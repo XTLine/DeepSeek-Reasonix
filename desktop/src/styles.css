@@ -1703,11 +1703,9 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
 }
 .msg-text .markdown {
   white-space: normal;
-  overflow-wrap: anywhere;
 }
 .msg-text p {
   margin: 0 0 12px;
-  overflow-wrap: anywhere;
 }
 .msg-text p:last-child {
   margin-bottom: 0;
