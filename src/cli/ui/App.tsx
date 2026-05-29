@@ -41,6 +41,7 @@ import {
   loadEngineeringLifecycleMode,
   loadHistoryScrollMode,
   loadMaxIterPerTurn,
+  loadMaxOutputTokens,
   loadMouseWheelRows,
   loadReasoningEffort,
   loadTheme,
@@ -1035,6 +1036,7 @@ function AppInner({
       hooks: hookList,
       hookCwd: currentRootDir,
       reasoningEffort: initialReasoningEffort ?? loadReasoningEffort(),
+      maxOutputTokens: loadMaxOutputTokens(),
       maxIterPerTurn: loadMaxIterPerTurn(),
       rebuildSystem,
     });
