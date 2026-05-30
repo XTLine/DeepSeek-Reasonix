@@ -8,36 +8,36 @@ import (
 	"io"
 	"sync"
 
-	"reasonix/internal/agent"
+	"reasonix/internal/control"
 	"reasonix/internal/event"
-	"reasonix/internal/permission"
 	"reasonix/internal/plugin"
 )
 
 // SessionParams is everything a Factory needs to assemble one ACP session's
-// agent. Sink and Approver are owned by this package (an updateSink and an
-// rpcApprover bound to the session id); the Factory wires them into the agent's
-// event sink and into permission.NewGate(policy, approver) respectively. Model is
-// empty when the client did not request one — the Factory picks its default.
+// controller. Sink is owned by this package (an updateSink bound to the session
+// id) and must be wired into the controller's event sink; the controller's
+// interactive approval (see control.Controller.EnableInteractiveApproval) then
+// routes "ask" decisions back through that sink as ApprovalRequest events, which
+// the sink forwards to the client over session/request_permission.
 //
-// Cwd roots the session's file tools and bash. MCPServers are the stdio MCP
-// servers the client asked the agent to connect for this session.
+// The Factory picks the model (ACP's session/new carries no model selection).
+// Cwd roots the session's file tools and bash (built via builtin.Workspace).
+// MCPServers are the stdio MCP servers the client asked the agent to connect for
+// this session.
 type SessionParams struct {
-	Model      string
 	Cwd        string
 	MCPServers []plugin.Spec
 	Sink       event.Sink
-	Approver   permission.Approver
 }
 
-// Factory builds the per-session agent runner. The composition root (the cli's
-// `reasonix acp` command, wired once the v2 refactor lands) implements it by
-// reusing the extracted session-assembly logic: a Provider, a tool Registry
-// rooted at Cwd, a per-session MCP host from MCPServers, an interactive Gate
-// backed by the Approver, and the event Sink. The returned cleanup releases
-// per-session resources (MCP subprocesses) and is called on teardown.
+// Factory builds the per-session controller. The composition root (the cli's
+// `reasonix acp` command) implements it by reusing setup()'s assembly: a
+// Provider for Model, a tool Registry rooted at Cwd via builtin.Workspace, a
+// per-session MCP host from MCPServers, the event Sink, all wired into a
+// control.Controller. The returned controller owns its own cleanup (Close stops
+// MCP subprocesses), so the service calls ctrl.Close() on teardown.
 type Factory interface {
-	NewSession(ctx context.Context, p SessionParams) (runner agent.Runner, cleanup func(), err error)
+	NewSession(ctx context.Context, p SessionParams) (*control.Controller, error)
 }
 
 // AgentInfo identifies this agent to clients in the initialize reply.
@@ -49,7 +49,7 @@ type AgentInfo struct {
 // Serve runs an ACP agent on r/w (stdin/stdout in production) until the input
 // ends or ctx is cancelled. It owns the JSON-RPC connection and the session
 // registry; the Factory supplies the kernel wiring. This is the single entry
-// point the `reasonix acp` command will call.
+// point the `reasonix acp` command calls.
 //
 // stdout is the JSON-RPC channel: callers must keep all other output (logs,
 // diagnostics) off w and on stderr, or the wire corrupts.
@@ -69,21 +69,6 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, factory Factory, info 
 	return conn.Serve(ctx)
 }
 
-// closeAll tears down every open session's per-session resources (MCP
-// subprocesses) when the connection ends.
-func (s *service) closeAll() {
-	s.mu.Lock()
-	sessions := s.sessions
-	s.sessions = make(map[string]*acpSession)
-	s.mu.Unlock()
-	for _, sess := range sessions {
-		sess.abort()
-		if sess.cleanup != nil {
-			sess.cleanup()
-		}
-	}
-}
-
 // service holds the connection-wide ACP state: the factory, agent identity, and
 // the live session registry.
 type service struct {
@@ -95,12 +80,11 @@ type service struct {
 	sessions map[string]*acpSession
 }
 
-// acpSession is one open session: its runner plus the cancel func of the
+// acpSession is one open session: its controller plus the cancel func of the
 // in-flight turn (nil when idle) so session/cancel can abort it.
 type acpSession struct {
-	id      string
-	runner  agent.Runner
-	cleanup func()
+	id   string
+	ctrl *control.Controller
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -141,9 +125,10 @@ func (s *service) initialize(_ context.Context, _ json.RawMessage) (any, error) 
 	}, nil
 }
 
-// sessionNew opens a session: it mints an id, builds the session's sink and
-// approver bound to that id, asks the Factory to assemble the agent, and
-// registers it.
+// sessionNew opens a session: it mints an id, builds the session's sink bound to
+// that id, asks the Factory to assemble the controller, switches the controller
+// to interactive approval (so tool gates surface as ApprovalRequest events the
+// sink forwards), and registers it.
 func (s *service) sessionNew(ctx context.Context, raw json.RawMessage) (any, error) {
 	var p SessionNewParams
 	if len(raw) > 0 {
@@ -157,27 +142,29 @@ func (s *service) sessionNew(ctx context.Context, raw json.RawMessage) (any, err
 		return nil, &RPCError{Code: ErrInternal, Message: "session/new: " + err.Error()}
 	}
 
-	params := SessionParams{
+	sink := newUpdateSink(s.conn, id)
+	ctrl, err := s.factory.NewSession(ctx, SessionParams{
 		Cwd:        p.Cwd,
 		MCPServers: mcpSpecs(p.MCPServers),
-		Sink:       newUpdateSink(s.conn, id),
-		Approver:   newRPCApprover(s.conn, id),
-	}
-	runner, cleanup, err := s.factory.NewSession(ctx, params)
+		Sink:       sink,
+	})
 	if err != nil {
 		return nil, &RPCError{Code: ErrInternal, Message: "session/new: " + err.Error()}
 	}
+	ctrl.EnableInteractiveApproval()
+	sink.bindApprove(ctrl.Approve)
 
 	s.mu.Lock()
-	s.sessions[id] = &acpSession{id: id, runner: runner, cleanup: cleanup}
+	s.sessions[id] = &acpSession{id: id, ctrl: ctrl}
 	s.mu.Unlock()
 
 	return SessionNewResult{SessionID: id}, nil
 }
 
-// sessionPrompt runs one turn. It flattens the prompt blocks to text, runs the
-// session's agent under a per-turn cancelable context (so session/cancel can stop
-// it), and reports why the turn ended.
+// sessionPrompt runs one turn. It flattens the prompt blocks to text and runs the
+// session's controller synchronously under a per-turn cancelable context (so
+// session/cancel can stop it), then reports why the turn ended. The controller
+// streams the turn's events to the session's sink as it runs.
 func (s *service) sessionPrompt(ctx context.Context, raw json.RawMessage) (any, error) {
 	var p SessionPromptParams
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -194,7 +181,7 @@ func (s *service) sessionPrompt(ctx context.Context, raw json.RawMessage) (any, 
 
 	runCtx, cancel := context.WithCancel(ctx)
 	sess.setCancel(cancel)
-	runErr := sess.runner.Run(runCtx, text)
+	runErr := sess.ctrl.Run(runCtx, text)
 	sess.setCancel(nil)
 	cancel()
 
@@ -225,6 +212,19 @@ func (s *service) session(id string) *acpSession {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sessions[id]
+}
+
+// closeAll tears down every open session (aborting any in-flight turn and
+// stopping its MCP subprocesses) when the connection ends.
+func (s *service) closeAll() {
+	s.mu.Lock()
+	sessions := s.sessions
+	s.sessions = make(map[string]*acpSession)
+	s.mu.Unlock()
+	for _, sess := range sessions {
+		sess.abort()
+		sess.ctrl.Close()
+	}
 }
 
 // mcpSpecs converts ACP stdio MCP server declarations to plugin.Spec. ACP's

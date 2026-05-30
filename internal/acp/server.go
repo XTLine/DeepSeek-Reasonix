@@ -40,7 +40,7 @@ func (e *RPCError) Error() string { return e.Message }
 //
 // Writes are serialized by a mutex, so handlers running on separate goroutines
 // (a long session/prompt alongside a session/cancel) never interleave a line.
-// It implements notifier, the dependency dispatch.go and permission.go take.
+// It implements notifier, the dependency the dispatch sink takes.
 type Conn struct {
 	r io.Reader
 
@@ -55,6 +55,7 @@ type Conn struct {
 	reqH map[string]RequestHandler
 	notH map[string]NotificationHandler
 
+	wg        sync.WaitGroup
 	closeOnce sync.Once
 	closed    chan struct{}
 }
@@ -116,28 +117,39 @@ func (c *Conn) Handle(method string, h RequestHandler) { c.reqH[method] = h }
 // HandleNotify registers a notification handler for method.
 func (c *Conn) HandleNotify(method string, h NotificationHandler) { c.notH[method] = h }
 
-// Serve reads inbound frames until the reader ends or ctx is cancelled, then
-// fails any in-flight outbound requests. Each inbound request/notification runs
-// on its own goroutine so a long-running prompt does not block cancellation or
-// permission replies. Returns nil on clean EOF.
+// Serve reads inbound frames until the reader ends or ctx is cancelled. Each
+// inbound request/notification runs on its own goroutine so a long-running prompt
+// does not block cancellation or permission replies. When the read loop ends it
+// cancels in-flight handlers (so prompts abort) and waits for them to return —
+// flushing fast responses and unwinding aborted ones — before failing any
+// outstanding outbound requests. Returns nil on clean EOF.
 func (c *Conn) Serve(ctx context.Context) error {
-	defer c.shutdown()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	br := bufio.NewReaderSize(c.r, 64<<10)
+	var loopErr error
 	for {
 		line, err := readLine(br)
 		if len(line) > 0 {
 			c.dispatch(ctx, line)
 		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil
+			if !errors.Is(err, io.EOF) {
+				loopErr = err
 			}
-			return err
+			break
 		}
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if err := ctx.Err(); err != nil {
+			loopErr = err
+			break
 		}
 	}
+
+	cancel()     // abort in-flight handlers (prompts unwind via ctx)
+	c.wg.Wait()  // let them flush their responses before we tear down
+	c.shutdown() // fail any still-pending outbound requests
+	return loopErr
 }
 
 // readLine reads one NDJSON line (without the trailing newline), enforcing the
@@ -189,10 +201,18 @@ func (c *Conn) dispatch(ctx context.Context, line []byte) {
 	hasID := len(in.ID) > 0
 	switch {
 	case in.Method != "" && hasID:
-		go c.serveRequest(ctx, in.ID, in.Method, in.Params)
+		c.wg.Add(1)
+		go func() {
+			defer c.wg.Done()
+			c.serveRequest(ctx, in.ID, in.Method, in.Params)
+		}()
 	case in.Method != "" && !hasID:
 		if h := c.notH[in.Method]; h != nil {
-			go h(ctx, in.Params)
+			c.wg.Add(1)
+			go func() {
+				defer c.wg.Done()
+				h(ctx, in.Params)
+			}()
 		}
 	case in.Method == "" && hasID:
 		c.resolve(in)

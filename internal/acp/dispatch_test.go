@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"reasonix/internal/event"
 )
@@ -172,6 +173,87 @@ func TestUpdateSinkDropsAndWarns(t *testing.T) {
 	}
 	if c, _ := u["content"].(map[string]any); !strings.Contains(c["text"].(string), "watch out") {
 		t.Errorf("warn content = %v", u["content"])
+	}
+}
+
+// approveCall records one approve(id, allow, session) callback.
+type approveCall struct {
+	id      string
+	allow   bool
+	session bool
+}
+
+func TestUpdateSinkApprovalAllowAlways(t *testing.T) {
+	fn := &fakeNotifier{onReq: func(method string, params any) (json.RawMessage, error) {
+		if method != "session/request_permission" {
+			t.Errorf("request method = %q, want session/request_permission", method)
+		}
+		raw, _ := json.Marshal(params)
+		var p PermissionRequestParams
+		if err := json.Unmarshal(raw, &p); err != nil {
+			t.Fatalf("permission params: %v", err)
+		}
+		if p.SessionID != "sess-1" {
+			t.Errorf("sessionId = %q", p.SessionID)
+		}
+		if p.ToolCall.Kind != "execute" {
+			t.Errorf("kind = %q, want execute", p.ToolCall.Kind)
+		}
+		if p.ToolCall.ToolCallID != "gate-9" {
+			t.Errorf("toolCallId = %q, want gate-9", p.ToolCall.ToolCallID)
+		}
+		res, _ := json.Marshal(PermissionRequestResult{
+			Outcome: PermissionOutcome{Outcome: "selected", OptionID: string(OptAllowAlways)},
+		})
+		return res, nil
+	}}
+	sink := newUpdateSink(fn, "sess-1")
+	got := make(chan approveCall, 1)
+	sink.bindApprove(func(id string, allow, session bool) { got <- approveCall{id, allow, session} })
+
+	sink.Emit(event.Event{Kind: event.ApprovalRequest, Approval: event.Approval{ID: "9", Tool: "bash", Subject: "rm -rf /"}})
+
+	select {
+	case c := <-got:
+		if c != (approveCall{id: "9", allow: true, session: true}) {
+			t.Errorf("approve = %+v, want {9 true true}", c)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("approve was never called")
+	}
+}
+
+func TestUpdateSinkApprovalDenied(t *testing.T) {
+	// Both a "cancelled" outcome and a transport error must deny the call.
+	for _, tc := range []struct {
+		name string
+		resp func() (json.RawMessage, error)
+	}{
+		{"cancelled", func() (json.RawMessage, error) {
+			r, _ := json.Marshal(PermissionRequestResult{Outcome: PermissionOutcome{Outcome: "cancelled"}})
+			return r, nil
+		}},
+		{"transport error", func() (json.RawMessage, error) {
+			return nil, context.Canceled
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := &fakeNotifier{onReq: func(string, any) (json.RawMessage, error) { return tc.resp() }}
+			sink := newUpdateSink(fn, "sess-1")
+			got := make(chan approveCall, 1)
+			sink.bindApprove(func(id string, allow, session bool) { got <- approveCall{id, allow, session} })
+
+			sink.Emit(event.Event{Kind: event.ApprovalRequest, Approval: event.Approval{ID: "3", Tool: "edit_file"}})
+
+			select {
+			case c := <-got:
+				if c.allow || c.session {
+					t.Errorf("approve = %+v, want denied", c)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("approve was never called")
+			}
+		})
 	}
 }
 

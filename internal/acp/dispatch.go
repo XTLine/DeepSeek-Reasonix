@@ -9,9 +9,9 @@ import (
 	"reasonix/internal/event"
 )
 
-// notifier is the slice of Conn that the per-session adapters depend on: the
-// dispatch sink pushes session/update notifications, the approver makes a
-// session/request_permission request. Narrowing to this interface keeps both
+// notifier is the slice of Conn the dispatch sink depends on: it pushes
+// session/update notifications and, when a tool needs approval, makes a
+// session/request_permission request. Narrowing to this interface keeps the sink
 // unit-testable with a fake.
 type notifier interface {
 	Notify(method string, params any) error
@@ -30,15 +30,28 @@ const maxResultChars = 8000
 // v2 has no separate "tool intent" event — a call goes ToolDispatch → ToolResult,
 // two states — so we emit a single pending tool_call on dispatch (already carrying
 // rawInput, which main only had by the intent step) and a completed/failed
-// tool_call_update on result. Message/Usage/Phase/TurnStarted have no place in
-// main's update set and are dropped.
+// tool_call_update on result. Message/Usage/Phase/TurnStarted/TurnDone have no
+// place in main's update set and are dropped (TurnDone's outcome surfaces as the
+// session/prompt stopReason instead).
+//
+// An ApprovalRequest is the controller asking the user to allow a gated tool
+// call; the sink forwards it as a session/request_permission round-trip and feeds
+// the answer back via approve (control.Controller.Approve), which the run loop is
+// blocked on.
 type updateSink struct {
 	conn      notifier
 	sessionID string
+	approve   func(id string, allow, session bool)
 }
 
 func newUpdateSink(conn notifier, sessionID string) *updateSink {
 	return &updateSink{conn: conn, sessionID: sessionID}
+}
+
+// bindApprove installs the controller's Approve callback, called by the service
+// once the controller exists (the sink is built first, to hand to the Factory).
+func (s *updateSink) bindApprove(fn func(id string, allow, session bool)) {
+	s.approve = fn
 }
 
 // Emit implements event.Sink. The agent calls it serially (see event.Sink), so no
@@ -90,11 +103,61 @@ func (s *updateSink) Emit(e event.Event) {
 				Content:       textBlock("\n\n[warning] " + e.Text),
 			})
 		}
+
+	case event.ApprovalRequest:
+		// The run loop is now blocked awaiting Approve(id, …). Do the
+		// client round-trip off the emit goroutine so Emit returns at once
+		// (the agent emits serially); the answer unblocks the loop.
+		go s.requestPermission(e.Approval)
 	}
 }
 
 func (s *updateSink) send(update any) {
 	_ = s.conn.Notify("session/update", SessionUpdateParams{SessionID: s.sessionID, Update: update})
+}
+
+// requestPermission forwards an approval request to the client as a
+// session/request_permission round-trip and feeds the outcome back through
+// approve. Any transport failure or a cancelled/rejected outcome denies the call,
+// so the model gets a blocked result rather than the turn hanging.
+func (s *updateSink) requestPermission(a event.Approval) {
+	if s.approve == nil {
+		return
+	}
+	title := a.Tool
+	if a.Subject != "" {
+		title = a.Tool + " " + a.Subject
+	}
+	params := PermissionRequestParams{
+		SessionID: s.sessionID,
+		ToolCall: PermissionToolCall{
+			ToolCallID: "gate-" + a.ID,
+			Title:      title,
+			Kind:       toolKindFor(a.Tool),
+			Status:     "pending",
+		},
+		Options: []PermissionOption{
+			{OptionID: string(OptAllowOnce), Name: "Allow", Kind: OptAllowOnce},
+			{OptionID: string(OptAllowAlways), Name: "Allow for this session", Kind: OptAllowAlways},
+			{OptionID: string(OptRejectOnce), Name: "Reject", Kind: OptRejectOnce},
+		},
+	}
+
+	allow, session := false, false
+	// context.Background: Conn.Request also unblocks on connection close, so the
+	// round-trip can't outlive the wire even without a turn-scoped context here.
+	if raw, err := s.conn.Request(context.Background(), "session/request_permission", params); err == nil {
+		var res PermissionRequestResult
+		if json.Unmarshal(raw, &res) == nil && res.Outcome.Outcome == "selected" {
+			switch PermissionOptionKind(res.Outcome.OptionID) {
+			case OptAllowOnce:
+				allow = true
+			case OptAllowAlways:
+				allow, session = true, true
+			}
+		}
+	}
+	s.approve(a.ID, allow, session)
 }
 
 // textBlock builds a text content block.

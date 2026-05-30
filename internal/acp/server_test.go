@@ -3,40 +3,37 @@ package acp
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"sync"
 	"testing"
 	"time"
 
-	"reasonix/internal/agent"
+	"reasonix/internal/control"
 	"reasonix/internal/event"
-	"reasonix/internal/permission"
 )
 
-// --- fakes: a Factory/Runner pair driven by an injected behavior ---
+// --- fakes: a Factory wrapping a behavior-driven runner in a real Controller ---
 
+// fakeRunner stands in for an agent.Runner; it emits to the session's sink and
+// honors ctx cancellation, but runs no model.
 type fakeRunner struct {
 	sink     event.Sink
-	approver permission.Approver
-	behavior func(ctx context.Context, r *fakeRunner, input string) error
+	behavior func(ctx context.Context, sink event.Sink, input string) error
 }
 
 func (r *fakeRunner) Run(ctx context.Context, input string) error {
-	return r.behavior(ctx, r, input)
+	return r.behavior(ctx, r.sink, input)
 }
 
+// fakeFactory builds a real control.Controller around the fake runner, so the
+// service exercises the actual controller surface (Run/Cancel/Close) it uses.
 type fakeFactory struct {
-	behavior func(ctx context.Context, r *fakeRunner, input string) error
-	mu       sync.Mutex
-	params   []SessionParams
+	behavior func(ctx context.Context, sink event.Sink, input string) error
 }
 
-func (f *fakeFactory) NewSession(_ context.Context, p SessionParams) (agent.Runner, func(), error) {
-	f.mu.Lock()
-	f.params = append(f.params, p)
-	f.mu.Unlock()
-	return &fakeRunner{sink: p.Sink, approver: p.Approver, behavior: f.behavior}, func() {}, nil
+func (f *fakeFactory) NewSession(_ context.Context, p SessionParams) (*control.Controller, error) {
+	runner := &fakeRunner{sink: p.Sink, behavior: f.behavior}
+	return control.New(control.Options{Runner: runner, Sink: p.Sink}), nil
 }
 
 // --- a minimal JSON-RPC client over the wire, for integration tests ---
@@ -192,10 +189,10 @@ func updateKind(t *testing.T, f frame) string {
 // --- tests ---
 
 func TestServeLifecycle(t *testing.T) {
-	factory := &fakeFactory{behavior: func(_ context.Context, r *fakeRunner, input string) error {
-		r.sink.Emit(event.Event{Kind: event.Text, Text: "hi " + input})
-		r.sink.Emit(event.Event{Kind: event.ToolDispatch, Tool: event.Tool{ID: "c1", Name: "ls", Args: `{}`}})
-		r.sink.Emit(event.Event{Kind: event.ToolResult, Tool: event.Tool{ID: "c1", Name: "ls", Output: "file.go"}})
+	factory := &fakeFactory{behavior: func(_ context.Context, sink event.Sink, input string) error {
+		sink.Emit(event.Event{Kind: event.Text, Text: "hi " + input})
+		sink.Emit(event.Event{Kind: event.ToolDispatch, Tool: event.Tool{ID: "c1", Name: "ls", Args: `{}`}})
+		sink.Emit(event.Event{Kind: event.ToolResult, Tool: event.Tool{ID: "c1", Name: "ls", Output: "file.go"}})
 		return nil
 	}}
 	client, stop := startServer(t, factory)
@@ -246,76 +243,9 @@ func TestServeLifecycle(t *testing.T) {
 	}
 }
 
-func TestServePermissionRoundTrip(t *testing.T) {
-	factory := &fakeFactory{behavior: func(ctx context.Context, r *fakeRunner, _ string) error {
-		allow, remember, err := r.approver.Approve(ctx, "bash", "rm -rf /", json.RawMessage(`{"command":"rm -rf /"}`))
-		if err != nil {
-			return err
-		}
-		r.sink.Emit(event.Event{Kind: event.Text, Text: fmt.Sprintf("allow=%v remember=%v", allow, remember)})
-		return nil
-	}}
-	client, stop := startServer(t, factory)
-	defer stop()
-
-	client.call(t, "initialize", InitializeParams{ProtocolVersion: 1})
-	newResp := client.call(t, "session/new", SessionNewParams{})
-	var nr SessionNewResult
-	json.Unmarshal(newResp.Result, &nr)
-
-	promptCh := client.callAsync("session/prompt", SessionPromptParams{
-		SessionID: nr.SessionID,
-		Prompt:    []ContentBlock{{Type: "text", Text: "go"}},
-	})
-
-	// The agent's Approve fires a session/request_permission request; answer it.
-	select {
-	case req := <-client.reqs:
-		if req.Method != "session/request_permission" {
-			t.Fatalf("unexpected request %q", req.Method)
-		}
-		var pr PermissionRequestParams
-		if err := json.Unmarshal(req.Params, &pr); err != nil {
-			t.Fatalf("permission params: %v", err)
-		}
-		if pr.ToolCall.Kind != "execute" {
-			t.Errorf("permission kind = %q, want execute", pr.ToolCall.Kind)
-		}
-		client.reply(req.ID, PermissionRequestResult{
-			Outcome: PermissionOutcome{Outcome: "selected", OptionID: string(OptAllowAlways)},
-		})
-	case <-time.After(2 * time.Second):
-		t.Fatal("no permission request received")
-	}
-
-	notifs, resp := drainPrompt(t, client, promptCh)
-	var pr SessionPromptResult
-	json.Unmarshal(resp.Result, &pr)
-	if pr.StopReason != StopEndTurn {
-		t.Errorf("stopReason = %q, want end_turn", pr.StopReason)
-	}
-	var sawDecision bool
-	for _, n := range notifs {
-		var p struct {
-			Update struct {
-				Content struct {
-					Text string `json:"text"`
-				} `json:"content"`
-			} `json:"update"`
-		}
-		json.Unmarshal(n.Params, &p)
-		if p.Update.Content.Text == "allow=true remember=true" {
-			sawDecision = true
-		}
-	}
-	if !sawDecision {
-		t.Errorf("approver did not resolve to allow_always (allow=true remember=true)")
-	}
-}
-
 func TestServeCancel(t *testing.T) {
 	started := make(chan struct{})
-	factory := &fakeFactory{behavior: func(ctx context.Context, _ *fakeRunner, _ string) error {
+	factory := &fakeFactory{behavior: func(ctx context.Context, _ event.Sink, _ string) error {
 		close(started)
 		<-ctx.Done()
 		return ctx.Err()
@@ -353,7 +283,7 @@ func TestServeCancel(t *testing.T) {
 }
 
 func TestServeUnknownMethod(t *testing.T) {
-	factory := &fakeFactory{behavior: func(context.Context, *fakeRunner, string) error { return nil }}
+	factory := &fakeFactory{behavior: func(context.Context, event.Sink, string) error { return nil }}
 	client, stop := startServer(t, factory)
 	defer stop()
 

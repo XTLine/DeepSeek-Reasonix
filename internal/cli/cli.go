@@ -55,6 +55,8 @@ func Run(args []string, version string) int {
 		return runServe(rest)
 	case "init":
 		return initConfig(rest)
+	case "acp":
+		return acpCommand(rest, version)
 	case "version", "--version", "-v":
 		fmt.Println("reasonix", version)
 		return 0
