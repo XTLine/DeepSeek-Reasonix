@@ -69,3 +69,15 @@ export interface Meta {
   eventChannel: string;
   cwd: string;
 }
+
+export interface CommandInfo {
+  name: string; // without the leading slash
+  description: string;
+  hint?: string;
+  kind: "builtin" | "custom" | "mcp";
+}
+
+export interface DirEntry {
+  name: string;
+  isDir: boolean;
+}

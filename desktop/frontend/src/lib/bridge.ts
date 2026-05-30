@@ -5,7 +5,7 @@
 // that streams a canned turn through the same contract — letting the whole UI be
 // developed and laid out without rebuilding the Go side.
 
-import type { ContextInfo, HistoryMessage, Meta, WireEvent } from "./types";
+import type { CommandInfo, ContextInfo, DirEntry, HistoryMessage, Meta, WireEvent } from "./types";
 
 // AppBindings mirrors desktop/app.go's exported method set. Keep in sync by hand
 // (or regenerate with `wails generate module` and import wailsjs instead).
@@ -19,6 +19,8 @@ export interface AppBindings {
   History(): Promise<HistoryMessage[]>;
   ContextUsage(): Promise<ContextInfo>;
   Meta(): Promise<Meta>;
+  Commands(): Promise<CommandInfo[]>;
+  ListDir(rel: string): Promise<DirEntry[]>;
 }
 
 interface WailsRuntime {
@@ -147,6 +149,32 @@ function makeMockApp(): AppBindings {
         eventChannel: EVENT_CHANNEL,
         cwd: "~/projects/reasonix",
       };
+    },
+    async Commands() {
+      return [
+        { name: "new", description: "Start a new session", kind: "builtin" as const },
+        { name: "compact", description: "Summarize older history to free up context", kind: "builtin" as const },
+        { name: "review", description: "Review the staged diff", hint: "[focus]", kind: "custom" as const },
+      ];
+    },
+    async ListDir(rel: string) {
+      // A tiny fake tree so the @ menu is navigable in browser dev.
+      if (rel === "" || rel === "./") {
+        return [
+          { name: "internal", isDir: true },
+          { name: "desktop", isDir: true },
+          { name: "README.md", isDir: false },
+          { name: "go.mod", isDir: false },
+        ];
+      }
+      if (rel === "internal/") {
+        return [
+          { name: "control", isDir: true },
+          { name: "boot", isDir: true },
+          { name: "event.go", isDir: false },
+        ];
+      }
+      return [{ name: "file.go", isDir: false }];
     },
   };
 }

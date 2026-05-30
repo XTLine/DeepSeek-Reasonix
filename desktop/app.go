@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -179,6 +182,83 @@ func (a *App) Meta() Meta {
 		EventChannel: eventChannel,
 		Cwd:          cwd,
 	}
+}
+
+// CommandInfo describes one available slash command for the composer's "/" menu.
+type CommandInfo struct {
+	Name        string `json:"name"` // without the leading slash
+	Description string `json:"description"`
+	Hint        string `json:"hint,omitempty"` // argument hint, if any
+	Kind        string `json:"kind"`           // "builtin" | "custom" | "mcp"
+}
+
+// Commands lists the slash commands available this session — built-in actions,
+// custom commands (.reasonix/commands), and MCP prompts — for the composer's "/"
+// autocomplete menu.
+func (a *App) Commands() []CommandInfo {
+	out := []CommandInfo{
+		{Name: "new", Description: "Start a new session", Kind: "builtin"},
+		{Name: "compact", Description: "Summarize older history to free up context", Kind: "builtin"},
+	}
+	if a.ctrl == nil {
+		return out
+	}
+	for _, c := range a.ctrl.Commands() {
+		out = append(out, CommandInfo{Name: c.Name, Description: c.Description, Hint: c.ArgHint, Kind: "custom"})
+	}
+	if h := a.ctrl.Host(); h != nil {
+		for _, p := range h.Prompts() {
+			out = append(out, CommandInfo{Name: p.Name, Description: p.Description, Kind: "mcp"})
+		}
+	}
+	return out
+}
+
+// DirEntry is one entry in the "@" file-reference menu.
+type DirEntry struct {
+	Name  string `json:"name"`
+	IsDir bool   `json:"isDir"`
+}
+
+// atSkip are entries the "@" menu hides as noise.
+var atSkip = map[string]bool{".git": true, "node_modules": true, ".DS_Store": true}
+
+// ListDir lists one directory level (directories first, then files, each
+// alphabetical) for the "@" file-reference menu. rel resolves against the process
+// cwd; "" lists the cwd. The menu navigates one level at a time, never
+// recursively — bounded for huge trees.
+func (a *App) ListDir(rel string) []DirEntry {
+	base, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+	dir := base
+	if rel != "" {
+		if filepath.IsAbs(rel) {
+			dir = filepath.Clean(rel)
+		} else {
+			dir = filepath.Join(base, rel)
+		}
+	}
+	es, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var dirs, files []DirEntry
+	for _, e := range es {
+		name := e.Name()
+		if atSkip[name] {
+			continue
+		}
+		if e.IsDir() {
+			dirs = append(dirs, DirEntry{Name: name, IsDir: true})
+		} else {
+			files = append(files, DirEntry{Name: name, IsDir: false})
+		}
+	}
+	sort.Slice(dirs, func(i, j int) bool { return strings.ToLower(dirs[i].Name) < strings.ToLower(dirs[j].Name) })
+	sort.Slice(files, func(i, j int) bool { return strings.ToLower(files[i].Name) < strings.ToLower(files[j].Name) })
+	return append(dirs, files...)
 }
 
 // eventSink is the controller's event.Sink in desktop mode: it forwards every

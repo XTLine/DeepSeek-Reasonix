@@ -570,9 +570,81 @@ body {
   background: var(--bg);
   padding: 12px 20px 8px;
 }
-.composer {
+.composer-wrap {
+  position: relative;
   max-width: var(--maxw);
   margin: 0 auto;
+}
+.slashmenu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 5px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  z-index: 20;
+}
+.slashmenu__item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 9px;
+  background: none;
+  border: none;
+  border-radius: 7px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.slashmenu__item--active {
+  background: var(--accent-soft);
+}
+.slashmenu__name {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.slashmenu__name--file {
+  color: var(--fg);
+  font-weight: 450;
+}
+.filemenu__icon {
+  color: var(--fg-faint);
+  flex-shrink: 0;
+}
+.filemenu__icon--dir {
+  color: var(--accent);
+}
+.slashmenu__hint {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--fg-faint);
+  flex-shrink: 0;
+}
+.slashmenu__desc {
+  font-size: 12.5px;
+  color: var(--fg-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.slashmenu__kind {
+  margin-left: auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--fg-faint);
+  flex-shrink: 0;
+}
+.composer {
   display: flex;
   gap: 8px;
   align-items: flex-end;
