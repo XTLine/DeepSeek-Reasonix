@@ -93,11 +93,16 @@ func (*AskTool) Execute(ctx context.Context, args json.RawMessage) (string, erro
 			return "", fmt.Errorf("question %d: a question and at least two options are required", i+1)
 		}
 		opts := make([]event.AskOption, len(q.Options))
+		seenLabels := make(map[string]int, len(q.Options))
 		for j, o := range q.Options {
 			label := strings.TrimSpace(o.Label)
 			if label == "" {
 				return "", fmt.Errorf("question %d option %d: label is required", i+1, j+1)
 			}
+			if prev, ok := seenLabels[label]; ok {
+				return "", fmt.Errorf("question %d option %d: duplicate label %q also used by option %d", i+1, j+1, label, prev+1)
+			}
+			seenLabels[label] = j
 			opts[j] = event.AskOption{Label: label, Description: strings.TrimSpace(o.Description)}
 		}
 		qs = append(qs, event.AskQuestion{

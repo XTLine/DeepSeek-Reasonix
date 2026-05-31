@@ -36,6 +36,44 @@ func TestAskToolRejectsBlankOptionLabels(t *testing.T) {
 	}
 }
 
+func TestAskToolRejectsDuplicateOptionLabelsAfterTrimming(t *testing.T) {
+	_, err := NewAskTool().Execute(context.Background(), []byte(`{
+		"questions":[{
+			"header":"Release",
+			"question":"What should happen next?",
+			"options":[
+				{"label":"Deploy"},
+				{"label":" Deploy ","description":"same label after trimming"}
+			]
+		}]
+	}`))
+	if err == nil {
+		t.Fatal("expected duplicate trimmed option label to be rejected")
+	}
+	if !strings.Contains(err.Error(), "option 2") || !strings.Contains(err.Error(), "duplicate") || !strings.Contains(err.Error(), "Deploy") {
+		t.Fatalf("error = %v, want it to identify the duplicate option label", err)
+	}
+}
+
+func TestAskToolRejectsExactDuplicateOptionLabels(t *testing.T) {
+	_, err := NewAskTool().Execute(context.Background(), []byte(`{
+		"questions":[{
+			"header":"Release",
+			"question":"What should happen next?",
+			"options":[
+				{"label":"Deploy"},
+				{"label":"Deploy"}
+			]
+		}]
+	}`))
+	if err == nil {
+		t.Fatal("expected duplicate option label to be rejected")
+	}
+	if !strings.Contains(err.Error(), "option 2") || !strings.Contains(err.Error(), "duplicate") || !strings.Contains(err.Error(), "Deploy") {
+		t.Fatalf("error = %v, want it to identify the duplicate option label", err)
+	}
+}
+
 func TestAskToolTrimsPromptAndOptionsBeforePrompting(t *testing.T) {
 	asker := &recordingAsker{}
 	ctx := withCallContext(context.Background(), "call_1", event.Discard, asker)
