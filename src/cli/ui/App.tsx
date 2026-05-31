@@ -4022,6 +4022,13 @@ function AppInner({
       if (!snap) return;
       setPendingChoice(null);
       if (choice.kind === "custom") {
+        if (choice.text !== undefined) {
+          const gateId = pendingGateIdRef.current;
+          if (gateId !== null) {
+            pauseGate.resolve(gateId, { type: "text", text: choice.text });
+          }
+          return;
+        }
         setStagedChoiceCustom(snap);
         return;
       }
