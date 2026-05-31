@@ -88,17 +88,22 @@ func (*AskTool) Execute(ctx context.Context, args json.RawMessage) (string, erro
 
 	qs := make([]event.AskQuestion, 0, len(p.Questions))
 	for i, q := range p.Questions {
-		if q.Question == "" || len(q.Options) < 2 {
+		question := strings.TrimSpace(q.Question)
+		if question == "" || len(q.Options) < 2 {
 			return "", fmt.Errorf("question %d: a question and at least two options are required", i+1)
 		}
 		opts := make([]event.AskOption, len(q.Options))
 		for j, o := range q.Options {
-			opts[j] = event.AskOption{Label: o.Label, Description: o.Description}
+			label := strings.TrimSpace(o.Label)
+			if label == "" {
+				return "", fmt.Errorf("question %d option %d: label is required", i+1, j+1)
+			}
+			opts[j] = event.AskOption{Label: label, Description: strings.TrimSpace(o.Description)}
 		}
 		qs = append(qs, event.AskQuestion{
 			ID:      fmt.Sprintf("q%d", i+1),
-			Header:  q.Header,
-			Prompt:  q.Question,
+			Header:  strings.TrimSpace(q.Header),
+			Prompt:  question,
 			Options: opts,
 			Multi:   q.MultiSelect,
 		})
