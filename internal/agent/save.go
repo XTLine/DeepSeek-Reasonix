@@ -1,9 +1,10 @@
 package agent
 
 import (
-	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -58,19 +59,20 @@ func LoadSession(path string) (*Session, error) {
 	defer f.Close()
 
 	s := &Session{}
-	sc := bufio.NewScanner(f)
-	// Chat messages can be large after a long read_file result; raise the
-	// scanner buffer to a few MiB rather than failing on long lines.
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
+	// Decode a stream of JSON values rather than scanning lines: a single
+	// message (e.g. a multi-MiB bash output) can exceed any line-buffer cap, and
+	// Save's json.Encoder has no such limit — a Scanner here made sessions that
+	// saved fine fail to reload.
+	dec := json.NewDecoder(f)
+	for {
 		var m provider.Message
-		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
+		if err := dec.Decode(&m); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
 			return nil, fmt.Errorf("decode %s: %w", path, err)
 		}
 		s.Messages = append(s.Messages, m)
-	}
-	if err := sc.Err(); err != nil {
-		return nil, err
 	}
 	return s, nil
 }
@@ -136,14 +138,13 @@ func previewSession(path string) (string, int) {
 		return "", 0
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 8192), 1<<20)
+	dec := json.NewDecoder(f)
 	first := ""
 	turns := 0
-	for sc.Scan() {
+	for {
 		var m provider.Message
-		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
-			continue
+		if err := dec.Decode(&m); err != nil {
+			break // EOF or a malformed tail — return the preview gathered so far
 		}
 		if m.Role == provider.RoleUser {
 			turns++

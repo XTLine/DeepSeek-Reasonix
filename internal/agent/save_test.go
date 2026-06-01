@@ -64,6 +64,29 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSaveLoadLargeMessage(t *testing.T) {
+	s := NewSession("sys")
+	s.Add(provider.Message{Role: provider.RoleUser, Content: "run it"})
+	// A bash result can exceed any line-buffer cap; Save must round-trip it.
+	big := strings.Repeat("x", 5*1024*1024)
+	s.Add(provider.Message{Role: provider.RoleTool, Name: "bash", ToolCallID: "c1", Content: big})
+
+	path := filepath.Join(t.TempDir(), "big.jsonl")
+	if err := s.Save(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := LoadSession(path)
+	if err != nil {
+		t.Fatalf("LoadSession of a session with a >4MiB message: %v", err)
+	}
+	if len(loaded.Messages) != 3 {
+		t.Fatalf("message count = %d, want 3", len(loaded.Messages))
+	}
+	if loaded.Messages[2].Content != big {
+		t.Errorf("large content not round-tripped (got %d bytes, want %d)", len(loaded.Messages[2].Content), len(big))
+	}
+}
+
 // TestListSessionsOrdersByMTime makes sure the picker shows the most
 // recently used conversation first — that's what users reach for when they
 // hit `reasonix chat --continue`.
