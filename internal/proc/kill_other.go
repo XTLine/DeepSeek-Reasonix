@@ -11,3 +11,10 @@ func KillTree(cmd *exec.Cmd) {
 	}
 	_ = cmd.Process.Kill()
 }
+
+// TrackTree is a no-op off Windows (returns 0); KillTracked then falls back to
+// KillTree, which is sufficient where the platform reaps the child directly.
+func TrackTree(_ *exec.Cmd) uintptr { return 0 }
+
+// KillTracked terminates cmd's process tree; the handle is unused off Windows.
+func KillTracked(cmd *exec.Cmd, _ uintptr) { KillTree(cmd) }
