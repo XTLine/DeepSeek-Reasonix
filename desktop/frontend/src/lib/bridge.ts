@@ -81,6 +81,7 @@ export interface AppBindings {
   SubmitToTab(tabID: string, input: string): Promise<void>;
   SubmitDisplay(display: string, input: string): Promise<void>;
   SubmitDisplayToTab(tabID: string, display: string, input: string): Promise<void>;
+  RunShell(command: string): Promise<void>;
   Cancel(): Promise<void>;
   CancelTab(tabID: string): Promise<void>;
   Approve(id: string, allow: boolean, session: boolean, persist: boolean): Promise<void>;
@@ -802,6 +803,21 @@ function makeMockApp(): AppBindings {
         async SubmitDisplayToTab(_tabID, display, input) {
           await this.SubmitDisplay(display, input);
         },
+        async RunShell(command) {
+          cancelled = false;
+          emit({ kind: "turn_started" });
+          await delay(100);
+          if (cancelled) return;
+          const id = `shell-${command.slice(0, 32)}`;
+          emit({ kind: "tool_dispatch", tool: { id, name: "bash", args: JSON.stringify({ command }), readOnly: false } });
+          await delay(200);
+          if (cancelled) return;
+          emit({ kind: "tool_progress", tool: { id, name: "bash", output: `$ ${command}\n(mock output)\n`, readOnly: false } });
+          await delay(100);
+          if (cancelled) return;
+          emit({ kind: "tool_result", tool: { id, name: "bash", output: `$ ${command}\n(mock output)\n`, readOnly: false } });
+          emit({ kind: "turn_done" });
+        },
         async Cancel() {
           cancelled = true;
           emit({ kind: "turn_done" });
@@ -810,7 +826,7 @@ function makeMockApp(): AppBindings {
           await this.Cancel();
         },
         async Approve(_id, allow, session, persist) {
-      if (!pendingApprovalPreview) return;
+          if (!pendingApprovalPreview) return;
       pendingApprovalPreview = false;
       const suffix = persist ? "persisted" : session ? "allowed for session" : "allowed once";
       emit({

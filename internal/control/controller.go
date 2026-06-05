@@ -11,12 +11,15 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,12 +34,14 @@ import (
 	"reasonix/internal/diff"
 	"reasonix/internal/event"
 	"reasonix/internal/hook"
+	"reasonix/internal/i18n"
 	"reasonix/internal/jobs"
 	"reasonix/internal/memory"
 	"reasonix/internal/nilutil"
 	"reasonix/internal/permission"
 	"reasonix/internal/plugin"
 	"reasonix/internal/provider"
+	"reasonix/internal/sandbox"
 	"reasonix/internal/skill"
 	"reasonix/internal/tool"
 )
@@ -435,6 +440,10 @@ func (c *Controller) Submit(input string) {
 		c.rememberProjectNote(note)
 		return
 	}
+	if strings.HasPrefix(trimmed, "!") {
+		c.RunShell(trimmed[1:])
+		return
+	}
 	switch {
 	case trimmed == "/compact" || strings.HasPrefix(trimmed, "/compact "):
 		focus := strings.TrimSpace(strings.TrimPrefix(trimmed, "/compact"))
@@ -501,6 +510,17 @@ func (c *Controller) Submit(input string) {
 				c.notice(err.Error())
 			}
 			return
+		case "/rewind":
+			args := strings.TrimSpace(strings.TrimPrefix(trimmed, fields[0]))
+			turn, scope, err := parseRewind(args, c.Checkpoints())
+			if err != nil {
+				c.notice("usage: /rewind [turn] [code|conversation|both]")
+				return
+			}
+			if err := c.Rewind(turn, scope); err != nil {
+				c.notice(err.Error())
+			}
+			return
 		}
 		if c.managementNotice(trimmed) {
 			return
@@ -535,6 +555,94 @@ func (c *Controller) rememberProjectNote(note string) {
 	} else {
 		c.notice("remembered → " + path)
 	}
+}
+
+// shellTimeout is the maximum time a user-invoked "!command" may run. Matches
+// the bash tool's timeout so behaviour is consistent across invocation paths.
+const shellTimeout = 120 * time.Second
+
+// shellWaitDelay bounds how long cmd.Run() waits after context cancellation for
+// the child's pipes to drain, matching the bash tool's WaitDelay.
+const shellWaitDelay = 5 * time.Second
+
+// shellWriter forwards each chunk of shell output to a callback, so RunShell
+// can stream live progress to the frontend as the command produces output.
+type shellWriter struct{ emit func(string) }
+
+func (w *shellWriter) Write(p []byte) (int, error) {
+	w.emit(string(p))
+	return len(p), nil
+}
+
+// RunShell executes a shell command directly (bypassing the model) and streams
+// the output as ToolDispatch/ToolProgress/ToolResult events. It uses the same
+// bash-tool infrastructure (shell resolution, timeout) and shares the runGuarded
+// lock with model turns — only one can run at a time. User-invoked "!" commands
+// run without the OS sandbox (the user typed the command explicitly).
+func (c *Controller) RunShell(command string) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		c.notice(i18n.M.ShellExecEmpty)
+		return
+	}
+	c.runGuarded(func(ctx context.Context) error {
+		sh := sandbox.ResolveShell()
+		argv, _ := sandbox.Command(sandbox.Spec{}, sh, command) // false = unsandboxed (user invoked)
+
+		preview := []rune(command)
+		if len(preview) > 32 {
+			preview = preview[:32]
+		}
+		id := "shell-" + string(preview)
+
+		c.sink.Emit(event.Event{
+			Kind: event.ToolDispatch,
+			Tool: event.Tool{
+				ID:   id,
+				Name: "bash",
+				Args: fmt.Sprintf(`{"command":%q}`, command),
+			},
+		})
+
+		ctx, cancel := context.WithTimeout(ctx, shellTimeout)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		setShellKillTree(cmd)
+		cmd.WaitDelay = shellWaitDelay
+		cmd.Dir = c.cpRoot
+		var buf bytes.Buffer
+		w := io.MultiWriter(&buf, &shellWriter{emit: func(chunk string) {
+			c.sink.Emit(event.Event{
+				Kind: event.ToolProgress,
+				Tool: event.Tool{ID: id, Output: chunk},
+			})
+		}})
+		cmd.Stdout = w
+		cmd.Stderr = w
+		err := cmd.Run()
+		out := buf.String()
+
+		if ctx.Err() == context.DeadlineExceeded {
+			c.sink.Emit(event.Event{
+				Kind: event.ToolResult,
+				Tool: event.Tool{ID: id, Name: "bash", Output: out, Err: fmt.Sprintf(i18n.M.ShellExecTimeoutFmt, shellTimeout)},
+			})
+			return nil
+		}
+		if err != nil {
+			c.sink.Emit(event.Event{
+				Kind: event.ToolResult,
+				Tool: event.Tool{ID: id, Name: "bash", Output: out, Err: fmt.Sprintf(i18n.M.ShellExecFailedFmt, err)},
+			})
+			return nil
+		}
+		c.sink.Emit(event.Event{
+			Kind: event.ToolResult,
+			Tool: event.Tool{ID: id, Name: "bash", Output: out},
+		})
+		return nil
+	})
 }
 
 // runRefTurn resolves a line's @references into a context block and starts a
@@ -1821,6 +1929,39 @@ func listItem(line string) (content string, level int, ok bool) {
 // requestApproval emits an ApprovalRequest and blocks until Approve(ID, …)
 // answers or ctx is cancelled. A prior session grant for the same tool+subject
 // short-circuits. promptMu serialises outstanding prompts.
+// parseRewind parses the arguments after "/rewind". The user may provide:
+//   /rewind              → latest checkpoint, both
+//   /rewind <turn>       → that turn, both
+//   /rewind <turn> <scope> → that turn, code|conversation|both
+// If no turn is given, the latest checkpoint is used. If no scope is given, Both is assumed.
+func parseRewind(args string, cps []checkpoint.Meta) (int, RewindScope, error) {
+	fields := strings.Fields(args)
+	if len(fields) == 0 {
+		if len(cps) == 0 {
+			return 0, RewindBoth, fmt.Errorf("no checkpoints available")
+		}
+		return cps[len(cps)-1].Turn, RewindBoth, nil
+	}
+	turn, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return 0, RewindBoth, fmt.Errorf("invalid turn: %w", err)
+	}
+	scope := RewindBoth
+	if len(fields) >= 2 {
+		switch strings.ToLower(fields[1]) {
+		case "code":
+			scope = RewindCode
+		case "conversation":
+			scope = RewindConversation
+		case "both":
+			scope = RewindBoth
+		default:
+			return 0, RewindBoth, fmt.Errorf("unknown scope %q", fields[1])
+		}
+	}
+	return turn, scope, nil
+}
+
 func (c *Controller) requestApproval(ctx context.Context, tool, subject string) (bool, bool, error) {
 	key := tool + "\x00" + subject
 

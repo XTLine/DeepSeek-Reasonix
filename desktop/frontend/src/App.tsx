@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import { ShellExpandProvider, useShellExpand } from "./lib/shellExpand";
 import {
   SquarePen,
   Brain,
@@ -208,11 +209,30 @@ function workspaceDisplayName(path?: string): string {
   return parts.length > 0 ? parts[parts.length - 1] : path;
 }
 
+
+/** Global hotkey handler for shell-expand toggle (Ctrl/Cmd+B). */
+function ShellHotkeys() {
+  const shellExpand = useShellExpand();
+  useEffect(() => {
+    if (!shellExpand) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "b") {
+        e.preventDefault();
+        shellExpand.toggleLast();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [shellExpand]);
+  return null;
+}
+
 export default function App() {
   const {
     state,
     activeTabId,
     send,
+    runShell,
     notice,
     cancel,
     approve,
@@ -510,6 +530,16 @@ export default function App() {
   const handleSend = useCallback(
     async (displayText: string, submitText = displayText) => {
       const trimmed = displayText.trim();
+      // "!<cmd>" runs a shell command directly, bypassing the model.
+      if (trimmed.startsWith("!")) {
+        const cmd = trimmed.slice(1).trim();
+        if (!cmd) {
+          notice("usage: !<command>  (e.g. !ls -la)");
+          return;
+        }
+        runShell(cmd);
+        return;
+      }
       const model = /^\/model\s+(\S+)$/.exec(trimmed);
       if (model) {
         void switchModel(model[1]);
@@ -548,7 +578,7 @@ export default function App() {
       await syncModeToController(mode);
       send(trimmed, submitText.trim());
     },
-    [switchModel, openMemory, syncModeToController, mode, send, notice, t],
+    [switchModel, openMemory, syncModeToController, mode, send, runShell, notice, t],
   );
 
   const refreshTabMetas = useCallback(async (): Promise<TabMeta[]> => {
@@ -1091,6 +1121,8 @@ export default function App() {
   const workspacePanelMaxWidth = workspacePreviewActive ? RIGHT_DOCK_MAX_WIDTH : RIGHT_DOCK_TREE_MAX_WIDTH;
 
   return (
+    <ShellExpandProvider>
+    <ShellHotkeys />
     <div className="app">
       <div
         ref={layoutRef}
@@ -1524,5 +1556,6 @@ export default function App() {
 
       {needsOnboarding && <OnboardingOverlay onComplete={() => setNeedsOnboarding(false)} />}
     </div>
+    </ShellExpandProvider>
   );
 }

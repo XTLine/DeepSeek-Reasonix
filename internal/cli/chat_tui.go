@@ -94,6 +94,13 @@ type chatTUI struct {
 	// pendingInterject queues input typed while a turn runs; each TurnDone
 	// dequeues the front and submits it as the next turn.
 	pendingInterject []string
+	// queueEditCursor tracks which queued message the user is currently
+	// browsing/editing via ↑/↓ during tuiRunning. -1 means "not browsing".
+	queueEditCursor int
+	// queueEditDraft saves the in-progress input text when the user first
+	// presses ↑ to browse the queue, so it can be restored when the cursor
+	// moves past the end.
+	queueEditDraft string
 
 	// history is a resumed session's messages, committed to scrollback once on
 	// the first WindowSizeMsg so a reopened chat shows its prior transcript.
@@ -140,6 +147,14 @@ type chatTUI struct {
 	toolTail      []string
 	toolPartial   string
 	toolLineCount int
+	// shellOutputs stores the full accumulated output of each shell command
+	// (tool IDs with "shell-" prefix), so the first 10 lines can be shown after
+	// collapse and Ctrl+B can toggle the complete output.
+	shellOutputs  map[string]string
+	shellExpanded map[string]bool
+	// shellTranscriptIdx maps a shell tool ID to the transcript index of its
+	// collapsed output block, so Ctrl+B can rewrite it in place.
+	shellTranscriptIdx map[string]int
 	// toolStreamStart / toolStreamFrame drive the "⎿ working · Ns" line shown
 	// under a dispatched tool that hasn't produced output yet, so a slow tool
 	// (e.g. codegraph_context) reads as making progress rather than frozen.
@@ -429,6 +444,7 @@ func newChatTUI(ctrl *control.Controller, missing string, eventCh chan event.Eve
 		input:                ti,
 		spinner:              sp,
 		submittedInputCursor: -1,
+		queueEditCursor:      -1,
 		nextPasteID:          1,
 		reasoningLineIdx:     -1,
 		reasoningTextIdx:     -1,
@@ -438,6 +454,9 @@ func newChatTUI(ctrl *control.Controller, missing string, eventCh chan event.Eve
 		pending:              &strings.Builder{},
 		pendingCommit:        &commitBuf,
 		renderer:             newMarkdownRenderer(termW),
+		shellOutputs:         make(map[string]string),
+		shellExpanded:        make(map[string]bool),
+		shellTranscriptIdx:   make(map[string]int),
 		eventCh:              eventCh,
 		history:              ctrl.History(),
 		host:                 ctrl.Host(),
@@ -494,6 +513,76 @@ func (m *chatTUI) recallSubmittedInput(delta int) bool {
 func (m *chatTUI) resetSubmittedInputRecall() {
 	m.submittedInputCursor = -1
 	m.submittedInputDraft = ""
+}
+
+// navigateQueue moves through the pending interject queue during tuiRunning.
+// delta < 0 means ↑ (older), delta > 0 means ↓ (newer). Returns true if the
+// input was updated.
+func (m *chatTUI) navigateQueue(delta int) bool {
+	if len(m.pendingInterject) == 0 {
+		return false
+	}
+	cursor := m.queueEditCursor
+	if cursor < 0 {
+		if delta > 0 {
+			return false // already at "new draft" — nothing newer
+		}
+		// First ↑: save the current draft and jump to the last queued item.
+		m.queueEditDraft = m.input.Value()
+		cursor = len(m.pendingInterject) - 1
+	} else {
+		cursor += delta
+	}
+
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor >= len(m.pendingInterject) {
+		// Past the end: restore the draft the user was composing.
+		m.queueEditCursor = -1
+		m.input.SetValue(m.queueEditDraft)
+		m.growInputToFit()
+		return true
+	}
+	m.queueEditCursor = cursor
+	m.input.SetValue(m.pendingInterject[cursor])
+	m.growInputToFit()
+	return true
+}
+
+// resetQueueNavigation resets the queue browsing cursor so the user returns to
+// normal input mode. Any in-progress edit is discarded (the queued item keeps
+// its previous value).
+func (m *chatTUI) resetQueueNavigation() {
+	m.queueEditCursor = -1
+	m.queueEditDraft = ""
+}
+
+// renderQueueIndicator renders the pending-message queue as dim text to show
+// above the input box when messages are queued during a running turn.
+func (m chatTUI) renderQueueIndicator() string {
+	if m.state != tuiRunning || len(m.pendingInterject) == 0 {
+		return ""
+	}
+	queueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // dim grey
+	highlightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	var lines []string
+	for i, msg := range m.pendingInterject {
+		preview := msg
+		// Truncate long messages for the compact preview.
+		runes := []rune(preview)
+		if len(runes) > 50 {
+			preview = string(runes[:47]) + "…"
+		}
+		cursor := " "
+		style := queueStyle
+		if m.queueEditCursor == i {
+			cursor = "▸"
+			style = highlightStyle
+		}
+		lines = append(lines, style.Render(fmt.Sprintf("  %s [%d] %s", cursor, i+1, preview)))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // prompts returns the MCP prompts discovered at startup (nil when no plugins).
@@ -588,13 +677,23 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseClickMsg:
 		// Right-click copies the active selection (Windows Terminal convention);
-		// left-press in the transcript region begins a text selection.
+		// left-press in the transcript region begins a text selection — unless
+		// the click lands on a shell-output hint line, which toggles expand.
 		if msg.Button == tea.MouseRight && m.sel.active && !m.sel.empty() {
 			text := m.selectedText()
 			m.sel = selection{}
 			return m, tea.Batch(copyToClipboard(text), finalize(m, cmds))
 		}
 		if msg.Button == tea.MouseLeft && msg.Y < m.viewport.Height() {
+			// Check if the clicked line is a shell-output hint.
+			lineIdx := m.viewport.YOffset() + msg.Y
+			if lineIdx >= 0 && lineIdx < len(m.wrappedLines) {
+				clicked := m.wrappedLines[lineIdx]
+				if strings.Contains(clicked, "more lines") && strings.Contains(clicked, "Ctrl+B") {
+					m.toggleShellOutput()
+					return m, finalize(m, cmds)
+				}
+			}
 			at := m.transcriptCaret(msg.X, msg.Y)
 			m.sel = selection{active: true, anchor: at, head: at}
 			m.autoScroll = 0
@@ -770,15 +869,27 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "up":
-			if m.state != tuiRunning && m.recallSubmittedInput(-1) {
+			if m.state == tuiRunning {
+				if m.navigateQueue(-1) {
+					return m, nil
+				}
+			} else if m.recallSubmittedInput(-1) {
 				return m, nil
 			}
 		case "down":
-			if m.state != tuiRunning && m.recallSubmittedInput(1) {
+			if m.state == tuiRunning {
+				if m.navigateQueue(1) {
+					return m, nil
+				}
+			} else if m.recallSubmittedInput(1) {
 				return m, nil
 			}
+		case "enter":
+			// Don't reset queue navigation — the Enter handler below needs
+			// queueEditCursor to decide whether to save an edit or enqueue.
 		default:
 			m.resetSubmittedInputRecall()
+			m.resetQueueNavigation()
 		}
 		switch msg.String() {
 		case "esc":
@@ -792,6 +903,13 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.unsendPending()
 			case m.state == tuiRunning:
 				m.ctrl.Cancel()
+				// Defensive: if the controller is no longer running (cancel
+				// completed synchronously, e.g. for shell commands), transition
+				// to idle immediately instead of waiting for TurnDone.
+				if !m.ctrl.Running() {
+					m.state = tuiIdle
+					m.confirmBubbleSent()
+				}
 			case m.planMode:
 				m.planMode = false
 				m.ctrl.SetPlanMode(false)
@@ -860,6 +978,9 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+o":
 			m.toggleVerboseReasoning(m.state != tuiRunning)
 			return m, finalize(m, cmds)
+		case "ctrl+b":
+			m.toggleShellOutput()
+			return m, finalize(m, cmds)
 		case "shift+tab":
 			// Cycle auto → plan → YOLO; allowed mid-turn so the user can flip the
 			// gate while a run is in flight (the controller's mode is atomic).
@@ -871,11 +992,21 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if line == "" {
 					return m, nil
 				}
-				m.pendingInterject = append(m.pendingInterject, line)
+				if m.queueEditCursor >= 0 && m.queueEditCursor < len(m.pendingInterject) {
+					// Save the edited text back to the queue slot.
+					m.pendingInterject[m.queueEditCursor] = line
+					m.notice(fmt.Sprintf("queue [%d] updated", m.queueEditCursor+1))
+					m.queueEditCursor = -1
+					m.queueEditDraft = ""
+				} else {
+					m.pendingInterject = append(m.pendingInterject, line)
+					m.notice("feedback queued — will send when the current turn finishes")
+					m.queueEditCursor = -1
+					m.queueEditDraft = ""
+				}
 				m.input.Reset()
 				m.input.SetHeight(1)
 				m.pastedBlocks = nil
-				m.notice("feedback queued — will send when the current turn finishes")
 				return m, finalize(m, cmds)
 			}
 			if m.modelSwitchPending {
@@ -905,6 +1036,34 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.notice(fmt.Sprintf(i18n.M.QuickRememberDoneFmt, path))
 				}
 				return m, finalize(m, cmds)
+			}
+
+			// "!<cmd>" runs a shell command directly, bypassing the model.
+			if strings.HasPrefix(line, "!") {
+				cmd := strings.TrimPrefix(line, "!")
+				if strings.TrimSpace(cmd) == "" {
+					m.input.Reset()
+					m.input.SetHeight(1)
+					m.pastedBlocks = nil
+					m.notice(i18n.M.ShellExecEmpty)
+					return m, finalize(m, cmds)
+				}
+				m.input.Reset()
+				m.input.SetHeight(1)
+				m.pastedBlocks = nil
+				m.state = tuiRunning
+				m.runStart = time.Now()
+				m.elapsed = 0
+				m.turnTokens = 0
+				m.pendingRestore = line
+				m.bubbleStartIdx = len(m.transcript)
+				m.commitLine("")
+				m.commitLine(renderUserBubble(line, m.width, m.planMode))
+				m.bubblePending = true
+				m.turnDiscarded = false
+				m.confirmBubbleSent() // shell events arrive instantly
+				m.ctrl.RunShell(cmd)
+				return m, tea.Batch(m.spinner.Tick, elapsedTick())
 			}
 
 			// Slash commands run locally without going through the model. A
@@ -975,6 +1134,9 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.pendingInterject) > 0 {
 				interject := m.pendingInterject[0]
 				m.pendingInterject = m.pendingInterject[1:]
+				// Reset queue navigation — the indices shifted.
+				m.queueEditCursor = -1
+				m.queueEditDraft = ""
 				cmds = append(cmds, m.startTurn(interject, interject, interject))
 			}
 		}
@@ -1340,6 +1502,15 @@ func reasoningBlock(raw string, width, maxLines int) string {
 // the live block scrolls within this window so a chatty build doesn't flood.
 const toolStreamTailLines = 8
 
+// shellPreviewLines is how many lines of shell output to show by default after
+// the command finishes. Ctrl+B toggles the full output.
+const shellPreviewLines = 10
+
+// shellExpandMaxLines caps how many lines Ctrl+B shows in expanded mode, so a
+// very large output (e.g. thousands of lines) doesn't hang the TUI or push the
+// input box off-screen.
+const shellExpandMaxLines = 200
+
 // streamToolOutput appends a chunk of a running tool's output and re-renders its
 // live block (the last toolStreamTailLines lines) under the tool card, opening
 // the block on the first chunk. Mirrors streamReasoning.
@@ -1355,6 +1526,10 @@ func (m *chatTUI) streamToolOutput(id, chunk string) {
 		m.toolLineCount = 0
 		m.toolStreamIdx = len(m.transcript)
 		m.commitLine("")
+	}
+	// Accumulate full output for shell commands so Ctrl+B can expand it.
+	if strings.HasPrefix(id, "shell-") {
+		m.shellOutputs[id] += chunk
 	}
 	// Fold completed lines into the bounded tail; keep the trailing partial.
 	data := m.toolPartial + chunk
@@ -1393,7 +1568,9 @@ func (m *chatTUI) pushToolLine(line string) {
 
 // collapseToolOutput replaces a finished tool's live block with a dim
 // "⎿ N lines" summary, so the scrollback keeps a marker of the run without the
-// full output (which the model already received). No-op when id isn't streaming.
+// full output (which the model already received). For shell commands ("shell-"
+// prefix), it shows the first shellPreviewLines with a Ctrl+B hint instead.
+// No-op when id isn't streaming.
 func (m *chatTUI) collapseToolOutput(id string) {
 	if m.toolStreamIdx < 0 || id == "" || m.toolStreamID != id {
 		return
@@ -1403,14 +1580,30 @@ func (m *chatTUI) collapseToolOutput(id string) {
 		n++
 	}
 	if n == 0 {
-		// The tool produced no streamed output (e.g. an MCP call like
-		// codegraph_context) — drop the "working" placeholder so only the card
-		// remains, rather than leaving a "0 lines" summary.
 		if m.toolStreamIdx == len(m.transcript)-1 {
 			m.transcript = m.transcript[:m.toolStreamIdx]
 		} else {
 			m.transcript[m.toolStreamIdx] = ""
 		}
+	} else if full, ok := m.shellOutputs[id]; ok {
+		// Shell command: show first N lines + hint.
+		lines := strings.Split(strings.TrimRight(full, "\n"), "\n")
+		total := len(lines)
+		if total > shellPreviewLines {
+			preview := make([]string, shellPreviewLines+1)
+			for i := 0; i < shellPreviewLines; i++ {
+				preview[i] = dim(clampPlain(lines[i], m.width-len([]rune(connector))))
+			}
+			preview[shellPreviewLines] = dim(fmt.Sprintf("… %d more lines (click/Ctrl+B)", total-shellPreviewLines))
+			m.transcript[m.toolStreamIdx] = connectorBlock(preview)
+		} else {
+			rendered := make([]string, total)
+			for i, ln := range lines {
+				rendered[i] = dim(clampPlain(ln, m.width-len([]rune(connector))))
+			}
+			m.transcript[m.toolStreamIdx] = connectorBlock(rendered)
+		}
+		m.shellTranscriptIdx[id] = m.toolStreamIdx
 	} else {
 		m.transcript[m.toolStreamIdx] = connectorBlock([]string{dim(fmt.Sprintf("%d lines", n))})
 	}
@@ -1420,6 +1613,63 @@ func (m *chatTUI) collapseToolOutput(id string) {
 	m.toolTail = m.toolTail[:0]
 	m.toolPartial = ""
 	m.toolLineCount = 0
+}
+
+// toggleShellOutput expands or collapses the output of the most recent shell
+// command. When expanded, up to shellExpandMaxLines lines are shown; when
+// collapsed, only the first shellPreviewLines are shown. Called on Ctrl+B.
+func (m *chatTUI) toggleShellOutput() {
+	// Find the most recent shell output that has a transcript entry.
+	var lastID string
+	var lastIdx int
+	for id, idx := range m.shellTranscriptIdx {
+		if idx > lastIdx {
+			lastID = id
+			lastIdx = idx
+		}
+	}
+	if lastID == "" {
+		return
+	}
+	full, ok := m.shellOutputs[lastID]
+	if !ok {
+		return
+	}
+	lines := strings.Split(strings.TrimRight(full, "\n"), "\n")
+	total := len(lines)
+	innerW := m.width - len([]rune(connector))
+	if innerW < 10 {
+		innerW = 80
+	}
+
+	if m.shellExpanded[lastID] {
+		// Collapse back to preview.
+		m.shellExpanded[lastID] = false
+		if total > shellPreviewLines {
+			preview := make([]string, shellPreviewLines+1)
+			for i := 0; i < shellPreviewLines; i++ {
+				preview[i] = dim(clampPlain(lines[i], innerW))
+			}
+			preview[shellPreviewLines] = dim(fmt.Sprintf("… %d more lines (click/Ctrl+B)", total-shellPreviewLines))
+			m.transcript[lastIdx] = connectorBlock(preview)
+		}
+	} else {
+		// Expand: show up to shellExpandMaxLines lines.
+		m.shellExpanded[lastID] = true
+		show := total
+		if show > shellExpandMaxLines {
+			show = shellExpandMaxLines
+		}
+		rendered := make([]string, show)
+		for i := 0; i < show; i++ {
+			rendered[i] = dim(clampPlain(lines[i], innerW))
+		}
+		if total > shellExpandMaxLines {
+			rendered = append(rendered, dim(fmt.Sprintf("… %d more lines", total-shellExpandMaxLines)))
+		}
+		m.transcript[lastIdx] = connectorBlock(rendered)
+	}
+	m.transcriptDirty = true
 }
 
 // toolWorkingFrames is the braille spinner cycled once per second on the
@@ -1617,13 +1867,25 @@ func (m chatTUI) View() tea.View {
 		boxW = 10
 	}
 	hideComposer := m.hideComposer()
+	shellMode := strings.HasPrefix(strings.TrimSpace(m.input.Value()), "!")
 	var box string
 	if !hideComposer {
-		box = inputBoxStyle.Width(boxW).Render(m.input.View())
+		style := inputBoxStyle.Width(boxW)
+		if shellMode {
+			style = style.BorderForeground(lipgloss.Color(statusShellColor.hex))
+		}
+		box = style.Render(m.input.View())
 	}
 
 	var modeTag string
 	switch {
+	case shellMode:
+		modeTag = lipgloss.NewStyle().
+			Background(lipgloss.Color(statusShellColor.hex)).
+			Foreground(lipgloss.Color("#ffffff")).
+			Bold(true).
+			Padding(0, 1).
+			Render("Shell")
 	case m.ctrl.Bypass():
 		modeTag = lipgloss.NewStyle().
 			Background(lipgloss.Color(statusYoloColor.hex)).
@@ -1664,6 +1926,8 @@ func (m chatTUI) View() tea.View {
 		status = "  " + modeTag + " · " + i18n.M.ChatStatusPlanApproval
 	case m.pendingApproval != nil:
 		status = "  " + modeTag + " · " + i18n.M.ChatStatusToolApproval
+	case shellMode:
+		status = "  " + modeTag + " · " + i18n.M.ShellModeHint
 	case m.ctrl.Bypass():
 		status = "  " + modeTag + " · " + i18n.M.ChatStatusYoloIdle + " " + dim("("+i18n.M.ChatStatusCycleHint+")")
 	default:
@@ -1766,6 +2030,10 @@ func (m chatTUI) View() tea.View {
 	}
 	statusBlock := clampStatusLine(status, boxW) + "\n" + clampStatusLine(dataLine, boxW)
 	if !hideComposer {
+		if qi := m.renderQueueIndicator(); qi != "" {
+			parts = append(parts, qi)
+			rowsAboveBox += strings.Count(qi, "\n") + 1
+		}
 		parts = append(parts, box)
 	}
 	parts = append(parts, statusBlockStyle.Width(boxW).MaxWidth(boxW).Render(statusBlock))
@@ -2602,6 +2870,8 @@ func (m *chatTUI) ingestEvent(e event.Event) {
 		// just clear the un-sendable flag.
 		m.confirmBubbleSent()
 		m.state = tuiIdle
+		m.queueEditCursor = -1
+		m.queueEditDraft = ""
 		m.clearSubmittedPastes()
 		if e.Err != nil && e.Err.Error() != "" && !strings.Contains(e.Err.Error(), "context canceled") {
 			m.commitLine(wrapForViewport(i18n.M.ErrorPrefix+" "+e.Err.Error(), m.width, activeCLITheme.warn))

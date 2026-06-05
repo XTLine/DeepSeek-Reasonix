@@ -55,7 +55,8 @@ export type Item =
       output?: string;
       error?: string;
       truncated?: boolean;
-      parentId?: string;
+      isShell?: boolean; // true for !-prefix shell commands (controls default expand)
+      parentId?: string; // a sub-agent call nests under the `task` call with this id
     };
 
 interface State {
@@ -181,7 +182,7 @@ function applyEvent(s: State, e: WireEvent): State {
         if (it.kind === "tool") next[idx] = { ...it, name: t.name, args: t.args ? t.args : it.args, readOnly: t.readOnly };
         return { ...s, items: next };
       }
-      return { ...s, seq: s.seq + 1, items: [...s.items, { kind: "tool", id, name: t.name, args: t.args ?? "", readOnly: t.readOnly, status: "running", parentId: t.parentId }] };
+      return { ...s, seq: s.seq + 1, items: [...s.items, { kind: "tool", id, name: t.name, args: t.args ?? "", readOnly: t.readOnly, status: "running", isShell: id.startsWith("shell-"), parentId: t.parentId }] };
     }
     case "tool_result": {
       const t = e.tool;
@@ -426,6 +427,12 @@ export function useController() {
     (display !== submit ? app.SubmitDisplayToTab(activeTabId, display, submit) : app.SubmitToTab(activeTabId, submit)).catch(() => {});
   }, [activeTabId, dispatchTo]);
 
+  const runShell = useCallback((command: string) => {
+    if (!activeTabId) return;
+    dispatchTo(activeTabId, { type: "user", text: `!${command}` });
+    app.RunShell(command).catch(() => {});
+  }, [activeTabId, dispatchTo]);
+
   const notice = useCallback((text: string, level: "info" | "warn" = "info") => {
     if (!activeTabId) return;
     dispatchTo(activeTabId, { type: "local_notice", level, text });
@@ -624,7 +631,7 @@ export function useController() {
   return {
     state: activeState,
     activeTabId,
-    send, notice, cancel, approve, answerQuestion, setControllerMode,
+    send, runShell, notice, cancel, approve, answerQuestion, setControllerMode,
     newSession, listSessions, listTrashedSessions, resumeSession, previewSession, deleteSession, restoreSession, purgeTrashedSession, renameSession,
     refreshMeta, pickWorkspace, switchWorkspace, compact, rewind, setModel, setEffort,
     fetchMemory, remember, forget, saveDoc,

@@ -292,6 +292,14 @@ func (a *App) SubmitToTab(tabID, input string) {
 	}
 }
 
+// RunShell executes a shell command directly (bypassing the model) and streams
+// output as events on eventChannel.
+func (a *App) RunShell(command string) {
+	if ctrl := a.activeCtrl(); ctrl != nil {
+		ctrl.RunShell(command)
+	}
+}
+
 // SubmitDisplay runs input as a turn while recording a shorter UI-only display
 // string for the saved desktop transcript. The model still receives input.
 func (a *App) SubmitDisplay(display, input string) {
