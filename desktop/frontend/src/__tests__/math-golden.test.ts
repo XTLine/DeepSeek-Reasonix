@@ -114,9 +114,12 @@ console.log("\nisLikelyInlineMath — minimal LaTeX patterns (regression)");
 // as indices, comma-separated variables in ordered pairs / tuples, single
 // uppercase letters as set / algebra / group names, and one-sided
 // comparison operators. These patterns are language-agnostic.
-check("single-digit $1$, $2$, $5$ → math (LLM math indices)", () => isLikelyInlineMath("1") === true);
-check("$5 (single digit) → math", () => isLikelyInlineMath("5") === true);
+check("single-digit $1$, $2$, $5$ → NOT math (currency-shaped)", () => isLikelyInlineMath("1") === false);
+check("$5 (single digit) → NOT math (currency-shaped)", () => isLikelyInlineMath("5") === false);
 check("multi-digit $42$ → NOT math (currency-shaped)", () => isLikelyInlineMath("42") === false);
+check("$2.5x$ is math (number with variable)", () => isLikelyInlineMath("2.5x") === true);
+check("$10\%$ is math (percentage with LaTeX)", () => isLikelyInlineMath("10\\%") === true);
+
 check("comma-separated $A, B$ → math (ordered pair)", () => isLikelyInlineMath("A, B") === true);
 check("comma-separated $1, 2, 3$ → math (sequence)", () => isLikelyInlineMath("1, 2, 3") === true);
 check("comma-separated $\\alpha, \\beta$ → math (Greek pair)", () => isLikelyInlineMath("\\alpha, \\beta") === true);
@@ -211,7 +214,7 @@ check("digit before $$ is NOT a prose boundary (preserves c^2$$)", () => {
 });
 
 console.log("\nnormalizeMath — non-math dollar filtering");
-eq(normalizeMath("costs $1$ today"), "costs $1$ today", "$1$ is math (single-digit index)");  // was: "$5$ not math"
+eq(normalizeMath("costs $1$ today"), "costs &#36;1&#36; today", "$1$ is currency (pure number)");  // was: "$5$ not math"
 eq(normalizeMath("env $PATH$ here"), "env &#36;PATH&#36; here", "$PATH$ not math");
 eq(normalizeMath("solve $x^2 + y^2 = z^2$ please"), "solve $x^2 + y^2 = z^2$ please", "$x^2+y^2$ is math");
 eq(normalizeMath("$\\alpha + \\beta$"), "$\\alpha + \\beta$", "$\\alpha+\\beta$ is math");

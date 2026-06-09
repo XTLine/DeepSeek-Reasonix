@@ -175,8 +175,17 @@ function fencedCodeEnd(s: string, start: number): number {
   if (fenceLen < 3) return -1;
 
   const openingLineEnd = lineEnd(s, markerStart + fenceLen);
-  if (openingLineEnd >= s.length) return s.length;
+  
+  // If everything is on one line (no newline), search for next matching fence
+  // Treat ``` as a simple toggle: first is opening, second is closing
+  if (openingLineEnd >= s.length) {
+    const fencePattern = marker.repeat(fenceLen);
+    const nextFence = s.indexOf(fencePattern, markerStart + fenceLen);
+    if (nextFence === -1) return s.length;
+    return nextFence + fenceLen;
+  }
 
+  // Multi-line case: scan line by line for closing fence
   let lineStart = openingLineEnd + 1;
   while (lineStart < s.length) {
     const currentLineEnd = lineEnd(s, lineStart);

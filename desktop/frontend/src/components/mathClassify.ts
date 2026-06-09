@@ -1,11 +1,18 @@
 export function isLikelyInlineMath(math: string): boolean {
   if (!math || math !== math.trim() || math.includes("\n")) return false;
   if (math.includes("://") || math.includes("](")) return false;
-  // Pure-digit/decimal/percentage strings (multi-digit, with optional decimal
-  // or %) are too often currency / percentages in prose to risk classifying
-  // as math. Single-digit strings ($1$, $2$…) are exempted below — they are
-  // commonly math indices in physics / linear-algebra prose.
-  if (/^\$?\d{2,}(?:\.\d+)?%?$/.test(math)) return false;
+  // Pure-digit/decimal/percentage strings are almost always currency or
+  // percentages in prose (e.g., "$5$", "$10.50$", "$50%"). Reject these
+  // regardless of digit count — math expressions like "$2.5x$" will be
+  // accepted by later rules that detect operators or variable references.
+  if (/^\$?\d+(?:\.\d+)?%?$/.test(math)) return false;
+
+  // Number followed by variable (implicit multiplication) is math
+  // e.g., "2.5x", "3y^2", "0.5z"
+  if (/^\d+(?:\.\d+)?[A-Za-z]/.test(math)) return true;
+
+  // Number with LaTeX escape is math (e.g., "10\%", "5\cdot3")
+  if (/\d.*\\/.test(math)) return true;
 
   if (/\\[A-Za-z]+\b/.test(math)) return true;
   if (/[\^_{}|]/.test(math)) return true;
@@ -39,10 +46,6 @@ export function isLikelyInlineMath(math: string): boolean {
   if (/^v\d+(?:\.\d+)*$/i.test(math)) return false;
   if (/^[A-Za-z]{2,}$/.test(math)) return false;
 
-  // Single digit (e.g. "$1$", "$2$") is commonly a math index in physics,
-  // linear-algebra, and set-notation prose. Currency without a closing "$"
-  // is the much more common English-prose form, so the asymmetry is safe.
-  if (/^\d$/.test(math)) return true;
 
   // Single letter (uppercase or lowercase) is allowed as a math token.
   // Lowercase letters (a, b, x, y, z, …) are the most common math
