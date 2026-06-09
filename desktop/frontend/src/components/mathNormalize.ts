@@ -158,8 +158,8 @@ function unusedPlaceholderPrefix(s: string): string {
 }
 
 function fencedCodeEnd(s: string, start: number): number {
-  if (start !== 0 && s[start - 1] !== "\n") return -1;
-
+  // Allow ``` markers anywhere (not just after newlines) to handle malformed
+  // code blocks that are all on one line (e.g., pasted documentation)
   let markerStart = start;
   let spaces = 0;
   while (spaces < 4 && s[markerStart] === " ") {
