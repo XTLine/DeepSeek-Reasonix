@@ -258,7 +258,7 @@ export function CommandPalette({
                           <span className="palette__title">{it.title}</span>
                           {(it.hint || it.meta || it.badge) && (
                             <span className="palette__hint">
-                              {it.hint}
+                              {it.hint && <span className="palette__hint-text">{it.hint}</span>}
                               {it.meta && <span className="palette__meta">{it.meta}</span>}
                               {it.badge && <span className="palette__badge">{it.badge}</span>}
                             </span>

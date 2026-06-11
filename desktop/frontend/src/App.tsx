@@ -1641,7 +1641,7 @@ export default function App() {
       title: s.title?.trim() || s.preview || t("history.emptySession"),
       hint: s.workspaceRoot || undefined,
       meta: dayLabel(sessionActivityTime(s)),
-      badge: `${s.turns}轮`,
+      badge: t(s.turns === 1 ? "history.turnOne" : "history.turnOther", { n: s.turns }),
       run: () => void onResumeSession(s),
     }));
     return [...cmds, ...sessionItems];

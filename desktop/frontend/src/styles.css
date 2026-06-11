@@ -6533,6 +6533,13 @@ a[href] {
   line-height: 1.35;
   color: var(--fg-faint);
 }
+.palette__hint-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .palette__meta {
   flex: none;
   margin-left: auto;
