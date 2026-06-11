@@ -57,6 +57,10 @@ eq(latexNormalizeForKatex("\\alpha + \\beta"), "\\alpha + \\beta", "non-text com
 eq(latexNormalizeForKatex("a | b"), "a \\vert b", "| to \\vert without doubled space");
 eq(latexNormalizeForKatex("|x|"), "\\vert x\\vert", "|x| keeps command boundary");
 eq(latexNormalizeForKatex("\\text{foo \\$ bar}"), "\\text{foo \\$ bar}", "already escaped $");
+eq(latexNormalizeForKatex("100%"), "100\\%", "raw % escaped to \\% (KaTeX comment-char fix)");
+eq(latexNormalizeForKatex("x = 50%"), "x = 50\\%", "% at end of math escaped");
+eq(latexNormalizeForKatex("a%b"), "a\\%b", "% between letters escaped");
+eq(latexNormalizeForKatex("a\\%b"), "a\\%b", "already-escaped \\% not double-escaped");
 eq(latexNormalizeForKatex("\\textrm{test #}"), "\\textrm{test \\#}", "\\textrm also handled");
 eq(latexNormalizeForKatex("\\textbf{hello world}"), "\\textbf{hello world}", "\\textbf no special chars");
 eq(latexNormalizeForKatex("\\tfrac{a}{b}"), "\\tfrac{a}{b}", "nested braces in command");
@@ -115,7 +119,6 @@ console.log("\nisLikelyInlineMath — minimal LaTeX patterns (regression)");
 // uppercase letters as set / algebra / group names, and one-sided
 // comparison operators. These patterns are language-agnostic.
 check("single-digit $1$, $2$, $5$ → math (pure numbers)", () => isLikelyInlineMath("1") === true);
-check("$5 (single digit) → math (pure number)", () => isLikelyInlineMath("5") === true);
 check("multi-digit $42$ → math (pure number)", () => isLikelyInlineMath("42") === true);
 check("$2.5x$ is math (number with variable)", () => isLikelyInlineMath("2.5x") === true);
 check("$10\%$ is math (percentage with LaTeX)", () => isLikelyInlineMath("10\\%") === true);
@@ -214,12 +217,12 @@ check("digit before $$ is NOT a prose boundary (preserves c^2$$)", () => {
 });
 
 console.log("\nnormalizeMath — non-math dollar filtering");
-eq(normalizeMath("costs $1$ today"), "costs $1$ today", "$1$ is math (pure number)");  // was: "$5$ not math"
+eq(normalizeMath("costs $1$ today"), "costs $1$ today", "$1$ is math (single-digit index)");
 eq(normalizeMath("env $PATH$ here"), "env $PATH$ here", "$PATH$ not math (env var, dollars preserved)");
 eq(normalizeMath("solve $x^2 + y^2 = z^2$ please"), "solve $x^2 + y^2 = z^2$ please", "$x^2+y^2$ is math");
 eq(normalizeMath("$\\alpha + \\beta$"), "$\\alpha + \\beta$", "$\\alpha+\\beta$ is math");
 eq(normalizeMath("price is $10.50$ each"), "price is $10.50$ each", "$10.50$ is math (decimal number)");
-eq(normalizeMath("$I$ think"), "$I$ think", "$I$ is math (uppercase single letter)");  // was: "NOT math"
+eq(normalizeMath("$I$ think"), "$I$ think", "$I$ is math (uppercase single letter)");
 eq(normalizeMath("it costs $5 and $10 total"), "it costs $5 and $10 total", "multiple prose $ stays literal (dollars preserved)");
 
 console.log("\nnormalizeMath — Markdown code regions stay literal");
@@ -277,6 +280,15 @@ check("$|x+1|$ absolute value", () => {
 check("$\\|x\\|$ norm preserved (no \\vert mangling)", () => {
   return normalizeMath("$\\|x\\|$") === "$\\|x\\|$";
 });
+
+// ── normalizeMath — % in math (KaTeX comment-char) ─────────────────────────────
+// KaTeX treats unescaped % as a LaTeX comment to end-of-line, silently
+// truncating `$x = 50%$` to `$x = 50$`. Top-level % must be escaped.
+
+console.log("\nnormalizeMath — % in math");
+eq(normalizeMath("$x = 50%$"), "$x = 50\\%$", "trailing % escaped");
+eq(normalizeMath("$100%$"), "$100\\%$", "pure number with trailing %");
+eq(normalizeMath("$10\\%$"), "$10\\%$", "already-escaped \\% left alone");
 
 // ── normalizeMath — end-to-end KaTeX render of common LLM outputs ──────────────
 

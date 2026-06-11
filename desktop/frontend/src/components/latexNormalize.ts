@@ -88,6 +88,16 @@ export function latexNormalizeForKatex(source: string): string {
       continue;
     }
 
+    // KaTeX treats unescaped `%` as a LaTeX comment char and silently
+    // truncates the formula — e.g. `$x = 50%$` renders as just `x = 50`.
+    // Escape every top-level `%` to `\%`. Already-escaped `\%` is handled
+    // above as a 2-char command, so we never reach this branch for it.
+    if (source[i] === "%") {
+      out += "\\%";
+      i += 1;
+      continue;
+    }
+
     out += source[i];
     i += 1;
   }
