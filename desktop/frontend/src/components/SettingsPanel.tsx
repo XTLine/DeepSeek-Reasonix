@@ -18,6 +18,7 @@ import {
 } from "../lib/theme";
 import { TEXT_SIZES, applyTextSize, getTextSize, type TextSize } from "../lib/textSize";
 import { FONT_FAMILIES, applyFontFamily, getFontFamily, type FontFamily } from "../lib/fontFamily";
+import { getDisplayMode, onDisplayModeChange, setDisplayMode as setLocalDisplayMode } from "../lib/displayMode";
 import type { BotConnectionView, BotInstallStartResult, BotSettingsView, NetworkView, ProviderView, SettingsTab, SettingsView } from "../lib/types";
 import { InlineConfirmButton } from "./InlineConfirmButton";
 import { Tooltip } from "./Tooltip";
@@ -166,6 +167,7 @@ export function SettingsPanel({ onClose, onChanged, initialTab }: { onClose: () 
                     <UpdatesSection
                       configPath={s.configPath}
                       checkUpdates={s.checkUpdates}
+                      telemetry={s.telemetry !== false}
                       settingsBusy={busy}
                       applySettings={apply}
                     />
@@ -567,6 +569,7 @@ function normalizeSettingsView(view: SettingsView | null | undefined): SettingsV
     desktopTheme: normalizeThemePreference(view.desktopTheme),
     desktopThemeStyle: normalizeThemeStyleForTheme(view.desktopThemeStyle, normalizeThemePreference(view.desktopTheme)),
     closeBehavior: normalizeCloseBehavior(view.closeBehavior),
+    displayMode: normalizeDisplayMode(view.displayMode),
     checkUpdates: view.checkUpdates !== false,
   };
 }
@@ -575,6 +578,12 @@ type CloseBehavior = "background" | "quit";
 
 function normalizeCloseBehavior(mode: string | undefined): CloseBehavior {
   return mode === "quit" ? "quit" : "background";
+}
+
+type DisplayMode = "standard" | "compact" | "minimal";
+
+function normalizeDisplayMode(mode: string | undefined): DisplayMode {
+  return mode === "standard" || mode === "compact" || mode === "minimal" ? mode : "minimal";
 }
 
 function closeBehaviorLabel(mode: CloseBehavior, t: ReturnType<typeof useT>): string {
@@ -612,6 +621,8 @@ function reasoningProtocolLabel(protocol: string, t: ReturnType<typeof useT>): s
 function GeneralSection({ s, busy, apply }: SectionProps) {
   const { t, setPref } = useI18n();
   const closeBehavior = normalizeCloseBehavior(s.closeBehavior);
+  const [displayMode, setDisplayMode] = useState<DisplayMode>(() => normalizeDisplayMode(getDisplayMode()));
+  useEffect(() => onDisplayModeChange((mode) => setDisplayMode(mode)), []);
   const autoPlan = normalizeAutoPlan(s.autoPlan);
   const languagePref = normalizeLangPref(s.desktopLanguage);
   const setLanguage = (next: LangPref) => {
@@ -658,6 +669,23 @@ function GeneralSection({ s, busy, apply }: SectionProps) {
               onClick={() => void apply(() => app.SetExpandThinking(val))}
             >
               {val ? t("settings.expandThinking.expanded") : t("settings.expandThinking.collapsed")}
+            </button>
+          ))}
+        </div>
+      </SettingsField>
+      <SettingsField label={t("settings.displayMode")}>
+        <div className="set-seg">
+          {(["standard", "compact", "minimal"] as const).map((mode) => (
+            <button
+              key={mode}
+              className={`set-seg__btn${displayMode === mode ? " set-seg__btn--on" : ""}`}
+              disabled={busy}
+              onClick={() => {
+                setLocalDisplayMode(mode);
+                void apply(() => app.SetDisplayMode(mode));
+              }}
+            >
+              {t(`settings.displayMode.${mode}`)}
             </button>
           ))}
         </div>
@@ -3428,11 +3456,13 @@ const mb = (n: number) => (n / MB).toFixed(1);
 function UpdatesSection({
   configPath,
   checkUpdates,
+  telemetry,
   settingsBusy,
   applySettings,
 }: {
   configPath: string;
   checkUpdates: boolean;
+  telemetry: boolean;
   settingsBusy: boolean;
   applySettings: (fn: () => Promise<void>) => Promise<void>;
 }) {
@@ -3457,6 +3487,17 @@ function UpdatesSection({
           value={checkUpdates}
           disabled={settingsBusy}
           onChange={(enabled) => void applySettings(() => app.SetDesktopCheckUpdates(enabled))}
+        />
+      </SettingsField>
+      <SettingsField
+        className="settings-field--wide-copy"
+        label={t("settings.telemetryLabel")}
+        hint={t("settings.telemetryHint")}
+      >
+        <ToggleSegment
+          value={telemetry}
+          disabled={settingsBusy}
+          onChange={(enabled) => void applySettings(() => app.SetDesktopTelemetry(enabled))}
         />
       </SettingsField>
       <SettingsField label={t("updater.currentVersion", { v: version || "…" })}>

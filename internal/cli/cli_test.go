@@ -260,6 +260,71 @@ func TestWelcomePromptMissingKeysRequiresConfigSource(t *testing.T) {
 	}
 }
 
+func TestProvidersWithMissingKeysOnlyChecksActiveDefaultModel(t *testing.T) {
+	cfg := config.Default()
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	t.Setenv("MIMO_API_KEY", "")
+
+	missing := providersWithMissingKeys(cfg)
+	if len(missing) != 1 {
+		t.Fatalf("missing providers = %+v, want only active default model provider", missing)
+	}
+	if missing[0].APIKeyEnv != "DEEPSEEK_API_KEY" {
+		t.Fatalf("missing key env = %q, want DEEPSEEK_API_KEY", missing[0].APIKeyEnv)
+	}
+}
+
+func TestProvidersWithMissingKeysIgnoresUnusedBuiltInPresets(t *testing.T) {
+	cfg := config.Default()
+	t.Setenv("DEEPSEEK_API_KEY", "test-key")
+	t.Setenv("MIMO_API_KEY", "")
+
+	if missing := providersWithMissingKeys(cfg); len(missing) != 0 {
+		t.Fatalf("missing providers = %+v, want none when only unused MiMo presets are keyless", missing)
+	}
+}
+
+func TestProvidersWithMissingKeysIncludesReferencedSecondaryModels(t *testing.T) {
+	cfg := config.Default()
+	cfg.Agent.PlannerModel = "mimo-pro"
+	cfg.Agent.SubagentModel = "mimo-flash"
+	cfg.Agent.SubagentModels = map[string]string{
+		"review": "mimo-pro/mimo-v2.5-pro",
+	}
+	cfg.Agent.AutoPlanClassifier = "mimo-flash/mimo-v2.5"
+	t.Setenv("DEEPSEEK_API_KEY", "test-key")
+	t.Setenv("MIMO_API_KEY", "")
+
+	missing := providersWithMissingKeys(cfg)
+	if len(missing) != 1 {
+		t.Fatalf("missing providers = %+v, want MiMo once", missing)
+	}
+	if missing[0].APIKeyEnv != "MIMO_API_KEY" {
+		t.Fatalf("missing key env = %q, want MIMO_API_KEY", missing[0].APIKeyEnv)
+	}
+}
+
+func TestProvidersWithMissingKeysSkipsDisabledAutoPlanClassifier(t *testing.T) {
+	cfg := config.Default()
+	cfg.Agent.AutoPlan = "off"
+	cfg.Agent.AutoPlanClassifier = "mimo-flash/mimo-v2.5"
+	t.Setenv("DEEPSEEK_API_KEY", "test-key")
+	t.Setenv("MIMO_API_KEY", "")
+
+	if missing := providersWithMissingKeys(cfg); len(missing) != 0 {
+		t.Fatalf("missing providers = %+v, want none when auto-plan classifier is disabled", missing)
+	}
+
+	cfg.Agent.AutoPlan = "on"
+	missing := providersWithMissingKeys(cfg)
+	if len(missing) != 1 {
+		t.Fatalf("missing providers = %+v, want enabled auto-plan classifier provider", missing)
+	}
+	if missing[0].APIKeyEnv != "MIMO_API_KEY" {
+		t.Fatalf("missing key env = %q, want MIMO_API_KEY", missing[0].APIKeyEnv)
+	}
+}
+
 type cliRecordSink struct {
 	events []event.Kind
 }

@@ -77,7 +77,9 @@ type DesktopConfig struct {
 	Theme          string   `toml:"theme"`           // auto|dark|light; empty resolves to dark
 	ThemeStyle     string   `toml:"theme_style"`     // graphite|aurora|slate|carbon|nocturne|amber and legacy aliases
 	CloseBehavior  string   `toml:"close_behavior"`  // quit|background; desktop window close behavior
+	DisplayMode    string   `toml:"display_mode"`    // standard|compact|minimal; transcript display mode
 	CheckUpdates   *bool    `toml:"check_updates"`   // startup update checks; nil keeps the default enabled
+	Telemetry      *bool    `toml:"telemetry"`       // anonymous launch ping (install id + version + OS); nil keeps the default enabled
 	ProviderAccess []string `toml:"provider_access"` // desktop-only list of provider entries shown in Settings > Model > Access
 	ExpandThinking bool     `toml:"expand_thinking"` // true = show reasoning text expanded by default; false = collapsed
 }
@@ -188,6 +190,21 @@ func (c *Config) UICloseBehavior() string {
 	return c.DesktopCloseBehavior()
 }
 
+// DesktopDisplayMode normalizes the transcript display mode. Default is
+// "minimal" (collapsed model-generated intermediate items).
+func (c *Config) DesktopDisplayMode() string {
+	switch strings.ToLower(strings.TrimSpace(c.Desktop.DisplayMode)) {
+	case "standard":
+		return "standard"
+	case "compact":
+		return "compact"
+	case "minimal":
+		return "minimal"
+	default:
+		return "minimal"
+	}
+}
+
 // DesktopCheckUpdates reports whether the desktop should check for updates on
 // startup. Missing configs default to true so existing users keep update notices.
 func (c *Config) DesktopCheckUpdates() bool {
@@ -195,6 +212,15 @@ func (c *Config) DesktopCheckUpdates() bool {
 		return true
 	}
 	return *c.Desktop.CheckUpdates
+}
+
+// DesktopTelemetry reports whether the desktop sends the anonymous launch ping.
+// It carries no conversation, key, or file data — see desktop/README.md.
+func (c *Config) DesktopTelemetry() bool {
+	if c == nil || c.Desktop.Telemetry == nil {
+		return true
+	}
+	return *c.Desktop.Telemetry
 }
 
 // LSPConfig governs the optional Language Server Protocol tools (lsp_definition,
@@ -1756,11 +1782,22 @@ func (c *Config) ResolveModel(ref string) (*ProviderEntry, bool) {
 
 // ResolveModelWithFallback resolves a model reference to the canonical
 // "provider/model" form used by the desktop runtime. If ref is stale or empty,
-// it falls back to the first provider with at least one model.
+// it tries the user's configured default_model before falling back to the first
+// configured provider — so preference isn't overwritten by iteration order.
 func (c *Config) ResolveModelWithFallback(ref string) (resolvedRef string, fallback bool, ok bool) {
-	if strings.TrimSpace(ref) != "" {
+	ref = strings.TrimSpace(ref)
+	if ref != "" {
 		if e, found := c.ResolveModel(ref); found {
 			return e.Name + "/" + e.Model, false, true
+		}
+	}
+	// Before falling back to the first configured provider (which may not be the
+	// user's preferred choice), try the configured default_model.  Skip when ref
+	// already WAS the DefaultModel (it already failed above, so retrying won't
+	// help) or when the default provider has no API key configured.
+	if ref != c.DefaultModel && c.DefaultModel != "" {
+		if e, found := c.ResolveModel(c.DefaultModel); found && e.Configured() {
+			return e.Name + "/" + e.Model, true, true
 		}
 	}
 	for i := range c.Providers {

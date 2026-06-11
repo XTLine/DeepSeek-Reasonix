@@ -216,9 +216,11 @@ export interface AppBindings {
   DiagnoseBotConnection(id: string): Promise<BotConnectionDiagnostic>;
   TestBotConnection(id: string, target?: string): Promise<BotConnectionDiagnostic>;
   SetCloseBehavior(mode: string): Promise<void>;
+  SetDisplayMode(mode: string): Promise<void>;
   SetDesktopLanguage(lang: string): Promise<void>;
   SetDesktopAppearance(theme: string, style: string): Promise<void>;
   SetDesktopCheckUpdates(enabled: boolean): Promise<void>;
+  SetDesktopTelemetry(enabled: boolean): Promise<void>;
   SetExpandThinking(on: boolean): Promise<void>;
   MigrateDesktopPreferences(language: string, theme: string, style: string): Promise<void>;
   SetAgentParams(temperature: number, maxSteps: number, plannerMaxSteps: number, systemPrompt: string): Promise<void>;
@@ -233,6 +235,9 @@ export interface AppBindings {
   OpenDownloadPage(): Promise<void>;
   NeedsOnboarding(): Promise<boolean>;
   ConnectKey(apiKey: string): Promise<void>;
+  // Crash overlay "Send report" (desktop/crash_app.go): scrubs user paths, attaches
+  // version/os/arch, POSTs to the collection endpoint. Only ever sent on user click.
+  ReportCrash(kind: string, detail: string): Promise<void>;
   ListTabs(): Promise<TabMeta[]>;
   OpenProjectTab(workspaceRoot: string, topicID: string): Promise<TabMeta>;
   OpenGlobalTab(topicID: string): Promise<TabMeta>;
@@ -680,7 +685,9 @@ function makeMockApp(): AppBindings {
     desktopTheme: "light",
     desktopThemeStyle: "graphite",
     closeBehavior: "background",
+    displayMode: "minimal",
     checkUpdates: true,
+    telemetry: true,
     expandThinking: false,
     configPath: "~/projects/reasonix/reasonix.toml",
     providerKinds: ["openai"],
@@ -2031,6 +2038,9 @@ function makeMockApp(): AppBindings {
         async SetCloseBehavior(mode: string) {
           settings.closeBehavior = mode === "quit" ? "quit" : "background";
         },
+        async SetDisplayMode(mode: string) {
+          settings.displayMode = mode;
+        },
         async SetDesktopLanguage(lang: string) {
           settings.desktopLanguage = lang === "en" || lang === "zh" ? lang : "";
         },
@@ -2040,6 +2050,9 @@ function makeMockApp(): AppBindings {
         },
         async SetDesktopCheckUpdates(enabled: boolean) {
           settings.checkUpdates = enabled;
+        },
+        async SetDesktopTelemetry(enabled: boolean) {
+          settings.telemetry = enabled;
         },
         async SetExpandThinking(on: boolean) {
           settings.expandThinking = on;
@@ -2105,6 +2118,9 @@ function makeMockApp(): AppBindings {
       settings.providers.forEach((p) => {
         if (p.apiKeyEnv === "DEEPSEEK_API_KEY") p.keySet = true;
       });
+      await delay(300);
+    },
+    async ReportCrash() {
       await delay(300);
     },
     // Tab management mocks.

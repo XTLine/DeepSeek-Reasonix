@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -1385,12 +1386,12 @@ func withBuiltinFamilies(providers []config.ProviderEntry) []config.ProviderEntr
 	return providers
 }
 
-// promptMissingKeys re-runs the wizard's key-entry step for any enabled
-// provider whose api_key_env is unset. Newly entered values are appended to the
-// reasonix-owned global .env so the chat session that follows picks them up via
-// config.Load. The user can hit Enter to skip — the chat banner falls back to a
-// one-line warning so they still see what's missing. Returns a non-zero exit
-// code only when writing the env file fails.
+// promptMissingKeys re-runs the wizard's key-entry step for model refs that are
+// actually active and whose api_key_env is unset. Newly entered values are
+// appended to the reasonix-owned global .env so the chat session that follows
+// picks them up via config.Load. The user can hit Enter to skip — the chat
+// banner falls back to a one-line warning so they still see what's missing.
+// Returns a non-zero exit code only when writing the env file fails.
 func promptMissingKeys(cfg *config.Config) int {
 	missing := providersWithMissingKeys(cfg)
 	if len(missing) == 0 {
@@ -1418,19 +1419,41 @@ func promptMissingKeys(cfg *config.Config) int {
 // warns if they later switch to a model whose key is missing. configureKeys
 // dedupes shared envs, so duplicates are fine to leave in.
 func providersWithMissingKeys(cfg *config.Config) []config.ProviderEntry {
-	referenced := map[string]bool{
-		cfg.DefaultModel:        true,
-		cfg.Agent.PlannerModel:  true,
-		cfg.Agent.SubagentModel: true,
+	if cfg == nil {
+		return nil
 	}
-	for _, m := range cfg.Agent.SubagentModels {
-		referenced[m] = true
+	refs := []string{
+		cfg.DefaultModel,
+		cfg.Agent.PlannerModel,
+		cfg.Agent.SubagentModel,
 	}
-	var out []config.ProviderEntry
-	for _, p := range cfg.Providers {
-		if referenced[p.Name] && p.APIKeyEnv != "" && os.Getenv(p.APIKeyEnv) == "" {
-			out = append(out, p)
+	if !strings.EqualFold(strings.TrimSpace(cfg.Agent.AutoPlan), "off") {
+		refs = append(refs, cfg.Agent.AutoPlanClassifier)
+	}
+	if len(cfg.Agent.SubagentModels) > 0 {
+		keys := make([]string, 0, len(cfg.Agent.SubagentModels))
+		for key := range cfg.Agent.SubagentModels {
+			keys = append(keys, key)
 		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			refs = append(refs, cfg.Agent.SubagentModels[key])
+		}
+	}
+
+	var out []config.ProviderEntry
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		p, ok := cfg.ResolveModel(ref)
+		if !ok || p.APIKeyEnv == "" || os.Getenv(p.APIKeyEnv) != "" || seen[p.APIKeyEnv] {
+			continue
+		}
+		seen[p.APIKeyEnv] = true
+		out = append(out, *p)
 	}
 	return out
 }

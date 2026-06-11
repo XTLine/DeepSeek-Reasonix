@@ -147,7 +147,9 @@ type SettingsView struct {
 	DesktopTheme      string          `json:"desktopTheme"`
 	DesktopThemeStyle string          `json:"desktopThemeStyle"`
 	CloseBehavior     string          `json:"closeBehavior"`
+	DisplayMode       string          `json:"displayMode"`
 	CheckUpdates      bool            `json:"checkUpdates"`
+	Telemetry         bool            `json:"telemetry"`
 	ExpandThinking    bool            `json:"expandThinking"`
 	ConfigPath        string          `json:"configPath"`
 	// ProviderKinds lists the provider implementations the kernel actually
@@ -325,7 +327,9 @@ func (a *App) Settings() SettingsView {
 			DesktopTheme:      "light",
 			DesktopThemeStyle: "graphite",
 			CloseBehavior:     "background",
+			DisplayMode:       "minimal",
 			CheckUpdates:      true,
+			Telemetry:         true,
 			ExpandThinking:    false,
 		}
 	}
@@ -370,7 +374,9 @@ func (a *App) Settings() SettingsView {
 		DesktopTheme:      cfg.DesktopTheme(),
 		DesktopThemeStyle: cfg.DesktopThemeStyle(),
 		CloseBehavior:     cfg.DesktopCloseBehavior(),
+		DisplayMode:       cfg.DesktopDisplayMode(),
 		CheckUpdates:      cfg.DesktopCheckUpdates(),
+		Telemetry:         cfg.DesktopTelemetry(),
 		ExpandThinking:    cfg.Desktop.ExpandThinking,
 		ConfigPath:        cfgPath,
 		ProviderKinds:     nonNil(provider.Kinds()),
@@ -1269,6 +1275,11 @@ func (a *App) SetCloseBehavior(mode string) error {
 	return a.applyConfigOnly(func(c *config.Config) error { return c.SetDesktopCloseBehavior(mode) })
 }
 
+// SetDisplayMode updates the transcript display mode. UI-only, no rebuild needed.
+func (a *App) SetDisplayMode(mode string) error {
+	return a.applyConfigOnly(func(c *config.Config) error { return c.SetDesktopDisplayMode(mode) })
+}
+
 // SetDesktopLanguage updates only the desktop UI language. It deliberately does
 // not touch config.language, which the CLI/model-facing runtime uses.
 func (a *App) SetDesktopLanguage(lang string) error {
@@ -1299,6 +1310,11 @@ func (a *App) SetDesktopAppearance(theme, style string) error {
 // preference. Manual checks in Settings are unaffected.
 func (a *App) SetDesktopCheckUpdates(enabled bool) error {
 	return a.applyConfigOnly(func(c *config.Config) error { return c.SetDesktopCheckUpdates(enabled) })
+}
+
+// SetDesktopTelemetry sets whether the desktop sends the anonymous launch ping.
+func (a *App) SetDesktopTelemetry(enabled bool) error {
+	return a.applyConfigOnly(func(c *config.Config) error { return c.SetDesktopTelemetry(enabled) })
 }
 
 // SetExpandThinking sets whether reasoning text is expanded by default on
