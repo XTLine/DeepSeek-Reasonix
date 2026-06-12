@@ -16,6 +16,7 @@ import type {
   BotConnectionDiagnostic,
   BotInstallPollResult,
   BotInstallStartResult,
+  BotRuntimeStatusView,
   BotSettingsView,
   CapabilitiesView,
   CheckpointMeta,
@@ -229,6 +230,7 @@ export interface AppBindings {
   ClearBotSecret(envName: string): Promise<void>;
   StartBotConnectionInstall(provider: string, domain: string): Promise<BotInstallStartResult>;
   PollBotConnectionInstall(installID: string): Promise<BotInstallPollResult>;
+  BotRuntimeStatus(): Promise<BotRuntimeStatusView>;
   DiagnoseBotConnection(id: string): Promise<BotConnectionDiagnostic>;
   TestBotConnection(id: string, target?: string): Promise<BotConnectionDiagnostic>;
   SetCloseBehavior(mode: string): Promise<void>;
@@ -695,14 +697,15 @@ function makeMockApp(): AppBindings {
     bot: {
       enabled: !freshMock,
       model: "",
+      toolApprovalMode: "ask",
       maxSteps: 25,
       debounceMs: 1500,
       allowlist: {
         enabled: true,
         allowAll: false,
         qqUsers: [],
-        feishuUsers: [],
-        weixinUsers: [],
+        feishuUsers: freshMock ? [] : ["ou_mock_user_001"],
+        weixinUsers: freshMock ? [] : ["wxid_mock_user_001"],
         qqGroups: [],
         feishuGroups: [],
         weixinGroups: [],
@@ -735,6 +738,7 @@ function makeMockApp(): AppBindings {
           enabled: true,
           status: "connected",
           model: "",
+          toolApprovalMode: "",
           workspaceRoot: "",
           credential: {
             appId: "cli_mock_lark",
@@ -745,7 +749,7 @@ function makeMockApp(): AppBindings {
           },
           sessionMappings: [
             {
-              remoteId: "ou_3a2bdd60640aaa95518186677b1f6d8c",
+              remoteId: "ou_mock_user_001",
               sessionId: "topic:topic_product",
               scope: "global",
               workspaceRoot: "",
@@ -764,6 +768,7 @@ function makeMockApp(): AppBindings {
           enabled: true,
           status: "connected",
           model: "",
+          toolApprovalMode: "",
           workspaceRoot: "",
           credential: {
             appId: "",
@@ -774,7 +779,7 @@ function makeMockApp(): AppBindings {
           },
           sessionMappings: [
             {
-              remoteId: "wxid_kun_auto",
+              remoteId: "wxid_mock_user_001",
               sessionId: "topic:topic_ai",
               scope: "global",
               workspaceRoot: "",
@@ -919,7 +924,7 @@ function makeMockApp(): AppBindings {
               "[[reasonix-im]]",
               "provider=lark",
               "label=Feishu / Lark",
-              "sender=ou_3a2bdd60640aaa95518186677b1f6d8c",
+              "sender=ou_mock_user_001",
               "chat=p2p 会话",
               "[[/reasonix-im]]",
               "你可以做什么",
@@ -938,7 +943,7 @@ function makeMockApp(): AppBindings {
               "[[reasonix-im]]",
               "provider=weixin",
               "label=微信",
-              "sender=wxid_kun_auto",
+              "sender=wxid_mock_user_001",
               "chat=单聊",
               "[[/reasonix-im]]",
               "帮我整理一下今天要做的事",
@@ -957,7 +962,7 @@ function makeMockApp(): AppBindings {
               "[[reasonix-im]]",
               "provider=lark",
               "label=Feishu / Lark",
-              "sender=ou_3a2bdd60640aaa95518186677b1f6d8c",
+              "sender=ou_mock_user_001",
               "chat=p2p 会话",
               "[[/reasonix-im]]",
               "你可以做什么",
@@ -2267,6 +2272,16 @@ function makeMockApp(): AppBindings {
               : connection.credential,
           }));
         },
+        async BotRuntimeStatus() {
+          const runningConnections = settings.bot.connections.filter((connection) => connection.enabled && connection.status === "connected").length;
+          return {
+            running: settings.bot.enabled && runningConnections > 0,
+            status: settings.bot.enabled && runningConnections > 0 ? "running" : "stopped",
+            message: settings.bot.enabled && runningConnections > 0 ? `${runningConnections} bot connection(s) running` : "bot runtime is not started",
+            connections: runningConnections,
+            startedAt: settings.bot.enabled && runningConnections > 0 ? new Date(t0).toISOString() : "",
+          };
+        },
         async StartBotConnectionInstall(provider: string, domain: string) {
           const normalizedProvider = provider === "weixin" ? "weixin" : "feishu";
           const normalizedDomain = normalizedProvider === "weixin" ? "weixin" : domain === "lark" ? "lark" : "feishu";
@@ -2295,6 +2310,7 @@ function makeMockApp(): AppBindings {
             enabled: true,
             status: "connected",
             model: "",
+            toolApprovalMode: "",
             workspaceRoot: "",
             credential: {
               appId: provider === "feishu" ? "cli_mock" : "",

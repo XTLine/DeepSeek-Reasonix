@@ -119,15 +119,16 @@ type WeixinBotView struct {
 }
 
 type BotSettingsView struct {
-	Enabled     bool                `json:"enabled"`
-	Model       string              `json:"model"`
-	MaxSteps    int                 `json:"maxSteps"`
-	DebounceMs  int                 `json:"debounceMs"`
-	Allowlist   BotAllowlistView    `json:"allowlist"`
-	QQ          QQBotView           `json:"qq"`
-	Feishu      FeishuBotView       `json:"feishu"`
-	Weixin      WeixinBotView       `json:"weixin"`
-	Connections []BotConnectionView `json:"connections"`
+	Enabled          bool                `json:"enabled"`
+	Model            string              `json:"model"`
+	ToolApprovalMode string              `json:"toolApprovalMode"`
+	MaxSteps         int                 `json:"maxSteps"`
+	DebounceMs       int                 `json:"debounceMs"`
+	Allowlist        BotAllowlistView    `json:"allowlist"`
+	QQ               QQBotView           `json:"qq"`
+	Feishu           FeishuBotView       `json:"feishu"`
+	Weixin           WeixinBotView       `json:"weixin"`
+	Connections      []BotConnectionView `json:"connections"`
 }
 
 // SettingsView is the whole Settings panel payload.
@@ -413,10 +414,11 @@ func botSettingsView(b config.BotConfig) BotSettingsView {
 		mode = "webhook"
 	}
 	return BotSettingsView{
-		Enabled:    b.Enabled,
-		Model:      b.Model,
-		MaxSteps:   b.MaxSteps,
-		DebounceMs: b.DebounceMs,
+		Enabled:          b.Enabled,
+		Model:            b.Model,
+		ToolApprovalMode: normalizeBotConnectionToolApprovalMode(b.ToolApprovalMode),
+		MaxSteps:         b.MaxSteps,
+		DebounceMs:       b.DebounceMs,
 		Allowlist: BotAllowlistView{
 			Enabled:      b.Allowlist.Enabled,
 			AllowAll:     b.Allowlist.AllowAll,
@@ -508,6 +510,9 @@ func (a *App) loadDesktopUserConfigForEdit() (*config.Config, string, error) {
 	if _, err := os.Stat(userPath); err == nil {
 		cfg := config.LoadForEdit(userPath)
 		normalizeLegacyDesktopProviderAccessForSettings(cfg, userPath)
+		if err := a.migrateLegacyBotConfigToUser(cfg, userPath); err != nil {
+			return nil, "", err
+		}
 		return cfg, userPath, nil
 	}
 	cfg := config.LoadForEdit(userPath)
@@ -519,7 +524,71 @@ func (a *App) loadDesktopUserConfigForEdit() (*config.Config, string, error) {
 	legacyCfg := config.LoadForEdit(legacyPath)
 	normalizeLegacyDesktopProviderAccessForSettings(legacyCfg, legacyPath)
 	legacyCfg.ConfigVersion = config.Default().ConfigVersion
+	if err := migrateLegacyBotConfigToUser(cfg, legacyCfg, userPath); err != nil {
+		return nil, "", err
+	}
 	return legacyCfg, userPath, nil
+}
+
+func (a *App) migrateLegacyBotConfigToUser(userCfg *config.Config, userPath string) error {
+	if userCfg == nil {
+		return nil
+	}
+	legacyPath := config.SourcePathForRoot(a.activeWorkspaceRoot())
+	if legacyPath == "" || sameConfigPath(legacyPath, userPath) {
+		return nil
+	}
+	legacyCfg := config.LoadForEdit(legacyPath)
+	return migrateLegacyBotConfigToUser(userCfg, legacyCfg, userPath)
+}
+
+func migrateLegacyBotConfigToUser(userCfg, legacyCfg *config.Config, userPath string) error {
+	if userCfg == nil || legacyCfg == nil || desktopBotConfigConfigured(userCfg.Bot) {
+		return nil
+	}
+	if !desktopBotConfigConfigured(legacyCfg.Bot) {
+		return nil
+	}
+	userCfg.Bot = legacyCfg.Bot
+	if err := userCfg.SaveTo(userPath); err != nil {
+		return fmt.Errorf("migrate legacy bot config: %w", err)
+	}
+	return nil
+}
+
+func desktopBotConfigConfigured(bot config.BotConfig) bool {
+	defaults := config.Default().Bot
+	if bot.Enabled || strings.TrimSpace(bot.Model) != "" || len(bot.Connections) > 0 {
+		return true
+	}
+	if (bot.MaxSteps != 0 && bot.MaxSteps != defaults.MaxSteps) || (bot.DebounceMs != 0 && bot.DebounceMs != defaults.DebounceMs) {
+		return true
+	}
+	if bot.Allowlist.AllowAll ||
+		len(bot.Allowlist.QQUsers)+len(bot.Allowlist.FeishuUsers)+len(bot.Allowlist.WeixinUsers) > 0 ||
+		len(bot.Allowlist.QQGroups)+len(bot.Allowlist.FeishuGroups)+len(bot.Allowlist.WeixinGroups) > 0 {
+		return true
+	}
+	if bot.QQ.Enabled || strings.TrimSpace(bot.QQ.AppID) != "" || bot.QQ.AppSecretEnv != defaults.QQ.AppSecretEnv {
+		return true
+	}
+	if bot.Feishu.Enabled ||
+		strings.TrimSpace(bot.Feishu.AppID) != "" ||
+		bot.Feishu.Domain != defaults.Feishu.Domain ||
+		bot.Feishu.AppSecretEnv != defaults.Feishu.AppSecretEnv ||
+		strings.TrimSpace(bot.Feishu.VerificationToken) != "" ||
+		bot.Feishu.Mode != defaults.Feishu.Mode ||
+		bot.Feishu.WebhookPort != defaults.Feishu.WebhookPort ||
+		bot.Feishu.RequireMention != defaults.Feishu.RequireMention {
+		return true
+	}
+	if bot.Weixin.Enabled ||
+		bot.Weixin.AccountID != defaults.Weixin.AccountID ||
+		bot.Weixin.TokenEnv != defaults.Weixin.TokenEnv ||
+		bot.Weixin.APIBase != defaults.Weixin.APIBase {
+		return true
+	}
+	return false
 }
 
 func normalizeLegacyDesktopProviderAccessForSettings(cfg *config.Config, path string) {
@@ -1226,9 +1295,10 @@ func (a *App) SetNetwork(n NetworkView) error {
 }
 
 func (a *App) SetBotSettings(b BotSettingsView) error {
-	return a.applyConfigOnly(func(c *config.Config) error {
+	err := a.applyConfigOnly(func(c *config.Config) error {
 		c.Bot.Enabled = b.Enabled
 		c.Bot.Model = strings.TrimSpace(b.Model)
+		c.Bot.ToolApprovalMode = normalizeBotConnectionToolApprovalMode(b.ToolApprovalMode)
 		c.Bot.MaxSteps = b.MaxSteps
 		c.Bot.DebounceMs = b.DebounceMs
 		c.Bot.Allowlist = config.BotAllowlist{
@@ -1265,6 +1335,10 @@ func (a *App) SetBotSettings(b BotSettingsView) error {
 		c.Bot.Connections = botConnectionConfigs(b.Connections)
 		return nil
 	})
+	if err == nil {
+		a.refreshBotRuntimeAsync()
+	}
+	return err
 }
 
 func (a *App) SetBotSecret(envName, value string) error {
@@ -1275,6 +1349,7 @@ func (a *App) SetBotSecret(envName, value string) error {
 	if err := upsertDotEnv(envName, value); err != nil {
 		return err
 	}
+	a.refreshBotRuntimeAsync()
 	return nil
 }
 
@@ -1283,7 +1358,11 @@ func (a *App) ClearBotSecret(envName string) error {
 	if envName == "" {
 		return fmt.Errorf("bot secret env name is empty")
 	}
-	return removeDotEnv(envName)
+	if err := removeDotEnv(envName); err != nil {
+		return err
+	}
+	a.refreshBotRuntimeAsync()
+	return nil
 }
 
 // SetCloseBehavior updates desktop-only window close behavior without rebuilding
