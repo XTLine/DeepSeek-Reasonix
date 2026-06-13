@@ -140,3 +140,57 @@ func TestUnconfinedWriterWritesAnywhere(t *testing.T) {
 		t.Errorf("unconfined writer did not write: %v", err)
 	}
 }
+
+// --- confineRead & ConfineReaders ---
+
+func TestConfineReadEmpty(t *testing.T) {
+	if confineRead(nil, "/anywhere") {
+		t.Error("empty forbidRoots should be unconfined")
+	}
+}
+
+func TestConfineReadInsideAndOutside(t *testing.T) {
+	root := t.TempDir()
+	forbidRoots := realRoots([]string{root})
+
+	if !confineRead(forbidRoots, filepath.Join(root, "secret", "key.pem")) {
+		t.Error("path inside forbid root should be forbidden")
+	}
+	// A path outside must pass.
+	if confineRead(forbidRoots, filepath.Join(t.TempDir(), "ok.txt")) {
+		t.Error("path outside forbid root should not be forbidden")
+	}
+}
+
+func TestConfineReadBlocksReadFile(t *testing.T) {
+	forbidDir := t.TempDir()
+	secretPath := filepath.Join(forbidDir, "secret.txt")
+	if err := os.WriteFile(secretPath, []byte("classified"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	forbidRoots := realRoots([]string{forbidDir})
+	rf := readFile{forbidRoots: forbidRoots}
+	args, _ := json.Marshal(map[string]string{"path": secretPath})
+	if _, err := rf.Execute(context.Background(), args); err == nil {
+		t.Error("read_file should refuse a forbid-read path")
+	}
+	// Unconfined (nil forbidRoots) should work.
+	rfUnconfined := readFile{}
+	if _, err := rfUnconfined.Execute(context.Background(), args); err != nil {
+		t.Errorf("unconfined read_file should work: %v", err)
+	}
+}
+
+func TestConfineReaders(t *testing.T) {
+	forbidDir := t.TempDir()
+	readers := ConfineReaders([]string{forbidDir})
+	names := map[string]bool{}
+	for _, t := range readers {
+		names[t.Name()] = true
+	}
+	for _, want := range []string{"read_file", "ls", "glob"} {
+		if !names[want] {
+			t.Errorf("ConfineReaders missing %q", want)
+		}
+	}
+}

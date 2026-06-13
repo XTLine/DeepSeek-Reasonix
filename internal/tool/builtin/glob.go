@@ -15,8 +15,12 @@ import (
 func init() { tool.RegisterBuiltin(globTool{}) }
 
 // globTool matches files by pattern. workDir, when non-empty, is the directory
-// a relative pattern resolves against (see resolveIn).
-type globTool struct{ workDir string }
+// a relative pattern resolves against (see resolveIn). forbidRoots lists
+// directories the tool may not search inside.
+type globTool struct {
+	workDir     string
+	forbidRoots []string
+}
 
 func (globTool) Name() string { return "glob" }
 
@@ -51,7 +55,7 @@ func (g globTool) Execute(ctx context.Context, args json.RawMessage) (string, er
 
 	// If the pattern contains **, use recursive matching via filepath.WalkDir.
 	if strings.Contains(p.Pattern, "**") {
-		return globRecursive(ctx, p.Pattern)
+		return g.globRecursive(ctx, p.Pattern)
 	}
 
 	// For patterns without **, try filepath.Glob first. If no matches are
@@ -65,7 +69,7 @@ func (g globTool) Execute(ctx context.Context, args json.RawMessage) (string, er
 		return "", fmt.Errorf("glob %q: %w", p.Pattern, err)
 	}
 	if len(matches) == 0 && !strings.ContainsAny(rawPattern, "/\\") {
-		return globRecursive(ctx, filepath.Join(g.workDir, "**", rawPattern))
+		return g.globRecursive(ctx, filepath.Join(g.workDir, "**", rawPattern))
 	}
 	if len(matches) == 0 {
 		return "(no matches)", nil
@@ -81,7 +85,7 @@ func (g globTool) Execute(ctx context.Context, args json.RawMessage) (string, er
 // It splits the pattern at ** to get a root prefix and a suffix to match
 // against each file path found during the walk. Accepts a context so the
 // walk can be interrupted on cancellation.
-func globRecursive(ctx context.Context, pattern string) (string, error) {
+func (g globTool) globRecursive(ctx context.Context, pattern string) (string, error) {
 	// Split on ** to find the root directory and the remaining pattern.
 	parts := strings.SplitN(pattern, "**", 2)
 	root := parts[0]
@@ -116,7 +120,7 @@ func globRecursive(ctx context.Context, pattern string) (string, error) {
 			return nil // skip unreadable entries
 		}
 		if d.IsDir() {
-			if skipWalkDir(root, path, d.Name()) {
+			if skipWalkDir(root, path, d.Name()) || skipForbidDir(path, g.forbidRoots) {
 				return filepath.SkipDir
 			}
 			return nil

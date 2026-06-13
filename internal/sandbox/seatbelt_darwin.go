@@ -28,11 +28,9 @@ func Available() bool {
 
 // seatbeltProfile builds an SBPL profile that allows everything, then denies
 // all file writes and re-allows them only under the write-roots (workspace +
-// temp + caches). Network is denied unless allowed. Reads are left open so the
-// toolchain (compilers reading GOROOT, git reading ~/.gitconfig, …) keeps
-// working — the boundary this draws is "can't write outside the workspace, and
-// optionally can't talk to the network", which is the Phase 0 blast-radius made
-// to also cover arbitrary shell commands.
+// temp + caches). Network is denied unless allowed. Forbid-read roots get
+// individual deny-read rules. Reads elsewhere keep working so the toolchain
+// (compilers reading GOROOT, git reading ~/.gitconfig, …) functions.
 func seatbeltProfile(spec Spec) string {
 	var b strings.Builder
 	b.WriteString("(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write*\n")
@@ -40,6 +38,12 @@ func seatbeltProfile(spec Spec) string {
 		fmt.Fprintf(&b, "    (subpath %s)\n", sbplString(p))
 	}
 	b.WriteString(")\n")
+	// Deny reads under forbid-read roots so even a permitted shell command
+	// cannot peek at them through the OS sandbox. Each path gets its own deny
+	// rule; (allow default) above keeps reads working everywhere else.
+	for _, p := range forbidReadDirs(spec.ForbidReadRoots) {
+		fmt.Fprintf(&b, "(deny file-read* (subpath %s))\n", sbplString(p))
+	}
 	if !spec.Network {
 		b.WriteString("(deny network*)\n")
 	}
@@ -86,4 +90,28 @@ func sbplString(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)
 	return `"` + s + `"`
+}
+
+// forbidReadDirs resolves forbid-read roots to absolute, symlink-free paths so
+// Seatbelt matches the canonical on-disk location (e.g. /private/tmp for /tmp).
+func forbidReadDirs(roots []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(roots))
+	for _, d := range roots {
+		if d == "" {
+			continue
+		}
+		abs, err := filepath.Abs(d)
+		if err != nil {
+			continue
+		}
+		if real, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = real
+		}
+		if !seen[abs] {
+			seen[abs] = true
+			out = append(out, abs)
+		}
+	}
+	return out
 }

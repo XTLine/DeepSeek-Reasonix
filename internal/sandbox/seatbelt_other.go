@@ -34,9 +34,9 @@ func Available() bool {
 }
 
 // bwrapArgs builds the bubblewrap command-line arguments that confine the
-// shell command to the write roots, deny network unless allowed, and allow
-// read access to the whole filesystem (matching the macOS Seatbelt profile's
-// read-open policy).
+// shell command to the write roots, deny network unless allowed, and overlay
+// forbid-read directories with tmpfs so they appear empty. The rest of the
+// filesystem is mounted read-only (matching the macOS Seatbelt profile).
 func bwrapArgs(spec Spec, sh Shell, command string) []string {
 	args := []string{
 		"--unshare-net", // deny network by default
@@ -51,6 +51,9 @@ func bwrapArgs(spec Spec, sh Shell, command string) []string {
 	}
 	for _, root := range spec.WriteRoots {
 		args = append(args, "--bind", root, root)
+	}
+	for _, root := range spec.ForbidReadRoots {
+		args = append(args, "--tmpfs", root)
 	}
 	return append(args, sh.argv(command)...)
 }

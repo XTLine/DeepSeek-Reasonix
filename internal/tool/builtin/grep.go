@@ -18,6 +18,7 @@ import (
 
 	fileenc "reasonix/internal/fileutil/encoding"
 	"reasonix/internal/proc"
+	"reasonix/internal/sandbox"
 	"reasonix/internal/tool"
 )
 
@@ -63,9 +64,14 @@ func init() { tool.RegisterBuiltin(grepTool{}) }
 // grepTool searches files by regex. workDir, when non-empty, is the directory a
 // relative path resolves against (see resolveIn). rg, when non-empty, is a
 // ripgrep binary the search delegates to instead of the native Go scanner.
+// forbidRoots lists directories the tool may not search inside.
+// sb is the OS sandbox spec for the ripgrep subprocess, making forbid-read
+// directories invisible to ripgrep instead of checking them in-process.
 type grepTool struct {
-	workDir string
-	rg      string
+	workDir     string
+	rg          string
+	forbidRoots []string
+	sb          sandbox.Spec
 }
 
 func (grepTool) Name() string { return "grep" }
@@ -202,7 +208,7 @@ func (g grepTool) Execute(ctx context.Context, args json.RawMessage) (string, er
 	}
 
 	if info.IsDir() {
-		ig := newWalkIgnorer(p.Path)
+		ig := newWalkIgnorer(p.Path, g.forbidRoots)
 		_ = filepath.WalkDir(p.Path, func(path string, d os.DirEntry, err error) error {
 			if ctx.Err() != nil {
 				return ctx.Err() // abort promptly on cancel — a huge tree is interruptible
@@ -226,6 +232,9 @@ func (g grepTool) Execute(ctx context.Context, args json.RawMessage) (string, er
 			return nil
 		})
 	} else {
+		if confineRead(g.forbidRoots, p.Path) {
+			return formatGrep(ctx, nil, false, to), nil
+		}
 		_ = searchFile(p.Path)
 	}
 
@@ -235,10 +244,17 @@ func (g grepTool) Execute(ctx context.Context, args json.RawMessage) (string, er
 // runRipgrep delegates the search to ripgrep, which already emits
 // path:line:text with these flags and honors .gitignore. Output is streamed and
 // capped at grepMaxMatches so a flood of hits can't blow up memory.
+// The ripgrep subprocess is wrapped in the OS sandbox so forbid-read
+// directories are invisible to it (tmpfs on Linux, deny file-read* on macOS).
 func (g grepTool) runRipgrep(ctx context.Context, pattern, path string, to time.Duration) (string, error) {
-	cmd := exec.CommandContext(ctx, g.rg,
-		"--no-heading", "--line-number", "--with-filename", "--color", "never",
-		"--regexp", pattern, "--", path)
+	// Build the ripgrep command as a shell command string so it can be wrapped
+	// in the OS sandbox (bubblewrap / seatbelt). Shell metacharacters in
+	// pattern and path are single-quote escaped.
+	rgCmd := g.rg + " --no-heading --line-number --with-filename --color never --regexp " +
+		shellQuote(pattern) + " -- " + shellQuote(path)
+	argv, _ := sandbox.Command(g.sb, g.sb.Shell, rgCmd)
+
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	proc.HideWindow(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -275,6 +291,17 @@ func (g grepTool) runRipgrep(ctx context.Context, pattern, path string, to time.
 		}
 	}
 	return formatGrep(ctx, out, truncated, to), nil
+}
+
+// shellQuote single-quote escapes s for safe use in a POSIX shell command
+// string. If s contains no single quotes, it wraps s in single quotes. If it
+// does, each embedded ' is replaced with '\'' (end quote, escaped quote,
+// reopen quote).
+func shellQuote(s string) string {
+	if !strings.Contains(s, "'") {
+		return "'" + s + "'"
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // SearchSpec configures the grep tool's engine. A non-empty RgPath makes grep
@@ -317,7 +344,8 @@ func ResolveSearch(engine, rgPath string, warn io.Writer) SearchSpec {
 }
 
 // ConfineSearch returns the grep built-in bound to a resolved search engine,
-// overriding the native instance registered at init.
-func ConfineSearch(spec SearchSpec) tool.Tool {
-	return grepTool{rg: spec.RgPath}
+// os sandbox spec for the ripgrep subprocess, and forbid-read roots for the
+// native scanner, overriding the native instance registered at init.
+func ConfineSearch(spec SearchSpec, sb sandbox.Spec, forbidRoots []string) tool.Tool {
+	return grepTool{rg: spec.RgPath, sb: sb, forbidRoots: forbidRoots}
 }

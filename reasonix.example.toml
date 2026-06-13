@@ -111,6 +111,17 @@ effort         = "high"
 enabled = []   # empty = all built-in tools
 bash_timeout_seconds = 120   # foreground safety cap; set 0 for no tool-local cap
 
+# Sandbox confinement bounds the blast radius of tool calls. File-writers
+# (write_file/edit_file/multi_edit) may only write under workspace_root (empty =
+# current dir) + allow_write. forbid_read lists dirs the agent cannot read or list
+# (useful for hiding secrets or sensitive configuration from the model).
+# [sandbox]
+# workspace_root = ""                # default: current working directory
+# allow_write    = ["/tmp"]          # extra dirs writers may also modify
+# forbid_read    = ["~/.ssh"]        # dirs the agent cannot read or list
+# bash           = "enforce"         # "enforce" (default) or "off"; macOS Seatbelt
+# network        = true
+
 # CodeGraph code intelligence (symbol/call-graph search via tree-sitter + SQLite),
 # a built-in MCP server giving the agent codegraph_* search / context / explore /
 # trace / node tools. Off by default for first-run sessions. Once enabled, the

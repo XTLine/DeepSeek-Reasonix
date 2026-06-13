@@ -50,6 +50,41 @@ func ConfineWriters(roots []string) []tool.Tool {
 	}
 }
 
+// ConfineReaders returns the read/list/search built-ins (read_file, glob,
+// ls) bound to forbidRoots — directories the agent may not read or list.
+// grep is handled separately by ConfineSearch so it can also carry the
+// sandbox spec for its ripgrep subprocess.
+// An empty forbidRoots slice yields unconfined readers (the safe default).
+func ConfineReaders(forbidRoots []string) []tool.Tool {
+	rs := realRoots(forbidRoots)
+	return []tool.Tool{
+		readFile{forbidRoots: rs},
+		listDir{forbidRoots: rs},
+		globTool{forbidRoots: rs},
+	}
+}
+
+// confineRead reports whether target is inside any forbidRoot. An empty
+// forbidRoots slice is unconfined (returns false). Callers should return a
+// result that mimics the directory appearing empty (e.g. "no such file" for
+// read_file, "(empty directory)" for ls, "(no matches)" for grep) — matching
+// the tmpfs semantics the bubblewrap sandbox provides.
+func confineRead(forbidRoots []string, target string) bool {
+	if len(forbidRoots) == 0 {
+		return false
+	}
+	abs, err := realPath(target)
+	if err != nil {
+		return false // can't resolve → let the caller's normal error path handle it
+	}
+	for _, r := range forbidRoots {
+		if within(r, abs) {
+			return true
+		}
+	}
+	return false
+}
+
 // realRoots resolves each root to an absolute, symlink-free path, dropping any
 // that cannot be made absolute. Resolving here (once) means the per-call check
 // only has to resolve the target.
