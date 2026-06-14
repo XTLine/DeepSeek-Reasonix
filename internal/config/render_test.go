@@ -53,6 +53,7 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	orig.UI.ThemeStyle = "glacier"
 	orig.UI.ShortcutLayout = "desktop"
 	orig.Desktop.Language = "en"
+	orig.Desktop.LayoutStyle = "workbench"
 	orig.Desktop.Theme = "dark"
 	orig.Desktop.ThemeStyle = "graphite"
 	orig.Desktop.CloseBehavior = "background"
@@ -160,6 +161,9 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	}
 	if got.Desktop.Language != "en" {
 		t.Errorf("desktop.language = %q, want en", got.Desktop.Language)
+	}
+	if got.Desktop.LayoutStyle != "workbench" {
+		t.Errorf("desktop.layout_style = %q, want workbench", got.Desktop.LayoutStyle)
 	}
 	if got.Desktop.Theme != "dark" {
 		t.Errorf("desktop.theme = %q, want dark", got.Desktop.Theme)

@@ -299,6 +299,7 @@ func TestSettingsUsesUserDesktopPreferencesNotProjectConfig(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(project, "reasonix.toml"), []byte(`
 [desktop]
 language = "zh"
+layout_style = "workbench"
 theme = "light"
 theme_style = "glacier"
 close_behavior = "quit"
@@ -311,6 +312,9 @@ status_bar_items = ["cost", "balance"]
 	userCfg := config.LoadForEdit(config.UserConfigPath())
 	if err := userCfg.SetDesktopLanguage("en"); err != nil {
 		t.Fatalf("set desktop language: %v", err)
+	}
+	if err := userCfg.SetDesktopLayoutStyle("classic"); err != nil {
+		t.Fatalf("set desktop layout style: %v", err)
 	}
 	if err := userCfg.SetDesktopAppearance("dark", "graphite"); err != nil {
 		t.Fatalf("set desktop appearance: %v", err)
@@ -335,8 +339,8 @@ status_bar_items = ["cost", "balance"]
 	}
 
 	got := NewApp().Settings()
-	if got.DesktopLanguage != "en" || got.DesktopTheme != "dark" || got.DesktopThemeStyle != "graphite" || got.CloseBehavior != "background" || got.StatusBarStyle != "text" {
-		t.Fatalf("desktop settings = lang:%q theme:%q style:%q close:%q status:%q, want user-level desktop prefs", got.DesktopLanguage, got.DesktopTheme, got.DesktopThemeStyle, got.CloseBehavior, got.StatusBarStyle)
+	if got.DesktopLanguage != "en" || got.DesktopLayoutStyle != "classic" || got.DesktopTheme != "dark" || got.DesktopThemeStyle != "graphite" || got.CloseBehavior != "background" || got.StatusBarStyle != "text" {
+		t.Fatalf("desktop settings = lang:%q layout:%q theme:%q style:%q close:%q status:%q, want user-level desktop prefs", got.DesktopLanguage, got.DesktopLayoutStyle, got.DesktopTheme, got.DesktopThemeStyle, got.CloseBehavior, got.StatusBarStyle)
 	}
 	if want := []string{"model", "balance", "cache"}; !reflect.DeepEqual(got.StatusBarItems, want) {
 		t.Fatalf("desktop status bar items = %v, want user-level %v", got.StatusBarItems, want)
@@ -352,6 +356,7 @@ default_model = "legacy-provider/legacy-model"
 
 [desktop]
 language = "zh"
+layout_style = "workbench"
 theme = "light"
 theme_style = "glacier"
 close_behavior = "quit"
@@ -372,7 +377,7 @@ status_bar_items = ["model", "cache", "balance"]
 	if got.ConfigPath != config.UserConfigPath() {
 		t.Fatalf("Settings configPath = %q, want user config %q", got.ConfigPath, config.UserConfigPath())
 	}
-	if got.DefaultModel != "legacy-provider/legacy-model" || got.DesktopLanguage != "zh" || got.DesktopTheme != "light" || got.DesktopThemeStyle != "glacier" || got.CloseBehavior != "quit" || got.StatusBarStyle != "text" {
+	if got.DefaultModel != "legacy-provider/legacy-model" || got.DesktopLanguage != "zh" || got.DesktopLayoutStyle != "workbench" || got.DesktopTheme != "light" || got.DesktopThemeStyle != "glacier" || got.CloseBehavior != "quit" || got.StatusBarStyle != "text" {
 		t.Fatalf("Settings did not seed from legacy project config: %+v", got)
 	}
 	if want := []string{"model", "cache", "balance"}; !reflect.DeepEqual(got.StatusBarItems, want) {
@@ -385,8 +390,8 @@ status_bar_items = ["model", "cache", "balance"]
 		t.Fatalf("SetDesktopLanguage: %v", err)
 	}
 	userCfg := config.LoadForEdit(config.UserConfigPath())
-	if userCfg.DesktopLanguage() != "en" || userCfg.DesktopTheme() != "light" || userCfg.DesktopThemeStyle() != "glacier" || userCfg.DesktopCloseBehavior() != "quit" || userCfg.DesktopStatusBarStyle() != "text" {
-		t.Fatalf("saved user config did not preserve seeded desktop prefs: lang:%q theme:%q style:%q close:%q status:%q", userCfg.DesktopLanguage(), userCfg.DesktopTheme(), userCfg.DesktopThemeStyle(), userCfg.DesktopCloseBehavior(), userCfg.DesktopStatusBarStyle())
+	if userCfg.DesktopLanguage() != "en" || userCfg.DesktopLayoutStyle() != "workbench" || userCfg.DesktopTheme() != "light" || userCfg.DesktopThemeStyle() != "glacier" || userCfg.DesktopCloseBehavior() != "quit" || userCfg.DesktopStatusBarStyle() != "text" {
+		t.Fatalf("saved user config did not preserve seeded desktop prefs: lang:%q layout:%q theme:%q style:%q close:%q status:%q", userCfg.DesktopLanguage(), userCfg.DesktopLayoutStyle(), userCfg.DesktopTheme(), userCfg.DesktopThemeStyle(), userCfg.DesktopCloseBehavior(), userCfg.DesktopStatusBarStyle())
 	}
 	if want := []string{"model", "cache", "balance"}; !reflect.DeepEqual(userCfg.DesktopStatusBarItems(), want) {
 		t.Fatalf("saved user config did not preserve seeded status bar items: got %v want %v", userCfg.DesktopStatusBarItems(), want)
@@ -950,6 +955,9 @@ func TestMigrateDesktopPreferencesDoesNotOverwriteExistingConfig(t *testing.T) {
 	if err := userCfg.SetDesktopLanguage("en"); err != nil {
 		t.Fatalf("set desktop language: %v", err)
 	}
+	if err := userCfg.SetDesktopLayoutStyle("workbench"); err != nil {
+		t.Fatalf("set desktop layout style: %v", err)
+	}
 	if err := userCfg.SetDesktopAppearance("dark", "graphite"); err != nil {
 		t.Fatalf("set desktop appearance: %v", err)
 	}
@@ -962,8 +970,8 @@ func TestMigrateDesktopPreferencesDoesNotOverwriteExistingConfig(t *testing.T) {
 	}
 
 	got := config.LoadForEdit(config.UserConfigPath())
-	if got.DesktopLanguage() != "en" || got.DesktopTheme() != "dark" || got.DesktopThemeStyle() != "graphite" {
-		t.Fatalf("desktop prefs after migration = lang:%q theme:%q style:%q, want existing config preserved", got.DesktopLanguage(), got.DesktopTheme(), got.DesktopThemeStyle())
+	if got.DesktopLanguage() != "en" || got.DesktopLayoutStyle() != "workbench" || got.DesktopTheme() != "dark" || got.DesktopThemeStyle() != "graphite" {
+		t.Fatalf("desktop prefs after migration = lang:%q layout:%q theme:%q style:%q, want existing config preserved", got.DesktopLanguage(), got.DesktopLayoutStyle(), got.DesktopTheme(), got.DesktopThemeStyle())
 	}
 }
 

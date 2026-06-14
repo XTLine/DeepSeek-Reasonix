@@ -362,7 +362,7 @@ function settingsTabMeta(id: SettingsTab, s: SettingsView, t: ReturnType<typeof 
     case "models":
       return settingsModelMeta(s, t);
     case "general":
-      return `${closeBehaviorLabel(normalizeCloseBehavior(s.closeBehavior), t)} · ${t(`settings.autoPlan.${normalizeAutoPlan(s.autoPlan)}`)}`;
+      return `${desktopLayoutStyleLabel(normalizeDesktopLayoutStyle(s.desktopLayoutStyle), t)} · ${closeBehaviorLabel(normalizeCloseBehavior(s.closeBehavior), t)}`;
     case "providers":
       return t("settings.providerCount", { n: s.providers.length });
     case "bots":
@@ -635,6 +635,7 @@ function normalizeSettingsView(view: SettingsView | null | undefined): SettingsV
     autoApproveTools: Boolean(view.autoApproveTools ?? view.bypass),
     bypass: Boolean(view.autoApproveTools ?? view.bypass),
     desktopLanguage: normalizeLangPref(view.desktopLanguage),
+    desktopLayoutStyle: normalizeDesktopLayoutStyle(view.desktopLayoutStyle),
     desktopTheme: normalizeThemePreference(view.desktopTheme),
     desktopThemeStyle: normalizeThemeStyleForTheme(view.desktopThemeStyle, normalizeThemePreference(view.desktopTheme)),
     closeBehavior: normalizeCloseBehavior(view.closeBehavior),
@@ -655,6 +656,16 @@ type DisplayMode = "standard" | "compact";
 
 function normalizeDisplayMode(mode: string | undefined): DisplayMode {
   return mode === "standard" || mode === "compact" ? mode : "standard";
+}
+
+type DesktopLayoutStyle = "classic" | "workbench";
+
+function normalizeDesktopLayoutStyle(style: string | undefined): DesktopLayoutStyle {
+  return style === "workbench" ? "workbench" : "classic";
+}
+
+function desktopLayoutStyleLabel(style: DesktopLayoutStyle, t: ReturnType<typeof useT>): string {
+  return t(`settings.desktopLayoutStyle.${style}`);
 }
 
 type StatusBarStyle = "icon" | "text";
@@ -743,6 +754,7 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
   useEffect(() => () => mouseDragCleanupRef.current?.(), []);
   const autoPlan = normalizeAutoPlan(s.autoPlan);
   const languagePref = normalizeLangPref(s.desktopLanguage);
+  const desktopLayoutStyle = normalizeDesktopLayoutStyle(s.desktopLayoutStyle);
   const [genMusicPreset, setGenMusicPreset] = useState<GenerativePreset>(getGenerativePreset());
   const [soundPref, setSoundPref] = useState<SoundWavPref>(getSuccessPreference());
   const [attentionPref, setAttentionPref] = useState<SoundWavPref>(getAttentionPreference());
@@ -909,6 +921,20 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
               onClick={() => setLanguage(pref)}
             >
               {pref === "" ? t("settings.langAuto") : pref === "zh" ? "中文" : "English"}
+            </button>
+          ))}
+        </div>
+      </SettingsField>
+      <SettingsField label={t("settings.desktopLayoutStyle")}>
+        <div className="set-seg">
+          {(["classic", "workbench"] as const).map((style) => (
+            <button
+              key={style}
+              className={`set-seg__btn${desktopLayoutStyle === style ? " set-seg__btn--on" : ""}`}
+              disabled={busy}
+              onClick={() => void apply(() => app.SetDesktopLayoutStyle(style))}
+            >
+              {desktopLayoutStyleLabel(style, t)}
             </button>
           ))}
         </div>
