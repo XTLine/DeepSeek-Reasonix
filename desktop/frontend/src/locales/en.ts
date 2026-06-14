@@ -29,12 +29,7 @@ export const en = {
   "topbar.newSession": "New session",
   "topbar.startupError": "startup error: {msg}",
 
-  // tab bar
-  "tabBar.closeTab": "Close tab",
-  "tabBar.closeOtherTabs": "Close other tabs",
-  "tabBar.closeTabsToRight": "Close tabs to right",
-  "tabBar.newSession": "New session",
-  "tabBar.tabActions": "Tab actions",
+  // app chrome
   "tabBar.commandSearch": "Search · Command · Open file",
   "tabBar.commandSearchCompact": "Search",
 
@@ -523,6 +518,7 @@ export const en = {
   "projectTree.status.thinking": "thinking",
   "projectTree.status.streaming": "responding",
   "projectTree.status.waitingConfirmation": "waiting",
+  "projectTree.status.backgroundJob": "background job",
   "projectTree.status.paused": "paused",
   "projectTree.status.error": "error",
   "projectTree.removeProject": "Remove from sidebar",

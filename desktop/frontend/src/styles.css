@@ -14173,13 +14173,6 @@ a[href] {
   min-width: 16px;
 }
 
-.app-chrome__tab-strip {
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 100%;
-  display: none;
-}
-
 .app-chrome__identity {
   flex: 0 0 auto;
   min-width: 128px;
@@ -14294,22 +14287,9 @@ a[href] {
   transition: padding 0.28s cubic-bezier(0.2, 0.72, 0.2, 1);
 }
 
-.app--darwin .app-chrome--tabs .app-chrome__tab-strip {
-  display: flex;
-  --wails-draggable: no-drag;
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__tab-strip *,
 .app--darwin .app-chrome--tabs .tabbar,
 .app--darwin .app-chrome--tabs .tabbar * {
   --wails-draggable: no-drag;
-}
-
-/* The empty strip between the last tab and the search button must drag the
-   window like a native titlebar — the 10px top rail alone is unusable (#3853). */
-.app--darwin .app-chrome--tabs .tabbar__spacer {
-  --wails-draggable: drag;
-  align-self: stretch;
 }
 
 .app--darwin .app-chrome--tabs .app-chrome__drag-rail {
@@ -14617,14 +14597,6 @@ a[href] {
   background: color-mix(in srgb, var(--bg-soft) 92%, var(--bg-elev));
 }
 
-.app--windows .app-chrome--native-tabs .app-chrome__tab-strip,
-.app--linux .app-chrome--native-tabs .app-chrome__tab-strip {
-  display: flex;
-  --wails-draggable: no-drag;
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__tab-strip *,
-.app--linux .app-chrome--native-tabs .app-chrome__tab-strip *,
 .app--windows .app-chrome--native-tabs .tabbar,
 .app--linux .app-chrome--native-tabs .tabbar,
 .app--windows .app-chrome--native-tabs .tabbar *,
@@ -16159,6 +16131,11 @@ a[href] {
   color: color-mix(in srgb, var(--warn) 82%, var(--fg));
 }
 
+.project-tree__topic-status--background_job {
+  background: color-mix(in srgb, var(--shell-accent) 11%, transparent);
+  color: color-mix(in srgb, var(--shell-accent) 78%, var(--fg));
+}
+
 .project-tree__topic-status--paused {
   background: color-mix(in srgb, var(--fg-faint) 11%, transparent);
   color: var(--fg-faint);
@@ -16181,6 +16158,10 @@ a[href] {
   color: var(--fg-faint);
   font-size: 11px;
   line-height: 1.2;
+}
+
+.project-tree__topic--session .project-tree__topic-label {
+  color: var(--fg-dim);
 }
 
 .project-tree__topic-main:focus-visible {
@@ -18417,6 +18398,12 @@ a[href] {
   background: color-mix(in srgb, var(--warn) 12%, var(--bg-elev));
   color: color-mix(in srgb, var(--warn) 82%, var(--fg));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 20%, transparent);
+}
+
+:root[data-theme-style] .project-tree__topic-status--background_job {
+  background: color-mix(in srgb, var(--shell-accent) 10%, var(--bg-elev));
+  color: color-mix(in srgb, var(--shell-accent) 80%, var(--fg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--shell-accent) 18%, transparent);
 }
 
 :root[data-theme-style] .project-tree__topic-status--paused {

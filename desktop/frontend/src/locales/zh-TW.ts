@@ -30,13 +30,6 @@ export const zhTW: Record<DictKey, string> = {
   "topbar.newSession": "新建會話",
   "topbar.startupError": "啟動錯誤：{msg}",
 
-  // 標籤頁欄
-  "tabBar.closeTab": "關閉標籤頁",
-  "tabBar.closeOtherTabs": "關閉其他標籤頁",
-  "tabBar.closeTabsToRight": "關閉右側標籤頁",
-  "tabBar.newSession": "新建會話",
-  "tabBar.tabActions": "標籤頁操作",
-
   // 側邊欄
   "sidebar.conversations": "會話",
   "sidebar.allHistory": "歷史",
@@ -1088,6 +1081,7 @@ export const zhTW: Record<DictKey, string> = {
   "projectTree.status.thinking": "思考中",
   "projectTree.status.streaming": "輸出中",
   "projectTree.status.waitingConfirmation": "待確認",
+  "projectTree.status.backgroundJob": "背景任務",
   "projectTree.status.paused": "已暫停",
   "projectTree.status.error": "異常",
   "projectTree.collapseAllTooltip": "收起所有專案",

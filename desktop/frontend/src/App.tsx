@@ -758,11 +758,9 @@ export default function App() {
     setModel,
     setEffort,
     setTokenMode,
-    switchTab,
     openProjectTab,
     openGlobalTab,
-    closeTab,
-    reorderTabs,
+    openTopicSession,
     syncActiveTab,
     ensureBlankTab,
   } = useController();
@@ -771,8 +769,6 @@ export default function App() {
   const [composerProfilesByTab, setComposerProfilesByTab] = useState<Record<string, ComposerProfile>>({});
   const yoloRestoreToolApprovalModesRef = useRef<Record<string, RestorableToolApprovalMode>>({});
   const [tabMetas, setTabMetas] = useState<TabMeta[]>([]);
-  const [tabOrderIds, setTabOrderIds] = useState<string[]>([]);
-  const [tabRevealSignal, setTabRevealSignal] = useState(0);
   const [startupSplashVisible, setStartupSplashVisible] = useState<boolean>(() => shouldShowStartupSplash());
   // null until the mount probe resolves; true shows the overlay. Probed once —
   // clearing the key mid-session is the Settings panel's job, not the gate's.
@@ -1110,36 +1106,6 @@ export default function App() {
     [activeTabId, composerProfile],
   );
   const topicbarEditing = Boolean(activeTab?.topicId && activeTab.topicId === renamingTopicId);
-  const visibleTabId = activeTabId;
-  const visibleTabs = useMemo(() => {
-    const byId = new Map(tabMetas.map((tab) => [tab.id, tab]));
-    const ordered = tabOrderIds.map((id) => byId.get(id)).filter((tab): tab is TabMeta => Boolean(tab));
-    const missing = tabMetas.filter((tab) => !tabOrderIds.includes(tab.id));
-    return [...ordered, ...missing].map((tab) => {
-      const profile = composerProfilesByTab[tab.id] ?? composerProfileFromTab(tab);
-      return {
-        ...tab,
-        running: tab.id === visibleTabId ? tab.running || state.running : tab.running,
-        mode: composerProfileMode(profile),
-        collaborationMode: displayedComposerProfileCollaborationMode(profile),
-        toolApprovalMode: profile.toolApprovalMode,
-        tokenMode: profile.tokenMode,
-        goal: profile.goal,
-        active: tab.id === visibleTabId,
-      };
-    });
-  }, [composerProfilesByTab, state.running, tabMetas, tabOrderIds, visibleTabId]);
-
-  useEffect(() => {
-    const ids = tabMetas.map((tab) => tab.id);
-    setTabOrderIds((current) => {
-      const next = current.filter((id) => ids.includes(id));
-      for (const id of ids) {
-        if (!next.includes(id)) next.push(id);
-      }
-      return next.join("\u0000") === current.join("\u0000") ? current : next;
-    });
-  }, [tabMetas]);
 
   useEffect(() => {
     const ids = new Set(tabMetas.map((tab) => tab.id));
@@ -1477,7 +1443,6 @@ export default function App() {
     await ensureBlankTab(scope, scope === "project" ? workspaceRoot : "");
     setProjectRevision((value) => value + 1);
     await refreshTabMetas();
-    setTabRevealSignal((signal) => signal + 1);
   }, [ensureBlankTab, refreshTabMetas]);
 
   useEffect(() => {
@@ -1846,64 +1811,6 @@ export default function App() {
     setComposerInsertRequest({ id: Date.now(), text });
   }, []);
 
-  const handleTabChange = useCallback(async (id: string) => {
-    closeTransientOverlays();
-    await switchTab(id);
-    await refreshTabMetas();
-    setTabRevealSignal((signal) => signal + 1);
-  }, [closeTransientOverlays, refreshTabMetas, switchTab]);
-
-  const handleTabClose = useCallback(async (id: string) => {
-    closeTransientOverlays();
-    setComposerProfilesByTab((current) => {
-      if (!(id in current)) return current;
-      const next = { ...current };
-      delete next[id];
-      return next;
-    });
-    setTabMetas((current) => {
-      if (current.length <= 1) return current;
-      const closingIndex = current.findIndex((tab) => tab.id === id);
-      if (closingIndex < 0) return current;
-      const closingTab = current[closingIndex];
-      const remaining = current.filter((tab) => tab.id !== id);
-      if (!closingTab.active && closingTab.id !== activeTabId) return remaining;
-      const nextIndex = Math.min(closingIndex, remaining.length - 1);
-      const nextActiveId = remaining[nextIndex]?.id;
-      return remaining.map((tab) => ({ ...tab, active: tab.id === nextActiveId }));
-    });
-    await closeTab(id);
-    await refreshTabMetas();
-    setTabRevealSignal((signal) => signal + 1);
-  }, [activeTabId, closeTab, closeTransientOverlays, refreshTabMetas]);
-
-  const handleTabsClose = useCallback(async (ids: string[], nextActiveTabId?: string) => {
-    closeTransientOverlays();
-    const currentIds = tabMetas.map((tab) => tab.id);
-    const targets = ids.filter((id, index) => currentIds.includes(id) && ids.indexOf(id) === index);
-    if (targets.length === 0) return;
-    for (const id of targets) {
-      await closeTab(id);
-    }
-    if (nextActiveTabId && currentIds.includes(nextActiveTabId)) {
-      await switchTab(nextActiveTabId);
-    }
-    await refreshTabMetas();
-    setTabRevealSignal((signal) => signal + 1);
-  }, [closeTab, closeTransientOverlays, refreshTabMetas, switchTab, tabMetas]);
-
-  const handleTabsReorder = useCallback(async (ids: string[]) => {
-    setTabOrderIds(ids);
-    setTabMetas((current) => {
-      const byId = new Map(current.map((tab) => [tab.id, tab]));
-      const ordered = ids.map((id) => byId.get(id)).filter((tab): tab is TabMeta => Boolean(tab));
-      return ordered.length === current.length ? ordered : current;
-    });
-    await reorderTabs(ids);
-    await refreshTabMetas();
-    setTabRevealSignal((signal) => signal + 1);
-  }, [refreshTabMetas, reorderTabs]);
-
   const handleNewTab = useCallback(async () => {
     closeTransientOverlays();
     setSidebarImDetailConnectionId("");
@@ -1965,7 +1872,6 @@ export default function App() {
       rewind(turn, scope).then(() => {
         refreshTabMetas();
         setProjectRevision((v) => v + 1);
-        setTabRevealSignal((v) => v + 1);
       });
       return;
     }
@@ -2011,17 +1917,18 @@ export default function App() {
     setRewindSignal((v) => v + 1);
   }, [state.items, rewind, refreshTabMetas, setComposerInsertRequest]);
 
-  const handleOpenTopic = useCallback(async (scope: string, workspaceRoot: string, topicId: string) => {
+  const handleOpenTopic = useCallback(async (scope: string, workspaceRoot: string, topicId: string, sessionPath?: string) => {
     closeTransientOverlays();
     setSidebarImDetailConnectionId("");
-    if (scope === "global") {
+    if (sessionPath) {
+      await openTopicSession(scope, workspaceRoot, topicId, sessionPath);
+    } else if (scope === "global") {
       await openGlobalTab(topicId);
     } else {
       await openProjectTab(workspaceRoot, topicId);
     }
     await refreshTabMetas();
-    setTabRevealSignal((signal) => signal + 1);
-  }, [closeTransientOverlays, openGlobalTab, openProjectTab, refreshTabMetas]);
+  }, [closeTransientOverlays, openGlobalTab, openProjectTab, openTopicSession, refreshTabMetas]);
 
   const openSidebarImConnectionSession = useCallback(async (connection: SidebarImConnection) => {
     const target = mappedSessionTarget(connection.sessionId);
@@ -2041,7 +1948,6 @@ export default function App() {
       }
       await refreshTabMetas();
       setProjectRevision((value) => value + 1);
-      setTabRevealSignal((signal) => signal + 1);
     } catch (err) {
       console.warn("bot sidebar open failed", err);
       showToast(t("sidebar.imOpenFailed", { name: connection.title }));
@@ -2102,7 +2008,6 @@ export default function App() {
         setHistView(null);
         await resumeSession(session.path, targetTab.id);
         await refreshTabMetas();
-        setTabRevealSignal((signal) => signal + 1);
       } catch (err: any) {
         setHistView(null);
         if (scope === "project" && session.workspaceRoot) {
@@ -2343,9 +2248,6 @@ export default function App() {
         <AppChrome
           platform={desktopPlatform}
           browserPreviewChrome={browserPreviewChrome}
-          tabs={visibleTabs}
-          activeTabId={visibleTabId}
-          revealActiveSignal={tabRevealSignal}
           commandCompact={workspacePanelGridOpen}
           sidebarTogglePressed={sidebarTogglePressed}
           sidebarExpandBlocked={sidebarExpandBlocked}
@@ -2357,11 +2259,6 @@ export default function App() {
           workspacePanelLabel={workspacePanelRenderable ? t("rightDock.collapse") : t("rightDock.expand")}
           onToggleSidebar={toggleSidebar}
           onToggleWorkspacePanel={toggleWorkspacePanel}
-          onTabChange={(id) => void handleTabChange(id)}
-          onTabClose={(id) => void handleTabClose(id)}
-          onTabsClose={(ids, nextActiveTabId) => void handleTabsClose(ids, nextActiveTabId)}
-          onTabsReorder={(ids) => void handleTabsReorder(ids)}
-          onNewTab={() => void handleNewTab()}
           onOpenPalette={() => void openPalette()}
         />
 
@@ -2385,6 +2282,7 @@ export default function App() {
               activeScope={activeTab?.scope}
               activeWorkspaceRoot={activeTab?.workspaceRoot}
               activeTopicId={activeTab?.topicId}
+              activeSessionPath={activeTab?.sessionPath}
               imTopicSources={imTopicSources}
               onOpenTopic={handleOpenTopic}
               onOpenProjectHistory={openProjectHistory}

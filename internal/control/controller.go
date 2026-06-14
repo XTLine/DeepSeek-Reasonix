@@ -1115,6 +1115,14 @@ func (c *Controller) Running() bool {
 	return c.running
 }
 
+// PendingPrompt reports whether the current turn is blocked waiting for a user
+// approval, plan approval, memory approval, or ask-tool answer.
+func (c *Controller) PendingPrompt() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.approvals) > 0 || len(c.asks) > 0
+}
+
 // Turn returns the current turn number (0 before the first submit).
 func (c *Controller) Turn() int {
 	c.mu.Lock()
@@ -1430,13 +1438,6 @@ func (c *Controller) ClearSession() error {
 		return fmt.Errorf("cannot clear while a turn is running")
 	}
 	destroy := c.BeginDestroySession(oldPath)
-	if !destroy.Async {
-		if err := removeSessionArtifacts(oldPath); err != nil {
-			destroy.Finish()
-			return err
-		}
-		destroy.Finish()
-	}
 	c.hooks.SessionEnd(context.Background())
 	if c.sessionDir != "" {
 		c.mu.Lock()
@@ -1450,14 +1451,17 @@ func (c *Controller) ClearSession() error {
 	c.startedOnce = true
 	c.mu.Unlock()
 	c.hooks.SessionStart(context.Background())
+	cleanup := func() {
+		destroy.Wait()
+		if err := removeSessionArtifacts(oldPath); err != nil {
+			c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "clear session cleanup failed: " + err.Error()})
+		}
+		destroy.Finish()
+	}
 	if destroy.Async {
-		go func() {
-			destroy.Wait()
-			if err := removeSessionArtifacts(oldPath); err != nil {
-				c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "clear session cleanup failed: " + err.Error()})
-			}
-			destroy.Finish()
-		}()
+		go cleanup()
+	} else {
+		cleanup()
 	}
 	return nil
 }
