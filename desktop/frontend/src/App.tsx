@@ -2090,6 +2090,7 @@ export default function App() {
   }, [activeTab?.readOnly, send, rewind]);
 
   const handleMessageAction = useCallback((turn: number, scope: string) => {
+    if (activeTab?.readOnly) return;
     if (scope === "fork") {
       // Fork still goes through the controller (not optimistic).
       rewind(turn, scope).then(() => {
@@ -2138,7 +2139,7 @@ export default function App() {
     setComposerInsertRequest({ id: insertId, text: userItem?.text ?? "" });
 
     setRewindSignal((v) => v + 1);
-  }, [state.items, rewind, refreshTabMetas, setComposerInsertRequest]);
+  }, [activeTab?.readOnly, state.items, rewind, refreshTabMetas, setComposerInsertRequest]);
 
   const handleOpenTopic = useCallback(async (scope: string, workspaceRoot: string, topicId: string, sessionPath?: string) => {
     closeTransientOverlays();
@@ -2896,7 +2897,7 @@ export default function App() {
                 onRewind={handleMessageAction}
                 checkpoints={state.checkpoints}
                 actionPending={state.messageAction != null}
-                rewindDisabled={state.running || state.messageAction != null || state.approval != null || state.ask != null || clearContextPending}
+                rewindDisabled={Boolean(activeTab?.readOnly) || state.running || state.messageAction != null || state.approval != null || state.ask != null || clearContextPending}
                 running={state.running}
                 rewindSignal={rewindSignal}
               />

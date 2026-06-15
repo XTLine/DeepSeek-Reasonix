@@ -520,9 +520,7 @@ func (a *App) snapshotAllTabs() {
 	tabs := a.runtimeTabsLocked()
 	a.mu.RUnlock()
 	for _, t := range tabs {
-		if t.Ctrl != nil {
-			_ = t.Ctrl.Snapshot()
-		}
+		_ = a.snapshotTab(t)
 	}
 }
 
@@ -539,7 +537,7 @@ func (a *App) shutdown(context.Context) {
 	a.mu.RUnlock()
 	for _, t := range tabs {
 		if t.Ctrl != nil {
-			_ = t.Ctrl.Snapshot()
+			_ = a.snapshotTab(t)
 			t.Ctrl.Close()
 		}
 	}
@@ -689,6 +687,24 @@ func (a *App) SteerForTab(tabID, text string) {
 func (a *App) tabReadOnly(tabID string) bool {
 	tab := a.tabByID(tabID)
 	return tab != nil && tab.ReadOnly
+}
+
+func readOnlyChannelErr() error {
+	return fmt.Errorf("channel session is read-only")
+}
+
+func (a *App) snapshotTab(tab *WorkspaceTab) error {
+	if tab == nil {
+		return nil
+	}
+	a.mu.RLock()
+	readOnly := tab.ReadOnly
+	ctrl := tab.Ctrl
+	a.mu.RUnlock()
+	if readOnly || ctrl == nil {
+		return nil
+	}
+	return ctrl.Snapshot()
 }
 
 // Approve answers a pending approval_request by ID: allow runs the call, session
@@ -884,8 +900,12 @@ func (a *App) AnswerQuestionForTab(tabID, id string, answers []QuestionAnswer) {
 // compaction goes through Submit("/compact <focus>") instead.
 func (a *App) Compact() error {
 	a.mu.RLock()
+	tab := a.activeTabLocked()
 	ctrl := a.activeCtrlLocked()
 	a.mu.RUnlock()
+	if tab != nil && tab.ReadOnly {
+		return readOnlyChannelErr()
+	}
 	if ctrl == nil {
 		return nil
 	}
@@ -908,6 +928,9 @@ func (a *App) NewSession() error {
 	tab := a.activeTabLocked()
 	ctrl := a.activeCtrlLocked()
 	a.mu.RUnlock()
+	if tab != nil && tab.ReadOnly {
+		return readOnlyChannelErr()
+	}
 	if ctrl == nil {
 		return workspaceNotReadyErr(tab)
 	}
@@ -940,6 +963,9 @@ func (a *App) ClearSession() error {
 	tab := a.activeTabLocked()
 	ctrl := a.activeCtrlLocked()
 	a.mu.RUnlock()
+	if tab != nil && tab.ReadOnly {
+		return readOnlyChannelErr()
+	}
 	if ctrl == nil {
 		return workspaceNotReadyErr(tab)
 	}
@@ -1123,8 +1149,12 @@ func (a *App) ToolResultForTab(tabID, toolID string) *control.ToolResultData {
 // re-reads History after this resolves.
 func (a *App) Rewind(turn int, scope string) error {
 	a.mu.RLock()
+	tab := a.activeTabLocked()
 	ctrl := a.activeCtrlLocked()
 	a.mu.RUnlock()
+	if tab != nil && tab.ReadOnly {
+		return readOnlyChannelErr()
+	}
 	if ctrl == nil {
 		return nil
 	}
@@ -1147,6 +1177,10 @@ func (a *App) Fork(turn int) (TabMeta, error) {
 	if sourceTab == nil || ctrl == nil {
 		a.mu.RUnlock()
 		return TabMeta{}, nil
+	}
+	if sourceTab.ReadOnly {
+		a.mu.RUnlock()
+		return TabMeta{}, readOnlyChannelErr()
 	}
 	scope := sourceTab.Scope
 	workspaceRoot := sourceTab.WorkspaceRoot
@@ -1216,8 +1250,12 @@ func (a *App) Fork(turn int) (TabMeta, error) {
 // code intact. The frontend re-reads History after this resolves.
 func (a *App) SummarizeFrom(turn int) error {
 	a.mu.RLock()
+	tab := a.activeTabLocked()
 	ctrl := a.activeCtrlLocked()
 	a.mu.RUnlock()
+	if tab != nil && tab.ReadOnly {
+		return readOnlyChannelErr()
+	}
 	if ctrl == nil {
 		return nil
 	}
@@ -1226,8 +1264,12 @@ func (a *App) SummarizeFrom(turn int) error {
 
 func (a *App) SummarizeUpTo(turn int) error {
 	a.mu.RLock()
+	tab := a.activeTabLocked()
 	ctrl := a.activeCtrlLocked()
 	a.mu.RUnlock()
+	if tab != nil && tab.ReadOnly {
+		return readOnlyChannelErr()
+	}
 	if ctrl == nil {
 		return nil
 	}
@@ -1539,6 +1581,7 @@ type removedSessionRuntime struct {
 	scope         string
 	workspaceRoot string
 	topicID       string
+	readOnly      bool
 }
 
 type fallbackRuntimeTarget struct {
@@ -1640,6 +1683,7 @@ func removedRuntimeFromTab(tab *WorkspaceTab, dir, sessionPath string) removedSe
 		scope:         tab.Scope,
 		workspaceRoot: tab.WorkspaceRoot,
 		topicID:       tab.TopicID,
+		readOnly:      tab.ReadOnly,
 	}
 }
 
@@ -1664,6 +1708,9 @@ func prepareRemovedSessionRuntimes(removed []removedSessionRuntime) error {
 			if err := waitControllerStopped(item.ctrl); err != nil {
 				return err
 			}
+		}
+		if item.readOnly {
+			continue
 		}
 		if err := item.ctrl.Snapshot(); err != nil {
 			return err
@@ -1956,7 +2003,7 @@ func (a *App) rebindTabToSessionPath(tab *WorkspaceTab, sessionPath string) erro
 		return nil
 	}
 
-	_ = ctrl.Snapshot() // persist the current session before switching the view.
+	_ = a.snapshotTab(tab) // persist writable sessions before switching the view.
 	if tab.hasActiveRuntimeWork() {
 		if !a.detachRuntimeForReplacement(tab) {
 			return fmt.Errorf("current session runtime cannot be detached")
@@ -4681,7 +4728,7 @@ func (a *App) SetModelForTab(tabID, name string) error {
 	prevPath := ""
 	if tab.Ctrl != nil {
 		prevPath = tab.Ctrl.SessionPath()
-		_ = tab.Ctrl.Snapshot()
+		_ = a.snapshotTab(tab)
 		carried = tab.Ctrl.History()
 		tab.Ctrl.Close()
 	}
@@ -4778,7 +4825,7 @@ func (a *App) SetEffortForTab(tabID, level string) error {
 	prevPath := ""
 	if tab.Ctrl != nil {
 		prevPath = tab.Ctrl.SessionPath()
-		_ = tab.Ctrl.Snapshot()
+		_ = a.snapshotTab(tab)
 		carried = tab.Ctrl.History()
 		tab.Ctrl.Close()
 	}
@@ -4851,7 +4898,7 @@ func (a *App) SetTokenModeForTab(tabID, mode string) error {
 	oldCtrl := tab.Ctrl
 	if oldCtrl != nil {
 		prevPath = oldCtrl.SessionPath()
-		_ = oldCtrl.Snapshot()
+		_ = a.snapshotTab(tab)
 		carried = oldCtrl.History()
 	}
 	newCtrl, err := boot.Build(a.bootContext(), boot.Options{

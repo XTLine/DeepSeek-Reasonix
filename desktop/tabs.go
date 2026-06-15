@@ -1350,7 +1350,7 @@ func (a *App) CloseTab(tabID string) error {
 		//       (including the autosave loop) is a no-op;
 		//   (2) drain any in-flight tabSnapshotLoop before returning, so no
 		//       background write can land after the file is trashed.
-		_ = tab.Ctrl.Snapshot()
+		_ = a.snapshotTab(tab)
 		if tab.hasActiveRuntimeWork() && a.detachSessionRuntime(tab) {
 			// Detached runtimes keep running and must keep saving: do not
 			// clear the path or drain for them.
@@ -1671,7 +1671,7 @@ func (a *App) tabSnapshotLoop(tab *WorkspaceTab) {
 		ctrl := tab.Ctrl
 		a.mu.RUnlock()
 		if ctrl != nil {
-			if err := ctrl.Snapshot(); err == nil {
+			if err := a.snapshotTab(tab); err == nil {
 				if !a.maybeAutoTitleTopic(tab) {
 					a.emitProjectTreeChanged()
 				}

@@ -1802,6 +1802,26 @@ func TestOpenChannelSessionForTabIsReadOnly(t *testing.T) {
 	if string(after) != string(before) {
 		t.Fatalf("read-only channel transcript changed:\nbefore=%s\nafter=%s", before, after)
 	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open append: %v", err)
+	}
+	if _, err := f.WriteString(`{"role":"user","content":"external follow-up"}` + "\n"); err != nil {
+		f.Close()
+		t.Fatalf("append external message: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close append: %v", err)
+	}
+	app.snapshotAllTabs()
+	afterSnapshot, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read after snapshot: %v", err)
+	}
+	if !strings.Contains(string(afterSnapshot), "external follow-up") {
+		t.Fatalf("read-only channel snapshot overwrote external append:\n%s", afterSnapshot)
+	}
 }
 
 func TestResumeSessionRejectsPathOutsideControllerSessionDir(t *testing.T) {
