@@ -100,6 +100,30 @@ func TestHistoryMessagesArchiveCompletedToolPayloads(t *testing.T) {
 	}
 }
 
+func TestHistoryMessagesKeepToolFileDiffMetadata(t *testing.T) {
+	diff := "@@ -27 +27 @@\n-func save():\n+func save_file():\n"
+	msgs := []provider.Message{
+		{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{
+			ID:        "edit",
+			Name:      "edit_file",
+			Arguments: `{"path":"settings/settings_IO.gd","old_string":"func save():","new_string":"func save_file():"}`,
+			Diff:      diff,
+			Added:     1,
+			Removed:   1,
+		}}},
+		{Role: provider.RoleTool, Name: "edit_file", ToolCallID: "edit", Content: "edited settings/settings_IO.gd"},
+	}
+
+	got := historyMessages(msgs, func(content string) string { return content })
+	call := got[0].ToolCalls[0]
+	if call.Diff != diff || call.Added != 1 || call.Removed != 1 {
+		t.Fatalf("history tool diff metadata = diff:%q +%d -%d", call.Diff, call.Added, call.Removed)
+	}
+	if !call.ArgumentsArchived || call.Arguments != "" {
+		t.Fatalf("tool arguments should still be archived: %+v", call)
+	}
+}
+
 func TestHistoryMessagesKeepBoundedToolErrors(t *testing.T) {
 	largeError := "error: " + strings.Repeat("permission denied ", 400)
 	msgs := []provider.Message{

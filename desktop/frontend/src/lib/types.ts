@@ -43,6 +43,9 @@ export interface WireTool {
   durationMs?: number;
   partial?: boolean; // an early dispatch (name only) — a full one with args follows
   parentId?: string; // set on a sub-agent's calls — the parent `task` call's id
+  diff?: string;
+  added?: number;
+  removed?: number;
   profile?: WireProfile; // subagent model/effort resolved for this call
 }
 
@@ -248,6 +251,9 @@ export interface HistoryToolCall {
   arguments: string;
   subject?: string;
   summary?: string;
+  diff?: string;
+  added?: number;
+  removed?: number;
   argumentsArchived?: boolean;
 }
 

@@ -2704,6 +2704,9 @@ type HistoryToolCall struct {
 	Arguments         string `json:"arguments"`
 	Subject           string `json:"subject,omitempty"`
 	Summary           string `json:"summary,omitempty"`
+	Diff              string `json:"diff,omitempty"`
+	Added             int    `json:"added,omitempty"`
+	Removed           int    `json:"removed,omitempty"`
 	ArgumentsArchived bool   `json:"argumentsArchived,omitempty"`
 }
 
@@ -2757,7 +2760,7 @@ func historyMessages(msgs []provider.Message, resolveUserContent func(string) st
 						args = replayed
 					}
 				}
-				hm.ToolCalls[i] = historyToolCall(tc.ID, tc.Name, args, toolResults[tc.ID])
+				hm.ToolCalls[i] = historyToolCall(tc, args, toolResults[tc.ID])
 			}
 		}
 		if m.Role == provider.RoleTool {
@@ -2772,18 +2775,21 @@ func historyMessages(msgs []provider.Message, resolveUserContent func(string) st
 
 const historyToolPreviewLimit = 2_000
 
-func historyToolCall(id, name, args string, result provider.Message) HistoryToolCall {
+func historyToolCall(tc provider.ToolCall, args string, result provider.Message) HistoryToolCall {
 	call := HistoryToolCall{
-		ID:      id,
-		Name:    name,
-		Subject: historyToolSubject(name, args),
-		Summary: historyToolSummary(name, args, result.Content),
+		ID:      tc.ID,
+		Name:    tc.Name,
+		Subject: historyToolSubject(tc.Name, args),
+		Summary: historyToolSummary(tc.Name, args, result.Content),
+		Diff:    tc.Diff,
+		Added:   tc.Added,
+		Removed: tc.Removed,
 	}
-	if name == "todo_write" {
+	if tc.Name == "todo_write" {
 		call.Arguments = args
 		return call
 	}
-	if id == "" {
+	if tc.ID == "" {
 		call.Arguments = args
 		return call
 	}
@@ -3165,7 +3171,7 @@ func previewEventSessionMessages(path string) ([]HistoryMessage, bool, error) {
 				id := tc.ID
 				name := firstNonEmpty(tc.Name, tc.Function.Name)
 				args := firstNonEmpty(tc.Arguments, tc.Function.Arguments)
-				hm.ToolCalls = append(hm.ToolCalls, historyToolCall(id, name, args, provider.Message{}))
+				hm.ToolCalls = append(hm.ToolCalls, historyToolCall(provider.ToolCall{ID: id, Name: name, Arguments: args}, args, provider.Message{}))
 				if id != "" {
 					toolName[id] = name
 				}
