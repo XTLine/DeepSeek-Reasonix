@@ -334,7 +334,7 @@ var ChineseTraditional = Messages{
   echo "解釋這段程式碼" | reasonix run
 
 設定：
-  優先順序：flag > ./reasonix.toml > ~/.config/reasonix/config.toml > 內建預設值
+  優先順序：flag > ./reasonix.toml > ~/.reasonix/config.toml > 內建預設值
   金鑰透過 api_key_env 從環境變數注入（如 DEEPSEEK_API_KEY）。
   執行 'reasonix setup' 生成設定；詳見 docs/SPEC.md。
 `,

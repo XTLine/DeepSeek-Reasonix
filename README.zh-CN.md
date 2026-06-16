@@ -108,8 +108,10 @@ model       = "deepseek-v4-flash"
 api_key_env = "DEEPSEEK_API_KEY"
 ```
 
-优先级为 **flag > `./reasonix.toml` > 用户配置文件 > 内置默认值**;用户配置位于操作系统的配置目录——
-Linux 为 `~/.config/reasonix/`,macOS 为 `~/Library/Application Support/reasonix/`,Windows 为 `%AppData%\reasonix\`。
+优先级为 **flag > `./reasonix.toml` > 用户配置文件 > 内置默认值**；从
+**Reasonix v1.8.1** 开始，用户配置位于 macOS/Linux 的 `~/.reasonix/config.toml`，
+Windows 为 `%AppData%\reasonix\config.toml`。迁移细节见
+**[配置路径](./docs/CONFIG_PATHS.zh-CN.md)**。
 密钥经环境变量通过 `api_key_env` 注入,绝不写入配置文件。权限、沙盒、插件(MCP)、
 斜杠命令、`@` 引用与双模型设置,全部在 **[指南](./docs/GUIDE.zh-CN.md)** 里。
 

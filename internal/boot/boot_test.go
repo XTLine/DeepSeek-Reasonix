@@ -1715,7 +1715,11 @@ func TestBuildMigratesLegacySessionsFromConfigSessionDir(t *testing.T) {
 	proj := robustTempDir(t)
 	writeFile(t, proj, "reasonix.toml", "")
 
-	legacyDir := config.SessionDir()
+	legacyConfig := config.LegacyUserConfigPath()
+	if legacyConfig == "" {
+		t.Skip("legacy OS config path matches primary path on this platform")
+	}
+	legacyDir := filepath.Join(filepath.Dir(legacyConfig), "sessions")
 	writeFile(t, legacyDir, "custom-root.events.jsonl",
 		`{"type":"user.message","id":1,"ts":"t","turn":0,"text":"hello from redirected config root"}`+"\n"+
 			`{"type":"model.final","id":2,"ts":"t","turn":0,"content":"hi from redirected root","toolCalls":[],"usage":{},"costUsd":0}`+"\n")

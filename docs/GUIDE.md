@@ -12,6 +12,7 @@
 ## Contents
 
 - [Configuration](#configuration)
+- [Configuration paths](./CONFIG_PATHS.md)
 - [Reasoning language](./REASONING_LANGUAGE.md)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Permissions & sandbox](#permissions--sandbox)
@@ -23,10 +24,12 @@
 ## Configuration
 
 Resolution order: **flag > `./reasonix.toml` > the user config file >
-built-in defaults**. The user config lives in your OS config dir: `~/.config/reasonix/`
-on Linux, `~/Library/Application Support/reasonix/` on macOS, `%AppData%\reasonix\` on
-Windows. Secrets come from the environment via `api_key_env` and are
-never stored in config files.
+built-in defaults**. Starting with **Reasonix v1.8.1**, the user config lives at
+`~/.reasonix/config.toml` on macOS/Linux and
+`%AppData%\reasonix\config.toml` on Windows; see
+[Configuration paths](./CONFIG_PATHS.md) for migration and related data paths.
+Secrets come from the environment via `api_key_env` and are never stored in
+config files.
 
 For the desktop and CLI usage of visible reasoning language, see
 [Reasoning language](./REASONING_LANGUAGE.md).
@@ -71,7 +74,7 @@ deny  = ["Bash(rm -rf*)", "Bash(git push*)"] # hard-blocked in every mode
 allow = ["Bash(go test:*)"]                  # never prompted
 
 [sandbox]
-# workspace_root = ""          # file-writers confined here; empty = current dir
+# workspace_root = ""          # file-writers confined here + user config dir; empty = current dir
 # allow_write    = ["/tmp"]    # extra dirs write_file/edit_file/multi_edit/move_file may touch
 
 [[plugins]]
@@ -276,7 +279,7 @@ discards the current context without saving it. `/tree` shows saved conversation
 branches, `/branch [name]` forks the current conversation tip, `/branch <turn>
 [name]` forks from an earlier checkpointed turn, and `/switch <id|name>` loads
 another branch. **Custom commands** are Markdown files under `.reasonix/commands/`
-(project) or `~/.config/reasonix/commands/` (user) — `review.md` becomes
+(project) or `~/.reasonix/commands/` (user) — `review.md` becomes
 `/review`, a subdirectory namespaces it (`git/commit.md` → `/git:commit`). The
 body is a prompt template; invoking the command sends it as a turn.
 

@@ -113,9 +113,10 @@ api_key_env = "DEEPSEEK_API_KEY"
 ```
 
 Resolution order is **flag > `./reasonix.toml` > the user config file >
-built-in defaults**; the user file lives in your OS config dir — `~/.config/reasonix/`
-on Linux, `~/Library/Application Support/reasonix/` on macOS, `%AppData%\reasonix\` on
-Windows. Secrets come from the environment via `api_key_env` and are
+built-in defaults**; starting with **Reasonix v1.8.1**, the user file lives at
+`~/.reasonix/config.toml` on macOS/Linux and
+`%AppData%\reasonix\config.toml` on Windows. See
+**[Configuration paths](./docs/CONFIG_PATHS.md)** for migration details. Secrets come from the environment via `api_key_env` and are
 never written to config files. Permissions, the sandbox, plugins (MCP), slash
 commands, `@` references, and two-model setup are all in the
 **[Guide](./docs/GUIDE.md)**.

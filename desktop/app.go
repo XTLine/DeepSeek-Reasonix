@@ -317,7 +317,7 @@ func (a *App) startup(ctx context.Context) {
 	a.startTray()
 
 	if cfg, err := config.Load(); err == nil && cfg.DesktopMetrics() && version != "dev" {
-		a.metrics.Store(newMetricsAggregator(filepath.Dir(config.UserConfigPath())))
+		a.metrics.Store(newMetricsAggregator(config.MemoryUserDir()))
 	}
 
 	go a.restoreOrBuildTabs()

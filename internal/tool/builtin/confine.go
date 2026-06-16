@@ -81,8 +81,8 @@ func confine(roots []string, target string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("path %q is outside the workspace (writes are confined to %s); "+
-		"write inside it, or widen [sandbox] workspace_root / allow_write in reasonix.toml",
+	return fmt.Errorf("path %q is outside the writable roots (writes are confined to %s); "+
+		"write inside the workspace or Reasonix user config dir, or widen [sandbox] workspace_root / allow_write in reasonix.toml",
 		target, strings.Join(roots, ", "))
 }
 

@@ -10,11 +10,11 @@ import (
 // loadDotEnv loads KEY=value files into the process environment without
 // overriding variables that are already set (first file to set a key wins).
 // Order: a project ./.env (read-only back-compat, so a manual project override
-// takes precedence), then the reasonix-owned global credentials file in the user
-// config dir (where `reasonix setup` writes keys, so they resolve from any
-// directory without ever touching a project's own .env), then ~/.env as a legacy
-// fallback (the desktop app writes there). Existing environment variables always
-// win over all three.
+// takes precedence), then the reasonix-owned global credentials file under
+// Reasonix home (where `reasonix setup` writes keys, so they resolve from any
+// directory without ever touching a project's own .env), then legacy credentials
+// beside older config files, then ~/.env as a legacy fallback. Existing
+// environment variables always win over all files.
 func loadDotEnv() {
 	loadDotEnvForRoot(".")
 }
@@ -30,9 +30,39 @@ func loadDotEnvForRoot(root string) {
 	if p := UserCredentialsPath(); p != "" {
 		loadDotEnvFile(p)
 	}
+	for _, p := range legacyCredentialsPaths() {
+		loadDotEnvFile(p)
+	}
 	if home, err := os.UserHomeDir(); err == nil {
 		loadDotEnvFile(filepath.Join(home, ".env"))
 	}
+}
+
+func legacyCredentialsPaths() []string {
+	current := UserCredentialsPath()
+	seen := map[string]bool{}
+	var paths []string
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		path = filepath.Clean(path)
+		if current != "" && samePath(path, current) {
+			return
+		}
+		if seen[path] {
+			return
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	if dir := legacyOSSupportDir(); dir != "" {
+		add(filepath.Join(dir, "credentials"))
+	}
+	for _, cfg := range legacyXDGConfigPaths() {
+		add(filepath.Join(filepath.Dir(cfg), "credentials"))
+	}
+	return paths
 }
 
 // loadDotEnvFile reads one .env file (if present) and sets any keys not already

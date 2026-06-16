@@ -285,6 +285,7 @@ func TestDisconnectMCPServerRemovesLazyPlaceholder(t *testing.T) {
 }
 
 func TestRemoveMCPServerRemovesUnconnectedLazyPlaceholder(t *testing.T) {
+	isolateControlConfigHome(t)
 	dir := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)

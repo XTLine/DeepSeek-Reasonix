@@ -77,18 +77,22 @@ func (r *MigrationResult) Notice() string {
 // modifies or deletes the legacy files. Returns nil when there is nothing to
 // migrate, or when the current user config already exists.
 func MigrateLegacyIfNeeded() (*MigrationResult, error) {
+	credErr := migrateLegacyCredentialsIfNeeded()
 	dest := userConfigPath()
 	if dest == "" {
-		return nil, nil
+		return nil, credErr
 	}
 	if _, err := os.Stat(dest); err == nil {
-		return nil, nil
+		return nil, credErr
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, nil
+		return nil, credErr
 	}
 	if res, err := migrateLegacyTOMLIfNeeded(dest, home); res != nil || err != nil {
+		if err == nil {
+			err = credErr
+		}
 		return res, err
 	}
 	src := filepath.Join(home, ".reasonix", "config.json")
@@ -145,7 +149,31 @@ func MigrateLegacyIfNeeded() (*MigrationResult, error) {
 			return res, fmt.Errorf("write credentials: %w", err)
 		}
 	}
-	return res, nil
+	return res, credErr
+}
+
+func migrateLegacyCredentialsIfNeeded() error {
+	dest := UserCredentialsPath()
+	if dest == "" {
+		return nil
+	}
+	if _, err := os.Stat(dest); err == nil {
+		return nil
+	}
+	for _, src := range legacyCredentialsPaths() {
+		if src == "" {
+			continue
+		}
+		data, err := os.ReadFile(src)
+		if err != nil {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(dest, data, 0o600)
+	}
+	return nil
 }
 
 func migrateLegacyQQConfig(cfg *Config, legacy legacyQQConfig) {
@@ -213,9 +241,29 @@ func migrateLegacyTOMLIfNeeded(dest, home string) (*MigrationResult, error) {
 }
 
 func legacyTOMLPaths(dest, home string) []string {
-	paths := []string{filepath.Join(filepath.Dir(dest), "reasonix.toml")}
+	seen := map[string]bool{}
+	var paths []string
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		path = filepath.Clean(path)
+		if seen[path] {
+			return
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	if legacy := legacyUserConfigPath(); legacy != "" {
+		add(legacy)
+	}
+	for _, legacy := range legacyXDGConfigPaths() {
+		add(legacy)
+		add(filepath.Join(filepath.Dir(legacy), "reasonix.toml"))
+	}
+	add(filepath.Join(filepath.Dir(dest), "reasonix.toml"))
 	if home != "" {
-		paths = append(paths, filepath.Join(home, ".reasonix", "reasonix.toml"))
+		add(filepath.Join(home, ".reasonix", "reasonix.toml"))
 	}
 	return paths
 }

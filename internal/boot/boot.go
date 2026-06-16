@@ -845,6 +845,14 @@ func migrateLegacySessionSources(sink event.Sink) {
 			migrate: agent.MigrateLegacySessions,
 		})
 	}
+	if legacyConfig := config.LegacyUserConfigPath(); legacyConfig != "" {
+		legacyDir := filepath.Join(filepath.Dir(legacyConfig), "sessions")
+		sources = append(sources, legacySource{
+			dir:     legacyDir,
+			label:   legacyDir,
+			migrate: agent.MigrateLegacySessionsFromConfigDir,
+		})
+	}
 	// Back-fill v0.x sessions from the current user config session directory as
 	// well. This covers users whose platform config root was redirected before the
 	// Go rewrite; their event logs can already live where v2 stores sessions.

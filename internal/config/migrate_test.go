@@ -314,6 +314,174 @@ command = "legacy-home-bin"
 	}
 }
 
+func TestLoadFallsBackToLegacyOSConfigWhenPrimaryMissing(t *testing.T) {
+	_, dest, _ := legacyHome(t)
+	legacy := legacyUserConfigPath()
+	if legacy == "" {
+		t.Skip("legacy OS config path matches primary path on this platform")
+	}
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte(`default_model = "legacy-provider/legacy-model"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if source := SourcePath(); source != legacy {
+		t.Fatalf("SourcePath() = %q, want legacy path %q", source, legacy)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DefaultModel != "legacy-provider/legacy-model" {
+		t.Fatalf("DefaultModel = %q, want legacy value", cfg.DefaultModel)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("Load fallback should not create primary config, stat err=%v", err)
+	}
+}
+
+func TestLoadPrefersPrimaryConfigOverLegacyOSConfig(t *testing.T) {
+	_, dest, _ := legacyHome(t)
+	legacy := legacyUserConfigPath()
+	if legacy == "" {
+		t.Skip("legacy OS config path matches primary path on this platform")
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dest, []byte(`default_model = "primary-provider/primary-model"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte(`default_model = "legacy-provider/legacy-model"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if source := SourcePath(); source != dest {
+		t.Fatalf("SourcePath() = %q, want primary path %q", source, dest)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DefaultModel != "primary-provider/primary-model" {
+		t.Fatalf("DefaultModel = %q, want primary value", cfg.DefaultModel)
+	}
+}
+
+func TestMigrateImportsLegacyOSConfigToPrimaryConfig(t *testing.T) {
+	_, dest, _ := legacyHome(t)
+	legacy := legacyUserConfigPath()
+	if legacy == "" {
+		t.Skip("legacy OS config path matches primary path on this platform")
+	}
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte(`
+default_model = "legacy-provider/legacy-model"
+
+[[plugins]]
+name = "legacy-os"
+command = "legacy-os-bin"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := MigrateLegacyIfNeeded()
+	if err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if res == nil || res.From != legacy || res.To != dest {
+		t.Fatalf("migration result = %+v, want %s -> %s", res, legacy, dest)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read migrated config: %v", err)
+	}
+	if !strings.Contains(string(got), `name    = "legacy-os"`) {
+		t.Fatalf("dest missing legacy plugin:\n%s", got)
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		t.Fatalf("legacy file must remain untouched: %v", err)
+	}
+}
+
+func TestMigrateImportsLegacyXDGConfigToPrimaryConfig(t *testing.T) {
+	_, dest, home := legacyHome(t)
+	legacy := filepath.Join(home, ".config", "reasonix", "config.toml")
+	if samePath(legacy, dest) {
+		t.Skip("legacy XDG config path matches primary path on this platform")
+	}
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte(`
+default_model = "legacy-xdg-provider/legacy-xdg-model"
+
+[[plugins]]
+name = "legacy-xdg"
+command = "legacy-xdg-bin"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := MigrateLegacyIfNeeded()
+	if err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if res == nil || res.From != legacy || res.To != dest {
+		t.Fatalf("migration result = %+v, want %s -> %s", res, legacy, dest)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read migrated config: %v", err)
+	}
+	if !strings.Contains(string(got), `name    = "legacy-xdg"`) {
+		t.Fatalf("dest missing legacy XDG plugin:\n%s", got)
+	}
+}
+
+func TestMigrateImportsLegacyCredentialsEvenWhenPrimaryConfigExists(t *testing.T) {
+	_, dest, _ := legacyHome(t)
+	legacy := legacyUserConfigPath()
+	if legacy == "" {
+		t.Skip("legacy OS config path matches primary path on this platform")
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dest, []byte(`default_model = "deepseek-flash/deepseek-chat"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacyCred := filepath.Join(filepath.Dir(legacy), "credentials")
+	if err := os.MkdirAll(filepath.Dir(legacyCred), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyCred, []byte("DEEPSEEK_API_KEY=sk-old-creds\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := MigrateLegacyIfNeeded()
+	if err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if res != nil {
+		t.Fatalf("primary config exists, config migration should be skipped, got %+v", res)
+	}
+	data, err := os.ReadFile(UserCredentialsPath())
+	if err != nil {
+		t.Fatalf("read migrated credentials: %v", err)
+	}
+	if string(data) != "DEEPSEEK_API_KEY=sk-old-creds\n" {
+		t.Fatalf("migrated credentials = %q", data)
+	}
+}
+
 func TestMigrateNoLegacyIsNoop(t *testing.T) {
 	legacyHome(t)
 	res, err := MigrateLegacyIfNeeded()

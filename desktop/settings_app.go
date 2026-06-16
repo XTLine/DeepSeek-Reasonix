@@ -1527,7 +1527,7 @@ func (a *App) SetDesktopMetrics(enabled bool) error {
 	}
 	switch {
 	case enabled && a.metrics.Load() == nil && version != "dev":
-		a.metrics.Store(newMetricsAggregator(filepath.Dir(config.UserConfigPath())))
+		a.metrics.Store(newMetricsAggregator(config.MemoryUserDir()))
 	case !enabled:
 		a.metrics.Store(nil)
 	}

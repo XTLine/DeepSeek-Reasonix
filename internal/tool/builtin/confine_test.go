@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"reasonix/internal/config"
 	"reasonix/internal/sandbox"
 )
 
@@ -94,6 +95,45 @@ func TestWriteFileConfinement(t *testing.T) {
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
 		t.Error("file outside root must not be created")
+	}
+}
+
+func TestWriteFileDefaultRootsAllowUserConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("AppData", filepath.Join(home, "AppData", "Roaming"))
+
+	project := filepath.Join(home, "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	w := writeFile{roots: realRoots(cfg.WriteRootsForRoot(project))}
+
+	userConfig := config.UserConfigPath()
+	args, _ := json.Marshal(map[string]string{
+		"path":    userConfig,
+		"content": "default_model = \"deepseek\"\n",
+	})
+	if _, err := w.Execute(context.Background(), args); err != nil {
+		t.Fatalf("write user config should be allowed: %v", err)
+	}
+	if _, err := os.Stat(userConfig); err != nil {
+		t.Fatalf("user config was not created: %v", err)
+	}
+
+	outside := filepath.Join(filepath.Dir(filepath.Dir(userConfig)), "outside.toml")
+	args, _ = json.Marshal(map[string]string{
+		"path":    outside,
+		"content": "nope\n",
+	})
+	if _, err := w.Execute(context.Background(), args); err == nil {
+		t.Fatalf("write outside project and user config dir should be denied")
+	}
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Fatalf("outside file must not be created, stat err=%v", err)
 	}
 }
 

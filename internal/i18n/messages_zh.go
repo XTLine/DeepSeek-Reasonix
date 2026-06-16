@@ -387,7 +387,7 @@ var Chinese = Messages{
   echo "解释这段代码" | reasonix run
 
 配置：
-  优先级：flag > ./reasonix.toml > ~/.config/reasonix/config.toml > 内置默认值
+  优先级：flag > ./reasonix.toml > ~/.reasonix/config.toml > 内置默认值
   密钥通过 api_key_env 从环境变量注入（如 DEEPSEEK_API_KEY）。
   运行 'reasonix setup' 生成配置；详见 docs/SPEC.md。
 `,

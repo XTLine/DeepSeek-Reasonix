@@ -47,7 +47,7 @@ func TestLoadDotEnvFallsBackToHome(t *testing.T) {
 }
 
 // TestLoadDotEnvReadsGlobalCredentials proves `reasonix setup`'s target — the
-// reasonix-owned credentials file in the user config dir — is loaded from any
+// reasonix-owned credentials file under Reasonix home — is loaded from any
 // working directory, while a project ./.env still wins on a shared key.
 func TestLoadDotEnvReadsGlobalCredentials(t *testing.T) {
 	cwd := t.TempDir()
