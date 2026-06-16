@@ -60,12 +60,6 @@ func legacyCredentialsPaths() []string {
 	return paths
 }
 
-// loadDotEnvFile reads one .env file (if present) and sets any keys not already
-// present in the environment. Lenient, zero-dependency parsing.
-func loadDotEnvFile(path string) {
-	loadDotEnvFileAs(path, CredentialSource{})
-}
-
 func loadDotEnvFileAs(path string, source CredentialSource) {
 	f, err := os.Open(path)
 	if err != nil {
