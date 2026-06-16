@@ -3152,6 +3152,9 @@ a[href] {
   flex-direction: column;
   gap: 12px;
 }
+.msg-edit__attachments {
+  margin-bottom: 0;
+}
 .msg-edit__input {
   width: 100%;
   min-height: 78px;

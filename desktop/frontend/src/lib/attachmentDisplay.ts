@@ -78,6 +78,21 @@ export function restoreAttachmentRefsForSubmit(text: string): string {
   });
 }
 
+function displayRefName(name: string): string {
+  return name.replace(/[\[\]\(\)\r\n]+/g, " ").replace(/\s+/g, " ").trim() || "attachment";
+}
+
+export function formatAttachmentRefForDisplay(attachment: Pick<DisplayAttachment, "path" | "name" | "source">): string {
+  if (attachment.source === "attachment") {
+    return `@[${displayRefName(attachment.name || baseName(attachment.path) || "attachment")}](${attachment.path})`;
+  }
+  return `@${attachment.path}`;
+}
+
+export function formatAttachmentRefForSubmit(attachment: Pick<DisplayAttachment, "path">): string {
+  return `@${attachment.path}`;
+}
+
 export function parseAttachmentRefsForDisplay(text: string): { text: string; attachments: DisplayAttachment[] } {
   const attachments: DisplayAttachment[] = [];
   const cleaned = text
