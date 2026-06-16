@@ -73,6 +73,27 @@ console.log("\nuse controller meta");
 }
 
 {
+  const started = reducer(initialState, { type: "event", e: { kind: "turn_started" } });
+  const waiting = reducer(started, { type: "event", e: { kind: "approval_request", approval: { id: "1", tool: "bash", subject: "go test" } } });
+  eq(waiting.running, true, "approval prompt keeps the turn running");
+  eq(waiting.pendingPrompt, true, "approval prompt marks pendingPrompt");
+  eq(waiting.cancellable, true, "approval prompt remains cancellable");
+
+  const canceling = reducer(waiting, { type: "cancel_requested" });
+  eq(canceling.approval, undefined, "cancel_requested clears approval prompt locally");
+  eq(canceling.pendingPrompt, false, "cancel_requested clears pendingPrompt locally");
+  eq(canceling.cancelRequested, true, "cancel_requested marks cancelling");
+  eq(canceling.running, true, "cancel_requested waits for backend turn_done before idling");
+  const stalePrompt = reducer(canceling, { type: "event", e: { kind: "approval_request", approval: { id: "late", tool: "bash", subject: "sleep" } } });
+  eq(stalePrompt.approval, undefined, "late approval after cancel_requested stays hidden");
+
+  const backgroundOnly = reducer(initialState, { type: "backend_status", running: false, backgroundJobs: 1, cancellable: false });
+  eq(backgroundOnly.running, false, "background jobs alone do not make the composer runstatus active");
+  eq(backgroundOnly.backgroundJobs, 1, "backend_status stores background job count");
+  eq(backgroundOnly.cancellable, false, "background jobs alone are not foreground-cancellable");
+}
+
+{
   const idleExecutor = reducer(
     { ...initialState, context: { used: 0, window: 200, sessionTokens: 0 } },
     { type: "event", e: { kind: "usage", usage: usage("executor") } },

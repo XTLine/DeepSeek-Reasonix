@@ -936,7 +936,7 @@ func (a *App) NewSession() error {
 		return workspaceNotReadyErr(tab)
 	}
 	// Tab is already blank — just persist and skip the new-session dance.
-	if !ctrl.Running() && !messagesHaveConversationContent(ctrl.History()) {
+	if !controllerHasActiveRuntimeWork(ctrl) && !messagesHaveConversationContent(ctrl.History()) {
 		a.persistTabSessionPath(tab, ctrl.SessionPath())
 		return nil
 	}
@@ -992,7 +992,7 @@ func (a *App) clearActiveSessionRuntime(tab *WorkspaceTab, oldCtrl *control.Cont
 		oldSink.tabID = detachedRuntimeTabID(oldPath)
 		oldSink.ctx = nil
 	}
-	if oldCtrl.Running() {
+	if oldCtrl.RuntimeStatus().Cancellable {
 		oldCtrl.Cancel()
 		if err := waitControllerStopped(oldCtrl); err != nil {
 			return err
@@ -4931,7 +4931,11 @@ func modelProviderAccessAllowed(access map[string]bool, name string) bool {
 }
 
 func controllerHasActiveRuntimeWork(ctrl *control.Controller) bool {
-	return ctrl != nil && (ctrl.Running() || ctrl.PendingPrompt() || len(ctrl.Jobs()) > 0)
+	if ctrl == nil {
+		return false
+	}
+	status := ctrl.RuntimeStatus()
+	return status.Running || status.PendingPrompt || status.BackgroundJobs > 0
 }
 
 func rebuildControllerActiveWorkError(setting string) error {

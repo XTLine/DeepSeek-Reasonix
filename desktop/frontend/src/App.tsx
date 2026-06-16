@@ -2946,6 +2946,9 @@ export default function App() {
                   applyCollaborationMode("normal");
                   approve(state.approval!.id, false, false, false);
                 }}
+                onStop={() => {
+                  cancel();
+                }}
               />
             )}
             {state.ask && (
@@ -2953,6 +2956,9 @@ export default function App() {
                 ask={state.ask}
                 onAnswer={answerQuestion}
                 onDismiss={() => answerQuestion(state.ask!.id, [])}
+                onStop={() => {
+                  cancel();
+                }}
               />
             )}
             {clearContextPending && (

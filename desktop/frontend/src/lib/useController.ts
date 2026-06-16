@@ -78,6 +78,10 @@ interface State {
   items: Item[];
   running: boolean;
   turnActive: boolean;
+  pendingPrompt: boolean;
+  backgroundJobs: number;
+  cancelRequested: boolean;
+  cancellable: boolean;
   approval?: WireApproval;
   ask?: WireAsk;
   usage?: WireUsage;
@@ -108,6 +112,10 @@ export const initialState: State = {
   items: [],
   running: false,
   turnActive: false,
+  pendingPrompt: false,
+  backgroundJobs: 0,
+  cancelRequested: false,
+  cancellable: false,
   context: { used: 0, window: 0, sessionTokens: 0 },
   jobs: [],
   checkpoints: [],
@@ -206,7 +214,8 @@ type Action =
   | { type: "user"; text: string; seq: number }
   | { type: "unsend" }
   | { type: "send_failed"; error: string }
-  | { type: "backend_status"; running: boolean }
+  | { type: "backend_status"; running: boolean; pendingPrompt?: boolean; backgroundJobs?: number; cancelRequested?: boolean; cancellable?: boolean }
+  | { type: "cancel_requested" }
   | { type: "meta"; meta: Meta }
   | { type: "context"; context: ContextInfo }
   | { type: "balance"; balance: BalanceInfo }
@@ -401,7 +410,7 @@ function flushPendingUser(s: State): State {
 
 function applyEvent(s: State, e: WireEvent): State {
   if (s.discardTurn) {
-    if (e.kind === "turn_done") return { ...s, discardTurn: false, running: false, turnActive: false, currentAssistant: undefined, live: undefined };
+    if (e.kind === "turn_done") return { ...s, discardTurn: false, running: false, turnActive: false, pendingPrompt: false, cancelRequested: false, cancellable: false, currentAssistant: undefined, live: undefined };
     return s;
   }
   if (s.pendingUser !== undefined && e.kind !== "turn_done") {
@@ -420,7 +429,7 @@ function applyEvent(s: State, e: WireEvent): State {
       let cur: State = s;
       if (cur.pendingUser !== undefined) cur = flushPendingUser(cur);
       const { items, id, seq } = ensureAssistant(cur);
-      return { ...cur, items, currentAssistant: id, seq, live: { id, text: "", reasoning: "", reasoningComplete: false }, running: true, turnActive: true, turnStartAt: Date.now(), turnTokens: 0, turnTotalTokens: 0, turnCost: 0 };
+      return { ...cur, items, currentAssistant: id, seq, live: { id, text: "", reasoning: "", reasoningComplete: false }, running: true, turnActive: true, pendingPrompt: false, cancelRequested: false, cancellable: true, turnStartAt: Date.now(), turnTokens: 0, turnTotalTokens: 0, turnCost: 0 };
     }
     case "text":
     case "reasoning": {
@@ -537,8 +546,14 @@ function applyEvent(s: State, e: WireEvent): State {
     }
     case "steer":
       return { ...s, seq: s.seq + 1, items: [...s.items, { kind: "notice", id: `s${s.seq}`, level: "info", text: `↪ ${e.text ?? ""}` }] };
-    case "approval_request": return { ...s, approval: e.approval };
-    case "ask_request": return { ...s, ask: e.ask };
+    case "approval_request": {
+      if (s.cancelRequested) return s;
+      return { ...s, approval: e.approval, pendingPrompt: true, running: true, turnActive: true, cancellable: true };
+    }
+    case "ask_request": {
+      if (s.cancelRequested) return s;
+      return { ...s, ask: e.ask, pendingPrompt: true, running: true, turnActive: true, cancellable: true };
+    }
     case "turn_done": {
       if (s.pendingUser !== undefined) s = flushPendingUser(s);
       const finalized = s.items.map((it) => {
@@ -548,7 +563,7 @@ function applyEvent(s: State, e: WireEvent): State {
         return it;
       });
       let items: Item[] = e.err ? [...finalized, { kind: "notice", id: `e${s.seq}`, level: "warn", text: e.err }] : finalized;
-      return { ...s, items, live: undefined, running: false, turnActive: false, currentAssistant: undefined, approval: undefined, ask: undefined, seq: s.seq + 1 };
+      return { ...s, items, live: undefined, running: false, turnActive: false, pendingPrompt: false, cancelRequested: false, cancellable: false, currentAssistant: undefined, approval: undefined, ask: undefined, seq: s.seq + 1 };
     }
     default: return s;
   }
@@ -563,6 +578,9 @@ export function reducer(s: State, a: Action): State {
         seq: seq + 1,
         items: [...s.items, { kind: "user", id: `u${seq}`, text: a.text }],
         running: true,
+        pendingPrompt: false,
+        cancelRequested: false,
+        cancellable: true,
         turnStartAt: Date.now(),
         turnTokens: 0,
         turnTotalTokens: 0,
@@ -571,7 +589,8 @@ export function reducer(s: State, a: Action): State {
         discardTurn: false,
       };
     }
-    case "unsend": return { ...s, pendingUser: undefined, discardTurn: true, running: false, live: undefined };
+    case "unsend": return { ...s, pendingUser: undefined, discardTurn: true, running: false, pendingPrompt: false, cancelRequested: true, cancellable: false, approval: undefined, ask: undefined, live: undefined };
+    case "cancel_requested": return { ...s, pendingPrompt: false, cancelRequested: true, approval: undefined, ask: undefined, cancellable: s.running || s.turnActive };
     case "send_failed": {
       if (s.pendingUser === undefined) return s;
       let idx = -1;
@@ -581,18 +600,39 @@ export function reducer(s: State, a: Action): State {
       }
       const items = idx >= 0 ? s.items.map((it, i) => (i === idx ? { ...it, failed: true } : it)) : s.items;
       const notice: Item = { kind: "notice", id: `n${s.seq}`, level: "warn", text: a.error };
-      return { ...s, pendingUser: undefined, running: false, turnActive: false, live: undefined, seq: s.seq + 1, items: [...items, notice] };
+      return { ...s, pendingUser: undefined, running: false, turnActive: false, pendingPrompt: false, cancelRequested: false, cancellable: false, live: undefined, seq: s.seq + 1, items: [...items, notice] };
     }
     case "backend_status": {
-      if (a.running === s.running) return s;
-      if (a.running) return { ...s, running: true, turnActive: true, turnStartAt: s.turnStartAt || Date.now() };
+      const pendingPrompt = Boolean(a.pendingPrompt);
+      const backgroundJobs = Math.max(0, a.backgroundJobs ?? s.backgroundJobs ?? 0);
+      const cancelRequested = Boolean(a.cancelRequested);
+      const cancellable = Boolean(a.cancellable ?? a.running);
+      if (
+        a.running === s.running &&
+        pendingPrompt === s.pendingPrompt &&
+        backgroundJobs === s.backgroundJobs &&
+        cancelRequested === s.cancelRequested &&
+        cancellable === s.cancellable
+      ) return s;
+      if (a.running) {
+        return {
+          ...s,
+          running: true,
+          turnActive: true,
+          pendingPrompt,
+          backgroundJobs,
+          cancelRequested,
+          cancellable,
+          turnStartAt: s.turnStartAt || Date.now(),
+        };
+      }
       const finalized = s.items.map((it) => {
         if (it.kind === "assistant" && s.live && it.id === s.live.id) return { ...it, text: s.live.text, reasoning: s.live.reasoning, streaming: false };
         if (it.kind === "assistant" && it.streaming) return { ...it, streaming: false };
         if (it.kind === "tool" && it.status === "running") return { ...it, status: "stopped" as const };
         return it;
       });
-      return { ...s, items: finalized, running: false, turnActive: false, live: undefined, currentAssistant: undefined, approval: undefined, ask: undefined };
+      return { ...s, items: finalized, running: false, turnActive: false, pendingPrompt, backgroundJobs, cancelRequested, cancellable, live: undefined, currentAssistant: undefined, approval: undefined, ask: undefined };
     }
     case "meta": return sameMeta(s.meta, a.meta) ? s : { ...s, meta: a.meta };
     case "context": {
@@ -622,8 +662,8 @@ export function reducer(s: State, a: Action): State {
       return { ...s, items: archived, seq };
     }
     case "local_notice": return { ...s, running: false, turnActive: false, seq: s.seq + 1, items: [...s.items, { kind: "notice", id: `n${s.seq}`, level: a.level, text: a.text }] };
-    case "clearApproval": return { ...s, approval: undefined };
-    case "clearAsk": return { ...s, ask: undefined };
+    case "clearApproval": return { ...s, approval: undefined, pendingPrompt: false };
+    case "clearAsk": return { ...s, ask: undefined, pendingPrompt: false };
     case "reset": return { ...initialState, meta: s.meta, context: { ...s.context, used: 0, sessionTokens: 0 }, balance: s.balance, effort: s.effort, jobs: s.jobs, sessionGen: s.sessionGen + 1 };
     case "event": return applyEvent(s, a.e);
     default: return s;
@@ -779,8 +819,16 @@ export function useController() {
     if (!tab) return undefined;
     const local = statesRef.current.get(tabId);
     const needsInitialLoad = !local?.meta;
-    const missedTurnDone = Boolean(local?.running && !tab.running);
-    dispatchTo(tabId, { type: "backend_status", running: Boolean(tab.running) });
+    const foregroundRunning = Boolean(tab.cancellable ?? tab.running);
+    const missedTurnDone = Boolean(local?.running && !foregroundRunning);
+    dispatchTo(tabId, {
+      type: "backend_status",
+      running: foregroundRunning,
+      pendingPrompt: Boolean(tab.pendingPrompt),
+      backgroundJobs: tab.backgroundJobs ?? 0,
+      cancelRequested: Boolean(tab.cancelRequested),
+      cancellable: Boolean(tab.cancellable),
+    });
     if (needsInitialLoad || missedTurnDone) {
       await loadSessionDataForTab(tabId, missedTurnDone);
       return tabs;
@@ -938,7 +986,10 @@ export function useController() {
       }
       return text;
     }
-    if (tabId) app.CancelTab(tabId).catch(() => {});
+    if (tabId) {
+      dispatchTo(tabId, { type: "cancel_requested" });
+      app.CancelTab(tabId).catch(() => {});
+    }
     return undefined;
   }, [activeTabId, dispatchTo]);
 
