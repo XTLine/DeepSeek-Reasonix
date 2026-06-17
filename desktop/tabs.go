@@ -1558,7 +1558,7 @@ func (a *App) buildTabController(tab *WorkspaceTab) {
 		if path == "" && tab.TopicID != "" {
 			existingPath := findTopicSession(dir, tab.TopicID)
 			if existingPath != "" {
-				if loaded, err := agent.LoadSession(existingPath); err == nil {
+				if loaded, err := loadResumableSession(existingPath); err == nil {
 					ctrl.Resume(loaded, existingPath)
 					path = existingPath
 				}
@@ -4388,7 +4388,12 @@ func topicSessionIndexForDir(dir string) (topicSessionDirIndex, error) {
 
 func topicSessionIndexHasTopic(index topicSessionDirIndex, topicID string) bool {
 	matches := index.byTopic[strings.TrimSpace(topicID)]
-	return len(matches) > 0
+	for _, match := range matches {
+		if !agent.IsCleanupPending(match.path) {
+			return true
+		}
+	}
+	return false
 }
 
 func topicSessionMatches(dir, topicID string) []topicSessionMatch {
@@ -4400,7 +4405,17 @@ func topicSessionMatches(dir, topicID string) []topicSessionMatch {
 	if len(matches) == 0 {
 		return nil
 	}
-	return append([]topicSessionMatch(nil), matches...)
+	out := make([]topicSessionMatch, 0, len(matches))
+	for _, match := range matches {
+		if agent.IsCleanupPending(match.path) {
+			continue
+		}
+		out = append(out, match)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func invalidateTopicSessionIndex(dir string) {
