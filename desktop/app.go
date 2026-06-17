@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -1002,7 +1003,13 @@ func (a *App) clearActiveSessionRuntime(tab *WorkspaceTab, oldCtrl *control.Cont
 		}
 	}
 	destroy := oldCtrl.BeginDestroySession(oldPath)
-	waitDestroyHandles([]control.SessionDestroyHandle{destroy})
+	destroys := []control.SessionDestroyHandle{destroy}
+	teardownTimedOut := waitDestroyHandles(destroys)
+	if teardownTimedOut {
+		if err := agent.MarkCleanupPending(oldPath, "clear"); err != nil {
+			return err
+		}
+	}
 
 	newSink := &tabEventSink{tabID: tab.ID, app: a, ctx: a.ctx}
 	newCtrl, err := boot.Build(a.bootContext(), boot.Options{
@@ -1015,19 +1022,27 @@ func (a *App) clearActiveSessionRuntime(tab *WorkspaceTab, oldCtrl *control.Cont
 		TokenMode:      currentTabTokenMode(tab),
 	})
 	if err != nil {
-		finishDestroyHandles([]control.SessionDestroyHandle{destroy})
+		if teardownTimedOut {
+			go delayedDesktopSessionCleanup(oldPath, destroys)
+		} else {
+			finishDestroyHandles(destroys)
+		}
 		if oldSink != nil {
 			oldSink.tabID = tab.ID
 			oldSink.ctx = a.ctx
 		}
 		return err
 	}
-	if err := removeDesktopSessionArtifacts(oldPath); err != nil {
-		finishDestroyHandles([]control.SessionDestroyHandle{destroy})
-		newCtrl.Close()
-		return err
+	if teardownTimedOut {
+		go delayedDesktopSessionCleanup(oldPath, destroys)
+	} else {
+		if err := removeDesktopSessionArtifacts(oldPath); err != nil {
+			finishDestroyHandles(destroys)
+			newCtrl.Close()
+			return err
+		}
+		finishDestroyHandles(destroys)
 	}
-	finishDestroyHandles([]control.SessionDestroyHandle{destroy})
 	a.bindControllerDisplayRecorder(newCtrl)
 	newCtrl.EnableInteractiveApproval()
 	applyTabModeToController(newCtrl, tab.mode)
@@ -1047,7 +1062,7 @@ func (a *App) clearActiveSessionRuntime(tab *WorkspaceTab, oldCtrl *control.Cont
 		a.saveTabsLocked()
 	}
 	a.mu.Unlock()
-	oldCtrl.Close()
+	oldCtrl.CloseAfterDestroy()
 	a.emitProjectTreeChanged()
 	return nil
 }
@@ -1071,7 +1086,10 @@ func removeDesktopSessionArtifacts(path string) error {
 			return err
 		}
 	}
-	return agent.DeleteSubagentsByParent(filepath.Dir(path), agent.BranchID(path))
+	if err := agent.DeleteSubagentsByParent(filepath.Dir(path), agent.BranchID(path)); err != nil {
+		return err
+	}
+	return agent.ClearCleanupPending(path)
 }
 
 // CheckpointMeta summarises one rewind point (a user turn) for the desktop.
@@ -1560,16 +1578,22 @@ func (a *App) DeleteSession(path string) error {
 		a.closeRemovedSessionRuntimes(removed)
 		return err
 	}
-	err = trashSessionArtifactsBeforeMove(dir, sessionPath, key, func() {
-		destroys := a.destroyHandlesForSession(dir, sessionPath, removed)
-		waitDestroyHandles(destroys)
+	destroys := a.destroyHandlesForSession(dir, sessionPath, removed)
+	if waitDestroyHandles(destroys) {
+		if err := agent.MarkCleanupPending(sessionPath, "delete"); err != nil {
+			a.closeRemovedSessionRuntimesAfterDestroy(removed)
+			return err
+		}
+		go delayedDesktopSessionTrash(dir, sessionPath, key, destroys)
+	} else {
+		err = trashSessionArtifacts(dir, sessionPath, key)
 		finishDestroyHandles(destroys)
-	})
-	if err != nil {
-		a.closeRemovedSessionRuntimes(removed)
-		return err
+		if err != nil {
+			a.closeRemovedSessionRuntimesAfterDestroy(removed)
+			return err
+		}
 	}
-	a.closeRemovedSessionRuntimes(removed)
+	a.closeRemovedSessionRuntimesAfterDestroy(removed)
 	if fallback.needs {
 		if err := a.openFallbackRuntime(fallback); err != nil {
 			return err
@@ -1749,10 +1773,22 @@ func (a *App) destroyHandlesForSession(dir, sessionPath string, removed []remove
 	return destroys
 }
 
-func waitDestroyHandles(destroys []control.SessionDestroyHandle) {
+func waitDestroyHandles(destroys []control.SessionDestroyHandle) bool {
+	timedOut := false
 	for _, destroy := range destroys {
 		if destroy.Wait != nil {
-			destroy.Wait()
+			if destroy.Wait().HasTimedOut() {
+				timedOut = true
+			}
+		}
+	}
+	return timedOut
+}
+
+func waitAllDestroyHandles(destroys []control.SessionDestroyHandle) {
+	for _, destroy := range destroys {
+		if destroy.WaitAll != nil {
+			destroy.WaitAll()
 		}
 	}
 }
@@ -1765,6 +1801,22 @@ func finishDestroyHandles(destroys []control.SessionDestroyHandle) {
 	}
 }
 
+func delayedDesktopSessionCleanup(path string, destroys []control.SessionDestroyHandle) {
+	waitAllDestroyHandles(destroys)
+	if err := removeDesktopSessionArtifacts(path); err != nil {
+		slog.Warn("desktop: delayed session cleanup failed", "path", path, "err", err)
+	}
+	finishDestroyHandles(destroys)
+}
+
+func delayedDesktopSessionTrash(dir, sessionPath, key string, destroys []control.SessionDestroyHandle) {
+	waitAllDestroyHandles(destroys)
+	if err := trashSessionArtifacts(dir, sessionPath, key); err != nil {
+		slog.Warn("desktop: delayed session trash failed", "path", sessionPath, "err", err)
+	}
+	finishDestroyHandles(destroys)
+}
+
 func (a *App) closeRemovedSessionRuntimes(removed []removedSessionRuntime) {
 	seen := map[*control.Controller]bool{}
 	for _, item := range removed {
@@ -1773,6 +1825,17 @@ func (a *App) closeRemovedSessionRuntimes(removed []removedSessionRuntime) {
 		}
 		seen[item.ctrl] = true
 		item.ctrl.Close()
+	}
+}
+
+func (a *App) closeRemovedSessionRuntimesAfterDestroy(removed []removedSessionRuntime) {
+	seen := map[*control.Controller]bool{}
+	for _, item := range removed {
+		if item.ctrl == nil || seen[item.ctrl] {
+			continue
+		}
+		seen[item.ctrl] = true
+		item.ctrl.CloseAfterDestroy()
 	}
 }
 
@@ -1930,7 +1993,7 @@ func (a *App) ResumeSessionForTab(tabID, path string) ([]HistoryMessage, error) 
 	if err != nil {
 		return nil, err
 	}
-	if _, err := agent.LoadSession(sessionPath); err != nil {
+	if _, err := loadResumableSession(sessionPath); err != nil {
 		return nil, err
 	}
 	if sessionRuntimeKey(tab.currentSessionPath()) == sessionRuntimeKey(sessionPath) {
@@ -1955,7 +2018,7 @@ func (a *App) OpenChannelSessionForTab(tabID, path string) ([]HistoryMessage, er
 	if err != nil {
 		return nil, err
 	}
-	if _, err := agent.LoadSession(sessionPath); err != nil {
+	if _, err := loadResumableSession(sessionPath); err != nil {
 		return nil, err
 	}
 	if sessionRuntimeKey(tab.currentSessionPath()) != sessionRuntimeKey(sessionPath) {
@@ -1984,7 +2047,7 @@ func (a *App) rebindTabToSessionPath(tab *WorkspaceTab, sessionPath string) erro
 	if sessionPath == "" {
 		return fmt.Errorf("session path is required")
 	}
-	if _, err := agent.LoadSession(sessionPath); err != nil {
+	if _, err := loadResumableSession(sessionPath); err != nil {
 		return err
 	}
 	if sessionRuntimeKey(tab.currentSessionPath()) == sessionRuntimeKey(sessionPath) {
@@ -2038,6 +2101,13 @@ func (a *App) rebindTabToSessionPath(tab *WorkspaceTab, sessionPath string) erro
 		return fmt.Errorf("resume session: controller was not built")
 	}
 	return nil
+}
+
+func loadResumableSession(sessionPath string) (*agent.Session, error) {
+	if agent.IsCleanupPending(sessionPath) {
+		return nil, fmt.Errorf("session is pending cleanup")
+	}
+	return agent.LoadSession(sessionPath)
 }
 
 // PreviewSession reads a saved session for display only. It does not snapshot or

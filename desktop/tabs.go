@@ -1475,7 +1475,9 @@ func (a *App) buildTabController(tab *WorkspaceTab) {
 	}
 	startupSessionPath := ""
 	if pinnedPath, ok := pinnedTabSessionPath(sessionDir, tab.SessionPath); ok {
-		startupSessionPath = pinnedPath
+		if !agent.IsCleanupPending(pinnedPath) {
+			startupSessionPath = pinnedPath
+		}
 	} else if topicID != "" {
 		startupSessionPath = findTopicSession(sessionDir, topicID)
 	}
@@ -1556,7 +1558,7 @@ func (a *App) buildTabController(tab *WorkspaceTab) {
 		if path == "" && tab.TopicID != "" {
 			existingPath := findTopicSession(dir, tab.TopicID)
 			if existingPath != "" {
-				if loaded, err := agent.LoadSession(existingPath); err == nil {
+				if loaded, err := loadResumableSession(existingPath); err == nil {
 					ctrl.Resume(loaded, existingPath)
 					path = existingPath
 				}
@@ -3417,17 +3419,31 @@ func (a *App) TrashTopic(topicID string) error {
 		a.closeRemovedSessionRuntimes(removed)
 		return err
 	}
-	defer a.closeRemovedSessionRuntimes(removed)
+	destroyBegun := false
+	defer func() {
+		if destroyBegun {
+			a.closeRemovedSessionRuntimesAfterDestroy(removed)
+			return
+		}
+		a.closeRemovedSessionRuntimes(removed)
+	}()
 
 	for _, target := range targets {
-		var destroys []control.SessionDestroyHandle
-		err := trashSessionArtifactsBeforeMove(target.dir, target.sessionPath, target.key, func() {
-			destroys = a.destroyHandlesForSession(target.dir, target.sessionPath, removed)
-			waitDestroyHandles(destroys)
-		})
-		finishDestroyHandles(destroys)
-		if err != nil {
-			return err
+		destroys := a.destroyHandlesForSession(target.dir, target.sessionPath, removed)
+		if len(destroys) > 0 {
+			destroyBegun = true
+		}
+		if waitDestroyHandles(destroys) {
+			if err := agent.MarkCleanupPending(target.sessionPath, "delete"); err != nil {
+				return err
+			}
+			go delayedDesktopSessionTrash(target.dir, target.sessionPath, target.key, destroys)
+		} else {
+			err := trashSessionArtifacts(target.dir, target.sessionPath, target.key)
+			finishDestroyHandles(destroys)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	if err := a.DeleteTopic(topicID); err != nil {
@@ -4089,6 +4105,9 @@ func loadPinnedTabSession(dir, sessionPath string) (*agent.Session, string, bool
 	if !ok {
 		return nil, "", false
 	}
+	if agent.IsCleanupPending(path) {
+		return nil, "", false
+	}
 	loaded, err := agent.LoadSession(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -4369,7 +4388,12 @@ func topicSessionIndexForDir(dir string) (topicSessionDirIndex, error) {
 
 func topicSessionIndexHasTopic(index topicSessionDirIndex, topicID string) bool {
 	matches := index.byTopic[strings.TrimSpace(topicID)]
-	return len(matches) > 0
+	for _, match := range matches {
+		if !agent.IsCleanupPending(match.path) {
+			return true
+		}
+	}
+	return false
 }
 
 func topicSessionMatches(dir, topicID string) []topicSessionMatch {
@@ -4381,7 +4405,17 @@ func topicSessionMatches(dir, topicID string) []topicSessionMatch {
 	if len(matches) == 0 {
 		return nil
 	}
-	return append([]topicSessionMatch(nil), matches...)
+	out := make([]topicSessionMatch, 0, len(matches))
+	for _, match := range matches {
+		if agent.IsCleanupPending(match.path) {
+			continue
+		}
+		out = append(out, match)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func invalidateTopicSessionIndex(dir string) {

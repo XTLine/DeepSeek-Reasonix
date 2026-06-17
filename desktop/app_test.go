@@ -2111,6 +2111,53 @@ func TestDeleteSessionCancelsActiveRuntime(t *testing.T) {
 	}
 }
 
+func TestDeleteSessionWithStuckJobReturnsAfterSingleGrace(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	dir := config.SessionDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	path := filepath.Join(dir, "stuck-delete.jsonl")
+	keepPath := filepath.Join(dir, "keep.jsonl")
+	for _, p := range []string{path, keepPath} {
+		if err := os.WriteFile(p, []byte(`{"role":"user","content":"hello"}`+"\n"), 0o644); err != nil {
+			t.Fatalf("write session %s: %v", p, err)
+		}
+	}
+
+	grace := 150 * time.Millisecond
+	jm := jobs.NewManager(event.Discard, jobs.WithTeardownGrace(grace))
+	ctrl := control.New(control.Options{SessionDir: dir, SessionPath: path, Label: "test", Jobs: jm})
+	keepCtrl := control.New(control.Options{SessionDir: dir, SessionPath: keepPath, Label: "keep"})
+	releaseJob := startNonCooperativeSessionJob(t, jm, path)
+	defer func() {
+		releaseJob()
+		ctrl.Close()
+		keepCtrl.Close()
+	}()
+
+	app := NewApp()
+	app.setTestCtrl(ctrl, "")
+	app.tabs["keep"] = &WorkspaceTab{ID: "keep", Scope: "global", Ctrl: keepCtrl, Ready: true}
+	app.tabOrder = []string{"test", "keep"}
+
+	start := time.Now()
+	if err := app.DeleteSession(filepath.Base(path)); err != nil {
+		t.Fatalf("DeleteSession(stuck job): %v", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed > grace+100*time.Millisecond {
+		t.Fatalf("DeleteSession took %s, want one teardown grace plus scheduling slack", elapsed)
+	}
+	if !agent.IsCleanupPending(path) {
+		t.Fatalf("stuck delete should mark cleanup pending")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("stuck session file should remain until delayed cleanup: %v", err)
+	}
+}
+
 func TestDeleteSessionTrashConflictKeepsRuntime(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
@@ -2217,6 +2264,74 @@ func TestDeleteSessionCancelsInactiveOpenRuntime(t *testing.T) {
 	}
 	if open[filepath.Base(inactivePath)] || open[filepath.Base(otherPath)] {
 		t.Fatalf("ListSessions marked unopened session open, got %#v", open)
+	}
+}
+
+func TestTrashTopicWithStuckJobReturnsAfterSingleGrace(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	projectRoot := t.TempDir()
+	topicID := "topic_stuck_trash"
+	if err := addProject(projectRoot, ""); err != nil {
+		t.Fatalf("add project: %v", err)
+	}
+	if err := setTopicTitle(projectRoot, topicID, "Stuck trash"); err != nil {
+		t.Fatalf("set topic title: %v", err)
+	}
+	dir := config.SessionDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir sessions: %v", err)
+	}
+	sessionPath := writeTopicSession(t, dir, "stuck-topic.jsonl", topicID, "Stuck trash", projectRoot)
+
+	grace := 150 * time.Millisecond
+	jm := jobs.NewManager(event.Discard, jobs.WithTeardownGrace(grace))
+	ctrl := control.New(control.Options{SessionDir: dir, SessionPath: sessionPath, Label: "test", Jobs: jm, WorkspaceRoot: projectRoot})
+	releaseJob := startNonCooperativeSessionJob(t, jm, sessionPath)
+	defer func() {
+		releaseJob()
+		ctrl.Close()
+	}()
+
+	app := &App{
+		tabs: map[string]*WorkspaceTab{
+			"stuck": {
+				ID:            "stuck",
+				Scope:         "project",
+				WorkspaceRoot: projectRoot,
+				TopicID:       topicID,
+				TopicTitle:    "Stuck trash",
+				Ctrl:          ctrl,
+				Ready:         true,
+				disabledMCP:   map[string]ServerView{},
+			},
+			"keep": {
+				ID:            "keep",
+				Scope:         "project",
+				WorkspaceRoot: projectRoot,
+				TopicID:       "topic_keep",
+				TopicTitle:    "Keep",
+				Ready:         true,
+				disabledMCP:   map[string]ServerView{},
+			},
+		},
+		tabOrder:    []string{"stuck", "keep"},
+		activeTabID: "stuck",
+	}
+
+	start := time.Now()
+	if err := app.TrashTopic(topicID); err != nil {
+		t.Fatalf("TrashTopic(stuck job): %v", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed > grace+100*time.Millisecond {
+		t.Fatalf("TrashTopic took %s, want one teardown grace plus scheduling slack", elapsed)
+	}
+	if !agent.IsCleanupPending(sessionPath) {
+		t.Fatalf("stuck topic trash should mark cleanup pending")
+	}
+	if _, err := os.Stat(sessionPath); err != nil {
+		t.Fatalf("stuck topic session should remain until delayed trash: %v", err)
 	}
 }
 
@@ -2391,6 +2506,43 @@ func TestOpenChannelSessionForTabIsReadOnly(t *testing.T) {
 	}
 	if !strings.Contains(string(afterSnapshot), "external follow-up") {
 		t.Fatalf("read-only channel snapshot overwrote external append:\n%s", afterSnapshot)
+	}
+}
+
+func TestResumeSessionRejectsCleanupPending(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	dir := config.SessionDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	activePath := filepath.Join(dir, "active.jsonl")
+	pendingPath := filepath.Join(dir, "pending.jsonl")
+	for _, path := range []string{activePath, pendingPath} {
+		if err := os.WriteFile(path, []byte(`{"role":"user","content":"hello"}`+"\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	if err := agent.MarkCleanupPending(pendingPath, "delete"); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	ctrl := control.New(control.Options{SessionDir: dir, SessionPath: activePath, Label: "test"})
+	app.setTestCtrl(ctrl, "")
+	defer app.activeCtrl().Close()
+
+	if _, err := app.ResumeSession(pendingPath); err == nil || !strings.Contains(err.Error(), "pending cleanup") {
+		t.Fatalf("ResumeSession cleanup-pending error = %v, want pending cleanup", err)
+	}
+	if got := app.activeCtrl().SessionPath(); filepath.Clean(got) != filepath.Clean(activePath) {
+		t.Fatalf("active session path after rejected resume = %q, want %q", got, activePath)
+	}
+	if _, err := app.OpenChannelSessionForTab("test", pendingPath); err == nil || !strings.Contains(err.Error(), "pending cleanup") {
+		t.Fatalf("OpenChannelSessionForTab cleanup-pending error = %v, want pending cleanup", err)
+	}
+	if meta := app.tabMeta(app.activeTab(), true); meta.ReadOnly {
+		t.Fatalf("rejected channel open should not make tab read-only: %+v", meta)
 	}
 }
 
@@ -3278,6 +3430,31 @@ func (r *blockingRunner) Run(ctx context.Context, _ string) error {
 		return ctx.Err()
 	case <-r.release:
 		return nil
+	}
+}
+
+func startNonCooperativeSessionJob(t *testing.T, jm *jobs.Manager, sessionPath string) func() {
+	t.Helper()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	jm.StartForSession(agent.BranchID(sessionPath), "bash", "stuck job", func(ctx context.Context, _ io.Writer) (string, error) {
+		close(started)
+		<-ctx.Done()
+		<-release
+		return "", ctx.Err()
+	})
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background job never started")
+	}
+	released := false
+	return func() {
+		if released {
+			return
+		}
+		released = true
+		close(release)
 	}
 }
 

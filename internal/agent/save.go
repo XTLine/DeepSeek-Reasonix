@@ -15,6 +15,8 @@ import (
 	"reasonix/internal/provider"
 )
 
+const cleanupPendingExt = ".cleanup-pending.json"
+
 // Save writes the session's messages to path in JSONL — one provider.Message
 // per line — so a user can resume the conversation later. The file is
 // rewritten in full on every save: chat sessions are small (kilobytes), and
@@ -108,6 +110,62 @@ type SessionOrderInfo struct {
 	TopicTitle     string
 }
 
+// CleanupPendingMeta records that a session was logically removed but still has
+// artifacts waiting for a background job to unwind before physical cleanup.
+type CleanupPendingMeta struct {
+	Operation string `json:"operation"`
+	CreatedAt int64  `json:"createdAt"`
+}
+
+// CleanupPendingPath returns the durable marker path for a session transcript.
+func CleanupPendingPath(sessionPath string) string {
+	sessionPath = strings.TrimSpace(sessionPath)
+	if sessionPath == "" {
+		return ""
+	}
+	return strings.TrimSuffix(sessionPath, ".jsonl") + cleanupPendingExt
+}
+
+// MarkCleanupPending hides a logically removed session from resume/list surfaces
+// until delayed physical cleanup has finished.
+func MarkCleanupPending(sessionPath, operation string) error {
+	path := CleanupPendingPath(sessionPath)
+	if path == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	meta := CleanupPendingMeta{Operation: strings.TrimSpace(operation), CreatedAt: time.Now().UnixMilli()}
+	b, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o644)
+}
+
+// ClearCleanupPending removes a delayed-cleanup marker after physical cleanup.
+func ClearCleanupPending(sessionPath string) error {
+	path := CleanupPendingPath(sessionPath)
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// IsCleanupPending reports whether a session is hidden pending delayed cleanup.
+func IsCleanupPending(sessionPath string) bool {
+	path := CleanupPendingPath(sessionPath)
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // ListSessionOrder returns every *.jsonl session under dir in the same
 // most-recently-active order used by ListSessions, using only file metadata and
 // branch sidecars. A missing directory is not an error.
@@ -129,6 +187,9 @@ func ListSessionOrder(dir string) ([]SessionOrderInfo, error) {
 			continue
 		}
 		full := filepath.Join(dir, e.Name())
+		if IsCleanupPending(full) {
+			continue
+		}
 		createdAt := info.ModTime()
 		lastActivityAt := info.ModTime()
 		scope := "global"
