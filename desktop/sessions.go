@@ -176,6 +176,9 @@ func trashSessionArtifactsBeforeMove(dir, sessionPath, key string, beforeMove fu
 	if err := os.WriteFile(filepath.Join(itemDir, sessionTrashMetaFile), b, 0o644); err != nil {
 		return err
 	}
+	if err := agent.ClearCleanupPending(sessionPath); err != nil {
+		return err
+	}
 	return nil
 }
 

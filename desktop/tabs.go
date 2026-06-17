@@ -3420,14 +3420,18 @@ func (a *App) TrashTopic(topicID string) error {
 	defer a.closeRemovedSessionRuntimes(removed)
 
 	for _, target := range targets {
-		var destroys []control.SessionDestroyHandle
-		err := trashSessionArtifactsBeforeMove(target.dir, target.sessionPath, target.key, func() {
-			destroys = a.destroyHandlesForSession(target.dir, target.sessionPath, removed)
-			waitDestroyHandles(destroys)
-		})
-		finishDestroyHandles(destroys)
-		if err != nil {
-			return err
+		destroys := a.destroyHandlesForSession(target.dir, target.sessionPath, removed)
+		if waitDestroyHandles(destroys) {
+			if err := agent.MarkCleanupPending(target.sessionPath, "delete"); err != nil {
+				return err
+			}
+			go delayedDesktopSessionTrash(target.dir, target.sessionPath, target.key, destroys)
+		} else {
+			err := trashSessionArtifacts(target.dir, target.sessionPath, target.key)
+			finishDestroyHandles(destroys)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	if err := a.DeleteTopic(topicID); err != nil {

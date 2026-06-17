@@ -1578,14 +1578,20 @@ func (a *App) DeleteSession(path string) error {
 		a.closeRemovedSessionRuntimes(removed)
 		return err
 	}
-	err = trashSessionArtifactsBeforeMove(dir, sessionPath, key, func() {
-		destroys := a.destroyHandlesForSession(dir, sessionPath, removed)
-		waitDestroyHandles(destroys)
+	destroys := a.destroyHandlesForSession(dir, sessionPath, removed)
+	if waitDestroyHandles(destroys) {
+		if err := agent.MarkCleanupPending(sessionPath, "delete"); err != nil {
+			a.closeRemovedSessionRuntimes(removed)
+			return err
+		}
+		go delayedDesktopSessionTrash(dir, sessionPath, key, destroys)
+	} else {
+		err = trashSessionArtifacts(dir, sessionPath, key)
 		finishDestroyHandles(destroys)
-	})
-	if err != nil {
-		a.closeRemovedSessionRuntimes(removed)
-		return err
+		if err != nil {
+			a.closeRemovedSessionRuntimes(removed)
+			return err
+		}
 	}
 	a.closeRemovedSessionRuntimes(removed)
 	if fallback.needs {
@@ -1799,6 +1805,14 @@ func delayedDesktopSessionCleanup(path string, destroys []control.SessionDestroy
 	waitAllDestroyHandles(destroys)
 	if err := removeDesktopSessionArtifacts(path); err != nil {
 		slog.Warn("desktop: delayed session cleanup failed", "path", path, "err", err)
+	}
+	finishDestroyHandles(destroys)
+}
+
+func delayedDesktopSessionTrash(dir, sessionPath, key string, destroys []control.SessionDestroyHandle) {
+	waitAllDestroyHandles(destroys)
+	if err := trashSessionArtifacts(dir, sessionPath, key); err != nil {
+		slog.Warn("desktop: delayed session trash failed", "path", sessionPath, "err", err)
 	}
 	finishDestroyHandles(destroys)
 }
