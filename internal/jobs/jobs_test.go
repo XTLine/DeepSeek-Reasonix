@@ -472,8 +472,10 @@ func TestDestroySessionWaitsForAlreadyKilledJobs(t *testing.T) {
 func TestWaitTeardownTimesOutForNonCooperativeJob(t *testing.T) {
 	m := NewManager(event.Discard)
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseJob := func() { releaseOnce.Do(func() { close(release) }) }
 	defer func() {
-		close(release)
+		releaseJob()
 		m.Close()
 	}()
 
@@ -507,8 +509,7 @@ func TestWaitTeardownTimesOutForNonCooperativeJob(t *testing.T) {
 		t.Fatal("session-a should stay destroying until delayed cleanup finishes")
 	}
 
-	close(release)
-	release = make(chan struct{}) // keep deferred close valid after releasing the job
+	releaseJob()
 	for _, ch := range handle.DoneChannels() {
 		select {
 		case <-ch:
@@ -525,8 +526,10 @@ func TestWaitTeardownTimesOutForNonCooperativeJob(t *testing.T) {
 func TestCloseWithGraceTimesOutForNonCooperativeJob(t *testing.T) {
 	m := NewManager(event.Discard)
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseJob := func() { releaseOnce.Do(func() { close(release) }) }
 	defer func() {
-		close(release)
+		releaseJob()
 		m.Close()
 	}()
 
@@ -555,8 +558,7 @@ func TestCloseWithGraceTimesOutForNonCooperativeJob(t *testing.T) {
 		t.Fatalf("cancelled close jobs should not remain Running, got %+v", running)
 	}
 
-	close(release)
-	release = make(chan struct{}) // keep deferred close valid after releasing the job
+	releaseJob()
 	res := m.Wait(context.Background(), []string{j.ID}, 5)
 	if len(res) != 1 || res[0].Status != Killed {
 		t.Fatalf("want killed after delayed close cleanup, got %+v", res)

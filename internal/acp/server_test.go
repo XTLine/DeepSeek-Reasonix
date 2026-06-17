@@ -947,10 +947,7 @@ func TestSessionDeleteWithStuckJobReturnsAfterSingleGrace(t *testing.T) {
 	}
 	releaseJob()
 	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if !agent.IsCleanupPending(path) {
-			break
-		}
+	for agent.IsCleanupPending(path) {
 		if time.Now().After(deadline) {
 			t.Fatalf("cleanup-pending marker was not cleared after stuck job release")
 		}
