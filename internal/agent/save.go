@@ -77,6 +77,20 @@ func LoadSession(path string) (*Session, error) {
 		}
 		s.Messages = append(s.Messages, m)
 	}
+	// Repair the history in memory before anything reads it. Old sessions (pre
+	// adde2d3e) and interrupted turns can carry empty tool-call names, dangling
+	// tool_calls, orphan results, or half-streamed argument JSON that DeepSeek
+	// rejects with a 400 on replay. Normalizing once here — at the single
+	// source of truth — means the provider send path no longer has to re-repair
+	// the same stale data every turn. The fast path returns the input slice
+	// unchanged for a well-formed history, so we detect an actual repair by
+	// comparing slice headers: when NormalizeSession allocated a new backing
+	// array, the session is marked dirty so the next Save persists the fix.
+	normalized := NormalizeSession(s.Messages)
+	if len(normalized) != len(s.Messages) || (len(s.Messages) > 0 && &normalized[0] != &s.Messages[0]) {
+		s.normalizedDirty = true
+	}
+	s.Messages = normalized
 	return s, nil
 }
 

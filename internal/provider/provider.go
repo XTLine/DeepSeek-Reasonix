@@ -94,15 +94,38 @@ type Request struct {
 // responding to each 'tool_call_id'".
 const interruptedToolResult = "[no result: the previous turn was interrupted before this tool call completed]"
 
-// SanitizeToolPairing repairs a history so it satisfies the tool-call contract the
-// OpenAI-compatible and Anthropic APIs enforce: every assistant tool_calls entry
-// must be answered by a following tool message for its id, and a tool message must
-// follow such a call. It backfills a placeholder result for any unanswered call
-// (so the turn stays intact), drops orphan tool messages, and closes truncated
-// call-argument JSON (DeepSeek 400s on replayed half-streamed args, #3953).
-// Well-formed histories pass through unchanged (results stay in call order).
-// Callers send the result; the stored session keeps the original.
-func SanitizeToolPairing(msgs []Message) []Message {
+// SanitizeToolPairing is the provider-side alias for NormalizeMessages. It repairs
+// a history so it satisfies the tool-call contract the OpenAI-compatible and
+// Anthropic APIs enforce (every assistant tool_calls answered, no orphan tool
+// messages, truncated args closed) right before sending it to the wire — without
+// touching the stored session. Kept as a distinct name so call sites read as
+// "defensive wire prep" rather than "session mutation".
+func SanitizeToolPairing(msgs []Message) []Message { return NormalizeMessages(msgs) }
+
+// NormalizeMessages repairs a conversation history so it satisfies the tool-call
+// contract the OpenAI-compatible and Anthropic APIs enforce: every assistant
+// tool_calls entry must be answered by a following tool message for its id, and a
+// tool message must follow such a call. It backfills a placeholder result for any
+// unanswered call (so the turn stays intact), drops orphan tool messages,
+// backfills empty tool-call names from their results (#4727 — old sessions saved
+// before adde2d3e can carry an empty name), and closes truncated call-argument
+// JSON (DeepSeek 400s on replayed half-streamed args, #3953).
+//
+// This is the single source of truth for the repairs applied to a stored
+// conversation — both the agent's LoadSession (which persists the result lazily
+// via the next Save) and the provider's send path (SanitizeToolPairing) route
+// through it, so load-time and send-time never drift apart. That single-ownership
+// is what makes the #4727 → #4775 → revert churn impossible to reintroduce: a
+// behavior change lands in one place and both paths inherit it.
+//
+// A well-formed history — no unanswered calls, no orphan results, no empty tool-
+// call names, no truncated args — returns the input slice unchanged (same backing
+// array, zero allocation). This keeps the prefix-cache key stable for healthy
+// sessions and makes repeated normalization cheap.
+func NormalizeMessages(msgs []Message) []Message {
+	if normalized, ok := tryNormalizeFastPath(msgs); ok {
+		return normalized // well-formed: pass through without allocating
+	}
 	out := make([]Message, 0, len(msgs))
 	for i := 0; i < len(msgs); {
 		m := msgs[i]
@@ -131,6 +154,24 @@ func SanitizeToolPairing(msgs []Message) []Message {
 		i++
 	}
 	return out
+}
+
+// tryNormalizeFastPath reports whether msgs needs no repair and, if so, returns
+// it as-is so the caller can skip allocating. A history is repair-free when it
+// has no assistant tool_calls turns (nothing to pair), and no leading tool
+// messages (no orphans to drop). The per-turn deeper checks — name backfill,
+// arg repair — are handled by backfillToolCallNames/repairToolCallArgs own
+// fast paths once the slow path is entered.
+func tryNormalizeFastPath(msgs []Message) ([]Message, bool) {
+	for _, m := range msgs {
+		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
+			return nil, false
+		}
+		if m.Role == RoleTool {
+			return nil, false
+		}
+	}
+	return msgs, true
 }
 
 // repairToolCallArgs returns m with any undecodable tool-call Arguments closed
