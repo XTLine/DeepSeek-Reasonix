@@ -553,6 +553,20 @@ func (a *App) ensureActiveTabRebuildAllowed(setting string) error {
 	return nil
 }
 
+func (a *App) ensureLiveControllersRuntimeMutationAllowed(setting string) error {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, tab := range a.tabs {
+		if tab == nil {
+			continue
+		}
+		if controllerHasActiveRuntimeWork(tab.Ctrl) {
+			return rebuildControllerActiveWorkError(setting)
+		}
+	}
+	return nil
+}
+
 func (a *App) loadDesktopUserConfigForEdit() (*config.Config, string, error) {
 	userPath := config.UserConfigPath()
 	if userPath == "" {
@@ -793,11 +807,12 @@ func (a *App) rebuild() error {
 	}
 	ctrl, err := boot.Build(a.bootContext(), boot.Options{
 		Model: model, RequireKey: false,
-		Sink:           tab.sink,
-		WorkspaceRoot:  tab.WorkspaceRoot,
-		SessionDir:     tabSessionDir(tab),
-		EffortOverride: cloneStringPtr(tab.effort),
-		TokenMode:      currentTabTokenMode(tab),
+		Sink:                     tab.sink,
+		WorkspaceRoot:            tab.WorkspaceRoot,
+		SessionDir:               tabSessionDir(tab),
+		EffortOverride:           cloneStringPtr(tab.effort),
+		TokenMode:                currentTabTokenMode(tab),
+		CleanupPendingReconciler: reconcileDesktopCleanupPending,
 	})
 	if err != nil {
 		a.mu.Lock()
@@ -1123,6 +1138,9 @@ func (a *App) AddOfficialProviderAccess(kind, key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := a.ensureActiveTabRebuildAllowed("provider access"); err != nil {
+		return "", err
+	}
 	keyWarning := ""
 	if strings.TrimSpace(key) != "" && keyEnv != "" {
 		var err error
@@ -1264,6 +1282,11 @@ func (a *App) removeBuiltInProviderAccessAndRetargetTabs(name string) error {
 		a.mu.RUnlock()
 	}
 
+	if len(affected) == 0 {
+		if err := a.ensureActiveTabRebuildAllowed("provider access"); err != nil {
+			return err
+		}
+	}
 	retargetProviderReferences(cfg, name, fallbackRef)
 	removeProviderAccess(cfg, name)
 	if err := cfg.SaveTo(path); err != nil {
@@ -1341,6 +1364,11 @@ func (a *App) deleteProviderAndRetargetTabs(name string) error {
 
 	if len(affected) > 0 && fallbackRef == "" {
 		return fmt.Errorf("remove provider: %q is used by open tabs and no other configured provider exists", name)
+	}
+	if len(affected) == 0 {
+		if err := a.ensureActiveTabRebuildAllowed("provider"); err != nil {
+			return err
+		}
 	}
 	if err := cfg.RemoveProvider(name); err != nil {
 		return err
@@ -1722,6 +1750,9 @@ func (a *App) SetColdResumePrune(enabled bool) error {
 }
 
 func (a *App) SetReasoningLanguage(lang string) error {
+	if err := a.ensureLiveControllersRuntimeMutationAllowed("reasoning language"); err != nil {
+		return err
+	}
 	cfg, path, err := a.loadDesktopUserConfigForEdit()
 	if err != nil {
 		return err
