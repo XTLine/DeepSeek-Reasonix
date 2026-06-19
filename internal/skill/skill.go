@@ -52,13 +52,6 @@ const (
 	SkillFile = "SKILL.md"
 )
 
-// scriptExts lists executable extensions recognized in scripts/ directories,
-// separated by dots for fast contains-check. No-extension files (bare
-// executables like lint, deploy) pass through regardless.
-const scriptExts = ".sh.py.js.ts.rb.pl.php.ps1"
-
-
-
 // Skill is a loaded playbook.
 type Skill struct {
 	Name        string // canonical identifier; matches the directory / filename stem
@@ -671,9 +664,7 @@ func loadBodyWithScripts(skillPath, body string) string {
 		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		// Only list files that look like scripts: no extension, or recognized ext.
-		ext := strings.ToLower(filepath.Ext(e.Name()))
-		if ext != "" && !strings.Contains(scriptExts, ext) {
+		if !isScriptExt(filepath.Ext(e.Name())) {
 			continue
 		}
 		names = append(names, e.Name())
@@ -684,11 +675,20 @@ func loadBodyWithScripts(skillPath, body string) string {
 	sort.Strings(names)
 	var b strings.Builder
 	b.WriteString(body)
-	b.WriteString("## Scripts\n\nRun with bash.\n\n")
+	b.WriteString("\n\n## Scripts\n\nRun a listed script with bash using the exact path shown below; quote the path if it contains spaces.\n\n")
 	for _, n := range names {
 		b.WriteString("- `" + filepath.Join(scriptsDir, n) + "`\n")
 	}
 	return b.String()
+}
+
+func isScriptExt(ext string) bool {
+	switch strings.ToLower(ext) {
+	case "", ".sh", ".py", ".js", ".ts", ".rb", ".pl", ".php", ".ps1":
+		return true
+	default:
+		return false
+	}
 }
 
 // parseAllowedTools splits a comma-separated `allowed-tools` value into trimmed,

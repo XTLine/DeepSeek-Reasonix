@@ -372,7 +372,7 @@ func TestReferencesInlined(t *testing.T) {
 }
 
 func TestScriptsAppended(t *testing.T) {
-	home := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home with spaces")
 	writeSkill(t, home, ".reasonix/skills/withscripts/SKILL.md", "---\ndescription: r\n---\nmain body")
 	writeScript(t, home, ".reasonix/skills/withscripts/scripts/lint.py", "#!/usr/bin/env python3\nprint('ok')")
 	writeScript(t, home, ".reasonix/skills/withscripts/scripts/deploy.sh", "#!/usr/bin/env bash\necho ok")
@@ -390,6 +390,37 @@ func TestScriptsAppended(t *testing.T) {
 	}
 	if !strings.Contains(sk.Body, "lint.py") || !strings.Contains(sk.Body, "deploy.sh") {
 		t.Error("script paths missing from body")
+	}
+	if !strings.Contains(sk.Body, "main body\n\n## Scripts") {
+		t.Errorf("scripts section should be separated from the original body:\n%s", sk.Body)
+	}
+	if !strings.Contains(sk.Body, "quote the path if it contains spaces") {
+		t.Error("scripts guidance should mention quoting paths with spaces")
+	}
+}
+
+func TestScriptsStayOutOfSkillIndex(t *testing.T) {
+	home := t.TempDir()
+	writeSkill(t, home, ".reasonix/skills/withscripts/SKILL.md", "---\ndescription: cache-safe script skill\n---\nmain body")
+	writeScript(t, home, ".reasonix/skills/withscripts/scripts/lint.py", "#!/usr/bin/env python3\nprint('ok')")
+
+	st := New(Options{HomeDir: home, DisableBuiltins: true})
+	sk, ok := st.Read("withscripts")
+	if !ok {
+		t.Fatal("skill not found")
+	}
+	if !strings.Contains(sk.Body, "## Scripts") || !strings.Contains(sk.Body, "lint.py") {
+		t.Fatal("test setup expected scripts in the on-demand skill body")
+	}
+
+	index := ApplyIndex("BASE", []Skill{sk})
+	if !strings.Contains(index, "withscripts") || !strings.Contains(index, "cache-safe script skill") {
+		t.Fatalf("skill index missing name/description:\n%s", index)
+	}
+	for _, forbidden := range []string{"## Scripts", "lint.py", filepath.Join("scripts", "lint.py")} {
+		if strings.Contains(index, forbidden) {
+			t.Fatalf("skill index should not include on-demand script listing %q:\n%s", forbidden, index)
+		}
 	}
 }
 
@@ -426,6 +457,7 @@ func TestScriptsFilteredByExt(t *testing.T) {
 	writeScript(t, home, ".reasonix/skills/scriptscheck/scripts/.hidden.py", "")
 	writeScript(t, home, ".reasonix/skills/scriptscheck/scripts/readme.md", "# readme")
 	writeScript(t, home, ".reasonix/skills/scriptscheck/scripts/deploy", "#!/bin/sh\necho ok")
+	writeScript(t, home, ".reasonix/skills/scriptscheck/scripts/legacy.p", "print 'ok'\n")
 	writeScript(t, home, ".reasonix/skills/scriptscheck/scripts/.gitkeep", "")
 
 	st := New(Options{HomeDir: home, DisableBuiltins: true})
@@ -449,6 +481,9 @@ func TestScriptsFilteredByExt(t *testing.T) {
 	// readme.md should NOT be listed (documentation, not a script)
 	if strings.Contains(body, "readme.md") {
 		t.Error("non-script extensions should NOT be listed")
+	}
+	if strings.Contains(body, "legacy.p") {
+		t.Error("partial extension matches should NOT be listed")
 	}
 	// .gitkeep should NOT be listed (hidden file)
 	if strings.Contains(body, ".gitkeep") {
