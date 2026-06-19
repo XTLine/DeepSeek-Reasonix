@@ -194,6 +194,27 @@ func TestHTTPTransportReinitializesExpiredSession(t *testing.T) {
 		t.Fatalf("StartAll: %v", err)
 	}
 	defer host.Close()
+	host.mu.RLock()
+	client := host.clients[0]
+	host.mu.RUnlock()
+
+	done := make(chan struct{})
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				_, _ = client.hasPrompts, client.hasResources
+			}
+		}
+	}()
+	defer func() {
+		close(done)
+		<-readerDone
+	}()
 
 	got, err := tools[0].Execute(ctx, json.RawMessage(`{"name":"sam"}`))
 	if err != nil {

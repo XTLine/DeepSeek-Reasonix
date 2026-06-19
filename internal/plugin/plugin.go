@@ -900,7 +900,7 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 	if err == nil || method == "initialize" || !isHTTPSessionExpired(err) {
 		return res, err
 	}
-	if initErr := c.initialize(ctx); initErr != nil {
+	if initErr := c.initializeSession(ctx, false); initErr != nil {
 		return nil, fmt.Errorf("%w; reinitialize failed: %v", err, initErr)
 	}
 	return c.t.call(ctx, method, params)
@@ -918,6 +918,10 @@ func isHTTPSessionExpired(err error) bool {
 }
 
 func (c *Client) initialize(ctx context.Context) error {
+	return c.initializeSession(ctx, true)
+}
+
+func (c *Client) initializeSession(ctx context.Context, recordCapabilities bool) error {
 	res, err := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities":    map[string]any{},
@@ -925,6 +929,10 @@ func (c *Client) initialize(ctx context.Context) error {
 	})
 	if err != nil {
 		return err
+	}
+	if !recordCapabilities {
+		// Runtime session refresh must not rewrite startup-only capability flags.
+		return c.notify(ctx, "notifications/initialized", map[string]any{})
 	}
 	// Record which optional capabilities the server advertises. Presence of the
 	// key (even with an empty object) signals support.
