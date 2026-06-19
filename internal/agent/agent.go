@@ -827,6 +827,13 @@ func (a *Agent) finalReadinessFailure() string {
 	return a.finalReadinessCheck().reason
 }
 
+// GoalReadinessFailure returns the final-readiness failure reason — a summary of
+// incomplete todos and unverified project checks — or empty string if none.
+// Exported so the Controller can gate [goal:complete] on evidence.
+func (a *Agent) GoalReadinessFailure() string {
+	return a.finalReadinessFailure()
+}
+
 type finalReadinessCheck struct {
 	applies              bool
 	reason               string
@@ -855,7 +862,7 @@ func (a *Agent) finalReadinessCheck() finalReadinessCheck {
 		if !hasTodos && a.evidence.HasAnySuccessfulReceipt() {
 			incomplete, hasTodos = a.incompleteCanonicalTodos()
 		}
-		if hasTodos && len(incomplete) > 0 {
+		if hasTodos && len(incomplete) > 0 && a.evidence.HasSuccessfulTodoProgressReceipt() {
 			out.applies = true
 			out.incompleteTodos = len(incomplete)
 			missing = append(missing, finalReadinessIncompleteTodos(incomplete))
@@ -1226,7 +1233,7 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 	// styled markdown now that it is complete. Reasoning rides along so the sink
 	// has the full chain if it wants it.
 	if text.Len() > 0 || display != "" {
-		a.sink.Emit(event.Event{Kind: event.Message, Text: text.String(), Reasoning: display})
+		a.sink.Emit(event.Event{Kind: event.Message, Text: StripGoalMarkers(text.String()), Reasoning: display})
 	}
 	return text.String(), stored, signature, calls, usage, false, false, nil
 }

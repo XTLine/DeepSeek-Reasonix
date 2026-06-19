@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent, type ReactNode } from "react";
-import { QRCodeSVG } from "qrcode.react";
+import { lazy, memo, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent, type ReactNode } from "react";
 import { Check, CheckCircle2, ChevronDown, ChevronUp, Clipboard, GripVertical, KeyRound, Loader2, Play, QrCode, RefreshCw, Send } from "lucide-react";
 import { asArray } from "../lib/array";
 import { useDeferredClose } from "../lib/useMountTransition";
@@ -49,8 +48,6 @@ import type { BotAllowlistView, BotConnectionDiagnostic, BotConnectionView, BotI
 import { InlineConfirmButton } from "./InlineConfirmButton";
 import { Tooltip } from "./Tooltip";
 import { AnchoredPopover } from "./AnchoredPopover";
-import { MCPServersSettingsPage, SkillsSettingsPage } from "./CapabilitiesPanel";
-import { MemorySettingsPage } from "./MemoryPanel";
 import { getGenerativePreset, setGenerativePreset, generativeMusic, type GenerativePreset } from "../lib/generative-music";
 import { SoundSelect } from "./SoundSelect";
 import { getSuccessPreference, setSuccessPreference, getAttentionPreference, setAttentionPreference, playSuccessChime, playAttentionChime, type SoundWavPref } from "../lib/sound";
@@ -59,6 +56,11 @@ import { ShortcutComboDisplay } from "./ShortcutComboDisplay";
 
 const SETTINGS_TABS: SettingsTab[] = ["general", "models", "bots", "mcp", "skills", "memory", "hooks", "shortcuts", "permissions", "sandbox", "network", "appearance", "updates"];
 export type SettingsInitialFocus = { target: "bot-allowlist"; connectionId?: string };
+
+const MCPServersSettingsPage = lazy(() => import("./CapabilitiesPanel").then((module) => ({ default: module.MCPServersSettingsPage })));
+const SkillsSettingsPage = lazy(() => import("./CapabilitiesPanel").then((module) => ({ default: module.SkillsSettingsPage })));
+const MemorySettingsPage = lazy(() => import("./MemoryPanel").then((module) => ({ default: module.MemorySettingsPage })));
+const QRCodeSVG = lazy(() => import("qrcode.react").then((module) => ({ default: module.QRCodeSVG })));
 
 // SettingsPanel is the desktop settings centre — a centred modal with left
 // navigation and a right content area. It hosts all settings pages plus MCP,
@@ -92,15 +94,15 @@ export function SettingsPanel({
   // Play the modal exit animation, then let the parent unmount us.
   const { status, requestClose } = useDeferredClose(onClose, 240);
 
-  const reload = async () => {
+  const reload = useCallback(async () => {
     const next = normalizeSettingsView(await app.Settings().catch(() => null));
     setS(next);
     return next;
-  };
+  }, []);
   useEffect(() => {
     void reload();
     if (initialTab) setTab(initialTab === "providers" ? "models" : initialTab);
-  }, [initialTab]);
+  }, [initialTab, reload]);
   useEffect(() => {
     if (!s) return;
     const nextTheme = normalizeThemePreference(s.desktopTheme);
@@ -110,7 +112,7 @@ export function SettingsPanel({
   }, [s?.desktopTheme, s?.desktopThemeStyle]);
 
   // apply runs a mutation, re-reads settings, and refreshes the topbar/model.
-  const apply = async (fn: () => Promise<unknown>) => {
+  const apply = useCallback(async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setErr(null);
     setWarning(null);
@@ -126,8 +128,8 @@ export function SettingsPanel({
     } finally {
       setBusy(false);
     }
-  };
-  const backgroundApply = async (fn: () => Promise<void>) => {
+  }, [reload, onChanged]);
+  const backgroundApply = useCallback(async (fn: () => Promise<void>) => {
     setErr(null);
     setWarning(null);
     try {
@@ -137,7 +139,7 @@ export function SettingsPanel({
     } catch (e) {
       setErr(String((e as Error)?.message ?? e));
     }
-  };
+  }, [reload, onChanged]);
 
   // Close on Esc
   useEffect(() => {
@@ -152,6 +154,7 @@ export function SettingsPanel({
   // sandbox, appearance, updates) need SettingsView loaded. MCP, Skills, and Memory
   // load their own data and render regardless.
   const needsSettings = tab === "general" || tab === "models" || tab === "bots" || tab === "network" || tab === "permissions" || tab === "sandbox" || tab === "appearance" || tab === "updates";
+  const lazySettingsPageFallback = <div className="empty">{t("settings.loading")}</div>;
 
   return (
     <div className="management-modal-backdrop settings-modal-backdrop" data-state={status} onClick={(e) => { if (e.target === e.currentTarget) requestClose(); }}>
@@ -184,9 +187,9 @@ export function SettingsPanel({
                 {tab === "general" && s && <SettingsPageShell key={tab} s={s} tab={tab} busy={busy} apply={apply}><GeneralSection s={s} busy={busy} apply={apply} agentRunning={agentRunning} /></SettingsPageShell>}
                 {tab === "models" && s && <SettingsPageShell key={tab} s={s} tab={tab} busy={busy} apply={apply}><ModelsSection s={s} busy={busy} apply={apply} backgroundApply={backgroundApply} /></SettingsPageShell>}
                 {tab === "bots" && s && <SettingsPageShell key={tab} s={s} tab={tab} busy={busy} apply={apply}><BotsSection s={s} busy={busy} apply={apply} initialFocus={initialFocus} /></SettingsPageShell>}
-                {tab === "mcp" && <SettingsPageShell key={tab} s={s} tab={tab} busy={false} apply={apply}><MCPServersSettingsPage /></SettingsPageShell>}
-                {tab === "skills" && <SettingsPageShell key={tab} s={s} tab={tab} busy={false} apply={apply}><SkillsSettingsPage /></SettingsPageShell>}
-                {tab === "memory" && <SettingsPageShell key={tab} s={s} tab={tab} busy={false} apply={apply}><MemorySettingsPage /></SettingsPageShell>}
+                {tab === "mcp" && <SettingsPageShell key={tab} s={s} tab={tab} busy={false} apply={apply}><Suspense fallback={lazySettingsPageFallback}><MCPServersSettingsPage /></Suspense></SettingsPageShell>}
+                {tab === "skills" && <SettingsPageShell key={tab} s={s} tab={tab} busy={false} apply={apply}><Suspense fallback={lazySettingsPageFallback}><SkillsSettingsPage /></Suspense></SettingsPageShell>}
+                {tab === "memory" && <SettingsPageShell key={tab} s={s} tab={tab} busy={false} apply={apply}><Suspense fallback={lazySettingsPageFallback}><MemorySettingsPage /></Suspense></SettingsPageShell>}
                 {tab === "hooks" && <SettingsPageShell key={tab} s={s} tab={tab} busy={false} apply={apply}><HooksSection onChanged={onChanged} /></SettingsPageShell>}
                 {tab === "shortcuts" && <SettingsPageShell key={tab} s={s} tab={tab} busy={false} apply={apply}><ShortcutsSection /></SettingsPageShell>}
                 {tab === "permissions" && s && <SettingsPageShell key={tab} s={s} tab={tab} busy={busy} apply={apply}><PermissionsSection s={s} busy={busy} apply={apply} /></SettingsPageShell>}
@@ -834,10 +837,12 @@ function normalizeDisplayMode(mode: string | undefined): DisplayMode {
   return mode === "standard" || mode === "compact" ? mode : "standard";
 }
 
-type DesktopLayoutStyle = "classic" | "workbench";
+type DesktopLayoutStyle = "classic" | "workbench" | "creation";
 
 function normalizeDesktopLayoutStyle(style: string | undefined): DesktopLayoutStyle {
-  return style === "classic" ? "classic" : "workbench";
+  if (style === "classic") return "classic";
+  if (style === "creation") return "creation";
+  return "workbench";
 }
 
 function desktopLayoutStyleLabel(style: DesktopLayoutStyle, t: ReturnType<typeof useT>): string {
@@ -1107,7 +1112,7 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
       </SettingsField>
       <SettingsField label={t("settings.desktopLayoutStyle")}>
         <div className="set-seg">
-          {(["classic", "workbench"] as const).map((style) => (
+          {(["classic", "workbench", "creation"] as const).map((style) => (
             <button
               key={style}
               className={`set-seg__btn${desktopLayoutStyle === style ? " set-seg__btn--on" : ""}`}
@@ -2725,7 +2730,9 @@ function BotsSection({ s, busy, apply, initialFocus }: BotsSectionProps) {
                   installQrIsImage ? (
                     <img src={installQrURL} alt={t("settings.botInstallQrAlt")} />
                   ) : (
-                    <QRCodeSVG className="bot-connect-panel__qr-code" value={installQrURL} size={196} marginSize={1} />
+                    <Suspense fallback={<div className="bot-connect-panel__state"><QrCode aria-hidden="true" /></div>}>
+                      <QRCodeSVG className="bot-connect-panel__qr-code" value={installQrURL} size={196} marginSize={1} />
+                    </Suspense>
                   )
                 ) : install.status === "starting" ? (
                   <div className="bot-connect-panel__state">
@@ -2960,7 +2967,7 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
   const t = useT();
   const [subtab, setSubtab] = useState<"usage" | "access">("usage");
   const autoRefreshKeyRef = useRef("");
-  const refs = allRefs(s);
+  const refs = useMemo(() => allRefs(s), [s.providers]);
   const defaultRef = toRef(s.defaultModel, s);
   const plannerRef = toRef(s.plannerModel, s);
   const subagentRef = toRef(s.subagentModel, s);
@@ -3169,8 +3176,14 @@ function ModelPicker({
   const t = useT();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const q = query.trim().toLowerCase();
+  // Debounce search to avoid expensive filtering on every keystroke
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query), 150);
+    return () => clearTimeout(timer);
+  }, [query]);
+  const q = debouncedQuery.trim().toLowerCase();
   const emptyLabel = includeSameDefault ? t("settings.plannerNone") : emptyOptionLabel;
   const emptyHint = includeSameDefault ? t("settings.plannerNoneHint") : emptyOptionHint;
   const emptyMeta = includeSameDefault ? t("settings.plannerNoneHintShort") : emptyOptionHint;
@@ -3375,7 +3388,7 @@ function ProvidersSection({ s, busy, apply }: SectionProps) {
   const [fetchingProvider, setFetchingProvider] = useState<string | null>(null);
   const [fetchResults, setFetchResults] = useState<Record<string, ProviderFetchResult>>({});
   const [modelDrafts, setModelDrafts] = useState<Record<string, ProviderModelDraft>>({});
-  const groups = providerAccessGroups(s.providers.filter((p) => p.added), t);
+  const groups = useMemo(() => providerAccessGroups(s.providers.filter((p) => p.added), t), [s.providers, t]);
 
   const setGroupFetchResult = (groupID: string, result: ProviderFetchResult | null) => {
     setFetchResults((prev) => {
@@ -3995,9 +4008,15 @@ function ProviderModelDraftPicker({
 }) {
   const t = useT();
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  // Debounce search to avoid expensive filtering on every keystroke
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query), 150);
+    return () => clearTimeout(timer);
+  }, [query]);
   const selected = new Set(draft.selected);
   const vision = new Set(draft.visionModels);
-  const q = query.trim().toLowerCase();
+  const q = debouncedQuery.trim().toLowerCase();
   const visibleCandidates = q
     ? draft.candidates.filter((model) => model.toLowerCase().includes(q))
     : draft.candidates;
@@ -4161,9 +4180,13 @@ function providerGroupDescription(p: ProviderView, t: ReturnType<typeof useT>): 
 }
 
 function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
   const out: string[] = [];
   for (const value of values) {
-    if (value && !out.includes(value)) out.push(value);
+    if (value && !seen.has(value)) {
+      seen.add(value);
+      out.push(value);
+    }
   }
   return out;
 }
@@ -4192,6 +4215,23 @@ function parseBotListInput(value: string): string[] {
     .map((entry) => entry.trim())
     .filter(Boolean));
 }
+
+// Memoized model chips for ProviderEditor — prevents re-render when typing
+// in name/key/baseUrl fields.
+const ModelChips = memo(function ModelChips({ modelNames }: { modelNames: string[] }) {
+  const t = useT();
+  if (modelNames.length === 0) return null;
+  return (
+    <div className="provider-model-chips">
+      {modelNames.slice(0, 8).map((model) => (
+        <span className="provider-model-chip" key={model}>{model}</span>
+      ))}
+      {modelNames.length > 8 && (
+        <span className="provider-model-chip provider-model-chip--more">{t("settings.moreModels", { n: modelNames.length - 8 })}</span>
+      )}
+    </div>
+  );
+});
 
 function ProviderEditor({
   initial,
@@ -4376,10 +4416,10 @@ function ProviderEditor({
     );
   }
 
-  const modelNames = models
-    .split(",")
-    .map((m) => m.trim())
-    .filter(Boolean);
+  const modelNames = useMemo(
+    () => models.split(",").map((m) => m.trim()).filter(Boolean),
+    [models],
+  );
   const canFetch = Boolean(name.trim() && baseUrl.trim());
 
   const protocolField = initial ? (
@@ -4566,14 +4606,7 @@ function ProviderEditor({
       {modelNames.length > 0 && (
         <div className="provider-card-block">
           <div className="provider-card-block__label">{t("settings.availableModels")}</div>
-          <div className="provider-model-chips">
-            {modelNames.slice(0, 8).map((model) => (
-              <span className="provider-model-chip" key={model}>{model}</span>
-            ))}
-            {modelNames.length > 8 && (
-              <span className="provider-model-chip provider-model-chip--more">{t("settings.moreModels", { n: modelNames.length - 8 })}</span>
-            )}
-          </div>
+          <ModelChips modelNames={modelNames} />
         </div>
       )}
       <label className="set-label">{t("settings.manualModels")}</label>

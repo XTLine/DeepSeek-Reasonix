@@ -13,9 +13,20 @@ export function ModelSwitcher({ label, tabId, onPick }: { label: string; tabId?:
   const [open, setOpen] = useState(false);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [query, setQuery] = useState("");
+  const [triggerWidth, setTriggerWidth] = useState<number | undefined>(undefined);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const triggerWidth = triggerRef.current?.getBoundingClientRect().width;
+
+  // Measure trigger width off the render path to avoid forced layout
+  useEffect(() => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const measure = () => setTriggerWidth(el.getBoundingClientRect().width);
+    measure();
+    const observer = new ResizeObserver(() => measure());
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const loadModels = useCallback(() => {
     return (tabId ? app.ModelsForTab(tabId) : app.Models()).then((next) => setModels(asArray(next))).catch(() => {});
@@ -85,7 +96,7 @@ export function ModelSwitcher({ label, tabId, onPick }: { label: string; tabId?:
         onClick={() => setOpen((v) => !v)}
       >
         <Brain size={13} className="modelsw__kind" />
-        <span className="modelsw__label">{label}{currentProvider ? ` · ${currentProvider}` : ""}</span>
+        <span className="modelsw__label">{label}{currentProvider && <span className="modelsw__provider"> · {currentProvider}</span>}</span>
         <ChevronsUpDown size={11} />
       </button>
       <AnchoredPopover

@@ -85,7 +85,7 @@ type UIConfig struct {
 // language, terminal colours, or provider-visible prompt/request data.
 type DesktopConfig struct {
 	Language       string   `toml:"language"`         // auto|en|zh; empty/auto = browser/OS auto-detect
-	LayoutStyle    string   `toml:"layout_style"`     // classic|workbench; desktop layout style
+	LayoutStyle    string   `toml:"layout_style"`     // classic|workbench|creation; desktop layout style
 	Theme          string   `toml:"theme"`            // auto|dark|light; empty resolves to auto
 	ThemeStyle     string   `toml:"theme_style"`      // graphite|aurora|slate|carbon|nocturne|amber and legacy aliases
 	CloseBehavior  string   `toml:"close_behavior"`   // quit|background; desktop window close behavior
@@ -152,6 +152,8 @@ func normalizeDesktopLayoutStyle(style string) string {
 		return "classic"
 	case "workbench", "workspace":
 		return "workbench"
+	case "creation":
+		return "creation"
 	default:
 		return "workbench"
 	}
@@ -2105,7 +2107,10 @@ func desktopProviderAccessMap(names []string) map[string]bool {
 }
 
 func ensureDeepSeekOfficialProvider(c *Config) {
-	if _, ok := c.Provider("deepseek"); ok {
+	if p, ok := c.Provider("deepseek"); ok {
+		if officialProviderKind(p) == "deepseek" {
+			backfillOfficialContextWindow(p, 1_000_000)
+		}
 		return
 	}
 	entry := ProviderEntry{
@@ -2125,6 +2130,7 @@ func ensureDeepSeekOfficialProvider(c *Config) {
 		entry.Models = mergeModelLists([]string{"deepseek-v4-flash", "deepseek-v4-pro"}, old.ModelList())
 		entry.Default = firstKnownModel(entry.Default, entry.Models, "deepseek-v4-flash")
 	}
+	backfillOfficialContextWindow(&entry, 1_000_000)
 	c.Providers = append(c.Providers, entry)
 }
 
@@ -2133,6 +2139,7 @@ func ensureMimoAPIProvider(c *Config) {
 	visionModels := []string{"mimo-v2.5", "mimo-v2-omni"}
 	if p, ok := c.Provider("mimo-api"); ok {
 		if isOfficialMimoAPIProvider(p) {
+			backfillOfficialContextWindow(p, 1_048_576)
 			mergeCuratedModelsIntoProvider(p, models, "mimo-v2.5-pro")
 			mergeVisionModelsIntoProvider(p, visionModels)
 			backfillMimoDomesticPrices(p)
@@ -2158,6 +2165,7 @@ func ensureMimoTokenPlanProvider(c *Config, includeMimoFlash bool) {
 	visionModels := []string{"mimo-v2.5"}
 	if p, ok := c.Provider("mimo-token-plan"); ok {
 		if isOfficialMimoTokenPlanProvider(p) {
+			backfillOfficialContextWindow(p, 1_048_576)
 			mergeCuratedModelsIntoProvider(p, models, "mimo-v2.5-pro")
 			mergeVisionModelsIntoProvider(p, visionModels)
 			clearMixedMimoTokenPlanPrice(p)
@@ -2191,6 +2199,7 @@ func ensureMimoTokenPlanProvider(c *Config, includeMimoFlash bool) {
 	}
 	clearMixedMimoTokenPlanPrice(&entry)
 	backfillMimoDomesticPrices(&entry)
+	backfillOfficialContextWindow(&entry, 1_048_576)
 	c.Providers = append(c.Providers, entry)
 }
 
@@ -2244,6 +2253,12 @@ func mergeVisionModelsIntoProvider(e *ProviderEntry, models []string) {
 func clearMixedMimoTokenPlanPrice(e *ProviderEntry) {
 	if e != nil && e.HasModel("mimo-v2.5-pro") && e.HasModel("mimo-v2.5") {
 		e.Price = nil
+	}
+}
+
+func backfillOfficialContextWindow(e *ProviderEntry, fallback int) {
+	if e != nil && e.ContextWindow <= 0 {
+		e.ContextWindow = fallback
 	}
 }
 
