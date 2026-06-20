@@ -119,6 +119,11 @@ type Controller struct {
 	// goalStatePath is where the current goal state is persisted for session
 	// continuity. Empty means no persistence.
 	goalStatePath string
+	// goalWriteMu serializes goal-state disk writes so they happen OFF c.mu: a
+	// caller builds the JSON under c.mu (cheap) then writes it here after
+	// unlocking, keeping the per-turn goal persistence out of the critical
+	// section that approvals and status polls also take.
+	goalWriteMu sync.Mutex
 
 	// Checkpoints (snapshot-based rewind). cp is the per-session store rebound when
 	// the session path changes; cpRoot is the workspace root used to guard restore
@@ -756,7 +761,7 @@ func (c *Controller) advanceGoalAfterTurn() bool {
 		c.goalIntercepts = 0
 		c.goalSelfCheckDone = false
 		c.goalIdleTurns = 0
-		c.saveGoalState()
+		// (final state is persisted once below, after the lock is released)
 		c.goal = ""
 		c.goalStatus = GoalStatusComplete
 		c.goalBlocks = 0
@@ -808,11 +813,14 @@ func (c *Controller) advanceGoalAfterTurn() bool {
 		c.goalIdleTurns = 0
 		notice = c.goalBlock
 	}
+	var savePath string
+	var saveData []byte
 	if notice != "" {
-		c.saveGoalState()
+		savePath, saveData, _ = c.buildGoalStateLocked()
 	}
 	cont := notice == ""
 	c.mu.Unlock()
+	c.writeGoalState(savePath, saveData)
 	if notice != "" {
 		c.notice(notice)
 	}
@@ -937,16 +945,20 @@ func (c *Controller) stopGoal(status string) {
 	c.goalIntercepts = 0
 	c.goalSelfCheckDone = false
 	c.goalIdleTurns = 0
-	c.saveGoalState()
+	path, data, _ := c.buildGoalStateLocked()
 	c.mu.Unlock()
+	c.writeGoalState(path, data)
 }
 
-// saveGoalState persists the current goal state to disk for session continuity.
-func (c *Controller) saveGoalState() {
+// buildGoalStateLocked marshals the current goal state for persistence. The
+// caller holds c.mu; this only reads in-memory state and the executor's todo
+// snapshot, never touching disk. Returns the target path and JSON, or ok=false
+// when persistence is disabled. The matching writeGoalState does the disk write
+// OFF c.mu so the per-turn save can't stall an approval or status poll.
+func (c *Controller) buildGoalStateLocked() (path string, data []byte, ok bool) {
 	if c.goalStatePath == "" || c.executor == nil {
-		return
+		return "", nil, false
 	}
-	todos := c.executor.CanonicalTodoState()
 	state := goalState{
 		Goal:         c.goal,
 		Status:       c.goalStatus,
@@ -955,18 +967,30 @@ func (c *Controller) saveGoalState() {
 		Blocks:       c.goalBlocks,
 		Block:        c.goalBlock,
 		Strict:       c.goalStrict,
-		Todos:        todos,
+		Todos:        c.executor.CanonicalTodoState(),
 	}
-	data, err := json.Marshal(state)
+	b, err := json.Marshal(state)
 	if err != nil {
 		slog.Warn("controller: marshal goal state", "err", err)
+		return "", nil, false
+	}
+	return c.goalStatePath, b, true
+}
+
+// writeGoalState persists pre-marshaled goal-state bytes to disk, OFF c.mu and
+// serialized by goalWriteMu so concurrent saves don't interleave or land out of
+// order. Best-effort: failures are logged, not surfaced.
+func (c *Controller) writeGoalState(path string, data []byte) {
+	if path == "" || data == nil {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(c.goalStatePath), 0o755); err != nil {
+	c.goalWriteMu.Lock()
+	defer c.goalWriteMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		slog.Warn("controller: goal state dir", "err", err)
 		return
 	}
-	if err := os.WriteFile(c.goalStatePath, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		slog.Warn("controller: write goal state", "err", err)
 	}
 }
@@ -1851,8 +1875,9 @@ func (c *Controller) PlanMode() bool {
 func (c *Controller) GoalStrict(strict bool) {
 	c.mu.Lock()
 	c.goalStrict = strict
-	c.saveGoalState()
+	path, data, _ := c.buildGoalStateLocked()
 	c.mu.Unlock()
+	c.writeGoalState(path, data)
 }
 
 // SetGoal stores a session-scoped active goal. Compose injects it into outgoing
@@ -1865,7 +1890,6 @@ func (c *Controller) SetGoal(goal string) {
 func (c *Controller) SetGoalWithResearchMode(goal string, researchMode GoalResearchMode) {
 	goal = strings.TrimSpace(goal)
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if goal == "" {
 		c.goal = ""
 		c.goalStatus = GoalStatusStopped
@@ -1878,10 +1902,13 @@ func (c *Controller) SetGoalWithResearchMode(goal string, researchMode GoalResea
 		c.goalSelfCheckDone = false
 		c.goalIdleTurns = 0
 		c.goalStrict = false
-		c.saveGoalState()
+		path, data, _ := c.buildGoalStateLocked()
+		c.mu.Unlock()
+		c.writeGoalState(path, data)
 		return
 	}
 	if c.goal == goal && c.goalStatus == GoalStatusRunning && c.goalResearchMode == researchMode {
+		c.mu.Unlock()
 		return
 	}
 	c.goal = goal
@@ -1895,7 +1922,9 @@ func (c *Controller) SetGoalWithResearchMode(goal string, researchMode GoalResea
 	c.goalSelfCheckDone = false
 	c.goalIdleTurns = 0
 	c.goalStrict = false
-	c.saveGoalState()
+	path, data, _ := c.buildGoalStateLocked()
+	c.mu.Unlock()
+	c.writeGoalState(path, data)
 }
 
 func (c *Controller) ClearGoal() {
