@@ -953,10 +953,16 @@ func (c *Controller) saveGoalState() {
 	}
 	data, err := json.Marshal(state)
 	if err != nil {
+		slog.Warn("controller: marshal goal state", "err", err)
 		return
 	}
-	_ = os.MkdirAll(filepath.Dir(c.goalStatePath), 0o755)
-	_ = os.WriteFile(c.goalStatePath, data, 0o644)
+	if err := os.MkdirAll(filepath.Dir(c.goalStatePath), 0o755); err != nil {
+		slog.Warn("controller: goal state dir", "err", err)
+		return
+	}
+	if err := os.WriteFile(c.goalStatePath, data, 0o644); err != nil {
+		slog.Warn("controller: write goal state", "err", err)
+	}
 }
 
 // goalState is the serializable form of a running goal.
@@ -2200,11 +2206,14 @@ func (c *Controller) forkNamed(turn int, name string, switchToFork bool) (string
 	if err := sess.Save(newPath); err != nil {
 		return "", c.rewindFail(err)
 	}
+	forkPreview, forkTurns := agent.SessionPreviewFromMessages(forked)
 	if err := agent.SaveBranchMeta(newPath, agent.BranchMeta{
 		Name:             strings.TrimSpace(name),
 		ParentID:         parentID,
 		ForkTurn:         turn,
 		ForkMessageIndex: boundary,
+		Preview:          forkPreview,
+		Turns:            forkTurns,
 	}); err != nil {
 		return "", c.rewindFail(err)
 	}
@@ -2267,11 +2276,14 @@ func (c *Controller) Branch(name string) (string, error) {
 	if err := sess.Save(newPath); err != nil {
 		return "", c.rewindFail(err)
 	}
+	branchPreview, branchTurns := agent.SessionPreviewFromMessages(branched)
 	if err := agent.SaveBranchMeta(newPath, agent.BranchMeta{
 		Name:             strings.TrimSpace(name),
 		ParentID:         parentID,
 		ForkTurn:         -1,
 		ForkMessageIndex: len(branched),
+		Preview:          branchPreview,
+		Turns:            branchTurns,
 	}); err != nil {
 		return "", c.rewindFail(err)
 	}
