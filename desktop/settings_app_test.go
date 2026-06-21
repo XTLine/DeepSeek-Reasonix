@@ -626,6 +626,43 @@ func TestSetAutoPlanIgnoresProjectOverrideForLiveTab(t *testing.T) {
 	}
 }
 
+func TestSetAutoPlanEnablingClassifierRebuildsActiveController(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	cfg.Agent.AutoPlan = "off"
+	cfg.Agent.AutoPlanClassifier = "deepseek-flash"
+	if err := cfg.SaveTo(config.UserConfigPath()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	app := NewApp()
+	app.ctx = context.Background()
+	app.readyHook = func() {}
+	old := control.New(control.Options{AutoPlan: "off", Label: "old-controller"})
+	app.setTestCtrl(old, "deepseek-flash/deepseek-v4-flash")
+	defer func() {
+		if c := app.activeCtrl(); c != nil {
+			c.Close()
+		}
+	}()
+
+	if err := app.SetAutoPlan("on"); err != nil {
+		t.Fatalf("SetAutoPlan(on): %v", err)
+	}
+	if c := app.activeCtrl(); c == nil {
+		t.Fatal("SetAutoPlan should leave a rebuilt controller")
+	}
+	if c := app.activeCtrl(); c == old {
+		t.Fatal("SetAutoPlan should rebuild when enabling a configured classifier")
+	}
+
+	got := config.LoadForEdit(config.UserConfigPath())
+	if got.Agent.AutoPlan != "on" {
+		t.Fatalf("saved auto_plan = %q, want on", got.Agent.AutoPlan)
+	}
+}
+
 func TestSetReasoningLanguageRejectsBackgroundJobsBeforeSavingConfig(t *testing.T) {
 	isolateDesktopUserDirs(t)
 

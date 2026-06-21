@@ -1065,6 +1065,9 @@ func (a *App) SetAutoPlan(mode string) error {
 		return err
 	}
 	a.applyAutoPlanToLiveControllers(cfg.Agent.AutoPlan)
+	if desktopAutoPlanMode(cfg.Agent.AutoPlan) == "on" && strings.TrimSpace(cfg.Agent.AutoPlanClassifier) != "" {
+		return a.rebuild()
+	}
 	return nil
 }
 
