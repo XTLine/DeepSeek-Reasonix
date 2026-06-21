@@ -2251,16 +2251,15 @@ export default function App() {
     async (path: string) => {
       if (state.running) return;
       await deleteSession(path);
-      const sessions = await listSessions();
+      // Local state removal: filter the deleted session out of the current
+      // history view instead of re-fetching the full list from the backend.
       setHistView((cur) =>
-        cur === null
-          ? null
-          : cur.kind === "history"
-            ? { ...cur, sessions: cur.source === "scope" ? sessionsForScope(sessions, cur.filter) : sessions }
-            : cur,
+        cur === null || cur.kind !== "history"
+          ? cur
+          : { ...cur, sessions: cur.sessions.filter((s) => s.path !== path) },
       );
     },
-    [state.running, deleteSession, listSessions],
+    [state.running, deleteSession],
   );
   const onRenameSession = useCallback(
     async (path: string, title: string) => {
