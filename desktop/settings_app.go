@@ -414,7 +414,7 @@ func (a *App) Settings() SettingsView {
 				Deny:  []string{},
 			},
 			Sandbox:            SandboxView{Bash: "enforce", AllowWrite: []string{}, Shell: "auto"},
-			Agent:              AgentView{PlannerMaxSteps: 12, ColdResumePrune: true, ReasoningLanguage: "auto"},
+			Agent:              AgentView{PlannerMaxSteps: 0, ColdResumePrune: true, ReasoningLanguage: "auto"},
 			Bot:                botSettingsView(config.BotConfig{}),
 			AutoPlan:           "off",
 			DesktopLayoutStyle: "workbench",

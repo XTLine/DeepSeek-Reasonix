@@ -28,6 +28,8 @@ built-in defaults**. Starting with **Reasonix v1.8.1**, the user config lives at
 `~/.reasonix/config.toml` on macOS/Linux and
 `%AppData%\reasonix\config.toml` on Windows; see
 [Configuration paths](./CONFIG_PATHS.md) for migration and related data paths.
+Fields marked user/global only, including agent step limits, are not overridden
+by `./reasonix.toml`.
 Secrets come from the environment via `api_key_env` and are never stored in
 config files. Credentials default to `credentials_store = "auto"`, which prefers
 the OS credential store and falls back to the file under Reasonix home. New keys
@@ -45,8 +47,8 @@ default_model = "deepseek-flash"   # executor; set [agent].planner_model to add 
 # shortcut_layout = "desktop"      # classic|desktop; compatibility setting
 
 [agent]
-max_steps = 0                    # executor tool-call rounds; 0 = no limit
-planner_max_steps = 12           # planner read-only tool-call rounds; 0 = no limit
+max_steps = 0                    # user/global only; executor tool-call rounds; 0 = no limit
+planner_max_steps = 0            # user/global only; planner read-only tool-call rounds; 0 = no limit
 reasoning_language = "auto"      # visible reasoning text: auto|zh|en
 # planner_model = "deepseek-pro"      # optional low-frequency planner
 # subagent_model = "deepseek-pro"     # optional default for runAs=subagent skills
@@ -377,7 +379,6 @@ separate cache-stable sessions) is a one-line edit afterwards — set
 ```toml
 [agent]
 planner_model = "deepseek-pro"   # used as the low-frequency planner
-planner_max_steps = 12           # read-only tool-call rounds before pausing
 ```
 
 The planner sees loaded `REASONIX.md` / `AGENTS.md` memory and a small read-only
@@ -386,9 +387,8 @@ executor. Writer and workflow tools remain executor-only. `max_steps` limits the
 executor; `planner_max_steps` limits only the planner, and either can be set to
 `0` for no round limit.
 
-Keep personal step-limit preferences in the user config. Add them to a project's
-`./reasonix.toml` only when that repository needs a shared override, such as a
-larger planner limit for a very large codebase.
+Keep step-limit preferences in the user config. Project `./reasonix.toml` files
+do not override `max_steps` or `planner_max_steps`.
 
 Subagent skills inherit the executor model by default. Set `subagent_model` to
 run them on another configured model, or use `subagent_models` to override only
