@@ -1051,7 +1051,24 @@ func (a *App) SetSubagentEffort(level string) error {
 
 // SetAutoPlan updates the automatic plan-mode gate (off|on).
 func (a *App) SetAutoPlan(mode string) error {
-	return a.applyConfigChange(func(c *config.Config) error { return c.SetAutoPlan(mode) })
+	if err := a.ensureLiveControllersRuntimeMutationAllowed("auto-plan"); err != nil {
+		return err
+	}
+	cfg, path, err := a.loadDesktopUserConfigForEdit()
+	if err != nil {
+		return err
+	}
+	if err := cfg.SetAutoPlan(mode); err != nil {
+		return err
+	}
+	if err := cfg.SaveTo(path); err != nil {
+		return err
+	}
+	a.applyAutoPlanToLiveControllers(cfg.Agent.AutoPlan)
+	if desktopAutoPlanMode(cfg.Agent.AutoPlan) == "on" && strings.TrimSpace(cfg.Agent.AutoPlanClassifier) != "" {
+		return a.rebuild()
+	}
+	return nil
 }
 
 func desktopAutoPlanMode(mode string) string {
@@ -1060,6 +1077,28 @@ func desktopAutoPlanMode(mode string) string {
 		return "on"
 	default:
 		return "off"
+	}
+}
+
+func (a *App) applyAutoPlanToLiveControllers(fallback string) {
+	type liveTab struct {
+		root string
+		ctrl control.SessionAPI
+	}
+	var tabs []liveTab
+	a.mu.RLock()
+	for _, tab := range a.tabs {
+		if tab != nil && tab.Ctrl != nil {
+			tabs = append(tabs, liveTab{root: tab.WorkspaceRoot, ctrl: tab.Ctrl})
+		}
+	}
+	a.mu.RUnlock()
+	for _, tab := range tabs {
+		mode := fallback
+		if cfg, err := config.LoadForRoot(tab.root); err == nil {
+			mode = cfg.Agent.AutoPlan
+		}
+		tab.ctrl.SetAutoPlan(mode)
 	}
 }
 

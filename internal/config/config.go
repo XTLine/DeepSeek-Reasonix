@@ -1478,8 +1478,22 @@ func LoadForRoot(root string) (*Config, error) {
 	backfillDeepSeekOfficialPrices(cfg)
 	normalizeEffortConfig(cfg)
 	backfillDeepSeekPro(cfg)
+	cfg.Agent.AutoPlan = userAutoPlanMode()
 	cfg.CredentialsStore = credentialsStoreMode()
 	return cfg, nil
+}
+
+func userAutoPlanMode() string {
+	cfg := Default()
+	if uc := userConfigLoadPath(); uc != "" {
+		_ = mergeFile(cfg, uc)
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Agent.AutoPlan)) {
+	case "on", "ask":
+		return "on"
+	default:
+		return "off"
+	}
 }
 
 // backfillDeepSeekPro restores deepseek-pro for configs the pre-fix setup wizard

@@ -53,7 +53,7 @@ reasoning_language = "auto"      # visible reasoning text: auto|zh|en
 # planner_model = "deepseek-pro"      # optional low-frequency planner
 # subagent_model = "deepseek-pro"     # optional default for runAs=subagent skills
 # subagent_models = { review = "deepseek-pro", security_review = "deepseek-pro" }
-auto_plan = "off"                  # off|on; off keeps plan mode manual
+auto_plan = "off"                  # user-level only; off|on; off keeps plan mode manual
 # auto_plan_classifier = "deepseek-flash"   # optional; only borderline tasks call it
 
 [[providers]]
@@ -401,11 +401,12 @@ before editing or running side-effecting commands. `auto_plan_classifier` can
 name a cheap provider such as `deepseek-flash`; it is only called for borderline
 inputs and falls back to the heuristic if classification fails. Use
 `/auto-plan off|on` inside `reasonix` to change the user-level setting, or
-`reasonix config auto-plan off|on` from a shell/script. The visible reasoning
-language uses the same shape: `/reasoning-language auto|zh|en` in the session, or
-`reasonix config reasoning-language auto|zh|en` in a shell/script. Pass
-`--local` to the shell command only when you intentionally want a project-local
-override.
+`reasonix config auto-plan off|on` from a shell/script. Auto-plan is user-level
+only; `agent.auto_plan` in a project `reasonix.toml` is ignored. The visible
+reasoning language uses a similar shape: `/reasoning-language auto|zh|en` in the
+session, or `reasonix config reasoning-language auto|zh|en` in a shell/script.
+Pass `--local` to the reasoning-language shell command only when you
+intentionally want a project-local override.
 
 The why behind separate sessions (keeping each model's prefix cache-stable) is in
 [`SPEC.md` §3.5](./SPEC.md#35-two-model-collaboration-coordinator).

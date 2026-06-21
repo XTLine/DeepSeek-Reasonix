@@ -188,14 +188,16 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		}
 	}
 	fmt.Fprintf(&b, "temperature       = %s\n", formatFloat(c.Agent.Temperature))
-	autoPlan := c.Agent.AutoPlan
-	switch strings.ToLower(strings.TrimSpace(autoPlan)) {
-	case "on", "ask":
-		autoPlan = "on"
-	default:
-		autoPlan = "off"
+	if scope != RenderScopeProject {
+		autoPlan := c.Agent.AutoPlan
+		switch strings.ToLower(strings.TrimSpace(autoPlan)) {
+		case "on", "ask":
+			autoPlan = "on"
+		default:
+			autoPlan = "off"
+		}
+		fmt.Fprintf(&b, "auto_plan   = %q   # user-level only: off|on; off keeps plan mode manual\n", autoPlan)
 	}
-	fmt.Fprintf(&b, "auto_plan   = %q   # off|on; off keeps plan mode manual\n", autoPlan)
 	if lang := c.ReasoningLanguage(); lang != "auto" {
 		fmt.Fprintf(&b, "reasoning_language = %q   # visible reasoning language: auto|zh|en\n", lang)
 	} else {
