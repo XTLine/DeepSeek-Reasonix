@@ -804,11 +804,6 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 		usedAnyTool = true
 
 		results := a.executeBatch(ctx, calls)
-		// If the context was cancelled during tool execution, return immediately
-		// so the caller can detect the cancellation instead of continuing the loop.
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
 		for i, call := range calls {
 			a.session.Add(provider.Message{
 				Role:       provider.RoleTool,
@@ -816,6 +811,11 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 				ToolCallID: call.ID,
 				Name:       call.Name,
 			})
+		}
+		// If the context was cancelled during tool execution, return after storing
+		// the batch results so the session keeps paired tool-call history.
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 
 		// The prompt only grows from here; compact before the next turn so it
@@ -1452,12 +1452,12 @@ func (a *Agent) executeBatch(ctx context.Context, calls []provider.ToolCall) []s
 			break
 		}
 		if batch.parallel && batch.end-batch.start > 1 {
-			runParallel(batch.start, batch.end, run)
+			ranUntil := runParallel(ctx, batch.start, batch.end, run)
 			// After parallel execution completes, check if context was cancelled.
 			// The individual tool executions should have detected ctx.Done(), but
 			// we verify here to ensure we don't continue to subsequent batches.
 			if ctx.Err() != nil {
-				markCancelled(batch.end)
+				markCancelled(ranUntil)
 				break
 			}
 			continue
@@ -1568,14 +1568,28 @@ func parallelisable(r *tool.Registry, name string) bool {
 	return ok && t.ReadOnly()
 }
 
-func runParallel(start, end int, run func(int)) {
+func runParallel(ctx context.Context, start, end int, run func(int)) int {
 	const maxParallel = 8
 	sem := make(chan struct{}, maxParallel)
 	var wg sync.WaitGroup
+	ranUntil := start
+launch:
 	for i := start; i < end; i++ {
+		if ctx.Err() != nil {
+			break
+		}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break launch
+		}
+		if ctx.Err() != nil {
+			<-sem
+			break
+		}
 		i := i
-		sem <- struct{}{}
 		wg.Add(1)
+		ranUntil = i + 1
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
@@ -1583,6 +1597,7 @@ func runParallel(start, end int, run func(int)) {
 		}()
 	}
 	wg.Wait()
+	return ranUntil
 }
 
 // stormBreakThreshold is how many times in a row the same tool may fail the same

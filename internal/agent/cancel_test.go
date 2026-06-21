@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -248,6 +249,14 @@ func TestCancelDuringBatchStopsRemainingTools(t *testing.T) {
 	if !foundTool2Cancelled {
 		t.Log("Note: tool2 may have completed or been cancelled - check timing")
 	}
+
+	toolsByID := toolMessagesByID(a.Session().Messages)
+	if got := toolsByID["call-1"]; !strings.Contains(got, "tool1 done") {
+		t.Fatalf("completed tool result was not persisted before cancellation: %q", got)
+	}
+	if got := toolsByID["call-3"]; !strings.Contains(got, "cancelled") {
+		t.Fatalf("skipped tool result was not persisted as cancelled: %q", got)
+	}
 }
 
 // TestCancelBeforeParallelBatchSkipsTheWholeRemainingBatch verifies that a
@@ -318,4 +327,75 @@ func TestCancelBeforeParallelBatchSkipsTheWholeRemainingBatch(t *testing.T) {
 			t.Fatalf("cancelled unstarted tool result should explain cancellation: %+v", e.Tool)
 		}
 	}
+}
+
+func TestCancelInsideLargeParallelBatchStopsSchedulingNewTools(t *testing.T) {
+	executedMu.Lock()
+	executed = nil
+	executedMu.Unlock()
+
+	reg := tool.NewRegistry()
+	reg.Add(trackingTool{name: "readonly_tracking", readOnly: true})
+
+	var calls []provider.ToolCall
+	for i := 0; i < 12; i++ {
+		calls = append(calls, provider.ToolCall{
+			ID:        fmt.Sprintf("call-%02d", i),
+			Name:      "readonly_tracking",
+			Arguments: fmt.Sprintf(`{"name": "read%02d", "delay_ms": 5000}`, i),
+		})
+	}
+
+	mp := testutil.NewMock("m", testutil.Turn{ToolCalls: calls})
+	a := New(mp, reg, NewSession(""), Options{}, &recordSink{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- a.Run(ctx, "test cancel inside parallel batch")
+	}()
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Run returned nil, want context cancellation")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not complete within 5s")
+	}
+
+	executedMu.Lock()
+	executedCopy := append([]string(nil), executed...)
+	executedMu.Unlock()
+	for _, name := range executedCopy {
+		for i := 8; i < 12; i++ {
+			if strings.HasPrefix(name, fmt.Sprintf("read%02d", i)) {
+				t.Fatalf("parallel scheduler started a tool after cancellation: %v", executedCopy)
+			}
+		}
+	}
+
+	toolsByID := toolMessagesByID(a.Session().Messages)
+	if len(toolsByID) != len(calls) {
+		t.Fatalf("persisted tool messages = %d, want %d: %#v", len(toolsByID), len(calls), toolsByID)
+	}
+	if got := toolsByID["call-08"]; !strings.Contains(got, "cancelled") {
+		t.Fatalf("unstarted parallel tool result was not persisted as cancelled: %q", got)
+	}
+}
+
+func toolMessagesByID(msgs []provider.Message) map[string]string {
+	out := make(map[string]string)
+	for _, m := range msgs {
+		if m.Role == provider.RoleTool {
+			out[m.ToolCallID] = m.Content
+		}
+	}
+	return out
 }
