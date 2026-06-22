@@ -28,11 +28,13 @@ const LiveAssistantMessage = memo(function LiveAssistantMessage({
   defaultExpanded = false,
   expandWhileStreaming = true,
   truncateStreamingReasoning = false,
+  creationMode = false,
 }: {
   item: AssistantItem;
   defaultExpanded?: boolean;
   expandWhileStreaming?: boolean;
   truncateStreamingReasoning?: boolean;
+  creationMode?: boolean;
 }) {
   const live = useContext(LiveStreamContext);
   const shown = useMemo(
@@ -48,6 +50,7 @@ const LiveAssistantMessage = memo(function LiveAssistantMessage({
       defaultExpanded={defaultExpanded}
       expandWhileStreaming={expandWhileStreaming}
       truncateStreamingReasoning={truncateStreamingReasoning}
+      creationMode={creationMode}
     />
   );
 });
@@ -471,6 +474,7 @@ export function Transcript({
               defaultExpanded={false}
               expandWhileStreaming={false}
               truncateStreamingReasoning={true}
+              creationMode={creationMode}
             />,
           );
           if (!it.streaming && it.text.trim() !== "") {
@@ -545,7 +549,7 @@ export function Transcript({
             break;
           }
           case "assistant":
-            out.push(<LiveAssistantMessage key={it.id} item={it as AssistantItem} defaultExpanded={false} />);
+            out.push(<LiveAssistantMessage key={it.id} item={it as AssistantItem} defaultExpanded={false} creationMode={creationMode} />);
             if (!it.streaming && it.text.trim() !== "") {
               actionText = it.text;
               actionReady = true;
@@ -877,7 +881,7 @@ function WarmTurnItems({
         break;
       }
       case "assistant": {
-        nodes.push(<AssistantMessage key={it.id} item={it} defaultExpanded={false} />);
+        nodes.push(<AssistantMessage key={it.id} item={it} defaultExpanded={false} creationMode={creationMode} />);
         if (!it.streaming && it.text.trim() !== "") {
           actionText = it.text;
           actionReady = true;
@@ -1050,7 +1054,7 @@ function TurnCollapse({ items, durationMs, mode, subcalls, tabId, creationMode =
       case "phase": body.push(<PhaseCard key={it.id} text={it.text} />); break;
       case "assistant": {
         const displayItem = it;
-        body.push(<AssistantMessage key={it.id} item={displayItem as AssistantItem} />);
+        body.push(<AssistantMessage key={it.id} item={displayItem as AssistantItem} creationMode={creationMode} />);
         break;
       }
     }

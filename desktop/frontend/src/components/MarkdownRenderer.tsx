@@ -85,45 +85,50 @@ function PlainMarkdownBlock({ text }: { text: string }) {
   );
 }
 
-const components: Components = {
-  pre: ({ children }) => <>{children}</>,
-  code: ({ className, children }) => {
-    const text = String(children ?? "");
-    const match = /language-([\w-]+)/.exec(className ?? "");
-    const isBlock = match !== null || text.includes("\n");
-    if (isBlock) {
-      if (!match) return <PlainMarkdownBlock text={text.replace(/\n$/, "")} />;
-      return <CodeViewer value={text.replace(/\n$/, "")} language={match?.[1]} maxHeight={360} />;
-    }
-    return <code className="md-code">{children}</code>;
-  },
-  a: ({ href, children }) => (
-    <a
-      href={href}
-      onClick={(e) => {
-        e.preventDefault();
-        if (href) openExternal(href);
-      }}
-      onAuxClick={(e) => {
-        e.preventDefault();
-        if (href) openExternal(href);
-      }}
-      onMouseDown={(e) => {
-        if (e.button === 1) e.preventDefault();
-      }}
-    >
-      {children}
-    </a>
-  ),
-};
+function createComponents(plainStatusBlocks: boolean): Components {
+  return {
+    pre: ({ children }) => <>{children}</>,
+    code: ({ className, children }) => {
+      const text = String(children ?? "");
+      const match = /language-([\w-]+)/.exec(className ?? "");
+      const isBlock = match !== null || text.includes("\n");
+      if (isBlock) {
+        if (!match && plainStatusBlocks) return <PlainMarkdownBlock text={text.replace(/\n$/, "")} />;
+        return <CodeViewer value={text.replace(/\n$/, "")} language={match?.[1]} maxHeight={360} />;
+      }
+      return <code className="md-code">{children}</code>;
+    },
+    a: ({ href, children }) => (
+      <a
+        href={href}
+        onClick={(e) => {
+          e.preventDefault();
+          if (href) openExternal(href);
+        }}
+        onAuxClick={(e) => {
+          e.preventDefault();
+          if (href) openExternal(href);
+        }}
+        onMouseDown={(e) => {
+          if (e.button === 1) e.preventDefault();
+        }}
+      >
+        {children}
+      </a>
+    ),
+  };
+}
 
 const MarkdownRenderer = memo(function MarkdownRenderer({
   text,
+  plainStatusBlocks = false,
 }: {
   text: string;
+  plainStatusBlocks?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mathContent = useMemo(() => normalizeMath(text), [text]);
+  const components = useMemo(() => createComponents(plainStatusBlocks), [plainStatusBlocks]);
   return (
     <div className="md" ref={containerRef}>
       <ReactMarkdown
