@@ -539,6 +539,11 @@ func (s *service) sessionPrompt(ctx context.Context, raw json.RawMessage) (any, 
 		sess.finish()
 		if err := s.applyPendingSessionConfig(ctx, sess); err != nil {
 			sess.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "session config switch failed after turn: " + err.Error()})
+			if isSessionConfigActiveWorkError(err) {
+				if current, stateErr := s.configStateForSession(ctx, sess); stateErr == nil {
+					sess.sink.send(configOptionUpdate{SessionUpdate: "config_option_update", ConfigOptions: current.ConfigOptions})
+				}
+			}
 		}
 		cancel()
 	}()
@@ -660,16 +665,11 @@ func (s *service) rebuildSession(ctx context.Context, sess *acpSession, cfgState
 	status := sess.ctrl.RuntimeStatus()
 	if !sess.running && !status.Running && status.BackgroundJobs > 0 {
 		sess.mu.Unlock()
-		return &RPCError{Code: ErrInvalidRequest, Message: "session config: stop background jobs before switching config"}
+		return sessionConfigActiveWorkError("stop background jobs before switching config")
 	}
 	if sess.running || status.Running {
 		pending := cloneSessionConfigState(cfgState)
-		sess.model = cfgState.Model
-		sess.effortOverride = cloneStringPtr(cfgState.EffortOverride)
 		sess.pendingConfig = &pending
-		if sess.transcript != "" && sessionFileExists(sess.transcript) {
-			_ = saveACPMeta(sess.transcript, sess.metaLocked())
-		}
 		sess.mu.Unlock()
 		sess.sink.send(configOptionUpdate{SessionUpdate: "config_option_update", ConfigOptions: cfgState.ConfigOptions})
 		return nil
@@ -741,15 +741,26 @@ func (s *service) applyPendingSessionConfig(ctx context.Context, sess *acpSessio
 	sess.mu.Unlock()
 
 	if err := s.rebuildSession(ctx, sess, cfgState); err != nil {
-		sess.mu.Lock()
-		if !sess.deleted && sess.pendingConfig == nil {
-			pending := cloneSessionConfigState(cfgState)
-			sess.pendingConfig = &pending
+		if !isSessionConfigActiveWorkError(err) {
+			sess.mu.Lock()
+			if !sess.deleted && sess.pendingConfig == nil {
+				pending := cloneSessionConfigState(cfgState)
+				sess.pendingConfig = &pending
+			}
+			sess.mu.Unlock()
 		}
-		sess.mu.Unlock()
 		return err
 	}
 	return nil
+}
+
+func sessionConfigActiveWorkError(message string) *RPCError {
+	return &RPCError{Code: ErrInvalidRequest, Message: "session config: " + message}
+}
+
+func isSessionConfigActiveWorkError(err error) bool {
+	re, ok := err.(*RPCError)
+	return ok && re.Code == ErrInvalidRequest && strings.Contains(re.Message, "before switching config")
 }
 
 // sessionClose releases an active session. Unknown sessions are accepted as a

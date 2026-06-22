@@ -378,6 +378,44 @@ func updateKind(t *testing.T, f frame) string {
 	return p.Update.SessionUpdate
 }
 
+func configOptionValueFromUpdate(t *testing.T, f frame, id string) (string, bool) {
+	t.Helper()
+	var p struct {
+		Update struct {
+			SessionUpdate string                `json:"sessionUpdate"`
+			ConfigOptions []SessionConfigOption `json:"configOptions"`
+		} `json:"update"`
+	}
+	if err := json.Unmarshal(f.Params, &p); err != nil {
+		t.Fatalf("decode config update: %v", err)
+	}
+	if p.Update.SessionUpdate != "config_option_update" {
+		return "", false
+	}
+	opt, ok := findConfigOption(p.Update.ConfigOptions, id)
+	if !ok {
+		return "", false
+	}
+	return opt.CurrentValue, true
+}
+
+func messageChunkText(t *testing.T, f frame) (string, bool) {
+	t.Helper()
+	var p struct {
+		Update struct {
+			SessionUpdate string       `json:"sessionUpdate"`
+			Content       ContentBlock `json:"content"`
+		} `json:"update"`
+	}
+	if err := json.Unmarshal(f.Params, &p); err != nil {
+		t.Fatalf("decode message update: %v", err)
+	}
+	if p.Update.SessionUpdate != "agent_message_chunk" || p.Update.Content.Type != "text" {
+		return "", false
+	}
+	return p.Update.Content.Text, true
+}
+
 // --- tests ---
 
 func TestServeLifecycle(t *testing.T) {
@@ -703,6 +741,113 @@ func TestServeSessionConfigRejectsBackgroundJobsWhileIdle(t *testing.T) {
 	}
 	if running := jm.RunningForSession(agent.BranchID(sessionPath)); len(running) != 1 {
 		t.Fatalf("running jobs after rejected switch = %+v, want original job still running", running)
+	}
+}
+
+func TestServeQueuedSessionConfigDiscardedWhenPromptLeavesBackgroundJob(t *testing.T) {
+	dir := t.TempDir()
+	releaseJob := make(chan struct{})
+	releaseTurn := make(chan struct{})
+	startedJob := make(chan struct{})
+	startedTurn := make(chan struct{})
+	var jobOnce sync.Once
+	factory := &configurableFactory{dir: dir, managers: []*jobs.Manager{}}
+	factory.behavior = func(ctx context.Context, sink event.Sink, input string, p SessionParams) error {
+		if input == "first" {
+			close(startedTurn)
+			jm := factory.managerAt(t, 0)
+			jobOnce.Do(func() {
+				jm.StartForSession(jobs.SessionFromContext(ctx), "bash", "server", func(ctx context.Context, _ io.Writer) (string, error) {
+					close(startedJob)
+					select {
+					case <-releaseJob:
+						return "", nil
+					case <-ctx.Done():
+						return "", ctx.Err()
+					}
+				})
+			})
+			select {
+			case <-startedJob:
+			case <-time.After(2 * time.Second):
+				t.Fatal("background job never started")
+			}
+			select {
+			case <-releaseTurn:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		sink.Emit(event.Event{Kind: event.Text, Text: p.Model + ":" + input})
+		return nil
+	}
+	client, stop := startServer(t, factory)
+	defer stop()
+
+	client.call(t, "initialize", InitializeParams{ProtocolVersion: 1})
+	newResp := client.call(t, "session/new", SessionNewParams{Cwd: t.TempDir()})
+	var nr SessionNewResult
+	if err := json.Unmarshal(newResp.Result, &nr); err != nil {
+		t.Fatalf("session/new result: %v", err)
+	}
+
+	first := client.callAsync("session/prompt", SessionPromptParams{
+		SessionID: nr.SessionID,
+		Prompt:    []ContentBlock{{Type: "text", Text: "first"}},
+	})
+	select {
+	case <-startedTurn:
+	case <-time.After(2 * time.Second):
+		t.Fatal("prompt never started")
+	}
+	setResp := client.call(t, "session/set_config_option", SetSessionConfigOptionParams{
+		SessionID: nr.SessionID,
+		ConfigID:  "model",
+		Value:     "pro",
+	})
+	if setResp.Error != nil {
+		t.Fatalf("set_config_option while prompt is running errored: %+v", setResp.Error)
+	}
+
+	close(releaseTurn)
+	notifs, resp := drainPrompt(t, client, first)
+	if resp.Error != nil {
+		t.Fatalf("first prompt errored: %+v", resp.Error)
+	}
+	warningIndex := -1
+	for i, n := range notifs {
+		if text, ok := messageChunkText(t, n); ok && strings.Contains(text, "stop background jobs") {
+			warningIndex = i
+			break
+		}
+	}
+	if warningIndex < 0 {
+		t.Fatalf("queued switch updates = %d, want warning mentioning background jobs", len(notifs))
+	}
+	var sawOldConfig bool
+	for _, n := range notifs[warningIndex+1:] {
+		if value, ok := configOptionValueFromUpdate(t, n, "model"); ok && value == "fast" {
+			sawOldConfig = true
+			break
+		}
+	}
+	if !sawOldConfig {
+		t.Fatalf("queued switch notifications after warning did not include model currentValue=fast: %+v", notifs[warningIndex+1:])
+	}
+
+	close(releaseJob)
+	jm := factory.managerAt(t, 0)
+	_ = jm.WaitForSession(context.Background(), agent.BranchID(transcriptPath(dir, nr.SessionID)), nil, 5)
+	second := client.callAsync("session/prompt", SessionPromptParams{
+		SessionID: nr.SessionID,
+		Prompt:    []ContentBlock{{Type: "text", Text: "second"}},
+	})
+	_, resp = drainPrompt(t, client, second)
+	if resp.Error != nil {
+		t.Fatalf("second prompt errored: %+v", resp.Error)
+	}
+	if got := factory.buildCount(); got != 1 {
+		t.Fatalf("build count after discarded queued switch = %d, want 1", got)
 	}
 }
 
