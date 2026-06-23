@@ -166,5 +166,37 @@ console.log("\ncomposer goal toggle");
   dom.window.close();
 }
 
+{
+  const dom = installDom();
+  const { root } = await renderComposer();
+  const composer = document.querySelector(".composer") as HTMLElement | null;
+  if (!composer) throw new Error("composer did not render");
+
+  const drop = new window.Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(drop, "dataTransfer", {
+    configurable: true,
+    value: {
+      types: ["Files"],
+      files: [{}],
+      items: [
+        {
+          kind: "file",
+          webkitGetAsEntry: () => ({ isFile: true }),
+        },
+      ],
+    },
+  });
+  await act(async () => {
+    composer.dispatchEvent(drop);
+    await flushTimers();
+  });
+  ok(drop.defaultPrevented, "native file drop prevents browser image navigation");
+
+  await act(async () => {
+    root.unmount();
+  });
+  dom.window.close();
+}
+
 console.log(`\n${passed} passed, ${failed} failed, ${passed + failed} total`);
 if (failed > 0) process.exit(1);

@@ -1176,6 +1176,14 @@ export function useController() {
     dispatchTo(activeTabId, { type: "local_notice", level, text });
   }, [activeTabId, dispatchTo]);
 
+  const cancelTab = useCallback((tabId: string) => {
+    app.CancelTab(tabId)
+      .then(() => reconcileTabRuntime(tabId))
+      .catch((error) => {
+        dispatchTo(tabId, { type: "local_notice", level: "warn", text: `Cancel failed: ${errorMessage(error)}` });
+      });
+  }, [dispatchTo, reconcileTabRuntime]);
+
   const cancel = useCallback((): string | undefined => {
     const cur = stateRef.current;
     const tabId = activeTabId;
@@ -1183,16 +1191,16 @@ export function useController() {
       const text = cur.pendingUser;
       if (tabId) {
         dispatchTo(tabId, { type: "unsend" });
-        app.CancelTab(tabId).catch(() => {});
+        cancelTab(tabId);
       }
       return text;
     }
     if (tabId) {
       dispatchTo(tabId, { type: "cancel_requested" });
-      app.CancelTab(tabId).catch(() => {});
+      cancelTab(tabId);
     }
     return undefined;
-  }, [activeTabId, dispatchTo]);
+  }, [activeTabId, cancelTab, dispatchTo]);
 
   const approve = useCallback((id: string, allow: boolean, session: boolean, persist: boolean) => {
     if (!activeTabId) return;

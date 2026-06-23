@@ -1000,8 +1000,43 @@ func (a *App) NewSession() error {
 	if err := ctrl.NewSession(); err != nil {
 		return err
 	}
+	if err := a.assignFreshSessionTopic(tab); err != nil {
+		return err
+	}
 	a.persistTabSessionPath(tab, ctrl.SessionPath())
 	a.invalidatePromptHistoryCache()
+	a.emitProjectTreeChanged()
+	return nil
+}
+
+func (a *App) assignFreshSessionTopic(tab *WorkspaceTab) error {
+	if tab == nil {
+		return workspaceNotReadyErr(tab)
+	}
+	scope := tab.Scope
+	workspaceRoot := tab.WorkspaceRoot
+	if strings.TrimSpace(scope) == "global" {
+		workspaceRoot = ""
+	} else {
+		workspaceRoot = normalizeProjectRoot(workspaceRoot)
+	}
+	topicID := newTopicID()
+	if err := ensureTopicIndexed(scope, workspaceRoot, topicID, defaultTopicTitle, topicTitleSourceAuto); err != nil {
+		return err
+	}
+	if err := setTopicCreatedAt(topicTitleRoot(scope, workspaceRoot), topicID, time.Now().UnixMilli()); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	if current := a.tabs[tab.ID]; current == tab {
+		tab.TopicID = topicID
+		tab.TopicTitle = defaultTopicTitle
+		a.saveTabsLocked()
+	} else {
+		tab.TopicID = topicID
+		tab.TopicTitle = defaultTopicTitle
+	}
+	a.mu.Unlock()
 	return nil
 }
 

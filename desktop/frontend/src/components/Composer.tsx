@@ -1127,8 +1127,11 @@ export function Composer({
     }
 
     // OS file drops deliver no usable bytes/paths here; the native bridge
-    // (onFilesDropped → AttachDropped) handles them. Just clear the hover state.
-    if (hasFileDrag(e.dataTransfer)) setDragOver(false);
+    // (onFilesDropped -> AttachDropped) handles them. Prevent webview navigation.
+    if (hasFileDrag(e.dataTransfer)) {
+      e.preventDefault();
+      setDragOver(false);
+    }
   };
 
   const onDragOver = (e: DragEvent<HTMLDivElement>) => {
