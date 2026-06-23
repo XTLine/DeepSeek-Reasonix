@@ -441,6 +441,12 @@ func runServe(args []string) int {
 	if *behindProxy {
 		serveCfg.BehindProxy = true
 	}
+	mode, err := serve.NormalizeAuthMode(serveCfg.AuthMode)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
+		return 1
+	}
+	serveCfg.AuthMode = mode
 	if *password != "" && serveCfg.AuthMode == "password" {
 		// Hash the password at startup so the config never stores plaintext.
 		// If a PasswordHash is already set in config, the CLI password overrides it.
@@ -450,6 +456,10 @@ func runServe(args []string) int {
 			return 1
 		}
 		serveCfg.PasswordHash = h
+	}
+	if serveCfg.AuthMode == "password" && strings.TrimSpace(serveCfg.PasswordHash) == "" {
+		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, "auth mode password requires --password or serve.password_hash")
+		return 1
 	}
 
 	var resumeSession *agent.Session

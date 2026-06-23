@@ -66,6 +66,32 @@ func TestAuthGateModeNone(t *testing.T) {
 	}
 }
 
+func TestNormalizeAuthModeRejectsUnknown(t *testing.T) {
+	if _, err := NormalizeAuthMode("tokne"); err == nil {
+		t.Fatal("unknown auth mode should be rejected")
+	}
+}
+
+func TestInvalidAuthModeFailsClosed(t *testing.T) {
+	ag := newAuthGate(config.ServeConfig{AuthMode: "tokne"})
+	if ag.Mode() != "invalid" {
+		t.Errorf("mode = %q, want invalid", ag.Mode())
+	}
+	ts := httptest.NewServer(ag.middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler should not run for invalid auth mode")
+	})))
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
 // ── Token mode tests ──
 
 func TestTokenModeNoAuthReturns401(t *testing.T) {
@@ -356,6 +382,27 @@ func TestSignAndVerifySession(t *testing.T) {
 	tok := ag.signSession()
 	if !ag.verifySession(tok) {
 		t.Error("valid session should verify")
+	}
+}
+
+func TestSessionVerifiesAcrossRestartWithSamePasswordHash(t *testing.T) {
+	hash := mustHash("test")
+	ag1 := newAuthGate(config.ServeConfig{AuthMode: "password", PasswordHash: hash})
+	tok := ag1.signSession()
+
+	ag2 := newAuthGate(config.ServeConfig{AuthMode: "password", PasswordHash: hash})
+	if !ag2.verifySession(tok) {
+		t.Fatal("session signed with a persisted password hash should verify after restart")
+	}
+}
+
+func TestSessionRejectsDifferentPasswordHash(t *testing.T) {
+	ag1 := newAuthGate(config.ServeConfig{AuthMode: "password", PasswordHash: mustHash("first")})
+	tok := ag1.signSession()
+
+	ag2 := newAuthGate(config.ServeConfig{AuthMode: "password", PasswordHash: mustHash("second")})
+	if ag2.verifySession(tok) {
+		t.Fatal("session should not verify with a different password hash")
 	}
 }
 

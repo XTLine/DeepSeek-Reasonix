@@ -8,6 +8,7 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -27,7 +28,8 @@ var loginHTML []byte
 type authMode int
 
 const (
-	authNone     authMode = iota // no authentication (default, backward-compatible)
+	authInvalid  authMode = iota // invalid config; deny all requests
+	authNone                     // no authentication (default, backward-compatible)
 	authToken                    // pre-shared token in URL or cookie
 	authPassword                 // login page with bcrypt password
 )
@@ -40,6 +42,20 @@ const (
 	sessionDuration = 30 * 24 * time.Hour // how long a password session lasts
 	bcryptCost      = 12                  // bcrypt cost factor
 )
+
+// NormalizeAuthMode normalizes and validates the serve auth mode.
+func NormalizeAuthMode(mode string) (string, error) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = "none"
+	}
+	switch mode {
+	case "none", "token", "password":
+		return mode, nil
+	default:
+		return "", fmt.Errorf("auth mode must be none, token, or password, got %q", mode)
+	}
+}
 
 // rateLimit tracks login attempts per IP for brute-force protection.
 type rateLimit struct {
@@ -112,7 +128,12 @@ func newAuthGate(cfg config.ServeConfig) *authGate {
 		rateLimit:   newRateLimit(),
 		behindProxy: cfg.BehindProxy,
 	}
-	switch strings.ToLower(strings.TrimSpace(cfg.AuthMode)) {
+	mode, err := NormalizeAuthMode(cfg.AuthMode)
+	if err != nil {
+		ag.mode = authInvalid
+		return ag
+	}
+	switch mode {
 	case "token":
 		ag.mode = authToken
 		ag.token = strings.TrimSpace(cfg.Token)
@@ -121,14 +142,8 @@ func newAuthGate(cfg config.ServeConfig) *authGate {
 		}
 	case "password":
 		ag.mode = authPassword
-		ag.passwordHash = cfg.PasswordHash
-		ag.sessKey = make([]byte, 32)
-		if _, err := rand.Read(ag.sessKey); err != nil {
-			// crypto/rand.Read cannot fail on modern systems; panic rather
-			// than fall back to a deterministic key that would weaken every
-			// session signature.
-			panic("serve/auth: crypto/rand.Read failed: " + err.Error())
-		}
+		ag.passwordHash = strings.TrimSpace(cfg.PasswordHash)
+		ag.sessKey = sessionKeyForPasswordHash(ag.passwordHash)
 	default:
 		ag.mode = authNone
 	}
@@ -145,6 +160,8 @@ func (ag *authGate) Mode() string {
 		return "token"
 	case authPassword:
 		return "password"
+	case authInvalid:
+		return "invalid"
 	default:
 		return "none"
 	}
@@ -160,11 +177,29 @@ func HashPassword(password string) (string, error) {
 	return string(b), nil
 }
 
+func sessionKeyForPasswordHash(passwordHash string) []byte {
+	if passwordHash != "" {
+		sum := sha256.Sum256([]byte("reasonix serve session key\x00" + passwordHash))
+		return sum[:]
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		// crypto/rand.Read cannot fail on modern systems; panic rather than
+		// fall back to a deterministic key that would weaken every session.
+		panic("serve/auth: crypto/rand.Read failed: " + err.Error())
+	}
+	return key
+}
+
 // middleware returns an http.Handler that wraps next with authentication checks.
 // In password mode, /login is handled directly to bypass the CSRF content-type
 // guard (the login form uses application/x-www-form-urlencoded, not JSON).
 func (ag *authGate) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ag.mode == authInvalid {
+			ag.deny(w, r)
+			return
+		}
 		if ag.mode == authNone {
 			next.ServeHTTP(w, r)
 			return
