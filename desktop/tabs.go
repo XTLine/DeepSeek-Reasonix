@@ -24,6 +24,7 @@ import (
 	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/event"
+	"reasonix/internal/eventwire"
 	"reasonix/internal/fileutil"
 	"reasonix/internal/provider"
 )
@@ -802,9 +803,9 @@ func (s *tabEventSink) telemetryTab() (*WorkspaceTab, string) {
 // --- wire event with tab ----------------------------------------------------
 
 func toWireTab(e event.Event, tabID string) wireEventTab {
-	w := toWire(e)
+	w := eventwire.ToWire(e)
 	return wireEventTab{
-		wireEvent:         w,
+		Event:             w,
 		TabID:             tabID,
 		SessionHitTokens:  e.SessionHit,
 		SessionMissTokens: e.SessionMiss,
@@ -814,10 +815,10 @@ func toWireTab(e event.Event, tabID string) wireEventTab {
 	}
 }
 
-// wireEventTab extends wireEvent with tab routing info. The frontend reducer
+// wireEventTab extends the shared event wire with tab routing info. The frontend reducer
 // uses tabId to dispatch to the correct per-tab state.
 type wireEventTab struct {
-	wireEvent
+	eventwire.Event
 	TabID string `json:"tabId"`
 	// Session-cumulative tokens per tab.
 	SessionHitTokens  int `json:"sessionHitTokens,omitempty"`
