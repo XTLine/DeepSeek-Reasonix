@@ -448,3 +448,78 @@ func TestObserverLoopAdaptsLagWindowToSystemStability(t *testing.T) {
 		t.Fatalf("unstable lag window = %+v, samples=%d", unstable.LagWindow, unstable.LaggedSamples)
 	}
 }
+
+func TestPredictionActionBridgeIsAdvisoryOnly(t *testing.T) {
+	st := state{CompressionReports: []CompressionReport{{
+		TraceID:  "previous-stable",
+		Dynamics: CausalSignalDynamics{OverRegularized: false},
+	}}}
+	current := CausalSignalDynamics{
+		OverRegularized:  true,
+		AmplifiedSignals: []string{"supported_outcome"},
+		EntropySpikes:    []string{"rare_relation"},
+	}
+	report := observerLoopReport(st.CompressionReports, current, defaultControlPolicy())
+	if !report.AdvisoryBridge.AdvisoryEligible {
+		t.Fatalf("missing advisory bridge signal: %+v", report.AdvisoryBridge)
+	}
+	if report.AdvisoryBridge.AffectsExecution || !report.AdvisoryBridge.RequiresExplicitPromotion || !report.AdvisoryBridge.FeedbackBypassBlocked {
+		t.Fatalf("advisory bridge can affect execution: %+v", report.AdvisoryBridge)
+	}
+	if len(report.AdvisoryBridge.AdvisorySignals) > maxPredictionAdvisories {
+		t.Fatalf("advisory bridge exceeded bound: %+v", report.AdvisoryBridge)
+	}
+	if report.FeedbackEligible || len(report.FeedbackSignals) != 0 {
+		t.Fatalf("advisory bridge leaked into feedback: %+v", report)
+	}
+}
+
+func TestTemporalSyncSeparatesLagAndDampingClocks(t *testing.T) {
+	history := []CompressionReport{}
+	for i := 0; i < 8; i++ {
+		history = append(history, CompressionReport{
+			TraceID:  fmt.Sprintf("r%d", i),
+			Dynamics: CausalSignalDynamics{OverRegularized: i%2 == 0},
+		})
+	}
+	stablePolicy := defaultControlPolicy()
+	stablePolicy.SystemStabilityScore = 0.95
+	stablePolicy.OscillationIndex = 0.1
+	report := observerLoopReport(history, CausalSignalDynamics{}, stablePolicy)
+	if report.TemporalSync.LagWindow != minObserverLagWindow || report.TemporalSync.DampingWindow != defaultObserverLagWindow {
+		t.Fatalf("unexpected synchronized windows: %+v", report.TemporalSync)
+	}
+	if report.TemporalSync.NormalizedWindow != defaultObserverLagWindow || report.TemporalSync.Status != "bounded_desync" {
+		t.Fatalf("temporal sync did not normalize clocks: %+v", report.TemporalSync)
+	}
+}
+
+func TestPredictiveSignalBacklogDecaysStaleWarnings(t *testing.T) {
+	history := []CompressionReport{}
+	for i := 0; i < maxObserverLagWindow+2; i++ {
+		signals := []string{"predicted_observer_oscillation"}
+		if i == 0 {
+			signals = []string{"stale_warning"}
+		}
+		history = append(history, CompressionReport{
+			TraceID: fmt.Sprintf("r%d", i),
+			ObserverLoop: ObserverLoopReport{
+				ShadowObserver: ShadowObserverReport{ObservationOnlySignals: signals},
+			},
+		})
+	}
+	current := CausalSignalDynamics{
+		OverRegularized: true,
+		EntropySpikes:   []string{"rare_relation"},
+	}
+	report := observerLoopReport(history, current, defaultControlPolicy())
+	if !containsString(report.SignalBacklog.PendingSignals, "predicted_observer_oscillation") {
+		t.Fatalf("missing active warning in backlog: %+v", report.SignalBacklog)
+	}
+	if !containsString(report.SignalBacklog.StaleSignals, "stale_warning") || !report.AdvisoryBridge.BacklogResolved {
+		t.Fatalf("stale warning was not decayed/resolved: backlog=%+v bridge=%+v", report.SignalBacklog, report.AdvisoryBridge)
+	}
+	if report.SignalBacklog.PendingCount > report.SignalBacklog.MaxSignals {
+		t.Fatalf("backlog exceeded bound: %+v", report.SignalBacklog)
+	}
+}

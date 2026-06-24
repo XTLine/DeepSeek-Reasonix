@@ -22,6 +22,7 @@ const (
 	maxObserverLagWindow       = 10
 	mediumOscillationWarning   = 0.35
 	highOscillationWarning     = 0.55
+	maxPredictionAdvisories    = 3
 )
 
 type CompressionReport struct {
@@ -116,15 +117,18 @@ type CausalSignalDynamics struct {
 }
 
 type ObserverLoopReport struct {
-	Timeline             string                `json:"timeline,omitempty"`
-	ReadOnlyProjection   bool                  `json:"read_only_projection,omitempty"`
-	CurrentTraceExcluded bool                  `json:"current_trace_excluded,omitempty"`
-	LaggedSamples        int                   `json:"lagged_samples,omitempty"`
-	LagWindow            AdaptiveLagWindow     `json:"lag_window,omitempty"`
-	ShadowObserver       ShadowObserverReport  `json:"shadow_observer,omitempty"`
-	FeedbackEligible     bool                  `json:"feedback_eligible,omitempty"`
-	FeedbackSignals      []string              `json:"feedback_signals,omitempty"`
-	Damping              GlobalDampingEnvelope `json:"damping,omitempty"`
+	Timeline             string                  `json:"timeline,omitempty"`
+	ReadOnlyProjection   bool                    `json:"read_only_projection,omitempty"`
+	CurrentTraceExcluded bool                    `json:"current_trace_excluded,omitempty"`
+	LaggedSamples        int                     `json:"lagged_samples,omitempty"`
+	LagWindow            AdaptiveLagWindow       `json:"lag_window,omitempty"`
+	ShadowObserver       ShadowObserverReport    `json:"shadow_observer,omitempty"`
+	TemporalSync         TemporalSyncReport      `json:"temporal_sync,omitempty"`
+	SignalBacklog        PredictiveSignalBacklog `json:"signal_backlog,omitempty"`
+	AdvisoryBridge       PredictionActionBridge  `json:"advisory_bridge,omitempty"`
+	FeedbackEligible     bool                    `json:"feedback_eligible,omitempty"`
+	FeedbackSignals      []string                `json:"feedback_signals,omitempty"`
+	Damping              GlobalDampingEnvelope   `json:"damping,omitempty"`
 }
 
 type AdaptiveLagWindow struct {
@@ -144,6 +148,35 @@ type ShadowObserverReport struct {
 	ObservationOnlySignals       []string `json:"observation_only_signals,omitempty"`
 	FeedbackSignalsSuppressed    bool     `json:"feedback_signals_suppressed,omitempty"`
 	ExecutionInfluenceSuppressed bool     `json:"execution_influence_suppressed"`
+}
+
+type TemporalSyncReport struct {
+	Clock            string  `json:"clock,omitempty"`
+	LagWindow        int     `json:"lag_window,omitempty"`
+	DampingWindow    int     `json:"damping_window,omitempty"`
+	NormalizedWindow int     `json:"normalized_window,omitempty"`
+	DesyncIndex      float64 `json:"desync_index,omitempty"`
+	Status           string  `json:"status,omitempty"`
+}
+
+type PredictiveSignalBacklog struct {
+	Mode           string   `json:"mode,omitempty"`
+	MaxSignals     int      `json:"max_signals,omitempty"`
+	PendingSignals []string `json:"pending_signals,omitempty"`
+	StaleSignals   []string `json:"stale_signals,omitempty"`
+	PendingCount   int      `json:"pending_count,omitempty"`
+	StaleCount     int      `json:"stale_count,omitempty"`
+}
+
+type PredictionActionBridge struct {
+	Mode                      string   `json:"mode,omitempty"`
+	AdvisoryEligible          bool     `json:"advisory_eligible,omitempty"`
+	AdvisorySignals           []string `json:"advisory_signals,omitempty"`
+	MaxAdvisories             int      `json:"max_advisories,omitempty"`
+	RequiresExplicitPromotion bool     `json:"requires_explicit_promotion"`
+	AffectsExecution          bool     `json:"affects_execution"`
+	FeedbackBypassBlocked     bool     `json:"feedback_bypass_blocked"`
+	BacklogResolved           bool     `json:"backlog_resolved,omitempty"`
 }
 
 type GlobalDampingEnvelope struct {
@@ -567,6 +600,9 @@ func cloneCompressionReport(in *CompressionReport) *CompressionReport {
 	out.Dynamics.EntropySpikes = append([]string(nil), in.Dynamics.EntropySpikes...)
 	out.ObserverLoop.FeedbackSignals = append([]string(nil), in.ObserverLoop.FeedbackSignals...)
 	out.ObserverLoop.ShadowObserver.ObservationOnlySignals = append([]string(nil), in.ObserverLoop.ShadowObserver.ObservationOnlySignals...)
+	out.ObserverLoop.SignalBacklog.PendingSignals = append([]string(nil), in.ObserverLoop.SignalBacklog.PendingSignals...)
+	out.ObserverLoop.SignalBacklog.StaleSignals = append([]string(nil), in.ObserverLoop.SignalBacklog.StaleSignals...)
+	out.ObserverLoop.AdvisoryBridge.AdvisorySignals = append([]string(nil), in.ObserverLoop.AdvisoryBridge.AdvisorySignals...)
 	out.ObserverLoop.Damping.SuppressedSignals = append([]string(nil), in.ObserverLoop.Damping.SuppressedSignals...)
 	return &out
 }
@@ -937,6 +973,9 @@ func observerLoopReport(history []CompressionReport, current CausalSignalDynamic
 		dampingWindow = defaultObserverLagWindow
 	}
 	damping := globalDampingEnvelope(laggedDynamicsSamples(history, dampingWindow), feedbackSignals)
+	temporal := temporalSyncReport(lagWindow.Size, dampingWindow)
+	backlog := predictiveSignalBacklog(history, shadow)
+	bridge := predictionActionBridge(shadow, backlog)
 	report := ObserverLoopReport{
 		Timeline:             "lagged",
 		ReadOnlyProjection:   true,
@@ -944,6 +983,9 @@ func observerLoopReport(history []CompressionReport, current CausalSignalDynamic
 		LaggedSamples:        len(samples),
 		LagWindow:            lagWindow,
 		ShadowObserver:       shadow,
+		TemporalSync:         temporal,
+		SignalBacklog:        backlog,
+		AdvisoryBridge:       bridge,
 		FeedbackSignals:      feedbackSignals,
 		Damping:              damping,
 	}
@@ -1039,6 +1081,133 @@ func shadowObserverReport(samples []CausalSignalDynamics, current CausalSignalDy
 		FeedbackSignalsSuppressed:    len(signals) > 0,
 		ExecutionInfluenceSuppressed: true,
 	}
+}
+
+func temporalSyncReport(lagWindow, dampingWindow int) TemporalSyncReport {
+	if lagWindow <= 0 {
+		lagWindow = defaultObserverLagWindow
+	}
+	if dampingWindow <= 0 {
+		dampingWindow = defaultObserverLagWindow
+	}
+	normalized := lagWindow
+	if dampingWindow > normalized {
+		normalized = dampingWindow
+	}
+	desync := 0.0
+	if normalized > 0 {
+		desync = roundScore(math.Abs(float64(lagWindow-dampingWindow)) / float64(normalized))
+	}
+	status := "synchronized"
+	switch {
+	case desync > 0.5:
+		status = "desynchronized"
+	case desync > 0:
+		status = "bounded_desync"
+	}
+	return TemporalSyncReport{
+		Clock:            "causal_observation_window",
+		LagWindow:        lagWindow,
+		DampingWindow:    dampingWindow,
+		NormalizedWindow: normalized,
+		DesyncIndex:      desync,
+		Status:           status,
+	}
+}
+
+func predictiveSignalBacklog(history []CompressionReport, shadow ShadowObserverReport) PredictiveSignalBacklog {
+	recentStart := 0
+	if len(history) > maxObserverLagWindow {
+		recentStart = len(history) - maxObserverLagWindow
+	}
+	recent := []string{}
+	stale := []string{}
+	for i, report := range history {
+		signals := report.ObserverLoop.ShadowObserver.ObservationOnlySignals
+		if i < recentStart {
+			stale = append(stale, signals...)
+			continue
+		}
+		recent = append(recent, signals...)
+	}
+	recent = append(recent, shadow.ObservationOnlySignals...)
+	pending := prioritizedPredictiveSignals(recent, maxCompressionStrings)
+	stale = stringsNotIn(prioritizedPredictiveSignals(stale, maxCompressionStrings), pending)
+	return PredictiveSignalBacklog{
+		Mode:           "bounded_decay",
+		MaxSignals:     maxCompressionStrings,
+		PendingSignals: pending,
+		StaleSignals:   limitStrings(stale, maxCompressionStrings),
+		PendingCount:   len(pending),
+		StaleCount:     len(stale),
+	}
+}
+
+func predictionActionBridge(shadow ShadowObserverReport, backlog PredictiveSignalBacklog) PredictionActionBridge {
+	advisories := []string(nil)
+	if shadow.WarningLevel != "" && shadow.WarningLevel != "none" {
+		advisories = append(advisories, backlog.PendingSignals...)
+	}
+	advisories = prioritizedPredictiveSignals(advisories, maxPredictionAdvisories)
+	return PredictionActionBridge{
+		Mode:                      "bounded_advisory",
+		AdvisoryEligible:          len(advisories) > 0,
+		AdvisorySignals:           advisories,
+		MaxAdvisories:             maxPredictionAdvisories,
+		RequiresExplicitPromotion: true,
+		AffectsExecution:          false,
+		FeedbackBypassBlocked:     true,
+		BacklogResolved:           backlog.StaleCount > 0,
+	}
+}
+
+func prioritizedPredictiveSignals(signals []string, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	out := canonicalStrings(signals)
+	sort.SliceStable(out, func(i, j int) bool {
+		pi := predictiveSignalPriority(out[i])
+		pj := predictiveSignalPriority(out[j])
+		if pi != pj {
+			return pi < pj
+		}
+		return out[i] < out[j]
+	})
+	return limitStrings(out, limit)
+}
+
+func predictiveSignalPriority(signal string) int {
+	switch {
+	case signal == "predicted_observer_oscillation":
+		return 0
+	case strings.Contains(signal, "oscillation"):
+		return 1
+	case signal == "supported_outcome" || signal == "weakened_outcome":
+		return 2
+	case signal != "":
+		return 3
+	default:
+		return 9
+	}
+}
+
+func stringsNotIn(source, excluded []string) []string {
+	if len(source) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, value := range excluded {
+		seen[value] = true
+	}
+	out := make([]string, 0, len(source))
+	for _, value := range source {
+		if seen[value] {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
 }
 
 func predictiveObserverOscillationIndex(samples []CausalSignalDynamics, current CausalSignalDynamics) float64 {
