@@ -1273,9 +1273,7 @@ func updateExecutionState(prev ExecutionState, tr ExecutionTrace, learning Syste
 	if tr.Outcome == "success" {
 		st.KnownFacts = append(st.KnownFacts, "strategy succeeded: "+strings.Join(tr.StrategyUsed, ","))
 	} else {
-		for _, bad := range learning.BadStrategies {
-			st.FailedStrategies = append(st.FailedStrategies, bad)
-		}
+		st.FailedStrategies = append(st.FailedStrategies, learning.BadStrategies...)
 	}
 	for _, improvement := range learning.CompilerImprovements {
 		st.ActiveConstraints = appendConstraint(st.ActiveConstraints, Constraint{Type: "reference", Text: improvement, Source: "learning:" + learning.TraceID})
