@@ -131,7 +131,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// One-time import of v1/v0.5 legacy config — runs before Load so the freshly
 	// written config + ~/.env are picked up this same boot. CLI Run also calls this
 	// before config-only commands; this call stays as the shared frontend fallback.
-	migrated, migErr := config.MigrateLegacyIfNeeded()
+	migrated, migErr := config.MigrateLegacyIfNeededForRoot(root)
 	cfg, err := config.LoadForRoot(root)
 	if err != nil {
 		return nil, err
@@ -140,6 +140,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	if modelName == "" {
 		modelName = cfg.DefaultModel
 	}
+	config.NormalizeLegacyMimoCustomProvidersForRefs(cfg, modelName)
 	tokenMode := NormalizeTokenMode(opts.TokenMode)
 	tokenEconomy := tokenMode == TokenModeEconomy
 	keepPolicy := agentKeepPolicy(cfg.Agent.Keep)
@@ -217,6 +218,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	if st, ok := outputstyle.Resolve(cfg.Agent.OutputStyle, outputstyle.Dirs()); ok {
 		sysPrompt = outputstyle.Apply(sysPrompt, st)
 	}
+	sysPrompt += "\n\n" + config.UserDecisionPolicy
 	sysPrompt += "\n\n" + config.LanguagePolicy
 	if tokenEconomy {
 		sysPrompt += "\n\n" + tokenEconomyPrompt
@@ -275,11 +277,10 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		pluginHost = plugin.NewHost()
 	}
 
-	// Partition configured plugins by tier so eager/lazy/background can each
-	// take the path that fits them. User entries default to background: the
-	// session starts immediately while enabled MCP servers warm up.
+	// Partition configured plugins by tier so eager can block when explicitly
+	// requested while every other enabled MCP warms up in the background.
 	autoStartEntries := cfg.AutoStartPlugins()
-	eagerEntries, lazyEntries, bgEntries := partitionByTier(autoStartEntries)
+	eagerEntries, bgEntries := partitionByTier(autoStartEntries)
 	extraSpecs := applyKnownPluginOverrides(opts.ExtraPlugins, root)
 	onDemandMCPSpecs := map[string]plugin.Spec{}
 	onDemandMCPNames := []string{}
@@ -294,11 +295,11 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			}
 			onDemandMCPSpecs[name] = spec
 		}
-		eagerEntries, lazyEntries, bgEntries = nil, nil, nil
+		eagerEntries, bgEntries = nil, nil
 	}
 
 	// Auto-demote: any eager plugin that has been chronically slow (recent
-	// samples repeatedly hit the blocking startup budget) drops to lazy
+	// samples repeatedly hit the blocking startup budget) drops to background
 	// for this session. The user keeps eager intent, just doesn't pay for it
 	// on a server that's been misbehaving. A notice surfaces the demotion.
 	var demoteMessages []string
@@ -308,7 +309,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		rec := plugin.Recommend(e.Name, budget, 0)
 		if rec.Demote {
 			demoteMessages = append(demoteMessages, rec.Reason)
-			lazyEntries = append(lazyEntries, e)
+			bgEntries = append(bgEntries, e)
 			continue
 		}
 		kept = append(kept, e)
@@ -316,7 +317,6 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	eagerEntries = kept
 
 	eagerSpecs := PluginSpecsForRoot(eagerEntries, root)
-	lazySpecs := PluginSpecsForRoot(lazyEntries, root)
 	bgSpecs := PluginSpecsForRoot(bgEntries, root)
 
 	if !tokenEconomy {
@@ -327,9 +327,6 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	if opts.Stderr != nil {
 		for i := range eagerSpecs {
 			eagerSpecs[i].Stderr = opts.Stderr
-		}
-		for i := range lazySpecs {
-			lazySpecs[i].Stderr = opts.Stderr
 		}
 		for i := range bgSpecs {
 			bgSpecs[i].Stderr = opts.Stderr
@@ -394,11 +391,10 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		}
 	}
 
-	// Lazy / background: register placeholder tools now; the real spawn waits
-	// for either the first model call (lazy) or a goroutine kicked off here
-	// (background). Both share the same pluginHost so /mcp status, hot-add,
-	// and Close see one cohesive set of servers regardless of tier.
-	registerDeferred := func(specs []plugin.Spec, kick bool) {
+	// Background: register placeholder tools now and kick off the real spawn.
+	// Everything shares the same pluginHost so /mcp status, hot-add, and Close
+	// see one cohesive set of servers.
+	registerBackground := func(specs []plugin.Spec) {
 		for _, s := range specs {
 			// Already running on the shared host? Register tools directly.
 			if pluginHost.HasClient(s.Name) {
@@ -411,25 +407,21 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 				}
 			}
 			if opts.SharedHost != nil {
-				// Shared host: register lazy tools WITHOUT kicking so the
-				// subprocess only starts on the first actual tool call.
-				// This avoids spawning MCP processes (e.g. CodeGraph) for
-				// every workspace root on boot — a tab that sits unused for
-				// days never pays the startup cost.
+				// Shared host relies on Host's spawn guard to avoid duplicate
+				// processes across tabs for the same workspace root.
 				cs, _ := plugin.LoadCachedSchema(s.Name, plugin.SpecFingerprint(s))
-				for _, t := range plugin.LazyToolset(s, cs, pluginHost, reg, ctx, false) {
+				for _, t := range plugin.LazyToolset(s, cs, pluginHost, reg, ctx, true) {
 					reg.Add(t)
 				}
 			} else {
 				cs, _ := plugin.LoadCachedSchema(s.Name, plugin.SpecFingerprint(s))
-				for _, t := range plugin.LazyToolset(s, cs, pluginHost, reg, ctx, kick) {
+				for _, t := range plugin.LazyToolset(s, cs, pluginHost, reg, ctx, true) {
 					reg.Add(t)
 				}
 			}
 		}
 	}
-	registerDeferred(lazySpecs, false)
-	registerDeferred(bgSpecs, true)
+	registerBackground(bgSpecs)
 
 	for _, msg := range demoteMessages {
 		sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: msg})
@@ -969,7 +961,7 @@ func rememberPermissionRule(workspaceRoot, rule string) control.RememberResult {
 		result.Err = err
 		return result
 	}
-	if err := edit.SaveTo(path); err != nil {
+	if err := config.WritePermissionsSection(path, edit.Permissions.Allow); err != nil {
 		slog.Warn("save config after permission rule", "err", err)
 		result.Err = err
 		return result
@@ -1175,7 +1167,6 @@ func NewProvider(e *config.ProviderEntry) (provider.Provider, error) {
 // NewProviderWithProxy builds a provider.Provider with the configured ordinary
 // network proxy settings.
 func NewProviderWithProxy(e *config.ProviderEntry, proxy netclient.ProxySpec) (provider.Provider, error) {
-	keyResolution := config.ResolveCredential(e.APIKeyEnv)
 	return provider.New(e.Kind, provider.Config{
 		Name:    e.Name,
 		BaseURL: e.BaseURL,
@@ -1186,7 +1177,7 @@ func NewProviderWithProxy(e *config.ProviderEntry, proxy netclient.ProxySpec) (p
 		// default_effort when the user has not explicitly selected /effort.
 		Extra: map[string]any{
 			"api_key_env":        e.APIKeyEnv,
-			"api_key_source":     keyResolution.Source.Label,
+			"api_key_source":     e.APIKeySourceLabel(),
 			"thinking":           e.Thinking,
 			"effort":             config.EffectiveEffort(e),
 			"reasoning_protocol": config.ReasoningProtocolForEntry(e),
@@ -1252,23 +1243,19 @@ func builtinToolEnabled(enabled []string, name string) bool {
 	return false
 }
 
-// partitionByTier splits configured plugin entries into the three startup
-// buckets — eager (block boot until ready), lazy (placeholder until first
-// model use), background (placeholder + start spawn now). Entries with an
-// empty tier land in background; unrecognised non-empty tiers land in lazy so a
-// typo never triggers unexpected background work.
-func partitionByTier(entries []config.PluginEntry) (eager, lazy, bg []config.PluginEntry) {
+// partitionByTier splits configured plugin entries into eager (block boot until
+// ready) and background (placeholder + start spawn now). Entries with an empty,
+// legacy lazy, or unrecognised tier land in background.
+func partitionByTier(entries []config.PluginEntry) (eager, bg []config.PluginEntry) {
 	for _, e := range entries {
 		switch e.ResolvedTier() {
 		case "eager":
 			eager = append(eager, e)
-		case "background":
-			bg = append(bg, e)
 		default:
-			lazy = append(lazy, e)
+			bg = append(bg, e)
 		}
 	}
-	return eager, lazy, bg
+	return eager, bg
 }
 
 // PluginSpecs maps configured plugin entries to plugin.Spec, expanding ${VAR}

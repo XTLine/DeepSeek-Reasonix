@@ -9,6 +9,7 @@ import (
 	"reasonix/internal/command"
 	"reasonix/internal/config"
 	"reasonix/internal/event"
+	"reasonix/internal/evidence"
 	"reasonix/internal/hook"
 	"reasonix/internal/jobs"
 	"reasonix/internal/memory"
@@ -58,6 +59,7 @@ type TurnControl interface {
 	Steer(text string)
 	SteerConsumed() bool
 	Running() bool
+	CancelRequested() bool
 	RuntimeStatus() RuntimeStatus
 	Turn() int
 	History() []provider.Message
@@ -131,6 +133,7 @@ type MemoryControl interface {
 type Capabilities interface {
 	Host() *plugin.Host
 	Commands() []command.Command
+	ReloadCommands(ctx context.Context) error
 	Skills() []skill.Skill
 	AllSkills() []skill.Skill
 	DisabledSkills() []skill.Skill
@@ -151,12 +154,13 @@ type Capabilities interface {
 	ImportMCPEntries(entries []config.PluginEntry) (total, added, updated, connected, failed, skipped int, err error)
 }
 
-// Status covers read-only run/usage/billing telemetry.
+// Status covers read-only run/usage/billing telemetry and task list state.
 type Status interface {
 	ContextSnapshot() (int, int)
 	LastUsage() *provider.Usage
 	Balance(ctx context.Context) (*billing.Balance, error)
 	Jobs() []jobs.View
+	Todos() []evidence.TodoItem
 }
 
 // SessionPersistence covers snapshotting a session and tearing down its on-disk

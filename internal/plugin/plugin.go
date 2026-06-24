@@ -561,6 +561,20 @@ func (h *Host) Failures() []Failure {
 	return out
 }
 
+// ConnectingServers returns server names whose startup handshake is currently in
+// flight. It is intentionally status-only: connected clients and failures remain
+// the source of truth for ready/issue states.
+func (h *Host) ConnectingServers() []string {
+	h.spawningMu.Lock()
+	defer h.spawningMu.Unlock()
+	out := make([]string, 0, len(h.spawning))
+	for name := range h.spawning {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // RecordFailure stores a failed MCP connection attempt for status UIs.
 func (h *Host) RecordFailure(s Spec, err error) {
 	h.mu.Lock()

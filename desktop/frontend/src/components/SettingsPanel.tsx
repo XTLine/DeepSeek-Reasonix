@@ -534,8 +534,9 @@ function ShortcutsSection() {
               </div>
               <div className="shortcuts-settings__control">
                 <button
-                  className={`shortcuts-settings__key${isRecording ? " shortcuts-settings__key--recording" : ""}`}
+                  className={`shortcuts-settings__key${isRecording ? " shortcuts-settings__key--recording" : ""}${definition.configurable === false ? " shortcuts-settings__key--locked" : ""}`}
                   type="button"
+                  disabled={definition.configurable === false}
                   aria-label={isRecording ? t("settings.shortcutsRecording") : display}
                   aria-pressed={isRecording}
                   onClick={() => {
@@ -785,8 +786,8 @@ function normalizeSettingsView(view: SettingsView | null | undefined): SettingsV
     noProxy: "",
     proxy: { type: "socks5", server: "", port: 0, username: "", password: "" },
   };
-  const agent = view.agent ?? { temperature: 0, maxSteps: 0, plannerMaxSteps: 12, systemPrompt: "", coldResumePrune: true, reasoningLanguage: "auto" };
-  agent.plannerMaxSteps = Number.isFinite(agent.plannerMaxSteps) ? Math.max(0, Math.trunc(agent.plannerMaxSteps)) : 12;
+  const agent = view.agent ?? { temperature: 0, maxSteps: 0, plannerMaxSteps: 0, systemPrompt: "", coldResumePrune: true, reasoningLanguage: "auto" };
+  agent.plannerMaxSteps = Number.isFinite(agent.plannerMaxSteps) ? Math.max(0, Math.trunc(agent.plannerMaxSteps)) : 0;
   agent.maxSteps = Number.isFinite(agent.maxSteps) ? Math.max(0, Math.trunc(agent.maxSteps)) : 0;
   agent.reasoningLanguage = normalizeReasoningLanguage(agent.reasoningLanguage);
   return {
@@ -2979,7 +2980,7 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
     : !providerIsConfigured(defaultProviderView)
       ? t("settings.modelNeedsKey", { provider: modelProviderLabel(defaultProvider, defaultProviderView, t) })
       : "";
-  const agent = s.agent ?? { temperature: 0, maxSteps: 0, plannerMaxSteps: 12, systemPrompt: "", coldResumePrune: true, reasoningLanguage: "auto" };
+  const agent = s.agent ?? { temperature: 0, maxSteps: 0, plannerMaxSteps: 0, systemPrompt: "", coldResumePrune: true, reasoningLanguage: "auto" };
   const setAgentSteps = (maxSteps: number, plannerMaxSteps: number) => (
     app.SetAgentParams(agent.temperature, maxSteps, plannerMaxSteps, agent.systemPrompt)
   );
@@ -3667,12 +3668,10 @@ type ProviderModelDraft = {
 };
 
 type AddProviderMode = null | "official" | "custom";
-type OfficialProviderKind = "deepseek" | "mimo-api" | "mimo-token-plan";
+type OfficialProviderKind = "deepseek";
 
 const OFFICIAL_PROVIDER_CHOICES: Array<{ kind: OfficialProviderKind; labelKey: DictKey; descKey: DictKey; keyEnv: string }> = [
   { kind: "deepseek", labelKey: "settings.addProvider.official.deepseek", descKey: "settings.addProvider.official.deepseekDesc", keyEnv: "DEEPSEEK_API_KEY" },
-  { kind: "mimo-api", labelKey: "settings.addProvider.official.mimoApi", descKey: "settings.addProvider.official.mimoApiDesc", keyEnv: "MIMO_API_KEY" },
-  { kind: "mimo-token-plan", labelKey: "settings.addProvider.official.mimoTokenPlan", descKey: "settings.addProvider.official.mimoTokenPlanDesc", keyEnv: "MIMO_API_KEY" },
 ];
 
 function AddProviderPanel({
@@ -4135,13 +4134,6 @@ function canonicalOfficialProviderName(name: string): string {
     case "deepseek-flash":
     case "deepseek-pro":
       return "deepseek";
-    case "mimo":
-    case "xiaomi-mimo":
-    case "xiaomi_mimo":
-      return "mimo-api";
-    case "mimo-pro":
-    case "mimo-flash":
-      return "mimo-token-plan";
     default:
       return name.trim();
   }
@@ -4152,8 +4144,6 @@ function officialProviderKind(p: ProviderView): string {
   const name = canonicalOfficialProviderName(p.name);
   const host = providerBaseHost(p.baseUrl);
   if (name === "deepseek" && host === "api.deepseek.com") return "deepseek";
-  if (name === "mimo-token-plan" && host === "token-plan-cn.xiaomimimo.com") return "mimo-token-plan";
-  if (name === "mimo-api" && host === "api.xiaomimimo.com") return "mimo-api";
   return "";
 }
 
@@ -4166,16 +4156,12 @@ function providerGroupID(p: ProviderView): string {
 function providerGroupLabel(p: ProviderView, t?: ReturnType<typeof useT>): string {
   const id = providerGroupID(p);
   if (id === "builtin:deepseek") return t ? t("settings.providerLabel.deepseek") : "DeepSeek";
-  if (id === "builtin:mimo-api") return t ? t("settings.providerLabel.mimoApi") : "Mimo API";
-  if (id === "builtin:mimo-token-plan") return t ? t("settings.providerLabel.mimoTokenPlan") : "Mimo Token Plan";
   return p.name;
 }
 
 function providerGroupDescription(p: ProviderView, t: ReturnType<typeof useT>): string {
   const id = providerGroupID(p);
   if (id === "builtin:deepseek") return t("settings.providerDesc.deepseek");
-  if (id === "builtin:mimo-api") return t("settings.providerDesc.mimoApi");
-  if (id === "builtin:mimo-token-plan") return t("settings.providerDesc.mimoTokenPlan");
   return p.baseUrl;
 }
 

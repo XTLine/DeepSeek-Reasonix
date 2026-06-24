@@ -92,6 +92,7 @@ func TestWriteRootsForRootExcludesUserConfigDirByDefault(t *testing.T) {
 // an equivalent config — i.e. the wizard never writes a file it can't read.
 func TestRenderTOMLRoundTrips(t *testing.T) {
 	orig := Default()
+	orig.Providers = append(orig.Providers, legacyMimoCustomProvider("mimo-pro"))
 	orig.DefaultModel = "mimo-pro"
 	orig.Language = "zh"
 	orig.UI.Theme = "light"
@@ -516,7 +517,7 @@ func TestScopedRenderSeparatesUserAndProjectConfig(t *testing.T) {
 	}
 
 	project := RenderTOMLForScope(c, RenderScopeProject)
-	for _, forbidden := range []string{"[desktop]", "[notifications]", "close_behavior =", "check_updates ="} {
+	for _, forbidden := range []string{"[desktop]", "[notifications]", "close_behavior =", "check_updates =", "max_steps", "planner_max_steps"} {
 		if strings.Contains(project, forbidden) {
 			t.Fatalf("project render should not contain %q:\n%s", forbidden, project)
 		}
@@ -691,7 +692,7 @@ func TestRenderTOMLNonDefaultStepsWrittenExplicitly(t *testing.T) {
 	isolateUserConfigHome(t)
 	c := Default()
 	c.Agent.MaxSteps = 5
-	c.Agent.PlannerMaxSteps = 0
+	c.Agent.PlannerMaxSteps = 7
 	out := RenderTOML(c)
 	agentLines := extractSectionLines(out, "[agent]")
 	foundMax, foundPlanner := false, false
@@ -718,7 +719,7 @@ func TestRenderTOMLDefaultStepsDoNotOverrideGlobalConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	globalPath := filepath.Join(globalDir, "config.toml")
-	if err := os.WriteFile(globalPath, []byte("[agent]\nplanner_max_steps = 0\nmax_steps = 100\n"), 0o644); err != nil {
+	if err := os.WriteFile(globalPath, []byte("[agent]\nplanner_max_steps = 9\nmax_steps = 100\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -733,8 +734,8 @@ func TestRenderTOMLDefaultStepsDoNotOverrideGlobalConfig(t *testing.T) {
 	if err := mergeFile(cfg, globalPath); err != nil {
 		t.Fatalf("global merge failed: %v", err)
 	}
-	if cfg.Agent.PlannerMaxSteps != 0 {
-		t.Fatalf("after global: planner_max_steps = %d, want 0", cfg.Agent.PlannerMaxSteps)
+	if cfg.Agent.PlannerMaxSteps != 9 {
+		t.Fatalf("after global: planner_max_steps = %d, want 9", cfg.Agent.PlannerMaxSteps)
 	}
 	if cfg.Agent.MaxSteps != 100 {
 		t.Fatalf("after global: max_steps = %d, want 100", cfg.Agent.MaxSteps)
@@ -743,8 +744,8 @@ func TestRenderTOMLDefaultStepsDoNotOverrideGlobalConfig(t *testing.T) {
 	if err := mergeFile(cfg, projectPath); err != nil {
 		t.Fatalf("project merge failed: %v", err)
 	}
-	if cfg.Agent.PlannerMaxSteps != 0 {
-		t.Errorf("after project: planner_max_steps = %d, want 0 (global should not be overridden by commented-out default)", cfg.Agent.PlannerMaxSteps)
+	if cfg.Agent.PlannerMaxSteps != 9 {
+		t.Errorf("after project: planner_max_steps = %d, want 9 (global should not be overridden by commented-out default)", cfg.Agent.PlannerMaxSteps)
 	}
 	if cfg.Agent.MaxSteps != 100 {
 		t.Errorf("after project: max_steps = %d, want 100 (global should not be overridden by commented-out default)", cfg.Agent.MaxSteps)

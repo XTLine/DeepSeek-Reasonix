@@ -68,24 +68,20 @@ type Controller struct {
 	sink     event.Sink
 	policy   permission.Policy
 
-	label         string
-	modelRef      string
-	systemPrompt  string
-	sessionDir    string
-	host          *plugin.Host
-	commands      []command.Command
-	skills        []skill.Skill
-	allSkills     []skill.Skill
-	skillStore    *skill.Store
-	allSkillStore *skill.Store
-	hooks         *hook.Runner // session hook runner; nil-safe (no hooks configured)
-	mem           *memory.Set
-	// memMu serializes memory mutations (QuickAdd/SaveDoc/SaveMemory/ForgetMemory/
-	// QueueMemory) so each write+reload+swap is atomic with respect to the others,
-	// WITHOUT holding c.mu across the disk I/O. c.mu is taken only briefly — to read
-	// the snapshot pointer and to swap the reloaded snapshot in — never around a
-	// filesystem walk, so a memory-panel save can't stall an approval or status poll.
-	memMu             sync.Mutex
+	label        string
+	modelRef     string
+	systemPrompt string
+	sessionDir   string
+	commands     atomic.Pointer[[]command.Command]
+	// skills owns the session's discovered skills (enabled subset, full set, and
+	// the reloadable stores) — the skills slice of the Capabilities concern. See
+	// skill.go.
+	skills skillSet
+	hooks  *hook.Runner // session hook runner; nil-safe (no hooks configured)
+	// memory owns the loaded memory snapshot, the pending turn-tail notes queue,
+	// and write serialization behind its own locks, off c.mu — so a memory-panel
+	// save never stalls an approval or status poll. See memory.go.
+	memory            memoryManager
 	cleanup           func()
 	autoPlan          string
 	reasoningLanguage string
@@ -109,31 +105,31 @@ type Controller struct {
 	// Close cancels its still-running jobs.
 	jobs *jobs.Manager
 
-	// reg is the live tool registry the executor reads each turn; pluginCtx is the
-	// session-scoped context a hot-added stdio server binds its subprocess to.
-	// Together they let AddMCPServer connect a server mid-session and have its tools
-	// available on the next turn (see AddMCPServer / RemoveMCPServer).
-	reg       *tool.Registry
-	pluginCtx context.Context
+	// mcp owns the session's live tool/plugin surface — the MCP plugin Host, the
+	// tool registry the executor reads each turn, and the session-scoped context a
+	// hot-added stdio server binds its subprocess to — behind its own lock, off
+	// c.mu. The Controller keeps the config-facing orchestration (persisting
+	// reasonix.toml on add/remove, building specs from entries). See mcp.go.
+	mcp mcpManager
 
 	// goals owns the active goal's FSM (status, intercepts, idle/turn counters)
 	// and its persistence, behind its own mutex so a per-turn goal save never
 	// stalls an approval or status poll on c.mu. See goal.go.
 	goals goalMachine
 
-	// Checkpoints (snapshot-based rewind). cp is the per-session store rebound when
-	// the session path changes; cpRoot is the workspace root used to guard restore
-	// writes. cpTurn is the monotonic turn counter (decoupled from the store so it
-	// never collides after a restructure); cpBound[turn] records len(Session.Messages)
-	// at that turn's start — the truncation boundary for a conversation rewind/fork.
-	// Boundaries are persisted in each checkpoint and rebuilt from the store on
-	// resume (so a reopened session can still rewind conversation / fork), but
-	// dropped after a summarize restructures the log so those operations report
-	// "unavailable" rather than mis-truncating; code rewind (file-based) is unaffected.
-	cp      *checkpoint.Store
-	cpRoot  string
-	cpTurn  int
-	cpBound map[int]int
+	// workspaceRoot is the workspace root: the base for resolving @-refs and slash
+	// path refs, the working directory for user "!" shell commands and custom
+	// command discovery, and the guard root for checkpoint restore writes. It is
+	// surfaced to frontends via WorkspaceRoot().
+	workspaceRoot string
+
+	// checkpoints owns the snapshot-based rewind bookkeeping (the per-session
+	// store, the monotonic turn counter, and the conversation-rewind boundary map)
+	// behind its own lock, off c.mu — so a boundary read for a rewind/fork never
+	// contends on the run-state lock. The Controller keeps the rewind/fork/summarize
+	// orchestration (truncating the session, restoring code, emitting events). See
+	// checkpoint.go.
+	checkpoints checkpointManager
 
 	// approval owns the approval/ask prompt bookkeeping and the runtime approval
 	// posture (ask/auto/yolo, session grants, the just-approved-plan window)
@@ -153,13 +149,6 @@ type Controller struct {
 	sessionPath string
 	// turn counts model turns this session, passed to hooks in their payload.
 	turn int
-
-	// pendingMemory holds memory notes added mid-session (via "#" quick-add or a
-	// memory edit) that haven't yet been folded into a turn. Compose drains it
-	// onto the next outgoing turn — never into the cache-stable system prefix — so
-	// a fresh memory takes effect this session without busting the prompt cache;
-	// it joins the prefix naturally on the next session.
-	pendingMemory []string
 
 	displayRecorder func(content, display string)
 }
@@ -308,14 +297,10 @@ func New(opts Options) *Controller {
 		systemPrompt:           opts.SystemPrompt,
 		sessionDir:             opts.SessionDir,
 		sessionPath:            opts.SessionPath,
-		host:                   opts.Host,
-		commands:               opts.Commands,
-		skills:                 opts.Skills,
-		allSkills:              opts.AllSkills,
-		skillStore:             opts.SkillStore,
-		allSkillStore:          opts.AllSkillStore,
+		commands:               atomic.Pointer[[]command.Command]{},
+		skills:                 newSkillSet(opts.Skills, opts.AllSkills, opts.SkillStore, opts.AllSkillStore),
 		hooks:                  opts.Hooks,
-		mem:                    opts.Memory,
+		memory:                 newMemoryManager(opts.Memory),
 		cleanup:                opts.Cleanup,
 		autoPlan:               normalizeAutoPlan(opts.AutoPlan),
 		reasoningLanguage:      config.NormalizeReasoningLanguage(opts.ReasoningLanguage),
@@ -327,19 +312,18 @@ func New(opts Options) *Controller {
 		balanceKey:             opts.BalanceKey,
 		balanceClient:          opts.BalanceClient,
 		jobs:                   opts.Jobs,
-		reg:                    opts.Registry,
-		pluginCtx:              pluginCtx,
-		cpRoot:                 opts.WorkspaceRoot,
+		mcp:                    newMcpManager(opts.Host, opts.Registry, pluginCtx),
+		workspaceRoot:          opts.WorkspaceRoot,
 		approval:               newApprovalManager(opts.Policy, ToolApprovalAsk, opts.ApprovalTimeout),
 	}
 	// Checkpoints: bind a store to the session and route writer pre-edits into it.
 	c.rebindCheckpoints(opts.SessionPath)
 	c.setActiveJobSession(opts.SessionPath)
+	cmdsInit := opts.Commands
+	c.commands.Store(&cmdsInit)
 	if c.executor != nil {
 		c.executor.SetPreEditHook(func(ch diff.Change) {
-			if c.cp != nil {
-				c.cp.Snapshot(ch)
-			}
+			c.checkpoints.snapshot(ch)
 		})
 		c.executor.SetMemoryQueue(c)
 	}
@@ -392,31 +376,18 @@ func ckptDir(sessionPath string) string {
 // checkpoints already on disk, and resets the turn boundaries. Called on
 // construction and whenever the session path changes (NewSession/Resume/SetSessionPath).
 func (c *Controller) rebindCheckpoints(sessionPath string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.goals.setStatePath(goalStatePath(sessionPath))
-	c.cp = checkpoint.New(ckptDir(sessionPath), c.cpRoot)
-	c.cpTurn = c.cp.NextTurn() // continue numbering past any checkpoints on disk
-	c.cpBound = c.cp.Bounds()  // rebuilt from persisted checkpoints so a resumed
-	if c.cpBound == nil {      // session can still rewind conversation / fork
-		c.cpBound = map[int]int{}
-	}
+	c.checkpoints.rebind(ckptDir(sessionPath), c.workspaceRoot)
 }
 
 // beginCheckpoint opens a checkpoint for the turn about to run, recording the
 // current message count as the conversation-rewind boundary. Called at the top of
 // runTurn, before the user message is appended.
 func (c *Controller) beginCheckpoint(input string) {
-	if c.cp == nil || c.executor == nil {
+	if c.executor == nil {
 		return
 	}
-	c.mu.Lock()
-	turn := c.cpTurn
-	c.cpTurn++
-	msgIndex := len(c.executor.Session().Messages)
-	c.cpBound[turn] = msgIndex
-	c.mu.Unlock()
-	c.cp.Begin(turn, input, msgIndex)
+	c.checkpoints.begin(input, len(c.executor.Session().Messages))
 }
 
 // --- commands (frontend → controller) ---
@@ -538,126 +509,11 @@ func (c *Controller) runGoalLoopWithRaw(ctx context.Context, input, raw string) 
 }
 
 func (c *Controller) runGoalLoopWithRawDisplay(ctx context.Context, input, raw, display string) error {
-	if err := c.runTurnWithRawDisplay(ctx, input, raw, display); err != nil {
-		if ctx.Err() != nil {
-			c.stopGoal(GoalStatusStopped)
-		}
-		return err
-	}
-	return c.continueGoal(ctx)
+	return newTurnOrchestrator(c).runGoalLoopWithRawDisplay(ctx, input, raw, display)
 }
 
 func (c *Controller) runTurnWithRawDisplay(ctx context.Context, input, raw, display string) error {
-	c.maybeSessionStart(ctx)
-	c.maybeAutoPlan(ctx, raw)
-	parentSession := c.parentSessionID()
-	ctx = agent.WithParentSession(ctx, parentSession)
-	ctx = jobs.WithSession(ctx, parentSession)
-	ctx = agent.WithUserImages(ctx, c.inputImages(input))
-	input = c.Compose(input)
-	startMessages := c.messageCount()
-	defer c.snapshotActivityIfChanged(startMessages)
-	defer c.recordDisplayForNewUser(startMessages, display)
-	// Open a checkpoint for this turn before the user message is appended, so the
-	// recorded message boundary precedes it and pre-edit snapshots land here.
-	c.beginCheckpoint(input)
-	// UserPromptSubmit / Stop hooks bracket the whole turn (incl. the plan
-	// research + approved-execution sub-turns below): a gating UserPromptSubmit
-	// aborts before any model call; Stop fires once when the turn returns.
-	if c.hooks.Enabled() {
-		c.mu.Lock()
-		c.turn++
-		turn := c.turn
-		c.mu.Unlock()
-		if block, _ := c.hooks.PromptSubmit(ctx, input, turn); block {
-			return nil // the hook's notify callback already surfaced the reason
-		}
-		defer func() { c.hooks.Stop(ctx, lastAssistantText(c.History()), turn) }()
-	}
-	if err := c.runner.Run(ctx, input); err != nil {
-		return err
-	}
-	c.mu.Lock()
-	plan := c.planMode
-	c.mu.Unlock()
-	if !plan {
-		return nil
-	}
-	proposal := lastAssistantText(c.History())
-	if proposal == "" {
-		return nil // no substantive proposal to gate
-	}
-	// The plan is already visible as the assistant's answer, so the request
-	// carries no subject — it's purely the gate.
-	allow, _, err := c.requestApproval(ctx, planApprovalTool, "", nil)
-	if err != nil {
-		return err
-	}
-	if !allow {
-		return nil // keep planning; plan mode stays on
-	}
-	c.SetPlanMode(false)
-	todoArgs := c.seedPlanTodos(proposal)
-	execStart := c.sessionMessageCount()
-	// The plan is the go-ahead: don't re-prompt for each write of the approved
-	// work. Auto-approve writers for the duration of this execution turn only; a
-	// later turn (even "continue") falls back to the normal per-tool approval.
-	c.approval.setPlanAutoApprove(true)
-	defer c.approval.setPlanAutoApprove(false)
-	if err := c.runner.Run(ctx, c.ComposeSynthetic(planApprovedMessage)); err != nil {
-		return err
-	}
-	if todoArgs != "" && !c.hasTodoUpdateSince(execStart) {
-		c.completePlanTodos(todoArgs)
-	}
-	return nil
-}
-
-func (c *Controller) continueGoal(ctx context.Context) error {
-	for {
-		cont := c.advanceGoalAfterTurn()
-		if !cont {
-			return nil
-		}
-		if err := ctx.Err(); err != nil {
-			c.stopGoal(GoalStatusStopped)
-			return err
-		}
-		turn := goalContinueTurn
-		if msg, ok := c.goals.takeIntercept(); ok {
-			turn = msg
-			c.notice("goal intercept: incomplete todos remain (override with a second [goal:complete])")
-		}
-		if err := c.runTurnWithRawDisplay(ctx, turn, turn, ""); err != nil {
-			if ctx.Err() != nil {
-				c.stopGoal(GoalStatusStopped)
-			}
-			return err
-		}
-	}
-}
-
-func (c *Controller) advanceGoalAfterTurn() bool {
-	// Gather every input the FSM needs off the goal lock: parse the marker,
-	// snapshot the executor's todos + readiness, and check tool activity. None
-	// of these touch goal state, so the machine's critical section stays pure.
-	status, reason, _ := parseGoalStatusMarker(lastAssistantText(c.History()))
-	var readiness string
-	if c.executor != nil {
-		readiness = c.executor.GoalReadinessFailure()
-	}
-	res := c.goals.advance(goalAdvanceInput{
-		status:     status,
-		reason:     reason,
-		toolCalled: c.toolWasCalledLastTurn(),
-		todos:      c.goalTodos(),
-		readiness:  readiness,
-	})
-	c.persistGoalState(res.path, res.data, res.ok)
-	if res.notice != "" {
-		c.notice(res.notice)
-	}
-	return res.cont
+	return newTurnOrchestrator(c).runTurnWithRawDisplay(ctx, input, raw, display)
 }
 
 // toolWasCalledLastTurn reports whether the most recent assistant message
@@ -822,7 +678,7 @@ func (c *Controller) submitCommandOrTurn(trimmed, input, display string, scopedR
 			runRefTurn(ref, display)
 			return
 		}
-		if ref, ok := SlashPathLineRef(trimmed, c.cpRoot); ok {
+		if ref, ok := SlashPathLineRef(trimmed, c.workspaceRoot); ok {
 			runRefTurnWithRefs(input, ref, display)
 			return
 		}
@@ -1164,7 +1020,7 @@ func (c *Controller) RunShell(command string) {
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		setShellKillTree(cmd)
 		cmd.WaitDelay = shellWaitDelay
-		cmd.Dir = c.cpRoot
+		cmd.Dir = c.workspaceRoot
 		var buf bytes.Buffer
 		w := io.MultiWriter(&buf, &shellWriter{emit: func(chunk string) {
 			c.sink.Emit(event.Event{
@@ -1283,6 +1139,13 @@ func (c *Controller) Running() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.running
+}
+
+// CancelRequested reports whether Cancel has been requested for the active turn.
+func (c *Controller) CancelRequested() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.canceling
 }
 
 // PendingPrompt reports whether the current turn is blocked waiting for a user
@@ -1684,10 +1547,7 @@ const (
 
 // Checkpoints lists the session's rewind points (one per user turn), oldest first.
 func (c *Controller) Checkpoints() []checkpoint.Meta {
-	if c.cp == nil {
-		return nil
-	}
-	return c.cp.List()
+	return c.checkpoints.list()
 }
 
 // rewindFail emits the error as a Warn notice (so a frontend that swallows the
@@ -1705,19 +1565,16 @@ func (c *Controller) rewindFail(err error) error {
 // unavailable for turns inherited from a resumed session (code rewind still works).
 // Frontends re-render their transcript from History after the call.
 func (c *Controller) Rewind(turn int, scope RewindScope) error {
-	if c.cp == nil || c.executor == nil {
+	if !c.checkpoints.enabled() || c.executor == nil {
 		return c.rewindFail(fmt.Errorf("checkpoints unavailable"))
 	}
-	c.mu.Lock()
-	running := c.running
-	boundary, hasBound := c.cpBound[turn]
-	c.mu.Unlock()
-	if running {
+	if c.Running() {
 		return c.rewindFail(fmt.Errorf("cannot rewind while a turn is running"))
 	}
+	boundary, hasBound := c.checkpoints.boundary(turn)
 
 	if scope == RewindCode || scope == RewindBoth {
-		written, deleted, err := c.cp.RestoreCode(turn)
+		written, deleted, err := c.checkpoints.restoreCode(turn)
 		if err != nil {
 			return c.rewindFail(fmt.Errorf("rewind code: %w", err))
 		}
@@ -1738,14 +1595,7 @@ func (c *Controller) Rewind(turn int, scope RewindScope) error {
 			return c.rewindFail(fmt.Errorf("conversation rewind unavailable for turn %d: the conversation was compacted past this point", turn))
 		}
 		s.Messages = s.Messages[:boundary]
-		c.mu.Lock()
-		c.cpTurn = turn // renumber future turns from here; later turns are gone
-		for k := range c.cpBound {
-			if k >= turn {
-				delete(c.cpBound, k)
-			}
-		}
-		c.mu.Unlock()
+		c.checkpoints.truncateFrom(turn) // renumber future turns from here; later turns are gone
 		if err := c.Snapshot(); err != nil {
 			slog.Warn("controller: snapshot after rewind", "err", err)
 		}
@@ -1782,13 +1632,10 @@ func (c *Controller) forkNamed(turn int, name string, switchToFork bool) (string
 	if c.sessionDir == "" {
 		return "", c.rewindFail(fmt.Errorf("fork needs session persistence, which is disabled"))
 	}
-	c.mu.Lock()
-	running := c.running
-	boundary, hasBound := c.cpBound[turn]
-	c.mu.Unlock()
-	if running {
+	if c.Running() {
 		return "", c.rewindFail(fmt.Errorf("cannot fork while a turn is running"))
 	}
+	boundary, hasBound := c.checkpoints.boundary(turn)
 	if !hasBound {
 		return "", c.rewindFail(fmt.Errorf("fork unavailable for turn %d (resumed session)", turn))
 	}
@@ -1839,9 +1686,7 @@ func (c *Controller) forkNamed(turn int, name string, switchToFork bool) (string
 }
 
 func (c *Controller) CheckpointHasBoundary(turn int) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	boundary, ok := c.cpBound[turn]
+	boundary, ok := c.checkpoints.boundary(turn)
 	if !ok {
 		return false
 	}
@@ -2010,13 +1855,10 @@ func (c *Controller) summarizeAt(ctx context.Context, turn int, from bool) error
 	if c.executor == nil {
 		return c.rewindFail(fmt.Errorf("checkpoints unavailable"))
 	}
-	c.mu.Lock()
-	running := c.running
-	boundary, hasBound := c.cpBound[turn]
-	c.mu.Unlock()
-	if running {
+	if c.Running() {
 		return c.rewindFail(fmt.Errorf("cannot summarize while a turn is running"))
 	}
+	boundary, hasBound := c.checkpoints.boundary(turn)
 	if !hasBound {
 		return c.rewindFail(fmt.Errorf("summarize unavailable for turn %d (resumed session)", turn))
 	}
@@ -2030,11 +1872,9 @@ func (c *Controller) summarizeAt(ctx context.Context, turn int, from bool) error
 		return c.rewindFail(err)
 	}
 	// The log was restructured; existing boundaries no longer map. Drop them (keep
-	// cpTurn monotonic so new turns don't collide with the store) — conversation
-	// rewind degrades to "unavailable" until fresh turns rebuild boundaries.
-	c.mu.Lock()
-	c.cpBound = map[int]int{}
-	c.mu.Unlock()
+	// the turn counter monotonic so new turns don't collide with the store) —
+	// conversation rewind degrades to "unavailable" until fresh turns rebuild them.
+	c.checkpoints.clearBounds()
 	if err := c.Snapshot(); err != nil {
 		slog.Warn("controller: post-summarize snapshot", "err", err)
 	}
@@ -2325,6 +2165,15 @@ func (c *Controller) SessionCache() (hit, miss int) {
 	return c.executor.SessionCache()
 }
 
+// Todos returns a copy of the canonical task list (the latest todo_write state
+// merged with complete_step advances) so frontends can render a live task panel.
+func (c *Controller) Todos() []evidence.TodoItem {
+	if c.executor == nil {
+		return nil
+	}
+	return c.executor.CanonicalTodoState()
+}
+
 // ToolResultData holds the full arguments and output for one tool call, loaded
 // on demand when a frontend expands a collapsed tool card.
 type ToolResultData struct {
@@ -2382,31 +2231,62 @@ func (c *Controller) Balance(ctx context.Context) (*billing.Balance, error) {
 
 // Host returns the running MCP host (nil when no plugins), for frontends that
 // list servers / resolve MCP prompts.
-func (c *Controller) Host() *plugin.Host { return c.host }
+func (c *Controller) Host() *plugin.Host { return c.mcp.hostRef() }
 
 // Commands returns the loaded custom slash commands.
-func (c *Controller) Commands() []command.Command { return c.commands }
+func (c *Controller) Commands() []command.Command {
+	if p := c.commands.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// ReloadCommands rescans all command directories and hot-swaps the slash_command
+// tool and the internal command slice — no MCP restart, no hook rerun.
+func (c *Controller) ReloadCommands(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	cmds, loadErr := command.Load(config.CommandDirsForRoot(c.workspaceRoot)...)
+	cmdSkills := c.Skills()
+
+	entries := make([]command.SlashEntry, 0, len(cmdSkills)+len(cmds))
+	for _, sk := range cmdSkills {
+		sk := sk
+		entries = append(entries, command.SlashEntry{
+			Name:        sk.Name,
+			Description: sk.Description,
+			Render:      func(args []string) string { return skill.Render(sk, strings.Join(args, " ")) },
+		})
+	}
+	for _, cmd := range cmds {
+		cmd := cmd
+		entries = append(entries, command.SlashEntry{
+			Name:        cmd.Name,
+			Description: cmd.Description,
+			ArgHint:     cmd.ArgHint,
+			Render:      func(args []string) string { return cmd.Render(args) },
+		})
+	}
+	c.mcp.registerTool(command.NewSlashCommandTool(entries))
+	cmdSlice := cmds
+	c.commands.Store(&cmdSlice)
+	return loadErr
+}
 
 // Skills returns the discoverable skills (for the slash menu and `/skills`).
 // When a live Store is available, scan it on demand so skills installed during
 // this session appear without rewriting the cache-stable system prompt.
 func (c *Controller) Skills() []skill.Skill {
-	if c.skillStore != nil {
-		return c.skillStore.List()
-	}
-	return c.skills
+	return c.skills.list()
 }
 
 // AllSkills returns every discoverable skill, including disabled ones, for
 // management surfaces that need to re-enable a hidden skill.
 func (c *Controller) AllSkills() []skill.Skill {
-	if c.allSkillStore != nil {
-		return c.allSkillStore.List()
-	}
-	if len(c.allSkills) > 0 {
-		return c.allSkills
-	}
-	return c.skills
+	return c.skills.listAll()
 }
 
 // DisabledSkills returns all discoverable skills that are disabled in config.
@@ -2489,9 +2369,11 @@ func (c *Controller) ConnectMCPServer(e config.PluginEntry) (int, error) {
 	return c.connectMCPServer(e)
 }
 
+// connectMCPServer expands an entry's ${VARS}, applies the known-server
+// overrides scoped to the workspace, and connects it live via the mcp manager.
 func (c *Controller) connectMCPServer(e config.PluginEntry) (int, error) {
 	exp := e.ExpandedPlugin()
-	return c.connectMCPSpec(plugin.ApplyKnownOverrides(plugin.Spec{
+	return c.mcp.connectSpec(plugin.ApplyKnownOverrides(plugin.Spec{
 		Name:    exp.Name,
 		Type:    exp.Type,
 		Command: exp.Command,
@@ -2500,31 +2382,6 @@ func (c *Controller) connectMCPServer(e config.PluginEntry) (int, error) {
 		URL:     exp.URL,
 		Headers: exp.Headers,
 	}, c.WorkspaceRoot()))
-}
-
-func (c *Controller) connectMCPSpec(s plugin.Spec) (int, error) {
-	if c.host == nil {
-		c.host = plugin.NewHost()
-	}
-	tools, err := c.host.Add(c.pluginCtx, s)
-	if err != nil {
-		if !plugin.IsServerAlreadyConnected(err) {
-			return 0, err
-		}
-		toolsCtx, cancel := context.WithTimeout(c.pluginCtx, 5*time.Second)
-		defer cancel()
-		tools, err = c.host.ToolsFor(toolsCtx, s.Name)
-		if err != nil {
-			return 0, err
-		}
-	}
-	if c.reg != nil {
-		c.reg.RemovePrefix(plugin.ToolPrefix(s.Name))
-		for _, t := range tools {
-			c.reg.Add(t)
-		}
-	}
-	return len(tools), nil
 }
 
 // ImportMCPEntries persists selected MCP entries and attempts to connect them
@@ -2554,7 +2411,7 @@ func (c *Controller) ImportMCPEntries(entries []config.PluginEntry) (total, adde
 		return 0, 0, 0, 0, 0, 0, err
 	}
 	for _, e := range entries {
-		if c.host != nil && containsString(c.host.ServerNames(), e.Name) {
+		if c.mcp.hasServer(e.Name) {
 			skipped++
 			continue
 		}
@@ -2565,15 +2422,6 @@ func (c *Controller) ImportMCPEntries(entries []config.PluginEntry) (total, adde
 		connected++
 	}
 	return len(entries), added, updated, connected, failed, skipped, nil
-}
-
-func containsString(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }
 
 func (c *Controller) ConfiguredMCPNames() []string {
@@ -2594,10 +2442,8 @@ func (c *Controller) DisconnectedMCPNames() []string {
 		return nil
 	}
 	connected := map[string]bool{}
-	if c.host != nil {
-		for _, name := range c.host.ServerNames() {
-			connected[name] = true
-		}
+	for _, name := range c.mcp.serverNames() {
+		connected[name] = true
 	}
 	var names []string
 	for _, p := range cfg.Plugins {
@@ -2627,22 +2473,15 @@ func (c *Controller) ConnectConfiguredMCPServer(name string) (int, error) {
 // the config save fails). A server declared in .mcp.json disconnects for this
 // session but returns on the next start, since that file isn't ours to edit.
 func (c *Controller) RemoveMCPServer(name string) (disconnected bool, err error) {
-	if c.host != nil {
-		if prefix, ok := c.host.Remove(name); ok {
-			disconnected = true
-			if c.reg != nil {
-				c.reg.RemovePrefix(prefix)
-			}
-		}
-	}
+	disconnected = c.mcp.disconnect(name)
 	cfg, lerr := config.Load()
 	if lerr != nil {
 		return disconnected, lerr
 	}
 	inConfig := cfg.RemovePlugin(name)
 	if inConfig {
-		if !disconnected && c.reg != nil {
-			c.reg.RemovePrefix(plugin.ToolPrefix(name))
+		if !disconnected {
+			c.mcp.removeToolPrefix(name)
 		}
 		if serr := cfg.Save(); serr != nil {
 			return disconnected, serr
@@ -2659,18 +2498,10 @@ func (c *Controller) RemoveMCPServer(name string) (disconnected bool, err error)
 // on the next session start, or now via ConnectConfiguredMCPServer (the "on").
 // Reports whether a live server was actually disconnected.
 func (c *Controller) DisconnectMCPServer(name string) bool {
-	disconnected := false
-	if c.host != nil {
-		if prefix, ok := c.host.Remove(name); ok {
-			disconnected = true
-			if c.reg != nil {
-				c.reg.RemovePrefix(prefix)
-			}
-		}
-	}
+	disconnected := c.mcp.disconnect(name)
 	removedPlaceholder := 0
-	if !disconnected && c.reg != nil {
-		removedPlaceholder = c.reg.RemovePrefix(plugin.ToolPrefix(name))
+	if !disconnected {
+		removedPlaceholder = c.mcp.removeToolPrefix(name)
 	}
 	return disconnected || removedPlaceholder > 0
 }
@@ -2680,10 +2511,7 @@ func (c *Controller) DisconnectMCPServer(name string) bool {
 // shared client stays alive for sibling tabs, while this session's registry drops
 // the server's provider-visible tools before the next turn.
 func (c *Controller) UnregisterMCPServerTools(name string) bool {
-	if c.reg == nil {
-		return false
-	}
-	return c.reg.RemovePrefix(plugin.ToolPrefix(name)) > 0
+	return c.mcp.suspendToolPrefix(name)
 }
 
 // Label returns the human-readable model label, e.g. "deepseek-flash".
@@ -2692,7 +2520,7 @@ func (c *Controller) Label() string { return c.label }
 // WorkspaceRoot returns the workspace root for this controller's session
 // (the directory that file-writers and @-references are scoped to).
 // Empty means no scoping is in effect.
-func (c *Controller) WorkspaceRoot() string { return c.cpRoot }
+func (c *Controller) WorkspaceRoot() string { return c.workspaceRoot }
 
 // InheritLifecycleFrom carries same-session lifecycle state across controller
 // rebuilds, such as model switches that preserve the conversation.
@@ -2833,94 +2661,34 @@ func (c *Controller) Bypass() bool {
 
 // --- memory ---
 //
-// c.mem is an immutable snapshot: reads take c.mu briefly and return the pointer.
-// Writes are serialized by memMu and do their disk I/O (the doc/store write plus
-// the memory.Load re-discovery) OFF c.mu, taking c.mu only to read the snapshot
-// pointer and to swap the freshly discovered snapshot in — so a write never holds
-// c.mu across a filesystem walk. A turn-tail note is queued for each write so the
-// change applies this session without disturbing the cache-stable system prefix
-// (it folds into the prefix on the next session). All of these are no-ops
-// returning "" when memory is disabled.
+// The memory snapshot, the pending turn-tail notes queue, and write serialization
+// live in c.memory (a memoryManager) behind its own locks, off c.mu — so a
+// memory-panel save never stalls an approval or status poll. These methods are
+// the SessionAPI surface; each is a thin delegation. See memory.go.
 
 // QuickAdd appends a one-line note to the doc-memory file for scope (project
 // REASONIX.md by default) — the write side of "#<note>". Returns the file written.
 func (c *Controller) QuickAdd(scope memory.Scope, note string) (string, error) {
-	c.memMu.Lock()
-	defer c.memMu.Unlock()
-	mem := c.memSnapshot()
-	if mem == nil {
-		return "", nil
-	}
-	path := mem.DocPath(scope)
-	if path == "" {
-		return "", fmt.Errorf("no target file for memory scope %q", scope)
-	}
-	if err := memory.AppendDoc(path, note); err != nil {
-		return "", err
-	}
-	c.applyMemoryWrite(mem, note)
-	return path, nil
+	return c.memory.quickAdd(scope, note)
 }
 
 // SaveDoc overwrites a recognized memory doc with body — the save side of the
 // desktop panel's in-place editor. Returns the file written.
 func (c *Controller) SaveDoc(path, body string) (string, error) {
-	c.memMu.Lock()
-	defer c.memMu.Unlock()
-	mem := c.memSnapshot()
-	if mem == nil {
-		return "", nil
-	}
-	written, err := mem.WriteDoc(path, body)
-	if err != nil {
-		return "", err
-	}
-	// Inject the new content once on the next turn: the cached prefix still holds
-	// the pre-edit version this session, so handing the model the current text
-	// avoids a stale-guidance gap until the next session re-folds it into the
-	// prefix. Trimmed to a single tail note (drained by Compose), not per-turn.
-	c.applyMemoryWrite(mem,
-		"Memory file "+written+" was just edited. Its current contents:\n"+strings.TrimSpace(body))
-	return written, nil
+	return c.memory.saveDoc(path, body)
 }
 
 // SaveMemory writes an active auto-memory fact and refreshes the in-session
 // snapshot. It is the explicit user-confirmed counterpart to the model-owned
 // remember tool, used by management surfaces that preview a candidate first.
 func (c *Controller) SaveMemory(m memory.Memory) (string, error) {
-	c.memMu.Lock()
-	defer c.memMu.Unlock()
-	mem := c.memSnapshot()
-	if mem == nil {
-		return "", nil
-	}
-	path, err := mem.Store.Save(m)
-	if err != nil {
-		return "", err
-	}
-	c.applyMemoryWrite(mem,
-		"Saved memory \""+m.Name+"\": "+strings.Join(strings.Fields(m.Description), " "))
-	return path, nil
+	return c.memory.saveMemory(m)
 }
 
 // ForgetMemory removes a saved auto-memory by name — the panel/TUI forget action,
-// the manual counterpart to the model's `forget` tool. It queues a turn-tail note
-// so the removal applies this session (the cached prefix still lists the fact
-// until the next session re-folds the index). The file is archived for
-// traceability by Store.Delete.
+// the manual counterpart to the model's `forget` tool.
 func (c *Controller) ForgetMemory(name string) error {
-	c.memMu.Lock()
-	defer c.memMu.Unlock()
-	mem := c.memSnapshot()
-	if mem == nil {
-		return nil
-	}
-	if err := mem.Store.Delete(name); err != nil {
-		return err
-	}
-	c.applyMemoryWrite(mem,
-		"Forgot memory \""+name+"\" — disregard its line still shown in the saved-memories index until next session.")
-	return nil
+	return c.memory.forget(name)
 }
 
 // QueueMemory implements memory.Queue: when the model runs the remember/forget
@@ -2928,50 +2696,14 @@ func (c *Controller) ForgetMemory(name string) error {
 // applies this session without touching the cache-stable prefix. It also
 // refreshes the snapshot a memory panel reads.
 func (c *Controller) QueueMemory(note string) {
-	c.memMu.Lock()
-	defer c.memMu.Unlock()
-	if mem := c.memSnapshot(); mem != nil {
-		c.applyMemoryWrite(mem, note)
-		return
-	}
-	// Memory disabled — still queue the turn-tail note; there's no snapshot to
-	// re-discover.
-	c.mu.Lock()
-	c.pendingMemory = append(c.pendingMemory, note)
-	c.mu.Unlock()
+	c.memory.queue(note)
 }
 
 // Memory returns the loaded memory snapshot (nil when memory is disabled), for
 // frontends that surface a memory panel or the /memory command. The returned
 // *Set is immutable — mutations go through QuickAdd / SaveDoc.
 func (c *Controller) Memory() *memory.Set {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.mem
-}
-
-// memSnapshot returns the current memory snapshot under a brief c.mu, so callers
-// can do the doc/store write and re-discovery off-lock. Holding memMu keeps the
-// returned pointer current until the matching applyMemoryWrite swaps it in.
-func (c *Controller) memSnapshot() *memory.Set {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.mem
-}
-
-// applyMemoryWrite re-discovers memory from disk (off-lock, the expensive part)
-// then, under a brief c.mu, swaps the fresh snapshot in and queues the turn-tail
-// note so a later Memory() reflects the just-applied write. mem is the snapshot
-// taken at the start of the memMu-serialized write and supplies the discovery
-// roots. Callers hold memMu.
-func (c *Controller) applyMemoryWrite(mem *memory.Set, note string) {
-	reloaded := memory.Load(memory.Options{CWD: mem.CWD, UserDir: mem.UserDir})
-	c.mu.Lock()
-	if note != "" {
-		c.pendingMemory = append(c.pendingMemory, note)
-	}
-	c.mem = reloaded
-	c.mu.Unlock()
+	return c.memory.current()
 }
 
 // --- approval bridge (agent gate → events) ---

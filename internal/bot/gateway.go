@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"reasonix/internal/agent"
 	"reasonix/internal/boot"
 	"reasonix/internal/config"
 	"reasonix/internal/control"
@@ -874,28 +873,33 @@ func (gw *BotGateway) getOrCreateSession(ctx context.Context, key string, msg In
 	}
 	ctrl.EnableInteractiveApproval()
 	ctrl.SetToolApprovalMode(toolApprovalMode)
-	ensureControllerSessionPath(ctrl)
+	ctrl.EnsureSessionPath()
 
 	gw.mu.Lock()
-	gw.controllers[key] = &sessionState{
+	// Re-check under the lock: while we were off-lock in boot.Build, a second
+	// message for the same key may have built and registered its own session.
+	// The first writer wins; close the controller we just built (releasing its
+	// jobs/plugin host) and reuse the existing one, so a near-simultaneous pair
+	// of opening messages can't leak a controller.
+	if existing, ok := gw.controllers[key]; ok {
+		existing.lastActive = time.Now()
+		gw.mu.Unlock()
+		ctrl.Close()
+		gw.logger.Info("bot session built concurrently; discarding duplicate", "platform", msg.Platform, "chat", hashID(msg.ChatID), "session", key[:8])
+		return existing
+	}
+	state := &sessionState{
 		ctrl:        ctrl,
 		sink:        sessionSink,
 		pendingAsks: make(map[string][]event.AskQuestion),
 		createdAt:   time.Now(),
 		lastActive:  time.Now(),
 	}
-	state := gw.controllers[key]
+	gw.controllers[key] = state
 	gw.mu.Unlock()
 
 	gw.logger.Info("bot session created", "platform", msg.Platform, "chat_type", msg.ChatType, "chat", hashID(msg.ChatID), "session", key[:8])
 	return state
-}
-
-func ensureControllerSessionPath(ctrl botController) {
-	if ctrl == nil || ctrl.SessionPath() != "" || ctrl.SessionDir() == "" {
-		return
-	}
-	ctrl.SetSessionPath(agent.NewSessionPath(ctrl.SessionDir(), ctrl.Label()))
 }
 
 // defaultBotApprovalTimeout caps how long a bot session waits for a remote
