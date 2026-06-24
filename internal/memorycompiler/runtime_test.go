@@ -78,11 +78,16 @@ func TestFailureTraceCreatesConstraintIR(t *testing.T) {
 	assertEdge(t, st.Edges, "contradicts")
 	traces := readTraces(t, dir)
 	last := traces[len(traces)-1]
-	if len(last.CausalEdges) == 0 {
-		t.Fatalf("expected causal trace edges, got %+v", last)
+	if len(last.CausalEdges) != 0 || len(last.ToolResults) != 0 || len(last.DecisionBranches) != 0 {
+		t.Fatalf("execution trace should stay minimal, got %+v", last)
 	}
 	if last.Cost.ToolCalls != 2 || last.Cost.ToolErrors != 2 {
 		t.Fatalf("cost metrics = %+v, want two tool calls and errors", last.Cost)
+	}
+	learningTraces := readLearningTraces(t, dir)
+	learningLast := learningTraces[len(learningTraces)-1]
+	if len(learningLast.CausalEdges) == 0 {
+		t.Fatalf("expected causal learning trace edges, got %+v", learningLast)
 	}
 }
 
@@ -176,6 +181,10 @@ func TestMutationEvaluationLoopAcceptsAppliedMutation(t *testing.T) {
 	turn.RecordToolResults([]ToolRecord{{Name: "go test", Output: "ok"}})
 	turn.Finish(nil)
 
+	_, turn = rt.StartTurn(context.Background(), "fix a bug", nil)
+	turn.RecordToolResults([]ToolRecord{{Name: "go test", Output: "ok"}})
+	turn.Finish(nil)
+
 	st := readState(t, dir)
 	found := false
 	for _, m := range st.Mutations {
@@ -187,6 +196,9 @@ func TestMutationEvaluationLoopAcceptsAppliedMutation(t *testing.T) {
 			if len(m.EvaluationTraceIDs) == 0 {
 				t.Fatalf("mutation missing evaluation trace: %+v", m)
 			}
+			if len(m.EvaluationTraceIDs) < mutationMinEvalTrials {
+				t.Fatalf("mutation accepted before minimum validation trials: %+v", m)
+			}
 		}
 	}
 	if !found {
@@ -194,8 +206,13 @@ func TestMutationEvaluationLoopAcceptsAppliedMutation(t *testing.T) {
 	}
 	traces := readTraces(t, dir)
 	last := traces[len(traces)-1]
-	if len(last.MutationEvaluations) == 0 {
-		t.Fatalf("expected mutation evaluation in trace: %+v", last)
+	if len(last.MutationEvaluations) != 0 {
+		t.Fatalf("execution trace should not carry mutation telemetry: %+v", last)
+	}
+	learningTraces := readLearningTraces(t, dir)
+	learningLast := learningTraces[len(learningTraces)-1]
+	if len(learningLast.MutationEvaluations) == 0 {
+		t.Fatalf("expected mutation evaluation in learning trace: %+v", learningLast)
 	}
 }
 
@@ -277,6 +294,89 @@ func TestCompilerContractOrderingIsStable(t *testing.T) {
 	}
 }
 
+func TestCompilerContractCanonicalizesSemanticOrder(t *testing.T) {
+	ir1 := PlannerIR{
+		Version:     version,
+		Goal:        "fix a bug",
+		SourceEvent: "fix a bug",
+		RuntimeMode: "control",
+		Constraints: []Constraint{
+			{Type: "reference", Text: "z", Source: "z"},
+			{Type: "avoid", Text: "a", Source: "a"},
+		},
+		RiskNotes: []string{"z risk", "a risk"},
+		MemoryReferences: []MemoryRef{
+			{ID: "m2", Content: "memory two", Influence: "reference"},
+			{ID: "m1", Content: "memory one", Influence: "evidence"},
+		},
+		StrategySelection: &StrategyPick{Selected: "general", Reason: "default", Rejected: []RejectedStrategy{
+			{ID: "z", Score: 0.1},
+			{ID: "a", Score: 0.9},
+		}},
+	}
+	ir2 := PlannerIR{
+		Version:     version,
+		Goal:        "fix a bug",
+		SourceEvent: "fix a bug",
+		RuntimeMode: "control",
+		Constraints: []Constraint{
+			{Type: "avoid", Text: "a", Source: "a"},
+			{Type: "reference", Text: "z", Source: "z"},
+		},
+		RiskNotes: []string{"a risk", "z risk"},
+		MemoryReferences: []MemoryRef{
+			{ID: "m1", Content: "memory one", Influence: "evidence"},
+			{ID: "m2", Content: "memory two", Influence: "reference"},
+		},
+		StrategySelection: &StrategyPick{Selected: "general", Reason: "default", Rejected: []RejectedStrategy{
+			{ID: "a", Score: 0.9},
+			{ID: "z", Score: 0.1},
+		}},
+	}
+	got1, err := compileExecutionContract(ir1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got2, err := compileExecutionContract(ir2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got1 != got2 {
+		t.Fatalf("canonical contracts differ:\n%s\n---\n%s", got1, got2)
+	}
+	if !strings.Contains(got1, `"constraints":[`) || !strings.Contains(got1, `"memory_references":[`) {
+		t.Fatalf("expected explicit canonical IR arrays, got:\n%s", got1)
+	}
+}
+
+func TestStrategyExplorationIsDeterministicAndBounded(t *testing.T) {
+	strategies := ensureBuiltInStrategies(nil)
+	var exploredGoal string
+	var firstPick StrategyPick
+	for i := 0; i < 200; i++ {
+		goal := "fix a bug variant " + string(rune('a'+i%26)) + "-" + string(rune('a'+(i/26)%26))
+		ranked := rankStrategies(goal, strategies)
+		pick := selectStrategy(goal, ranked)
+		if pick.Mode == "explore" {
+			exploredGoal = goal
+			firstPick = pick
+			break
+		}
+	}
+	if exploredGoal == "" {
+		t.Fatal("expected at least one deterministic exploration goal")
+	}
+	for i := 0; i < 5; i++ {
+		got := selectStrategy(exploredGoal, rankStrategies(exploredGoal, strategies))
+		if got.Selected != firstPick.Selected || got.Mode != firstPick.Mode {
+			t.Fatalf("exploration selection is not deterministic: first=%+v got=%+v", firstPick, got)
+		}
+	}
+	if firstPick.ExplorationRate != 0.1 {
+		t.Fatalf("exploration rate = %v, want 0.1", firstPick.ExplorationRate)
+	}
+}
+
 func TestTruthLockedNodeCannotBeOverwritten(t *testing.T) {
 	now := time.Now().UTC()
 	nodes := []MemoryNode{{
@@ -324,6 +424,23 @@ func readTraces(t *testing.T, dir string) []ExecutionTrace {
 	var traces []ExecutionTrace
 	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
 		var tr ExecutionTrace
+		if err := json.Unmarshal([]byte(line), &tr); err != nil {
+			t.Fatal(err)
+		}
+		traces = append(traces, tr)
+	}
+	return traces
+}
+
+func readLearningTraces(t *testing.T, dir string) []LearningTrace {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, learningTracesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var traces []LearningTrace
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var tr LearningTrace
 		if err := json.Unmarshal([]byte(line), &tr); err != nil {
 			t.Fatal(err)
 		}

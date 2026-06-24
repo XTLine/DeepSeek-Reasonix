@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,9 +22,17 @@ import (
 )
 
 const (
-	stateFile  = "state.json"
-	tracesFile = "traces.jsonl"
-	version    = "v5.0"
+	stateFile          = "state.json"
+	tracesFile         = "traces.jsonl"
+	learningTracesFile = "learning_traces.jsonl"
+	debugTracesFile    = "debug_traces.jsonl"
+	debugTraceEnv      = "REASONIX_MEMORY_COMPILER_DEBUG_TRACE"
+	version            = "v5.1"
+
+	explorationRatePercent   = 10
+	mutationMinEvalTrials    = 2
+	mutationAcceptThreshold  = 0.60
+	mutationRegressionMargin = 0.05
 )
 
 var runtimeLocks sync.Map
@@ -53,14 +63,14 @@ func runtimeLockForDir(dir string) *sync.Mutex {
 type PlannerIR struct {
 	Version             string        `json:"version"`
 	Goal                string        `json:"goal"`
-	SourceEvent         string        `json:"source_event,omitempty"`
-	RuntimeMode         string        `json:"runtime_mode,omitempty"`
-	Constraints         []Constraint  `json:"constraints,omitempty"`
-	StrategySelection   *StrategyPick `json:"strategy_selection,omitempty"`
-	AvailableStrategies []StrategyRef `json:"available_strategies,omitempty"`
-	MemoryReferences    []MemoryRef   `json:"memory_references,omitempty"`
-	ExecutionSteps      []Step        `json:"execution_steps,omitempty"`
-	RiskNotes           []string      `json:"risk_notes,omitempty"`
+	SourceEvent         string        `json:"source_event"`
+	RuntimeMode         string        `json:"runtime_mode"`
+	Constraints         []Constraint  `json:"constraints"`
+	StrategySelection   *StrategyPick `json:"strategy_selection"`
+	AvailableStrategies []StrategyRef `json:"available_strategies"`
+	MemoryReferences    []MemoryRef   `json:"memory_references"`
+	ExecutionSteps      []Step        `json:"execution_steps"`
+	RiskNotes           []string      `json:"risk_notes"`
 }
 
 type Constraint struct {
@@ -78,10 +88,12 @@ type StrategyRef struct {
 }
 
 type StrategyPick struct {
-	Selected string             `json:"selected"`
-	Reason   string             `json:"reason"`
-	Score    float64            `json:"score"`
-	Rejected []RejectedStrategy `json:"rejected,omitempty"`
+	Selected        string             `json:"selected"`
+	Reason          string             `json:"reason"`
+	Score           float64            `json:"score"`
+	Mode            string             `json:"mode"`
+	ExplorationRate float64            `json:"exploration_rate"`
+	Rejected        []RejectedStrategy `json:"rejected"`
 }
 
 type RejectedStrategy struct {
@@ -178,6 +190,23 @@ type MutationEvaluation struct {
 	Decision string  `json:"decision"`
 	Score    float64 `json:"score"`
 	Baseline float64 `json:"baseline"`
+	Trials   int     `json:"trials"`
+}
+
+type LearningTrace struct {
+	ID                   string               `json:"id"`
+	IRVersion            string               `json:"ir_version"`
+	Outcome              string               `json:"outcome"`
+	QualityScore         float64              `json:"quality_score"`
+	StrategyUsed         []string             `json:"strategy_used,omitempty"`
+	MemoryUsed           []string             `json:"memory_used,omitempty"`
+	DecisionBranches     []DecisionBranch     `json:"decision_branches,omitempty"`
+	CausalEdges          []CausalEdge         `json:"causal_edges,omitempty"`
+	CausalFindings       []string             `json:"causal_findings,omitempty"`
+	CompilerImprovements []string             `json:"compiler_improvements,omitempty"`
+	MutationEvaluations  []MutationEvaluation `json:"mutation_evaluations,omitempty"`
+	Cost                 CostMetrics          `json:"cost,omitempty"`
+	CreatedAt            time.Time            `json:"created_at"`
 }
 
 type MemoryQuality string
@@ -330,7 +359,10 @@ func buildIR(goal, sourceEvent string, st state) PlannerIR {
 	}
 	st.Strategies = ensureBuiltInStrategies(st.Strategies)
 	rankedStrategies := rankStrategies(goal, st.Strategies)
-	strategyPick := selectStrategy(rankedStrategies)
+	strategyPick := selectStrategy(goal, rankedStrategies)
+	if strategyPick.Mode == "explore" {
+		ir.RuntimeMode = "explore"
+	}
 	ir.StrategySelection = &strategyPick
 	for _, c := range st.ExecutionState.ActiveConstraints {
 		ir.Constraints = appendConstraint(ir.Constraints, c)
@@ -408,7 +440,7 @@ func buildIR(goal, sourceEvent string, st state) PlannerIR {
 			}
 		}
 	}
-	return ir
+	return canonicalizeIR(ir)
 }
 
 func hasUsefulIR(ir PlannerIR) bool {
@@ -416,6 +448,7 @@ func hasUsefulIR(ir PlannerIR) bool {
 }
 
 func compileExecutionContract(ir PlannerIR) (string, error) {
+	ir = canonicalizeIR(ir)
 	contract := struct {
 		Type        string    `json:"type"`
 		Instruction string    `json:"instruction"`
@@ -430,6 +463,189 @@ func compileExecutionContract(ir PlannerIR) (string, error) {
 		return "", err
 	}
 	return "<memory-compiler-execution>\n" + string(body) + "\n</memory-compiler-execution>", nil
+}
+
+func canonicalizeIR(ir PlannerIR) PlannerIR {
+	ir.Version = strings.TrimSpace(ir.Version)
+	if ir.Version == "" {
+		ir.Version = version
+	}
+	ir.Goal = summarizeGoal(ir.Goal)
+	ir.SourceEvent = strings.TrimSpace(ir.SourceEvent)
+	ir.RuntimeMode = strings.TrimSpace(ir.RuntimeMode)
+	if ir.RuntimeMode == "" {
+		ir.RuntimeMode = "control"
+	}
+	ir.Constraints = canonicalConstraints(ir.Constraints)
+	ir.AvailableStrategies = canonicalStrategyRefs(ir.AvailableStrategies)
+	ir.MemoryReferences = canonicalMemoryRefs(ir.MemoryReferences)
+	ir.ExecutionSteps = canonicalSteps(ir.ExecutionSteps)
+	ir.RiskNotes = canonicalStrings(ir.RiskNotes)
+	if ir.StrategySelection == nil {
+		ir.StrategySelection = &StrategyPick{
+			Selected:        "general",
+			Reason:          "default strategy",
+			Mode:            "control",
+			ExplorationRate: float64(explorationRatePercent) / 100,
+			Rejected:        []RejectedStrategy{},
+		}
+	} else {
+		ir.StrategySelection.Selected = strings.TrimSpace(ir.StrategySelection.Selected)
+		if ir.StrategySelection.Selected == "" {
+			ir.StrategySelection.Selected = "general"
+		}
+		ir.StrategySelection.Reason = strings.TrimSpace(ir.StrategySelection.Reason)
+		ir.StrategySelection.Score = roundScore(ir.StrategySelection.Score)
+		ir.StrategySelection.Mode = strings.TrimSpace(ir.StrategySelection.Mode)
+		if ir.StrategySelection.Mode == "" {
+			ir.StrategySelection.Mode = "control"
+		}
+		ir.StrategySelection.ExplorationRate = float64(explorationRatePercent) / 100
+		ir.StrategySelection.Rejected = canonicalRejectedStrategies(ir.StrategySelection.Rejected)
+	}
+	if ir.Constraints == nil {
+		ir.Constraints = []Constraint{}
+	}
+	if ir.AvailableStrategies == nil {
+		ir.AvailableStrategies = []StrategyRef{}
+	}
+	if ir.MemoryReferences == nil {
+		ir.MemoryReferences = []MemoryRef{}
+	}
+	if ir.ExecutionSteps == nil {
+		ir.ExecutionSteps = []Step{}
+	}
+	if ir.RiskNotes == nil {
+		ir.RiskNotes = []string{}
+	}
+	return ir
+}
+
+func canonicalConstraints(in []Constraint) []Constraint {
+	out := make([]Constraint, 0, len(in))
+	for _, c := range in {
+		c.Type = strings.TrimSpace(c.Type)
+		c.Text = strings.TrimSpace(c.Text)
+		c.Source = strings.TrimSpace(c.Source)
+		if c.Type == "" || c.Text == "" {
+			continue
+		}
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Type != out[j].Type {
+			return out[i].Type < out[j].Type
+		}
+		if out[i].Source != out[j].Source {
+			return out[i].Source < out[j].Source
+		}
+		return out[i].Text < out[j].Text
+	})
+	return dedupeConstraints(out)
+}
+
+func dedupeConstraints(in []Constraint) []Constraint {
+	seen := map[Constraint]bool{}
+	out := make([]Constraint, 0, len(in))
+	for _, c := range in {
+		if seen[c] {
+			continue
+		}
+		seen[c] = true
+		out = append(out, c)
+	}
+	return out
+}
+
+func canonicalStrategyRefs(in []StrategyRef) []StrategyRef {
+	out := make([]StrategyRef, 0, len(in))
+	for _, s := range in {
+		s.ID = strings.TrimSpace(s.ID)
+		s.Reason = strings.TrimSpace(s.Reason)
+		if s.ID == "" {
+			continue
+		}
+		s.SuccessRate = roundScore(s.SuccessRate)
+		s.Score = roundScore(s.Score)
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score == out[j].Score {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Score > out[j].Score
+	})
+	return out
+}
+
+func canonicalRejectedStrategies(in []RejectedStrategy) []RejectedStrategy {
+	out := make([]RejectedStrategy, 0, len(in))
+	for _, r := range in {
+		r.ID = strings.TrimSpace(r.ID)
+		r.Reason = strings.TrimSpace(r.Reason)
+		if r.ID == "" {
+			continue
+		}
+		r.Score = roundScore(r.Score)
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score == out[j].Score {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Score > out[j].Score
+	})
+	return out
+}
+
+func canonicalMemoryRefs(in []MemoryRef) []MemoryRef {
+	out := make([]MemoryRef, 0, len(in))
+	for _, ref := range in {
+		ref.ID = strings.TrimSpace(ref.ID)
+		ref.Content = strings.TrimSpace(ref.Content)
+		ref.Quality = strings.TrimSpace(ref.Quality)
+		ref.Influence = strings.TrimSpace(ref.Influence)
+		if ref.ID == "" || ref.Content == "" {
+			continue
+		}
+		out = append(out, ref)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Influence != out[j].Influence {
+			return out[i].Influence < out[j].Influence
+		}
+		return out[i].ID < out[j].ID
+	})
+	if len(out) > 5 {
+		out = out[:5]
+	}
+	return out
+}
+
+func canonicalSteps(in []Step) []Step {
+	out := make([]Step, 0, len(in))
+	for _, step := range in {
+		step.ID = strings.TrimSpace(step.ID)
+		step.Action = strings.TrimSpace(step.Action)
+		if step.ID == "" || step.Action == "" {
+			continue
+		}
+		out = append(out, step)
+	}
+	return out
+}
+
+func canonicalStrings(in []string) []string {
+	out := dedupeStrings(in)
+	sort.Strings(out)
+	return out
+}
+
+func roundScore(v float64) float64 {
+	if v > -0.00005 && v < 0.00005 {
+		return 0
+	}
+	return math.Round(v*10000) / 10000
 }
 
 func appendConstraint(existing []Constraint, next Constraint) []Constraint {
@@ -612,16 +828,32 @@ func rankStrategies(goal string, strategies []Strategy) []scoredStrategy {
 	return out
 }
 
-func selectStrategy(ranked []scoredStrategy) StrategyPick {
-	pick := StrategyPick{Selected: "general", Reason: "default strategy", Score: 0}
+func selectStrategy(goal string, ranked []scoredStrategy) StrategyPick {
+	pick := StrategyPick{
+		Selected:        "general",
+		Reason:          "default strategy",
+		Mode:            "control",
+		ExplorationRate: float64(explorationRatePercent) / 100,
+		Rejected:        []RejectedStrategy{},
+	}
+	eligible := make([]scoredStrategy, 0, len(ranked))
 	for _, candidate := range ranked {
-		if lowSuccessStrategy(candidate.strategy) {
-			continue
+		if !lowSuccessStrategy(candidate.strategy) {
+			eligible = append(eligible, candidate)
 		}
-		pick.Selected = candidate.strategy.ID
-		pick.Reason = candidate.reason
-		pick.Score = candidate.score
-		break
+	}
+	if len(eligible) > 0 {
+		selected := eligible[0]
+		if explore, candidate := explorationCandidate(goal, eligible); explore {
+			selected = candidate
+			pick.Mode = "explore"
+		}
+		pick.Selected = selected.strategy.ID
+		pick.Reason = selected.reason
+		pick.Score = selected.score
+		if pick.Mode == "explore" {
+			pick.Reason = "deterministic exploration buffer; " + pick.Reason
+		}
 	}
 	for _, candidate := range ranked {
 		if candidate.strategy.ID == pick.Selected {
@@ -643,6 +875,33 @@ func selectStrategy(ranked []scoredStrategy) StrategyPick {
 	return pick
 }
 
+func explorationCandidate(goal string, eligible []scoredStrategy) (bool, scoredStrategy) {
+	if len(eligible) < 2 || explorationRatePercent <= 0 {
+		return false, scoredStrategy{}
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(strings.ToLower(strings.TrimSpace(goal))))
+	for _, candidate := range eligible {
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(candidate.strategy.ID))
+		_, _ = fmt.Fprintf(h, ":%d:%d", candidate.strategy.Successes, candidate.strategy.Failures)
+	}
+	if int(h.Sum32()%100) >= explorationRatePercent {
+		return false, scoredStrategy{}
+	}
+	candidates := append([]scoredStrategy(nil), eligible[1:]...)
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].strategy.Samples() == candidates[j].strategy.Samples() {
+			if candidates[i].score == candidates[j].score {
+				return candidates[i].strategy.ID < candidates[j].strategy.ID
+			}
+			return candidates[i].score > candidates[j].score
+		}
+		return candidates[i].strategy.Samples() < candidates[j].strategy.Samples()
+	})
+	return true, candidates[0]
+}
+
 func bestStrategyID(goal string, strategies []Strategy) string {
 	bestID := "general"
 	bestScore := -1.0
@@ -662,14 +921,8 @@ func strategyScore(goal string, s Strategy) float64 {
 }
 
 func strategyScoreWithReason(goal string, s Strategy) (float64, string) {
-	score := s.SuccessRate()
-	reasons := []string{}
-	if s.Samples() == 0 {
-		score = 0.5
-		reasons = append(reasons, "neutral prior")
-	} else {
-		reasons = append(reasons, fmt.Sprintf("%.0f%% prior success", s.SuccessRate()*100))
-	}
+	score, reason := normalizedOutcomeScore(s)
+	reasons := []string{reason}
 	lowerGoal := strings.ToLower(goal)
 	for _, p := range s.Preconditions {
 		p = strings.ToLower(strings.TrimSpace(p))
@@ -687,6 +940,17 @@ func strategyScoreWithReason(goal string, s Strategy) (float64, string) {
 		reasons = append(reasons, "low success history")
 	}
 	return score, strings.Join(reasons, "; ")
+}
+
+func normalizedOutcomeScore(s Strategy) (float64, string) {
+	samples := s.Samples()
+	if samples == 0 {
+		return 0.5, "neutral prior"
+	}
+	// Usage-normalized scoring prevents a single early win from permanently
+	// dominating strategy selection while still preserving the observed rate.
+	score := s.SuccessRate() / float64(samples)
+	return score, fmt.Sprintf("%.0f%% prior success normalized by %d use(s)", s.SuccessRate()*100, samples)
 }
 
 func lowSuccessStrategy(s Strategy) bool {
@@ -857,7 +1121,7 @@ func finishCostMetrics(cost CostMetrics, records []ToolRecord, start, end time.T
 func (r *Runtime) writeTraceAndLearn(tr ExecutionTrace, strategyID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := os.MkdirAll(r.dir, 0o755); err != nil {
+	if err := os.MkdirAll(r.dir, 0o700); err != nil {
 		return
 	}
 	st := r.loadStateLocked()
@@ -879,8 +1143,58 @@ func (r *Runtime) writeTraceAndLearn(tr ExecutionTrace, strategyID string) {
 	st.NoisyRefs = updateNoisyRefs(st.NoisyRefs, learning)
 	st.Mutations = mergeMutations(st.Mutations, mutationsFromLearning(learning, baseline)...)
 	st.UpdatedAt = time.Now().UTC()
-	_ = appendJSONL(filepath.Join(r.dir, tracesFile), tr)
+	_ = appendJSONL(filepath.Join(r.dir, tracesFile), executionTraceProjection(tr))
+	if lt, ok := learningTraceFor(tr, learning); ok {
+		_ = appendJSONL(filepath.Join(r.dir, learningTracesFile), lt)
+	}
+	if debugTraceEnabled() {
+		_ = appendJSONL(filepath.Join(r.dir, debugTracesFile), tr)
+	}
 	_ = writeJSON(filepath.Join(r.dir, stateFile), st)
+}
+
+func executionTraceProjection(tr ExecutionTrace) ExecutionTrace {
+	return ExecutionTrace{
+		ID:                  tr.ID,
+		IRVersion:           tr.IRVersion,
+		Goal:                tr.Goal,
+		Steps:               append([]Step(nil), tr.Steps...),
+		Outcome:             tr.Outcome,
+		EfficiencyScore:     tr.EfficiencyScore,
+		MemoryEffectiveness: tr.MemoryEffectiveness,
+		StrategyUsed:        append([]string(nil), tr.StrategyUsed...),
+		MemoryUsed:          append([]string(nil), tr.MemoryUsed...),
+		Cost:                tr.Cost,
+		FailureReason:       tr.FailureReason,
+		StartedAt:           tr.StartedAt,
+		CompletedAt:         tr.CompletedAt,
+	}
+}
+
+func learningTraceFor(tr ExecutionTrace, learning SystemLearning) (LearningTrace, bool) {
+	if !hasLearning(learning) && len(tr.MutationEvaluations) == 0 {
+		return LearningTrace{}, false
+	}
+	return LearningTrace{
+		ID:                   tr.ID,
+		IRVersion:            tr.IRVersion,
+		Outcome:              tr.Outcome,
+		QualityScore:         traceQualityScore(tr),
+		StrategyUsed:         append([]string(nil), tr.StrategyUsed...),
+		MemoryUsed:           append([]string(nil), tr.MemoryUsed...),
+		DecisionBranches:     append([]DecisionBranch(nil), tr.DecisionBranches...),
+		CausalEdges:          append([]CausalEdge(nil), tr.CausalEdges...),
+		CausalFindings:       append([]string(nil), learning.CausalFindings...),
+		CompilerImprovements: append([]string(nil), learning.CompilerImprovements...),
+		MutationEvaluations:  append([]MutationEvaluation(nil), tr.MutationEvaluations...),
+		Cost:                 tr.Cost,
+		CreatedAt:            time.Now().UTC(),
+	}, true
+}
+
+func debugTraceEnabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(debugTraceEnv)))
+	return v == "1" || v == "true" || v == "yes"
 }
 
 func analyzeTrace(tr ExecutionTrace, strategyID string) SystemLearning {
@@ -985,29 +1299,42 @@ func evaluateMutations(existing []CompilerMutation, tr ExecutionTrace) ([]Compil
 			continue
 		}
 		m.EvaluationTraceIDs = append(m.EvaluationTraceIDs, tr.ID)
-		m.EvaluationScore = score
+		trials := len(m.EvaluationTraceIDs)
+		m.EvaluationScore = averageEvaluationScore(m.EvaluationScore, trials-1, score)
 		m.UpdatedAt = now
-		decision := "accepted"
-		if score+0.05 < m.BaselineScore {
-			decision = "rejected"
-			m.Applied = false
-			m.Status = "rejected"
-			m.EvaluationReason = "evaluation trace scored below mutation baseline"
-		} else {
-			m.Applied = true
-			m.Status = "accepted"
-			m.EvaluationReason = "evaluation trace matched or improved the mutation baseline"
+		decision := "testing"
+		m.EvaluationReason = fmt.Sprintf("collecting mutation validation traces (%d/%d)", trials, mutationMinEvalTrials)
+		if trials >= mutationMinEvalTrials {
+			if m.EvaluationScore >= mutationAcceptThreshold && m.EvaluationScore+mutationRegressionMargin >= m.BaselineScore {
+				decision = "accepted"
+				m.Applied = true
+				m.Status = "accepted"
+				m.EvaluationReason = "validation traces met confidence threshold without regressing baseline"
+			} else {
+				decision = "rejected"
+				m.Applied = false
+				m.Status = "rejected"
+				m.EvaluationReason = "validation traces failed confidence threshold or regressed baseline; mutation rolled back"
+			}
 		}
 		evaluations = append(evaluations, MutationEvaluation{
 			Target:   m.Target,
 			Change:   m.Change,
 			Reason:   m.Reason,
 			Decision: decision,
-			Score:    score,
+			Score:    m.EvaluationScore,
 			Baseline: m.BaselineScore,
+			Trials:   trials,
 		})
 	}
 	return existing, evaluations
+}
+
+func averageEvaluationScore(previous float64, previousTrials int, next float64) float64 {
+	if previousTrials <= 0 {
+		return next
+	}
+	return (previous*float64(previousTrials) + next) / float64(previousTrials+1)
 }
 
 func traceQualityScore(tr ExecutionTrace) float64 {
