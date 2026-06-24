@@ -32,6 +32,23 @@ type stubbornTurnRunner struct {
 func TestMain(m *testing.M) {
 	old := detectTermuxTerminal
 	detectTermuxTerminal = func() bool { return false }
+
+	// Pin the UI language for the whole cli test binary. Production code
+	// (cli.Run) calls i18n.DetectLanguage("") which resolves the host locale from
+	// the environment (REASONIX_LANG/LC_ALL/LC_MESSAGES/LANG) and installs it as
+	// the global i18n.M. On a non-English dev machine that flips M to e.g.
+	// Chinese, and tests that exercise the CLI entry point (acp_test.go,
+	// cli_test.go) don't restore it — so later tests asserting English UI strings
+	// fail, but only when the whole package runs, not in isolation. Forcing a
+	// deterministic English environment keeps the suite independent of the host
+	// locale (matching CI). Tests that need another language still set it
+	// explicitly via i18n.DetectLanguage(lang) with their own cleanup.
+	os.Unsetenv("REASONIX_LANG")
+	os.Unsetenv("LC_ALL")
+	os.Unsetenv("LC_MESSAGES")
+	os.Setenv("LANG", "en_US.UTF-8")
+	i18n.DetectLanguage("en")
+
 	code := m.Run()
 	detectTermuxTerminal = old
 	os.Exit(code)
