@@ -3,7 +3,7 @@
 // Renders a list of tasks with add/edit/delete controls, plus a manual
 // "run now" button for each. The panel is opened from the sidebar nav item.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Activity,
   ChevronLeft,
@@ -189,6 +189,7 @@ export function HeartbeatPanel({ open, onClose, startNew, onOpenTopic }: Heartbe
           interval: "30m",
           enabled: true,
           approvalMode: "yolo",
+          newConversationEachRun: false,
           createdAt: Date.now(),
         });
       });
@@ -216,6 +217,7 @@ export function HeartbeatPanel({ open, onClose, startNew, onOpenTopic }: Heartbe
       interval: "30m",
       enabled: true,
       approvalMode: "yolo",
+      newConversationEachRun: false,
       createdAt: Date.now(),
     });
   }, []);
@@ -489,10 +491,6 @@ export function HeartbeatPanel({ open, onClose, startNew, onOpenTopic }: Heartbe
                 </ul>
               );
             })()}
-
-            <div className="heartbeat-hint">
-              <span>{t("heartbeat.configHint")}</span>
-            </div>
           </div>
         )}
       </div>
@@ -854,6 +852,19 @@ function TaskEditor({
 
   const [draft, setDraft] = useState(task);
   const intervalBeforeCycle = useRef<string | null>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-grow prompt textarea: shrink-to-fit then cap at 180px
+  const autoGrowPrompt = useCallback(() => {
+    const el = promptRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 180) + "px";
+  }, []);
+
+  useLayoutEffect(() => {
+    autoGrowPrompt();
+  }, [draft.prompt, autoGrowPrompt]);
   const set = useCallback((field: keyof HeartbeatTask, value: string | boolean) => {
     setDraft((prev) => ({ ...prev, [field]: value }));
   }, []);
@@ -870,8 +881,9 @@ function TaskEditor({
 
   return (
     <div className="heartbeat-editor">
-      {/* Title */}
-      <div className="heartbeat-editor__field">
+      <div className="heartbeat-editor__fields">
+        {/* Title */}
+        <div className="heartbeat-editor__field">
         <label>{t("heartbeat.fieldTitle")}</label>
         <input
           ref={titleRef}
@@ -929,11 +941,14 @@ function TaskEditor({
       <div className="heartbeat-editor__field">
         <label>{t("heartbeat.fieldPrompt")}</label>
         <textarea
+          ref={promptRef}
           className="heartbeat-editor__textarea"
           value={draft.prompt}
-          onChange={(e) => set("prompt", e.target.value)}
+          onChange={(e) => {
+            set("prompt", e.target.value);
+            // autoGrowPrompt is called via useEffect watching draft.prompt
+          }}
           placeholder={t("heartbeat.promptPlaceholder")}
-          rows={5}
         />
       </div>
 
@@ -968,6 +983,25 @@ function TaskEditor({
            normalizeMode(draft.approvalMode) === "auto" ? t("heartbeat.approvalModeAutoHint") :
            t("heartbeat.approvalModeAskHint")}
         </span>
+      </div>
+
+      {/* New conversation per run */}
+      <div className="heartbeat-editor__field">
+        <label>{t("heartbeat.fieldNewConversation")}</label>
+        <div className="set-seg" style={{ alignSelf: "flex-start" }}>
+          <button
+            className={`set-seg__btn${!draft.newConversationEachRun ? " set-seg__btn--on" : ""}`}
+            onClick={() => setDraft((prev) => ({ ...prev, newConversationEachRun: false }))}
+          >
+            {t("heartbeat.newConversationEachRunOff")}
+          </button>
+          <button
+            className={`set-seg__btn${draft.newConversationEachRun ? " set-seg__btn--on" : ""}`}
+            onClick={() => setDraft((prev) => ({ ...prev, newConversationEachRun: true }))}
+          >
+            {t("heartbeat.newConversationEachRunOn")}
+          </button>
+        </div>
       </div>
 
       {/* Frequency */}
@@ -1078,6 +1112,8 @@ function TaskEditor({
             )}
           </div>
         )}
+      </div>
+
       </div>
 
       {/* Actions */}

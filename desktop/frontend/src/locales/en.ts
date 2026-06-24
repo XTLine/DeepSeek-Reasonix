@@ -529,6 +529,9 @@ export const en = {
   "heartbeat.approvalModeAskHint": "Each tool call needs manual confirmation",
   "heartbeat.approvalModeAutoHint": "Auto-approve safe tools, keep deny rules",
   "heartbeat.approvalModeYoloHint": "Skip all permission prompts, tasks run automatically",
+  "heartbeat.fieldNewConversation": "Conversation mode",
+  "heartbeat.newConversationEachRunOn": "New conversation each run",
+  "heartbeat.newConversationEachRunOff": "Reuse same conversation",
 
   "status.jobs": "{n} running",
   "status.jobsTitle": "Background jobs",

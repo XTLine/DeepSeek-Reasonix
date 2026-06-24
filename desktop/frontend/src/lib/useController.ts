@@ -1013,9 +1013,16 @@ export function useController() {
     }
   }, []);
 
-  const syncActiveTabFromBackend = useCallback(async (reset = false): Promise<string | undefined> => {
+  const syncActiveTabFromBackend = useCallback(async (reset = false, guard = false): Promise<string | undefined> => {
     const active = await activeTabFromBackend();
     if (!active) return undefined;
+    // When guard is true, skip if the frontend already settled on a
+    // different tab while we were fetching — this prevents fire-and-forget
+    // calls from mount/onReady from overwriting a user-initiated tab switch
+    // (e.g. handleNewTab → ensureBlankSurface / switchTab).
+    if (guard && activeTabIdRef.current && activeTabIdRef.current !== active.id) {
+      return active.id;
+    }
     setActiveTabId(active.id);
     activeTabIdRef.current = active.id;
     confirmBackendActiveTab(active.id);
@@ -1107,10 +1114,10 @@ export function useController() {
         void loadSessionDataForTab(readyTabId, false, "startup");
         return;
       }
-      void syncActiveTabFromBackend();
+      void syncActiveTabFromBackend(false, true);
     });
 
-    void syncActiveTabFromBackend();
+    void syncActiveTabFromBackend(false, true);
     // The event subscription is live now, so ask the backend to re-emit any
     // approval/ask prompt that was already blocking a tab before this load —
     // otherwise a session left mid-confirmation shows "waiting" with no modal

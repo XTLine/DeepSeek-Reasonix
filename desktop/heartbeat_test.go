@@ -163,6 +163,38 @@ func TestHeartbeatMergeRunUpdatesPreservesConcurrentEditsAndDeletes(t *testing.T
 	}
 }
 
+func TestHeartbeatReplaceTasksPrunesFreshConversationPendingTopics(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	engine := &HeartbeatEngine{
+		pendingTopics: map[string]heartbeatPendingTopic{
+			"fresh":   {TopicID: "topic-fresh", Submitted: true},
+			"legacy":  {TopicID: "topic-legacy", Submitted: true},
+			"deleted": {TopicID: "topic-deleted", Submitted: true},
+		},
+	}
+
+	err := engine.ReplaceTasks([]HeartbeatTask{
+		{ID: "fresh", NewConversationEachRun: true},
+		{ID: "legacy", NewConversationEachRun: false},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceTasks: %v", err)
+	}
+
+	if len(engine.pendingTopics) != 1 {
+		t.Fatalf("pendingTopics len = %d, want 1: %+v", len(engine.pendingTopics), engine.pendingTopics)
+	}
+	if got := engine.pendingTopics["fresh"]; got.TopicID != "topic-fresh" || !got.Submitted {
+		t.Fatalf("fresh pending topic = %+v, want submitted topic-fresh", got)
+	}
+	if _, ok := engine.pendingTopics["legacy"]; ok {
+		t.Fatalf("legacy task should not keep a fresh-conversation pending topic")
+	}
+	if _, ok := engine.pendingTopics["deleted"]; ok {
+		t.Fatalf("deleted task should not keep a pending topic")
+	}
+}
+
 func TestHeartbeatInactiveOpenDoesNotChangeActiveTab(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	projectRoot := t.TempDir()

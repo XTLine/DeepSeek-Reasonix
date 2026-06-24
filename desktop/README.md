@@ -188,6 +188,13 @@ handled here, and what to reach for if a target misbehaves:
   `WEBKIT_DISABLE_COMPOSITING_MODE=1`. Test on at least one GTK target before
   release; the CSS deliberately avoids `backdrop-filter`/blur (slow & inconsistent
   there).
+  - **Wayland + NVIDIA**: On KDE Plasma Wayland with NVIDIA GPUs, WebKitGTK can
+    crash at startup (`Error 71: Protocol error`) due to an upstream WebKit
+    explicit-sync bug (WebKit #280210, #317089, NVIDIA/egl-wayland #179).
+    Reasonix automatically sets `__NV_DISABLE_EXPLICIT_SYNC=1` when it detects
+    Wayland + NVIDIA GPU. To opt out, set `__NV_DISABLE_EXPLICIT_SYNC=0`.
+    Alternative fallbacks: `WEBKIT_DISABLE_DMABUF_RENDERER=1` (poor performance)
+    or `GDK_BACKEND=x11` (forces XWayland).
 - **Windows / WebView2** — `Theme: SystemDefault` follows the OS light/dark
   setting; the installer embeds the WebView2 bootstrapper. Canary builds disable
   WebView2 GPU acceleration by default to smoke-test blank-window reports; set

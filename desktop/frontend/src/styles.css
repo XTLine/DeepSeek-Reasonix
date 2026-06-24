@@ -3064,7 +3064,9 @@ a[href] {
   position: relative;
   height: 100%;
   overflow-y: auto;
+  overflow-y: overlay;
   overflow-x: hidden;
+  scrollbar-gutter: stable both-edges;
   padding: 24px 32px 32px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
@@ -3299,25 +3301,25 @@ a[href] {
   white-space: nowrap;
 }
 
-.transcript > .jump-bar {
+.transcript-shell > .jump-bar {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  z-index: var(--z-inline-sticky);
   max-width: none;
-  margin-left: auto;
-  margin-right: -48px;
+  margin: 0;
+  transform: translate(4px, -50%);
 }
 .jump-bar {
-  position: sticky;
-  top: 50%;
   z-index: var(--z-inline-sticky);
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   width: 56px;
   height: 240px;
-  margin-bottom: -240px;
   padding: 0 12px;
   opacity: 0;
   pointer-events: none;
-  transform: translate(4px, -50%);
   animation: jump-bar-in 0.18s ease-out 0.08s forwards;
 }
 .jump-scroll {
@@ -5637,14 +5639,19 @@ a[href] {
   flex-shrink: 0;
 }
 
-@container (max-width: 620px) {
+@container (max-width: 760px) {
   .composer-meta {
     gap: 8px;
     padding-inline: 10px;
   }
 
   .composer-meta__control--model {
-    flex: 0 0 auto;
+    flex: 1 1 160px;
+    max-width: min(320px, 50vw);
+  }
+
+  .composer-meta--has-intent-chip .composer-meta__control--model {
+    flex: 1 1 160px;
     max-width: min(320px, 50vw);
   }
 
@@ -18018,7 +18025,7 @@ a[href] {
   --wails-draggable: no-drag;
   flex: 1 1 auto;
   min-width: 0;
-  height: 26px;
+  align-self: stretch;
   border: 1px solid var(--accent-soft);
   border-radius: 7px;
   background: var(--bg-elev);
@@ -20876,8 +20883,8 @@ a[href] {
 
 :root[data-theme-style] .composer-wrap {
   width: 100%;
-  max-width: none;
-  margin: 0;
+  max-width: var(--maxw);
+  margin: 0 auto;
 }
 
 :root[data-theme-style] .composer-card {
@@ -20891,7 +20898,6 @@ a[href] {
 :root[data-theme-style] .composer-card:focus-within {
   border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
-  transform: translateY(-1px);
 }
 
 :root[data-theme-style] .composer {

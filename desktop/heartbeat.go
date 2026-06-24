@@ -28,19 +28,20 @@ import (
 
 // HeartbeatTask defines a single scheduled prompt.
 type HeartbeatTask struct {
-	ID              string `json:"id"`
-	Title           string `json:"title"`    // user-visible label
-	Prompt          string `json:"prompt"`   // the prompt to submit
-	Interval        string `json:"interval"` // e.g. "5m", "1h", "30s"
-	Enabled         bool   `json:"enabled"`
-	Scope           string `json:"scope,omitempty"`         // "global" or "project"
-	WorkspaceRoot   string `json:"workspaceRoot,omitempty"` // project root path when scope="project"
-	TopicID         string `json:"topicId,omitempty"`       // created topic, reused on re-run
-	LastRunAt       int64  `json:"lastRunAt,omitempty"`     // unix millis
-	CreatedAt       int64  `json:"createdAt,omitempty"`
-	ApprovalMode    string `json:"approvalMode"`              // "ask" | "auto" | "yolo"; empty defaults to "yolo"
-	TimeWindowStart string `json:"timeWindowStart,omitempty"` // "HH:MM" — interval tasks only run after this time (inclusive)
-	TimeWindowEnd   string `json:"timeWindowEnd,omitempty"`   // "HH:MM" — interval tasks only run before this time (exclusive)
+	ID                     string `json:"id"`
+	Title                  string `json:"title"`    // user-visible label
+	Prompt                 string `json:"prompt"`   // the prompt to submit
+	Interval               string `json:"interval"` // e.g. "5m", "1h", "30s"
+	Enabled                bool   `json:"enabled"`
+	Scope                  string `json:"scope,omitempty"`                  // "global" or "project"
+	WorkspaceRoot          string `json:"workspaceRoot,omitempty"`          // project root path when scope="project"
+	TopicID                string `json:"topicId,omitempty"`                // created topic, reused on re-run
+	LastRunAt              int64  `json:"lastRunAt,omitempty"`              // unix millis
+	NewConversationEachRun bool   `json:"newConversationEachRun,omitempty"` // true = create new topic every run
+	CreatedAt              int64  `json:"createdAt,omitempty"`
+	ApprovalMode           string `json:"approvalMode"`              // "ask" | "auto" | "yolo"; empty defaults to "yolo"
+	TimeWindowStart        string `json:"timeWindowStart,omitempty"` // "HH:MM" — interval tasks only run after this time (inclusive)
+	TimeWindowEnd          string `json:"timeWindowEnd,omitempty"`   // "HH:MM" — interval tasks only run before this time (exclusive)
 }
 
 // heartbeatConfig is the on-disk format.
@@ -53,17 +54,24 @@ type heartbeatConfig struct {
 // HeartbeatEngine runs scheduled task execution in a background goroutine.
 // It is owned by App and started during App.startup.
 type HeartbeatEngine struct {
-	mu      sync.Mutex
-	tasks   []HeartbeatTask
-	done    chan struct{}
-	running bool
-	app     *App // back-reference for topic creation, tab routing, and prompt submission
+	mu            sync.Mutex
+	tasks         []HeartbeatTask
+	pendingTopics map[string]heartbeatPendingTopic // in-memory retry/in-flight safety for NewConversationEachRun
+	done          chan struct{}
+	running       bool
+	app           *App // back-reference for topic creation, tab routing, and prompt submission
+}
+
+type heartbeatPendingTopic struct {
+	TopicID   string
+	Submitted bool
 }
 
 func newHeartbeatEngine(app *App) *HeartbeatEngine {
 	return &HeartbeatEngine{
-		app:  app,
-		done: make(chan struct{}),
+		app:           app,
+		done:          make(chan struct{}),
+		pendingTopics: make(map[string]heartbeatPendingTopic),
 	}
 }
 
@@ -211,17 +219,54 @@ func (e *HeartbeatEngine) executeTask(t HeartbeatTask) HeartbeatTask {
 		scope = "global"
 	}
 
-	// If we already have a topicID, reuse it; otherwise create a new topic.
-	var topicID = t.TopicID
-	if topicID == "" {
-		meta, err := e.app.CreateTopic(scope, workspaceRoot, title)
-		if err != nil {
-			log.Printf("[heartbeat] CreateTopic(%q): %v", t.Title, err)
-			t.LastRunAt = time.Now().UnixMilli()
-			return t
+	// Determine which topic to use.
+	//
+	// For NewConversationEachRun:
+	//   - Reuse a pending topic from a failed pre-submit attempt.
+	//   - Re-check a submitted topic until its controller is idle, so a long
+	//     previous run cannot overlap with the next scheduled fresh topic.
+	//   - Once the submitted topic is idle and due again, clear it and create a
+	//     fresh topic.
+	//
+	// For the legacy mode:
+	//   - Reuse the persisted topicID if available; create one on first run.
+	var topicID string
+	var pendingSubmitted bool
+	if t.NewConversationEachRun {
+		e.mu.Lock()
+		pending := e.pendingTopics[t.ID]
+		e.mu.Unlock()
+		topicID = pending.TopicID
+		pendingSubmitted = pending.Submitted
+		if topicID == "" {
+			// No pending topic — create a fresh one.
+			meta, err := e.app.CreateTopic(scope, workspaceRoot, title)
+			if err != nil {
+				log.Printf("[heartbeat] CreateTopic(%q): %v", t.Title, err)
+				t.LastRunAt = time.Now().UnixMilli()
+				return t
+			}
+			topicID = meta.ID
+			// Save in-memory for retry safety (NOT persisted to disk).
+			e.mu.Lock()
+			if e.pendingTopics == nil {
+				e.pendingTopics = make(map[string]heartbeatPendingTopic)
+			}
+			e.pendingTopics[t.ID] = heartbeatPendingTopic{TopicID: topicID}
+			e.mu.Unlock()
 		}
-		topicID = meta.ID
-		t.TopicID = topicID
+	} else {
+		topicID = t.TopicID
+		if topicID == "" {
+			meta, err := e.app.CreateTopic(scope, workspaceRoot, title)
+			if err != nil {
+				log.Printf("[heartbeat] CreateTopic(%q): %v", t.Title, err)
+				t.LastRunAt = time.Now().UnixMilli()
+				return t
+			}
+			topicID = meta.ID
+			t.TopicID = topicID
+		}
 	}
 
 	// Open the tab for the topic (creates one if needed) without changing the
@@ -257,6 +302,14 @@ func (e *HeartbeatEngine) executeTask(t HeartbeatTask) HeartbeatTask {
 		log.Printf("[heartbeat] controller busy for %q, skipping", t.Title)
 		return t // don't change approval mode for an existing turn — retry next tick
 	}
+	if t.NewConversationEachRun && pendingSubmitted {
+		e.mu.Lock()
+		if pending := e.pendingTopics[t.ID]; pending.TopicID == topicID && pending.Submitted {
+			delete(e.pendingTopics, t.ID)
+		}
+		e.mu.Unlock()
+		return e.executeTask(t)
+	}
 
 	// Set the task's approval mode only after confirming the controller is idle.
 	// SetToolApprovalModeForTab may drain pending approvals for auto/yolo modes,
@@ -271,6 +324,17 @@ func (e *HeartbeatEngine) executeTask(t HeartbeatTask) HeartbeatTask {
 	if !e.app.submitUserTurnToTab(tabMeta.ID, t.Prompt) {
 		log.Printf("[heartbeat] submit skipped for %q", t.Title)
 		return t
+	}
+
+	// After a successful submit, keep the topic as an in-flight guard. The next
+	// due run will busy-check this controller before creating a fresh topic.
+	if t.NewConversationEachRun {
+		e.mu.Lock()
+		if e.pendingTopics == nil {
+			e.pendingTopics = make(map[string]heartbeatPendingTopic)
+		}
+		e.pendingTopics[t.ID] = heartbeatPendingTopic{TopicID: topicID, Submitted: true}
+		e.mu.Unlock()
 	}
 
 	t.LastRunAt = time.Now().UnixMilli()
@@ -294,6 +358,7 @@ func (e *HeartbeatEngine) ReloadTasks() []HeartbeatTask {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.tasks = e.loadTasks()
+	e.prunePendingTopicsLocked(e.tasks)
 	out := make([]HeartbeatTask, len(e.tasks))
 	copy(out, e.tasks)
 	return out
@@ -304,7 +369,25 @@ func (e *HeartbeatEngine) ReplaceTasks(tasks []HeartbeatTask) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.tasks = tasks
+	e.prunePendingTopicsLocked(tasks)
 	return e.saveTasks(tasks)
+}
+
+func (e *HeartbeatEngine) prunePendingTopicsLocked(tasks []HeartbeatTask) {
+	if len(e.pendingTopics) == 0 {
+		return
+	}
+	keep := make(map[string]bool, len(tasks))
+	for _, task := range tasks {
+		if task.NewConversationEachRun {
+			keep[task.ID] = true
+		}
+	}
+	for id := range e.pendingTopics {
+		if !keep[id] {
+			delete(e.pendingTopics, id)
+		}
+	}
 }
 
 // TriggerNow runs a single task immediately by ID.

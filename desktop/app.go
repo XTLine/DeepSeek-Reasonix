@@ -1128,6 +1128,7 @@ func removeDesktopSessionArtifacts(path string) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}
+	defer invalidateTopicSessionIndexForPath(path)
 	for _, p := range sessionOwnedArtifactPaths(path) {
 		if strings.TrimSpace(p) == "" {
 			continue
@@ -1650,6 +1651,7 @@ func (a *App) DeleteSession(path string) error {
 	}
 	a.closeRemainingRemovedSessionRuntimesAfterDestroy(removed, closedRemoved)
 	if fallback.needs {
+		fallback = a.sessionDeleteFallbackTarget(fallback)
 		if err := a.openFallbackRuntime(fallback); err != nil {
 			return err
 		}
@@ -1691,6 +1693,7 @@ func (a *App) removeSessionRuntimeBindings(dir, sessionPath string) ([]removedSe
 			fallback = fallbackRuntimeTarget{scope: tab.Scope, workspaceRoot: tab.WorkspaceRoot, topicID: tab.TopicID}
 		}
 		removed = append(removed, removedRuntimeFromTab(tab, dir, sessionPath))
+		a.markTabRemovedLocked(tab)
 		delete(a.tabs, id)
 		a.removeTabOrderLocked(id)
 		if a.activeTabID == id {
@@ -1705,6 +1708,7 @@ func (a *App) removeSessionRuntimeBindings(dir, sessionPath string) ([]removedSe
 			fallback = fallbackRuntimeTarget{scope: tab.Scope, workspaceRoot: tab.WorkspaceRoot, topicID: tab.TopicID}
 		}
 		removed = append(removed, removedRuntimeFromTab(tab, dir, sessionPath))
+		a.markTabRemovedLocked(tab)
 		delete(a.detachedSessions, key)
 	}
 	if a.activeTabID == "" && len(a.tabOrder) > 0 {
@@ -1717,6 +1721,18 @@ func (a *App) removeSessionRuntimeBindings(dir, sessionPath string) ([]removedSe
 	a.saveTabsWrite(dir, entries, activeID, version)
 
 	return removed, fallback
+}
+
+func (a *App) sessionDeleteFallbackTarget(target fallbackRuntimeTarget) fallbackRuntimeTarget {
+	topicID := strings.TrimSpace(target.topicID)
+	if topicID == "" {
+		return target
+	}
+	if path, _ := a.findTopicContentSessionForTarget(target.scope, target.workspaceRoot, topicID); path != "" {
+		return target
+	}
+	target.topicID = ""
+	return target
 }
 
 func (a *App) removeTopicRuntimeBindings(topicID string) ([]removedSessionRuntime, fallbackRuntimeTarget) {
@@ -1734,6 +1750,7 @@ func (a *App) removeTopicRuntimeBindings(topicID string) ([]removedSessionRuntim
 			fallback = fallbackRuntimeTarget{scope: tab.Scope, workspaceRoot: tab.WorkspaceRoot}
 		}
 		removed = append(removed, removedRuntimeFromTab(tab, sessionDir, sessionPath))
+		a.markTabRemovedLocked(tab)
 		delete(a.tabs, id)
 		a.removeTabOrderLocked(id)
 		if a.activeTabID == id {
@@ -1750,6 +1767,7 @@ func (a *App) removeTopicRuntimeBindings(topicID string) ([]removedSessionRuntim
 			fallback = fallbackRuntimeTarget{scope: tab.Scope, workspaceRoot: tab.WorkspaceRoot}
 		}
 		removed = append(removed, removedRuntimeFromTab(tab, sessionDir, sessionPath))
+		a.markTabRemovedLocked(tab)
 		delete(a.detachedSessions, key)
 	}
 	if a.activeTabID == "" && len(a.tabOrder) > 0 {
@@ -2018,6 +2036,9 @@ func (a *App) RestoreSession(path string) error {
 	if a.sessionDestroying(dir, target) {
 		return fmt.Errorf("session cleanup is still in progress: %s", key)
 	}
+	if a.sessionOpen(dir, target) {
+		return fmt.Errorf("session is open: %s", key)
+	}
 	if err := restoreTrashedSessionFile(dir, path); err != nil {
 		return err
 	}
@@ -2037,6 +2058,17 @@ func (a *App) sessionDestroying(dir, sessionPath string) bool {
 			continue
 		}
 		if tab.Ctrl.IsDestroyingSession(sessionPath) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) sessionOpen(dir, sessionPath string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, tab := range a.runtimeTabsLocked() {
+		if tabMatchesSession(tab, dir, sessionPath) {
 			return true
 		}
 	}

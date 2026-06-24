@@ -55,6 +55,8 @@ default_model = "deepseek-flash"   # executor; set [agent].planner_model to add 
 max_steps = 0                    # user/global only; executor tool-call rounds; 0 = no limit
 planner_max_steps = 0            # user/global only; planner read-only tool-call rounds; 0 = no limit
 reasoning_language = "auto"      # visible reasoning text: auto|zh|en
+# plan_mode_allowed_tools = ["custom_reader"]   # extra read-only custom tools only;
+#                                                # does not unlock blocked tools or unsafe bash
 # planner_model = "deepseek-pro"      # optional low-frequency planner
 # subagent_model = "deepseek-pro"     # optional default for runAs=subagent skills
 # subagent_models = { review = "deepseek-pro", security_review = "deepseek-pro" }
@@ -99,6 +101,15 @@ command = "reasonix-plugin-example"
 ```
 
 For the full schema and every field's contract, see [`SPEC.md` §5](./SPEC.md#5-configuration-toml).
+
+`[agent].plan_mode_allowed_tools` is an extra read-only declaration for custom or
+external tools Reasonix cannot classify itself — it is also the escape valve for
+MCP/plugin tools whose read-only flag comes from an untrusted server
+`readOnlyHint`, which plan mode does not trust and so fails closed on until
+declared here (first-party `ReadOnlyToolNames` overrides and built-ins stay
+trusted). It never unlocks known blocked plan-mode tools such as `bash`, `task`,
+writers, installers, or memory mutation tools, and it never bypasses bash's
+plan-mode safety checks.
 
 ## Serve web frontend
 
@@ -213,7 +224,8 @@ Chat and transcript shortcuts:
 | `Ctrl+Home` / `Ctrl+End` | Jumps to the top or bottom of the transcript | Useful after long tool output. |
 | `Esc` | Backs out of the current action | It un-sends a just-submitted turn before any reply, cancels a running turn, or clears non-empty input. |
 | Double `Esc` on an empty idle composer | Opens the rewind picker | Same entry point as `/rewind`. |
-| `Ctrl+C` / `Meta+C` / `Super+C` | Copies an active transcript selection | Without a selection it cancels a running turn, clears non-empty input, or quits on a second empty-composer press. |
+| Terminal native selection | Copies transcript text | Reasonix does not enable mouse reporting by default, so terminal selection/copy remains available. |
+| `Ctrl+C` | Cancels, clears, or quits | Cancels a running turn, clears non-empty input, or quits on a second empty-composer press. |
 | `Ctrl+D` | Quits the TUI | Immediate quit. |
 | `Ctrl+V`, `Ctrl+Shift+V`, `Meta+V`, or `Super+V` | Pastes clipboard content | The CLI tries an image first, then falls back to text or file references. |
 | `/paste-image` | Pastes a clipboard image | Use it when you want image-only paste or the terminal handles text paste itself. |
@@ -227,7 +239,7 @@ Mode and display shortcuts:
 | `Ctrl+Y` | Toggles YOLO on/off | Turning YOLO off restores the previous Ask/Auto base when known. Terminals that forward Command/Super may also send `Cmd+Y`, but `Ctrl+Y` is the reliable terminal shortcut. |
 | `--yolo`, `--dangerously-skip-permissions` | Starts chat in YOLO | Same runtime mode as `Ctrl+Y`. |
 | `Ctrl+O` | Toggles verbose reasoning display | Also available through `/verbose`. |
-| `Ctrl+B` | Expands or collapses long shell output | Same action as clicking the collapsed shell-output hint. |
+| `Ctrl+B` | Expands or collapses long shell output | Works with terminal-native text selection because the TUI does not enable mouse reporting by default. |
 | Ask / Auto | No keyboard cycle | Ask is the default interactive base. Auto is not entered through `Shift+Tab`; use clients or APIs that expose the tool approval posture directly. |
 | `/goal <objective>`, `/goal --research <objective>`, `/goal --simple <objective>`, `/goal status`, `/goal clear` | Starts, checks, or clears Goal | Goal is not in any keyboard cycle; clearly long-horizon goals automatically enable AutoResearch. Ordinary prompts with strong AutoResearch signals are also upgraded into Goal. |
 
@@ -485,6 +497,15 @@ do not override `max_steps` or `planner_max_steps`.
 Subagent skills inherit the executor model by default. Set `subagent_model` to
 run them on another configured model, or use `subagent_models` to override only
 specific skills such as `review` or `security_review`.
+
+Use `read_only_task` when planning needs isolated, deeper research without
+granting write-capable delegation. Use `read_only_skill` when the same need is
+best expressed through an existing skill. Both run ephemeral read-only
+subagents with only read-only research tools plus safe foreground bash, return
+only the final answer, and do not create resumable subagent transcripts. In
+token economy mode, connect only this narrow surface with
+`connect_tool_source(source="read_only_skill")`; the full `skills` source still
+enables writer-capable skill tools and remains blocked in plan mode.
 
 For interactive frontends, plan mode is manual by default. Set
 `agent.auto_plan = "on"` to make complex-looking tasks enter plan mode

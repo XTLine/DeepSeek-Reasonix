@@ -114,6 +114,24 @@ func TestComposePlanModeMarker(t *testing.T) {
 	}
 }
 
+func TestPlanModeMarkerMatchesPolicy(t *testing.T) {
+	for _, want := range []string{"research", "ask", "todo_write", "read_only_task", "read_only_skill"} {
+		if !strings.Contains(PlanModeMarker, want) {
+			t.Fatalf("PlanModeMarker should describe %q as available:\n%s", want, PlanModeMarker)
+		}
+	}
+	for _, forbidden := range []string{"task", "complete_step"} {
+		if strings.Contains(PlanModeMarker, forbidden+" are available") || strings.Contains(PlanModeMarker, forbidden+",") {
+			t.Fatalf("PlanModeMarker must not list blocked tool %q as available:\n%s", forbidden, PlanModeMarker)
+		}
+	}
+	for _, blocked := range []string{"write files", "unsafe shell commands", "install capabilities", "mutate memory", "delegate", "mark execution steps complete"} {
+		if !strings.Contains(PlanModeMarker, blocked) {
+			t.Fatalf("PlanModeMarker should mention blocked capability %q:\n%s", blocked, PlanModeMarker)
+		}
+	}
+}
+
 func TestComposeReasoningLanguagePreference(t *testing.T) {
 	auto := New(Options{ReasoningLanguage: "auto"})
 	if got := auto.Compose("hi"); got != "hi" {
@@ -767,6 +785,11 @@ func TestStripComposePrefixes(t *testing.T) {
 		{
 			name:  "plan mode marker stripped",
 			input: PlanModeMarker + "\n\nexplain this function",
+			want:  "explain this function",
+		},
+		{
+			name:  "legacy plan mode marker stripped",
+			input: legacyPlanModeMarker + "\n\nexplain this function",
 			want:  "explain this function",
 		},
 		{

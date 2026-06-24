@@ -264,8 +264,8 @@ type Options struct {
 	// persist to disk (e.g. "Bash(go test:*)"). The callback is wired into the
 	// permission Gate on EnableInteractiveApproval.
 	OnRemember func(rule string) RememberResult
-	// PlanModeAllowedTools names tools exempt from the plan-mode read-only gate.
-	// Passed through to the executor agent so user-configured exceptions work.
+	// PlanModeAllowedTools names extra custom tools the plan-mode policy may treat
+	// as read-only. Known blocked tools and unsafe bash still lose.
 	PlanModeAllowedTools []string
 	// ApprovalTimeout bounds how long a tool-approval or ask prompt blocks waiting
 	// for a user decision. Zero (default) waits forever — right for an interactive

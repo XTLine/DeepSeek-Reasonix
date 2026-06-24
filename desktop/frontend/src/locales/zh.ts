@@ -530,6 +530,9 @@ export const zh: Record<DictKey, string> = {
   "heartbeat.approvalModeAskHint": "每次工具调用都需要手动确认",
   "heartbeat.approvalModeAutoHint": "自动批准安全工具，保留拒绝规则",
   "heartbeat.approvalModeYoloHint": "跳过所有工具权限提示，任务自动运行",
+  "heartbeat.fieldNewConversation": "对话模式",
+  "heartbeat.newConversationEachRunOn": "每次执行新建对话",
+  "heartbeat.newConversationEachRunOff": "复用同一对话",
 
   "status.jobs": "{n} 个运行中",
   "status.jobsTitle": "后台作业",

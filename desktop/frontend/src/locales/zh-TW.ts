@@ -384,6 +384,9 @@ export const zhTW: Record<DictKey, string> = {
   "heartbeat.approvalModeAskHint": "每次工具調用都需要手動確認",
   "heartbeat.approvalModeAutoHint": "自動批准安全工具，保留拒絕規則",
   "heartbeat.approvalModeYoloHint": "跳過所有工具權限提示，任務自動運行",
+  "heartbeat.fieldNewConversation": "對話模式",
+  "heartbeat.newConversationEachRunOn": "每次執行新建對話",
+  "heartbeat.newConversationEachRunOff": "複用同一對話",
 
   "status.jobs": "{n} 個執行中",
   "status.jobsTitle": "背景作業",
