@@ -6878,6 +6878,15 @@ a[href] {
 .workspace-panel--embedded {
   border-left: none;
 }
+.workspace-panel--with-tree-rail:not(.workspace-panel--tree-hidden) {
+  grid-template-columns: var(--workspace-tree-rail-width) var(--workspace-tree-width) minmax(var(--workspace-preview-min-width), 1fr);
+}
+.workspace-panel--with-tree-rail:not(.workspace-panel--tree-hidden) .workspace-files {
+  grid-column: 2;
+}
+.workspace-panel--with-tree-rail:not(.workspace-panel--tree-hidden) .workspace-preview {
+  grid-column: 3;
+}
 .workspace-panel--tree-hidden {
   grid-template-columns: var(--workspace-tree-rail-width) minmax(0, 1fr);
 }
@@ -6933,6 +6942,9 @@ a[href] {
   background: transparent;
   cursor: col-resize;
   touch-action: none;
+}
+.workspace-panel--with-tree-rail .workspace-tree-resizer {
+  left: calc(var(--workspace-tree-rail-width) + var(--workspace-tree-width) - 4px);
 }
 .workspace-tree-resizer::after {
   content: "";
@@ -7212,6 +7224,37 @@ a[href] {
 }
 .workspace-panel--embedded .workspace-preview__body {
   padding: 12px 12px 18px;
+}
+.workspace-preview__body--code {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+.workspace-panel--embedded .workspace-preview__body--code {
+  padding: 0;
+}
+.workspace-preview__body--code .workspace-note {
+  flex: 0 0 auto;
+  margin: 10px 14px 8px;
+}
+.workspace-preview__body--code .code-block {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  width: 100%;
+  max-width: none;
+}
+.workspace-preview__body--code .code {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  overflow: auto;
 }
 .workspace-preview__body .code-block,
 .workspace-preview__body .code {
@@ -21517,6 +21560,10 @@ a[href] {
   background: var(--chat-bg);
   padding: 10px 0 18px;
   scrollbar-color: color-mix(in srgb, var(--fg-faint) 30%, transparent) transparent;
+}
+
+:root[data-theme-style] .workspace-preview__body--code {
+  padding: 0;
 }
 
 :root[data-theme-style] .workspace-preview__body .code,

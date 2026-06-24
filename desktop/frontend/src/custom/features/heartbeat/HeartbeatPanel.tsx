@@ -79,6 +79,7 @@ function nextHeartbeatWindowTime(from: Date, start: number | null, end: number |
   }
   const minutes = from.getHours() * 60 + from.getMinutes();
   if (start! < end! && minutes < start!) return dateAtMinutes(from, start!);
+  if (start! > end! && minutes < start! && minutes >= end!) return dateAtMinutes(from, start!);
   const next = dateAtMinutes(from, start!);
   next.setDate(next.getDate() + 1);
   return next;
@@ -89,11 +90,37 @@ export function heartbeatNextRunAt(task: Pick<HeartbeatTask, "interval" | "lastR
   const intervalMs = heartbeatIntervalMs(task.interval);
   if (intervalMs === null) return null;
   const rawNext = task.lastRunAt + intervalMs;
+  if ((task.interval || "").includes("|")) return rawNext;
   const start = heartbeatClockMinutes(task.timeWindowStart);
   const end = heartbeatClockMinutes(task.timeWindowEnd);
   if (start === null && end === null) return rawNext;
   const candidate = new Date(Math.max(rawNext, now));
   return nextHeartbeatWindowTime(candidate, start, end).getTime();
+}
+
+function heartbeatIntervalLabel(interval: string | undefined, t: ReturnType<typeof useT>): string {
+  const cycleMatch = (interval || "").match(/^(\d+)[smh]\|(daily|weekly|biweekly|monthly|yearly)(?::([^@]*))?(?:@(\d{2}:\d{2}))?$/);
+  if (cycleMatch) {
+    const [, , type, days, time] = cycleMatch;
+    const timeStr = time ? ` ${time}` : "";
+    if (type === "daily") return `${t("heartbeat.cycleDaily")}${timeStr}`;
+    if (type === "weekly") return `${t("heartbeat.cycleWeekly")}${timeStr}`;
+    if (type === "biweekly") return `${t("heartbeat.cycleBiweekly")}${timeStr}`;
+    if (type === "monthly") return `${t("heartbeat.cycleMonthly")}${days ? ` ${days}` : ""}${timeStr}`;
+    if (type === "yearly") {
+      const parts = (days || "").split("-");
+      return `${t("heartbeat.cycleYearly")} ${parts[0] || "1"}/${parts[1] || "1"}${timeStr}`;
+    }
+  }
+  const clean = (interval || "").replace(/\|.*$/, "");
+  const m = clean.match(/^(\d+)([smh])$/);
+  if (!m) return clean;
+  const unitLabels: Record<string, string> = {
+    s: t("heartbeat.unitSec"),
+    m: t("heartbeat.unitMin"),
+    h: t("heartbeat.unitHour"),
+  };
+  return `${t("heartbeat.freqEvery")}${t("heartbeat.everyJoiner")}${m[1]}${unitLabels[m[2]] || m[2]}`;
 }
 
 interface HeartbeatPanelProps {
@@ -494,31 +521,7 @@ function TaskCard({
 }) {
   const t = useT();
 
-  // Parse interval for display and next-run calculation
-  const intervalLabel = (() => {
-    // Check for cycle format: duration|type[:days]@HH:MM
-    const cycleMatch = (task.interval || "").match(/^(\d+)[smh]\|(daily|weekly|biweekly|monthly|yearly)(?::([^@]*))?(?:@(\d{2}:\d{2}))?$/);
-    if (cycleMatch) {
-      const [, , type, days, time] = cycleMatch;
-      const timeStr = time ? ` ${time}` : "";
-      if (type === "daily") return `每天${timeStr}`;
-      if (type === "weekly" || type === "biweekly") {
-        const prefix = type === "biweekly" ? "每两周" : "每周";
-        return `${prefix}${timeStr}`;
-      }
-      if (type === "monthly") return `每月${days ? ` ${days}日` : ""}${timeStr}`;
-      if (type === "yearly") {
-        const parts = (days || "").split("-");
-        return `每年 ${parts[0] || "1"}月${parts[1] || "1"}日${timeStr}`;
-      }
-    }
-    // Simple interval: e.g. "30m", "1h"
-    const clean = (task.interval || "").replace(/\|.*$/, "");
-    const m = clean.match(/^(\d+)([smh])$/);
-    if (!m) return clean;
-    const unitLabels: Record<string, string> = { s: "秒", m: "分钟", h: "小时" };
-    return `每${m[1]}${unitLabels[m[2]] || m[2]}`;
-  })();
+  const intervalLabel = heartbeatIntervalLabel(task.interval, t);
 
   const nextRunLabel = (() => {
     if (!task.enabled) return t("heartbeat.disabled");
@@ -614,6 +617,42 @@ const WEEKDAYS = [
 ] as const;
 
 const ALL_WEEKDAYS = WEEKDAYS.map(w => w.key);
+const DEFAULT_WEEKLY_DAY = "mon";
+
+function defaultHeartbeatCycleDays(cycleType: string): string[] {
+  if (cycleType === "daily") return [...ALL_WEEKDAYS];
+  if (cycleType === "weekly" || cycleType === "biweekly") return [DEFAULT_WEEKLY_DAY];
+  return [];
+}
+
+export function heartbeatBuildCycleInterval(cycleType: string, days: string[], time: string): string {
+  const base: Record<string, string> = {
+    daily: "24h",
+    weekly: "168h",
+    biweekly: "336h",
+    monthly: "720h",
+    yearly: "8760h",
+  };
+  const selectedDays = days.filter(Boolean);
+  const isDailyWithSelection = cycleType === "daily" && selectedDays.length > 0 && selectedDays.length < 7;
+  const isDailyWithoutSelection = cycleType === "daily" && selectedDays.length === 0;
+  const effectiveType = isDailyWithoutSelection || isDailyWithSelection ? "weekly" : cycleType;
+  const scheduleDays =
+    (effectiveType === "weekly" || effectiveType === "biweekly") && selectedDays.length === 0
+      ? defaultHeartbeatCycleDays(effectiveType)
+      : selectedDays;
+
+  let suffix = `|${effectiveType}`;
+  if (effectiveType === "weekly" || effectiveType === "biweekly") {
+    suffix += `:${scheduleDays.join(",")}`;
+  } else if (effectiveType === "monthly") {
+    suffix += `:${scheduleDays[0] || "1"}`;
+  } else if (effectiveType === "yearly") {
+    suffix += `:${scheduleDays[0] || "1"}-${scheduleDays[1] || "1"}`;
+  }
+  suffix += `@${time}`;
+  return (base[cycleType] || "24h") + suffix;
+}
 
 function CycleEditor({
   draft,
@@ -630,8 +669,8 @@ function CycleEditor({
   const cycleDays = cycleMatch?.[3] || "";
   const cycleTime = cycleMatch?.[4] || "09:00";
   const [selectedDays, setSelectedDays] = useState<string[]>(
-    cycleDays ? cycleDays.split(",") :
-    cycleMatch && cycleMatch[2] === "daily" ? [...ALL_WEEKDAYS] : []
+    cycleDays ? cycleDays.split(",").filter(Boolean) :
+    defaultHeartbeatCycleDays(cycleMatch ? cycleMatch[2] : "daily")
   );
   const [monthDay, setMonthDay] = useState(cycleDays || "1");
   const [yearMonth, setYearMonth] = useState(cycleDays.split("-")[0] || "1");
@@ -641,33 +680,11 @@ function CycleEditor({
   const hasWeekdays = cycleType === "daily" || cycleType === "weekly" || cycleType === "biweekly";
 
   // Build interval string when config changes
-  const buildInterval = useCallback((ct: string, days: string[], tm: string) => {
-    const base: Record<string, string> = {
-      daily: "24h",
-      weekly: "168h",
-      biweekly: "336h",
-      monthly: "720h",
-      yearly: "8760h",
-    };
-    // If daily with specific day selection, switch to weekly format
-    const isDailyWithSelection = ct === "daily" && days.length > 0 && days.length < 7;
-    const effectiveType = isDailyWithSelection ? "weekly" : ct;
-    let suffix = `|${effectiveType}`;
-    if (effectiveType === "weekly" || effectiveType === "biweekly") {
-      suffix += `:${days.join(",")}`;
-    } else if (effectiveType === "monthly") {
-      suffix += `:${days[0] || "1"}`;
-    } else if (effectiveType === "yearly") {
-      // days[0] = month, days[1] = day — each is a plain number, no dash
-      suffix += `:${days[0] || "1"}-${days[1] || "1"}`;
-    }
-    suffix += `@${tm}`;
-    return (base[ct] || "24h") + suffix;
-  }, []);
+  const buildInterval = useCallback(heartbeatBuildCycleInterval, []);
 
   const onCycleTypeChange = useCallback((ct: string) => {
     setCycleType(ct);
-    const days = (ct === "daily" || ct === "weekly" || ct === "biweekly") ? [...ALL_WEEKDAYS] : [];
+    const days = defaultHeartbeatCycleDays(ct);
     setSelectedDays(days);
     setMonthDay("1");
     setYearMonth("1");
@@ -677,6 +694,7 @@ function CycleEditor({
 
   const onDayToggle = useCallback((day: string) => {
     setSelectedDays((prev) => {
+      if (prev.includes(day) && prev.length <= 1) return prev;
       const next = prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day];
       setDraft("interval", buildInterval(cycleType, next, timeVal));
       return next;
@@ -962,10 +980,11 @@ function TaskEditor({
               setFreqType("cycle");
               // Save the original interval so switching back can restore it
               const cur = draft.interval || "";
+              const nextInterval = cur.includes("|") ? cur : "24h|daily@09:00";
               if (!cur.includes("|")) {
                 intervalBeforeCycle.current = cur;
-                setDraft((prev) => ({ ...prev, interval: "24h|daily@09:00" }));
               }
+              setDraft((prev) => ({ ...prev, interval: nextInterval, timeWindowStart: undefined, timeWindowEnd: undefined }));
             }}
           >
             {t("heartbeat.freqCycle")}
@@ -1051,7 +1070,7 @@ function TaskEditor({
                 <button
                   className="heartbeat-card__open-btn heartbeat-editor__tw-clear"
                   onClick={() => setDraft((prev) => ({ ...prev, timeWindowStart: undefined, timeWindowEnd: undefined }))}
-                  title="清除时间窗口"
+                  title={t("heartbeat.clearTimeWindow")}
                 >
                   ×
                 </button>

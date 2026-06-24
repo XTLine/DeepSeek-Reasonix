@@ -103,6 +103,20 @@ func TestHeartbeatTaskDueAtHonorsIntervalTimeWindow(t *testing.T) {
 	if !heartbeatTaskDueAt(task, time.Date(2026, 6, 19, 9, 0, 0, 0, loc)) {
 		t.Fatal("interval task should run when the next time window opens")
 	}
+
+	neverRun := HeartbeatTask{
+		ID:              "never-run-window",
+		Interval:        "30m",
+		Enabled:         true,
+		TimeWindowStart: "09:00",
+		TimeWindowEnd:   "17:00",
+	}
+	if heartbeatTaskDueAt(neverRun, time.Date(2026, 6, 18, 20, 0, 0, 0, loc)) {
+		t.Fatal("never-run interval task should wait while outside the configured time window")
+	}
+	if !heartbeatTaskDueAt(neverRun, time.Date(2026, 6, 19, 9, 0, 0, 0, loc)) {
+		t.Fatal("never-run interval task should run when the configured time window opens")
+	}
 }
 
 func TestHeartbeatMergeRunUpdatesPreservesConcurrentEditsAndDeletes(t *testing.T) {

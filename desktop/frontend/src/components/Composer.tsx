@@ -10,6 +10,7 @@ import { cacheGeneration, loadOlder } from "../lib/composerHistory";
 import { SPINNER_WORDS, useI18n } from "../lib/i18n";
 import { detectShortcutPlatform, matchesShortcut } from "../lib/keyboardShortcuts";
 import { clearLayoutSize, loadOptionalLayoutSize, saveLayoutSize } from "../lib/layoutPreferences";
+import { createRafResizeUpdater } from "../lib/resizeDrag";
 import { useToast } from "../lib/toast";
 import { type CollaborationMode, type CommandInfo, type ComposerInsertRequest, type DirEntry, type EffortInfo, type HistoryMessage, type Mode, type PromptHistoryEntry, type SessionMeta, type SessionReference, type SlashArgItem, type SlashArgsResult, type TokenMode, type ToolApprovalMode } from "../lib/types";
 import {
@@ -1248,18 +1249,29 @@ export function Composer({
     const startHeight = composerHeight ?? card.getBoundingClientRect().height;
     let nextHeight = clampComposerHeight(startHeight);
     let moved = false;
+    card.style.setProperty("--composer-height", `${nextHeight}px`);
+    e.currentTarget.setAttribute("aria-valuenow", String(nextHeight));
+    const liveResize = createRafResizeUpdater({
+      target: card,
+      separator: e.currentTarget,
+      cssVar: "--composer-height",
+    });
     setComposerResizing(true);
     document.body.classList.add("composer-resizing");
 
     const onMove = (event: PointerEvent) => {
       moved = true;
       nextHeight = clampComposerHeight(startHeight + startY - event.clientY);
-      setComposerHeight(nextHeight);
+      liveResize.schedule(nextHeight);
     };
     const onUp = () => {
+      liveResize.flush();
       setComposerResizing(false);
       document.body.classList.remove("composer-resizing");
-      if (moved) saveComposerHeight(nextHeight);
+      if (moved) {
+        setComposerHeight(nextHeight);
+        saveComposerHeight(nextHeight);
+      }
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
       document.removeEventListener("pointercancel", onUp);
@@ -1603,6 +1615,7 @@ export function Composer({
     ? ({ height: `${textareaAutoHeight}px`, overflowY: textareaAutoOverflow ? "auto" : "hidden" } as CSSProperties)
     : undefined;
   const composerAutoExpanded = composerHeight === null && textareaAutoHeight !== null && textareaAutoHeight > 40;
+  const composerResizeValue = composerHeight ?? clampComposerHeight((textareaAutoHeight ?? 0) + COMPOSER_AUTO_RESERVED_HEIGHT);
   void onSetMode;
   const chooseApprovalMode = (nextMode: ToolApprovalMode) => {
     onSetToolApprovalMode(nextMode);
@@ -1998,14 +2011,19 @@ export function Composer({
         </div>
       )}
       <div
-        className={`composer-card${composerHeight !== null ? " composer-card--resized" : ""}${composerAutoExpanded ? " composer-card--autosized" : ""}${composerResizing ? " composer-card--resizing" : ""}${running ? " composer-card--running" : ""}`}
+        className={`composer-card${composerHeight !== null || composerResizing ? " composer-card--resized" : ""}${composerAutoExpanded ? " composer-card--autosized" : ""}${composerResizing ? " composer-card--resizing" : ""}${running ? " composer-card--running" : ""}`}
         ref={composerCardRef}
         style={composerCardStyle}
       >
         <button
           className="composer-resize-handle"
           type="button"
+          role="separator"
+          aria-orientation="horizontal"
           aria-label={t("composer.resize")}
+          aria-valuemin={COMPOSER_MIN_HEIGHT}
+          aria-valuemax={composerMaxHeight()}
+          aria-valuenow={composerResizeValue}
           title={t("composer.resize")}
           onPointerDown={onComposerResizeStart}
           onKeyDown={onComposerResizeKeyDown}

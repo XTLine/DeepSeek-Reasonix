@@ -391,7 +391,11 @@ func heartbeatTaskDueAt(t HeartbeatTask, now time.Time) bool {
 	if baseMillis == 0 {
 		baseMillis = t.CreatedAt
 	}
+	hasTimeWindow := t.TimeWindowStart != "" || t.TimeWindowEnd != ""
 	if baseMillis == 0 {
+		if hasTimeWindow {
+			return heartbeatWithinTimeWindow(t, now)
+		}
 		return true
 	}
 	if now.Sub(time.UnixMilli(baseMillis)) < d {
@@ -401,7 +405,7 @@ func heartbeatTaskDueAt(t HeartbeatTask, now time.Time) bool {
 	// For interval-based tasks with a time window, check if current time
 	// falls within the configured window. If outside, defer until the next
 	// tick that falls within the window.
-	if t.TimeWindowStart != "" || t.TimeWindowEnd != "" {
+	if hasTimeWindow {
 		return heartbeatWithinTimeWindow(t, now)
 	}
 

@@ -1,6 +1,6 @@
 // Run: tsx src/__tests__/heartbeat-next-run.test.ts
 
-import { heartbeatNextRunAt } from "../custom/features/heartbeat/HeartbeatPanel";
+import { heartbeatBuildCycleInterval, heartbeatNextRunAt } from "../custom/features/heartbeat/HeartbeatPanel";
 
 let passed = 0;
 let failed = 0;
@@ -55,6 +55,36 @@ eq(
   ),
   localMs(2026, 6, 18, 22, 20),
   "cross-midnight window keeps due time in the open window",
+);
+
+eq(
+  heartbeatNextRunAt(
+    { interval: "30m", lastRunAt: localMs(2026, 6, 18, 11, 30), timeWindowStart: "22:00", timeWindowEnd: "06:00" },
+    localMs(2026, 6, 18, 12, 10),
+  ),
+  localMs(2026, 6, 18, 22, 0),
+  "cross-midnight window waits for today's opening from midday",
+);
+
+eq(
+  heartbeatNextRunAt(
+    { interval: "24h|daily@20:00", lastRunAt: localMs(2026, 6, 18, 20, 0), timeWindowStart: "09:00", timeWindowEnd: "17:00" },
+    localMs(2026, 6, 19, 19, 0),
+  ),
+  localMs(2026, 6, 19, 20, 0),
+  "cycle next run ignores stale interval time windows",
+);
+
+eq(
+  heartbeatBuildCycleInterval("daily", [], "09:00"),
+  "24h|weekly:mon@09:00",
+  "empty daily day selection does not save as every day",
+);
+
+eq(
+  heartbeatBuildCycleInterval("weekly", [], "09:00"),
+  "168h|weekly:mon@09:00",
+  "weekly default uses one weekday",
 );
 
 console.log(`\n${passed} passed, ${failed} failed, ${passed + failed} total`);
