@@ -269,38 +269,52 @@ func (p *ParallelTasksTool) Execute(ctx context.Context, args json.RawMessage) (
 
 	completed := 0
 	startReady()
-	for completed < n {
-		select {
-		case r := <-doneCh:
-			if done[r.index] {
-				continue
-			}
-			completed++
-			done[r.index] = true
-			outputs[r.index] = r.output
-			taskErrs[r.index] = r.err
-			switch {
-			case r.err == nil:
-				statuses[r.index] = parallelTaskCompleted
-			case errors.Is(r.err, context.Canceled), errors.Is(r.err, context.DeadlineExceeded):
-				statuses[r.index] = parallelTaskCancelled
-			default:
-				statuses[r.index] = parallelTaskFailed
-			}
-			writeWisdom(r)
+	processResult := func(r subResult, schedule bool) {
+		if done[r.index] {
+			return
+		}
+		completed++
+		done[r.index] = true
+		outputs[r.index] = r.output
+		taskErrs[r.index] = r.err
+		switch {
+		case r.err == nil:
+			statuses[r.index] = parallelTaskCompleted
+		case errors.Is(r.err, context.Canceled), errors.Is(r.err, context.DeadlineExceeded):
+			statuses[r.index] = parallelTaskCancelled
+		default:
+			statuses[r.index] = parallelTaskFailed
+		}
+		writeWisdom(r)
 
-			for i, t := range params.Tasks {
-				if remaining[i] > 0 && !running[i] && !done[i] {
-					for _, dep := range t.DependsOn {
-						if dep == r.index {
-							remaining[i]--
-						}
+		for i, t := range params.Tasks {
+			if remaining[i] > 0 && !running[i] && !done[i] {
+				for _, dep := range t.DependsOn {
+					if dep == r.index {
+						remaining[i]--
 					}
 				}
 			}
+		}
+		if schedule {
 			startReady()
+		}
+	}
+	for completed < n {
+		select {
+		case r := <-doneCh:
+			processResult(r, true)
 		case <-ctx.Done():
 			err := ctx.Err()
+		drain:
+			for {
+				select {
+				case r := <-doneCh:
+					processResult(r, false)
+				default:
+					break drain
+				}
+			}
 			markCancelled(err)
 			return formatParallelTasksAggregate(outputs, taskErrs, statuses, true), err
 		}
