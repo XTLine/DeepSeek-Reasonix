@@ -111,7 +111,7 @@ func TestComposePlanModeMarker(t *testing.T) {
 }
 
 func TestPlanModeMarkerMatchesPolicy(t *testing.T) {
-	for _, want := range []string{"research", "ask", "todo_write"} {
+	for _, want := range []string{"research", "ask", "todo_write", "read_only_task"} {
 		if !strings.Contains(PlanModeMarker, want) {
 			t.Fatalf("PlanModeMarker should describe %q as available:\n%s", want, PlanModeMarker)
 		}

@@ -458,6 +458,11 @@ Subagent skills inherit the executor model by default. Set `subagent_model` to
 run them on another configured model, or use `subagent_models` to override only
 specific skills such as `review` or `security_review`.
 
+Use `read_only_task` when planning needs isolated, deeper research without
+granting write-capable delegation. It runs an ephemeral subagent with only
+read-only research tools plus safe foreground bash, returns only the final
+answer, and does not create a resumable subagent transcript.
+
 For interactive frontends, plan mode is manual by default. Set
 `agent.auto_plan = "on"` to make complex-looking tasks enter plan mode
 automatically: Reasonix first drafts a read-only plan, then waits for approval

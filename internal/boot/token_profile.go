@@ -18,7 +18,7 @@ const (
 	TokenModeEconomy = "economy"
 )
 
-const tokenEconomyPrompt = `Token economy mode is on. Keep the default tool surface lean. Optional sources are hidden behind connect_tool_source; enable skills, MCP servers, LSP, web_fetch, install_source, or task only when the current request actually needs them.`
+const tokenEconomyPrompt = `Token economy mode is on. Keep the default tool surface lean. Optional sources are hidden behind connect_tool_source; enable skills, MCP servers, LSP, web_fetch, install_source, task, or read_only_task only when the current request actually needs them.`
 
 var tokenEconomyCoreBuiltins = []string{
 	"bash",
@@ -71,19 +71,20 @@ func tokenEconomyBuiltins(configured []string) []string {
 type toolSourceConnector struct {
 	mu sync.Mutex
 
-	skills   func(context.Context) (string, error)
-	task     func(context.Context) (string, error)
-	install  func(context.Context) (string, error)
-	webFetch func(context.Context) (string, error)
-	lsp      func(context.Context) (string, error)
-	mcp      func(context.Context, string) (string, error)
-	mcpNames []string
+	skills       func(context.Context) (string, error)
+	task         func(context.Context) (string, error)
+	readOnlyTask func(context.Context) (string, error)
+	install      func(context.Context) (string, error)
+	webFetch     func(context.Context) (string, error)
+	lsp          func(context.Context) (string, error)
+	mcp          func(context.Context, string) (string, error)
+	mcpNames     []string
 }
 
 func (*toolSourceConnector) Name() string { return "connect_tool_source" }
 
 func (*toolSourceConnector) Description() string {
-	return "Token economy mode only: enable an optional tool source when the task needs it. Sources: skills, mcp, lsp, web_fetch, install_source, task. For mcp, pass the configured server name; omit name to list servers. Newly enabled tools are available on the next model request."
+	return "Token economy mode only: enable an optional tool source when the task needs it. Sources: skills, mcp, lsp, web_fetch, install_source, task, read_only_task. For mcp, pass the configured server name; omit name to list servers. Newly enabled tools are available on the next model request."
 }
 
 func (*toolSourceConnector) ReadOnly() bool { return true }
@@ -92,7 +93,7 @@ func (*toolSourceConnector) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"type":"object",
 		"properties":{
-			"source":{"type":"string","description":"Tool source to enable: skills, mcp, lsp, web_fetch, install_source, or task."},
+			"source":{"type":"string","description":"Tool source to enable: skills, mcp, lsp, web_fetch, install_source, task, or read_only_task."},
 			"name":{"type":"string","description":"For source=mcp, the configured server name. Omit to list configured MCP servers without connecting them."}
 		},
 		"required":["source"]
@@ -124,6 +125,8 @@ func (t *toolSourceConnector) Execute(ctx context.Context, args json.RawMessage)
 		return runSourceInstaller(ctx, "skills", t.skills)
 	case "task":
 		return runSourceInstaller(ctx, "task", t.task)
+	case "read_only_task":
+		return runSourceInstaller(ctx, "read_only_task", t.readOnlyTask)
 	case "install_source":
 		return runSourceInstaller(ctx, "install_source", t.install)
 	case "web_fetch":
@@ -153,7 +156,7 @@ func planModeSourceBlocked(ctx context.Context, source string) (bool, string) {
 	if !agent.PlanModeFromContext(ctx) {
 		return false, ""
 	}
-	readOnlySource := source == "web_fetch" || source == "lsp"
+	readOnlySource := source == "web_fetch" || source == "lsp" || source == "read_only_task"
 	decision := planmode.Policy{}.Decide(planmode.Call{Name: source, ReadOnly: readOnlySource})
 	return decision.Blocked, decision.Message
 }
@@ -170,6 +173,8 @@ func normalizeToolSource(source string) string {
 		return "web_fetch"
 	case "install", "install_source", "installer":
 		return "install_source"
+	case "read_only_task", "readonly_task", "read-only-task", "read_only_subagent", "readonly_subagent", "read-only-subagent", "research_task", "research-subagent":
+		return "read_only_task"
 	case "task", "subagent", "subagents":
 		return "task"
 	default:
@@ -196,6 +201,9 @@ func (t *toolSourceConnector) availableSources() []string {
 	}
 	if t.task != nil {
 		out = append(out, "task")
+	}
+	if t.readOnlyTask != nil {
+		out = append(out, "read_only_task")
 	}
 	sort.Strings(out)
 	return out

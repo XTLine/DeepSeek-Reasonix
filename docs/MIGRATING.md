@@ -100,6 +100,10 @@ and DeepSeek prefix-cache–oriented design.
   now only declares extra read-only custom/external tools. It no longer unlocks
   known blocked plan-mode tools such as `bash`, `task`, writers, installers, or
   memory mutation tools, and unsafe bash commands still remain blocked.
+- **Read-only subagent research**: use `read_only_task` for isolated research in
+  plan mode. It exposes only read-only tools and safe foreground bash, does not
+  write a resumable transcript, and keeps writer-capable `task` blocked until
+  after plan approval.
 - **No web dashboard** — the v2 line is terminal + desktop (Wails), by design.
 - Some granular v1 tools are intentionally consolidated (e.g. file-management ops
   go through `bash`); a few v1 tools are not yet ported (tracked on Discussions).

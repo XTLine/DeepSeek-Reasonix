@@ -49,6 +49,13 @@ func TestDecideBlocksSubagentStyleToolsWithCategoryMessage(t *testing.T) {
 	}
 }
 
+func TestDecideAllowsReadOnlyTaskDelegation(t *testing.T) {
+	decision := (Policy{}).Decide(Call{Name: "read_only_task", ReadOnly: true})
+	if decision.Blocked {
+		t.Fatalf("read_only_task should be allowed in plan mode: %s", decision.Message)
+	}
+}
+
 func TestDecideStillValidatesBashArgumentsWhenOverridden(t *testing.T) {
 	p := Policy{AllowedTools: []string{"bash"}}
 	args, err := json.Marshal(map[string]any{"command": "rm -rf /"})

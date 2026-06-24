@@ -1087,7 +1087,7 @@ command = "reasonix-missing-mockmcp"
 		}
 	}
 	for _, forbidden := range []string{
-		"web_fetch", "task", "run_skill", "read_skill", "install_skill", "install_source",
+		"web_fetch", "task", "read_only_task", "run_skill", "read_skill", "install_skill", "install_source",
 		"explore", "research", "review", "security_review",
 		"lsp_definition", "lsp_references", "lsp_hover", "lsp_diagnostics",
 	} {
@@ -1196,6 +1196,57 @@ model = "x"
 	for _, msg := range ctrl.History() {
 		if msg.Role == provider.RoleTool && msg.Name == "connect_tool_source" && strings.Contains(msg.Content, "blocked:") {
 			t.Fatalf("connect_tool_source should not be blocked in plan mode, got:\n%s", msg.Content)
+		}
+	}
+}
+
+func TestBuildTokenEconomyPlanModeCanConnectReadOnlyTask(t *testing.T) {
+	isolateConfigHome(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+
+	registerBootTokenProfileTestProvider()
+	prov := testutil.NewMock("token-economy",
+		testutil.Turn{ToolCalls: []provider.ToolCall{
+			{ID: "source-1", Name: "connect_tool_source", Arguments: `{"source":"read_only_task"}`},
+		}},
+		testutil.Turn{Text: "done"},
+	)
+	setBootTokenProfileTestProvider(t, prov)
+	writeFile(t, dir, "reasonix.toml", `
+default_model = "test-model"
+
+[agent]
+system_prompt = "BASE"
+
+[[providers]]
+name = "test-model"
+kind = "boot-token-profile-test"
+model = "x"
+`)
+
+	ctrl, err := Build(context.Background(), Options{Sink: event.Discard, TokenMode: TokenModeEconomy})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	defer ctrl.Close()
+	ctrl.SetPlanMode(true)
+	if err := ctrl.Run(context.Background(), "connect read-only subagent while planning"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	reqs := prov.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("requests = %d, want 2", len(reqs))
+	}
+	if !requestHasTool(reqs[1], "read_only_task") {
+		t.Fatalf("second request should expose read_only_task in plan economy mode; tools=%v", toolSchemaNames(reqs[1].Tools))
+	}
+	if requestHasTool(reqs[1], "task") {
+		t.Fatalf("read_only_task source should not expose writer-capable task; tools=%v", toolSchemaNames(reqs[1].Tools))
+	}
+	for _, msg := range ctrl.History() {
+		if msg.Role == provider.RoleTool && msg.Name == "connect_tool_source" && strings.Contains(msg.Content, "blocked:") {
+			t.Fatalf("connect_tool_source should not block read_only_task in plan mode, got:\n%s", msg.Content)
 		}
 	}
 }

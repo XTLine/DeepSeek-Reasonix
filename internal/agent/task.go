@@ -11,6 +11,7 @@ import (
 
 	"reasonix/internal/event"
 	"reasonix/internal/jobs"
+	"reasonix/internal/planmode"
 	"reasonix/internal/provider"
 	"reasonix/internal/tool"
 )
@@ -22,8 +23,18 @@ Use the provided tools to investigate or act. Return a single final answer that 
 and self-contained — the parent will see only that answer, not your tool calls or reasoning.
 If you need to ask for clarification, fail with a precise question instead of guessing.`
 
+// DefaultReadOnlyTaskSystemPrompt steers read-only sub-agents toward isolated
+// research. They never receive writer tools, persisted transcript controls, or
+// background process controls, so their final answer is the only handoff.
+const DefaultReadOnlyTaskSystemPrompt = `You are a read-only research sub-agent invoked by a parent coding agent.
+Use only the provided read-only tools to inspect code, docs, history, and safe shell output.
+Do not attempt to write files, install capabilities, mutate memory, control long-lived
+processes, or delegate to another agent. Return a concise, self-contained final answer
+with the evidence the parent needs.`
+
 var subagentMetaTools = []string{
 	"task",
+	"read_only_task",
 	"parallel_tasks",
 	"run_skill",
 	"read_skill",
@@ -100,6 +111,35 @@ func (b foregroundOnlyBash) Execute(ctx context.Context, args json.RawMessage) (
 }
 
 func (b foregroundOnlyBash) ReadOnly() bool { return b.inner.ReadOnly() }
+
+type readOnlyBash struct {
+	inner tool.Tool
+}
+
+func (b readOnlyBash) Name() string { return "bash" }
+
+func (b readOnlyBash) Description() string {
+	desc := strings.TrimSpace(b.inner.Description())
+	if desc == "" {
+		desc = "Execute a command in the shell and return combined stdout/stderr."
+	}
+	desc = strings.Replace(desc, "Execute a command in the shell", "Execute a foreground read-only command in the shell", 1)
+	return desc + " Only plan-mode safe read-only commands are allowed; shell operators, background execution, process preservation, and write-capable arguments are blocked."
+}
+
+func (readOnlyBash) Schema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"Read-only shell command to execute in the foreground. Must match the plan-mode safe bash policy."}},"required":["command"]}`)
+}
+
+func (b readOnlyBash) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	decision := planmode.Policy{}.Decide(planmode.Call{Name: "bash", Args: args})
+	if decision.Blocked {
+		return decision.Message, nil
+	}
+	return b.inner.Execute(ctx, args)
+}
+
+func (readOnlyBash) ReadOnly() bool { return true }
 
 // TaskTool spawns a sub-agent in its own session for a focused sub-task. The
 // sub-agent runs with a filtered tool whitelist and the same step budget shape
@@ -226,6 +266,86 @@ func (t *TaskTool) ResolveProfile(args json.RawMessage) *event.Profile {
 		return nil
 	}
 	return &event.Profile{Model: model, Effort: effort}
+}
+
+// ReadOnlyTaskTool runs an isolated sub-agent with a strictly read-only tool
+// registry. It intentionally omits background execution and transcript
+// continuation/fork controls so the call has no durable host side effects.
+type ReadOnlyTaskTool struct {
+	task *TaskTool
+}
+
+func NewReadOnlyTaskTool(task *TaskTool) *ReadOnlyTaskTool {
+	return &ReadOnlyTaskTool{task: task}
+}
+
+func (*ReadOnlyTaskTool) Name() string { return "read_only_task" }
+
+func (*ReadOnlyTaskTool) Description() string {
+	return "Spawn a read-only research sub-agent for a focused investigation. The sub-agent runs in an isolated, ephemeral session with read-only tools only; bash is wrapped to allow only plan-mode safe foreground commands. It cannot write files, install capabilities, mutate memory, run background jobs, continue/fork transcripts, or delegate to other agents. Only its final answer is returned."
+}
+
+func (*ReadOnlyTaskTool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+"type":"object",
+"properties":{
+  "prompt":{"type":"string","description":"What the read-only sub-agent should investigate. Be specific about the evidence or summary to return — the sub-agent does not see this conversation."},
+  "description":{"type":"string","description":"Short label for the read-only sub-task (3-7 words). Surfaced in the dispatch line so the user sees what's running."},
+  "tools":{"type":"array","items":{"type":"string"},"description":"Optional read-only tool whitelist. Writer, installer, memory mutation, background job, and delegation tools are never exposed."},
+  "max_steps":{"type":"integer","description":"Optional cap on tool-call rounds. Defaults to half the parent's cap (min 5).","minimum":1},
+  "model":{"type":"string","description":"Optional model override for the sub-agent (a configured provider/model name)."},
+  "effort":{"type":"string","description":"Optional reasoning effort for the sub-agent (e.g. high, max)."}
+},
+"required":["prompt"]
+}`)
+}
+
+func (*ReadOnlyTaskTool) ReadOnly() bool { return true }
+
+func (r *ReadOnlyTaskTool) ResolveProfile(args json.RawMessage) *event.Profile {
+	if r == nil || r.task == nil {
+		return nil
+	}
+	return r.task.ResolveProfile(args)
+}
+
+func (r *ReadOnlyTaskTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	if r == nil || r.task == nil {
+		return "", fmt.Errorf("read_only_task is not configured")
+	}
+	var p struct {
+		Prompt      string   `json:"prompt"`
+		Description string   `json:"description"`
+		Tools       []string `json:"tools"`
+		MaxSteps    int      `json:"max_steps"`
+		Model       string   `json:"model"`
+		Effort      string   `json:"effort"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", fmt.Errorf("invalid args: %w", err)
+	}
+	if strings.TrimSpace(p.Prompt) == "" {
+		return "", fmt.Errorf("prompt is required")
+	}
+
+	maxSteps := p.MaxSteps
+	if maxSteps <= 0 && r.task.maxSteps > 0 {
+		maxSteps = r.task.maxSteps / 2
+		if maxSteps < 5 {
+			maxSteps = 5
+		}
+	}
+
+	subReg := ReadOnlySubagentToolRegistry(r.task.parentReg, p.Tools)
+	if subReg.Len() == 0 {
+		return "", fmt.Errorf("read_only_task has no read-only tools available")
+	}
+	modelRef, effortRef := r.task.effectiveProfile(p.Model, p.Effort)
+	prov, pricing, ctxWin, err := r.task.resolveSubSessionRuntime(modelRef, effortRef)
+	if err != nil {
+		return "", fmt.Errorf("read-only sub-agent profile: %w", err)
+	}
+	return r.task.runSubSession(ctx, p.Prompt, subReg, subSink(ctx), maxSteps, prov, pricing, ctxWin, NewSession(DefaultReadOnlyTaskSystemPrompt))
 }
 
 func (t *TaskTool) effectiveProfile(model, effort string) (string, string) {
@@ -462,6 +582,45 @@ var plannerNonResearchTools = []string{
 func PlannerToolRegistry(parent *tool.Registry) *tool.Registry {
 	exclude := append(SubagentMetaTools(), plannerNonResearchTools...)
 	return FilterReadOnlyRegistry(parent, exclude...)
+}
+
+// ReadOnlySubagentToolRegistry returns the tool set exposed to read-only
+// sub-agents: read-only research tools plus a bash wrapper that enforces the
+// plan-mode safe command policy at execution time. Workflow/meta tools are
+// excluded even when their Tool.ReadOnly contract is true.
+func ReadOnlySubagentToolRegistry(parent *tool.Registry, names []string) *tool.Registry {
+	exclude := append(SubagentMetaTools(), subagentJobTools...)
+	exclude = append(exclude, plannerNonResearchTools...)
+	ex := make(map[string]bool, len(exclude))
+	for _, e := range exclude {
+		ex[e] = true
+	}
+	sub := tool.NewRegistry()
+	if parent == nil {
+		return sub
+	}
+	src := names
+	if len(src) == 0 {
+		src = parent.Names()
+	}
+	for _, name := range src {
+		if ex[name] {
+			continue
+		}
+		tl, ok := parent.Get(name)
+		if !ok {
+			continue
+		}
+		if name == "bash" {
+			sub.Add(readOnlyBash{inner: tl})
+			continue
+		}
+		if !tl.ReadOnly() {
+			continue
+		}
+		sub.Add(tl)
+	}
+	return sub
 }
 
 // FilterReadOnlyRegistry builds a sub-registry containing only tools whose

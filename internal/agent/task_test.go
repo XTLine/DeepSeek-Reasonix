@@ -206,6 +206,52 @@ func TestTaskToolRunsEphemerallyWithoutParentSession(t *testing.T) {
 	}
 }
 
+func TestReadOnlyTaskToolRunsEphemerallyWithReadOnlyRegistry(t *testing.T) {
+	sub := &mockProvider{name: "sub", chunks: []provider.Chunk{
+		{Type: provider.ChunkText, Text: "read-only findings"},
+		{Type: provider.ChunkDone},
+	}}
+	parentReg := tool.NewRegistry()
+	parentReg.Add(fakeTool{name: "read_file", readOnly: true})
+	parentReg.Add(fakeTool{name: "write_file", readOnly: false})
+	parentReg.Add(fakeTool{name: "todo_write", readOnly: true})
+	parentReg.Add(fakeTool{name: "complete_step", readOnly: true})
+	parentReg.Add(fakeTool{name: "bash", readOnly: false})
+	task := newTestTaskTool(t, sub, parentReg, "writer sys", "", "", nil)
+	readonly := NewReadOnlyTaskTool(task)
+	parentReg.Add(task)
+	parentReg.Add(readonly)
+
+	out, err := readonly.Execute(testTaskContext(), []byte(`{"prompt":"inspect callers"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "read-only findings") {
+		t.Fatalf("output = %q, want final answer", out)
+	}
+	if strings.Contains(out, "Subagent reference") {
+		t.Fatalf("read_only_task should not persist transcript refs: %q", out)
+	}
+	if sys := sub.lastReq.Messages[0]; sys.Role != provider.RoleSystem || sys.Content != DefaultReadOnlyTaskSystemPrompt {
+		t.Fatalf("read_only_task system prompt = %+v, want read-only prompt", sys)
+	}
+
+	got := map[string]bool{}
+	for _, s := range sub.lastReq.Tools {
+		got[s.Name] = true
+	}
+	for _, want := range []string{"read_file", "bash"} {
+		if !got[want] {
+			t.Fatalf("read_only_task sub-agent missing %q; tools=%v", want, toolSchemaNames(sub.lastReq.Tools))
+		}
+	}
+	for _, hidden := range []string{"write_file", "todo_write", "complete_step", "task", "read_only_task"} {
+		if got[hidden] {
+			t.Fatalf("read_only_task sub-agent should hide %q; tools=%v", hidden, toolSchemaNames(sub.lastReq.Tools))
+		}
+	}
+}
+
 func TestTaskToolRejectsContinuationWithoutParentSession(t *testing.T) {
 	sub := &mockProvider{name: "sub", chunks: []provider.Chunk{
 		{Type: provider.ChunkText, Text: "answer"},

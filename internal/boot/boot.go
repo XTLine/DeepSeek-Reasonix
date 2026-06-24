@@ -539,24 +539,43 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	taskModel := firstNonEmpty(cfg.Agent.SubagentModels["task"], cfg.Agent.SubagentModel)
 	taskEffort := firstNonEmpty(cfg.Agent.SubagentEfforts["task"], cfg.Agent.SubagentEffort)
 	taskToolAdded := false
-	addTaskTool := func() string {
-		if taskToolAdded {
-			return "task tool is already enabled."
-		}
-		taskToolAdded = true
-		tt := agent.NewTaskTool(execProv, entry.Price, reg, maxSteps,
+	readOnlyTaskToolAdded := false
+	var taskTool *agent.TaskTool
+	newTaskTool := func() *agent.TaskTool {
+		return agent.NewTaskTool(execProv, entry.Price, reg, maxSteps,
 			entry.ContextWindow, cfg.Agent.RecentKeep, cfg.Agent.SoftCompactRatio, cfg.Agent.CompactRatio, cfg.Agent.CompactForceRatio,
 			cfg.Agent.Temperature, config.ArchiveDir(), "", headlessGate,
 			keepPolicy,
 			taskModel, taskEffort, resolveSubagentProvider).
 			WithTranscripts(subagentStore, root, modelName, entry.Effort).
 			WithTranscriptIdentityResolver(subagentIdentity)
-		reg.Add(tt)
-		reg.Add(agent.NewParallelTasksTool(tt, reg))
+	}
+	addTaskTool := func() string {
+		if taskToolAdded {
+			return "task tool is already enabled."
+		}
+		taskToolAdded = true
+		if taskTool == nil {
+			taskTool = newTaskTool()
+		}
+		reg.Add(taskTool)
+		reg.Add(agent.NewParallelTasksTool(taskTool, reg))
 		return "enabled task."
+	}
+	addReadOnlyTaskTool := func() string {
+		if readOnlyTaskToolAdded {
+			return "read_only_task tool is already enabled."
+		}
+		readOnlyTaskToolAdded = true
+		if taskTool == nil {
+			taskTool = newTaskTool()
+		}
+		reg.Add(agent.NewReadOnlyTaskTool(taskTool))
+		return "enabled read_only_task."
 	}
 	if !tokenEconomy {
 		addTaskTool()
+		addReadOnlyTaskTool()
 	}
 
 	// The `memory` tool searches/reads saved facts on demand; `remember` persists
@@ -775,6 +794,9 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			},
 			task: func(context.Context) (string, error) {
 				return addTaskTool(), nil
+			},
+			readOnlyTask: func(context.Context) (string, error) {
+				return addReadOnlyTaskTool(), nil
 			},
 			install: func(context.Context) (string, error) {
 				return addInstallSourceTool(), nil
