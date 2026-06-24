@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"reasonix/internal/event"
 )
@@ -63,6 +64,35 @@ func TestRunSkillSubagentRuns(t *testing.T) {
 	}
 	if out != "answer from dig" {
 		t.Errorf("runner output not returned: %q", out)
+	}
+}
+
+func TestRunSkillSubagentCancellationReachesRunner(t *testing.T) {
+	home := t.TempDir()
+	writeSkill(t, home, ".reasonix/skills/dig.md", "---\ndescription: dig\nrunAs: subagent\n---\nbody")
+	runner := func(ctx context.Context, _ Skill, _ string, _ SubagentRunOptions) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	tl := NewRunSkillTool(New(Options{HomeDir: home, DisableBuiltins: true}), runner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := tl.Execute(ctx, json.RawMessage(`{"name":"dig","arguments":"find X"}`))
+		done <- err
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Execute error = %v, want context cancellation", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("run_skill subagent runner did not observe cancellation promptly")
 	}
 }
 
