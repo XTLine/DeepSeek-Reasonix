@@ -3028,7 +3028,7 @@ export default function App() {
 
           {!sidebarImDetailConnection && (
           <footer className="footer" ref={footerRef}>
-            {showTodos && <TodoPanel todoKey={todoKey} todos={todos} onDismiss={() => setDismissedTodo(todoKey)} />}
+            {showTodos && <TodoPanel todos={todos} onDismiss={() => setDismissedTodo(todoKey)} />}
             {rewindState && (
               <UndoRewindBanner
                 meta={{
