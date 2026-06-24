@@ -24,6 +24,7 @@ import (
 	"reasonix/internal/event"
 	"reasonix/internal/memory"
 	"reasonix/internal/netclient"
+	"reasonix/internal/planmode"
 	"reasonix/internal/plugin"
 	"reasonix/internal/provider"
 	"reasonix/internal/sandbox"
@@ -1197,6 +1198,57 @@ model = "x"
 		if msg.Role == provider.RoleTool && msg.Name == "connect_tool_source" && strings.Contains(msg.Content, "blocked:") {
 			t.Fatalf("connect_tool_source should not be blocked in plan mode, got:\n%s", msg.Content)
 		}
+	}
+}
+
+func TestBuildTokenEconomyPlanModeBlocksSourcesWithPolicy(t *testing.T) {
+	for _, source := range []string{"task", "install_source"} {
+		t.Run(source, func(t *testing.T) {
+			isolateConfigHome(t)
+			dir := robustTempDir(t)
+			t.Chdir(dir)
+
+			registerBootTokenProfileTestProvider()
+			prov := testutil.NewMock("token-economy",
+				testutil.Turn{ToolCalls: []provider.ToolCall{
+					{ID: "source-1", Name: "connect_tool_source", Arguments: fmt.Sprintf(`{"source":%q}`, source)},
+				}},
+				testutil.Turn{Text: "done"},
+			)
+			setBootTokenProfileTestProvider(t, prov)
+			writeFile(t, dir, "reasonix.toml", `
+default_model = "test-model"
+
+[agent]
+system_prompt = "BASE"
+
+[[providers]]
+name = "test-model"
+kind = "boot-token-profile-test"
+model = "x"
+`)
+
+			ctrl, err := Build(context.Background(), Options{Sink: event.Discard, TokenMode: TokenModeEconomy})
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			defer ctrl.Close()
+			ctrl.SetPlanMode(true)
+			if err := ctrl.Run(context.Background(), "connect blocked source while planning"); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			var toolOutput string
+			for _, msg := range ctrl.History() {
+				if msg.Role == provider.RoleTool && msg.Name == "connect_tool_source" {
+					toolOutput += msg.Content
+				}
+			}
+			want := planmode.Policy{}.Decide(planmode.Call{Name: source, ReadOnly: false}).Message
+			if !strings.Contains(toolOutput, want) {
+				t.Fatalf("connect_tool_source(%s) output = %q, want policy message %q", source, toolOutput, want)
+			}
+		})
 	}
 }
 

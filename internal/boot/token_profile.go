@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"reasonix/internal/agent"
+	"reasonix/internal/planmode"
 	"reasonix/internal/tool"
 )
 
@@ -114,18 +115,16 @@ func (t *toolSourceConnector) Execute(ctx context.Context, args json.RawMessage)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	if blocked, msg := planModeSourceBlocked(ctx, source); blocked {
+		return msg, nil
+	}
+
 	switch source {
 	case "skills":
 		return runSourceInstaller(ctx, "skills", t.skills)
 	case "task":
-		if agent.PlanModeFromContext(ctx) {
-			return "task is unavailable in plan mode because it exposes a writer-capable sub-agent tool.", nil
-		}
 		return runSourceInstaller(ctx, "task", t.task)
 	case "install_source":
-		if agent.PlanModeFromContext(ctx) {
-			return "install_source is unavailable in plan mode because it can install or remove tools.", nil
-		}
 		return runSourceInstaller(ctx, "install_source", t.install)
 	case "web_fetch":
 		return runSourceInstaller(ctx, "web_fetch", t.webFetch)
@@ -148,6 +147,15 @@ func (t *toolSourceConnector) Execute(ctx context.Context, args json.RawMessage)
 	default:
 		return "", fmt.Errorf("unknown tool source %q", p.Source)
 	}
+}
+
+func planModeSourceBlocked(ctx context.Context, source string) (bool, string) {
+	if !agent.PlanModeFromContext(ctx) {
+		return false, ""
+	}
+	readOnlySource := source == "web_fetch" || source == "lsp"
+	decision := planmode.Policy{}.Decide(planmode.Call{Name: source, ReadOnly: readOnlySource})
+	return decision.Blocked, decision.Message
 }
 
 func normalizeToolSource(source string) string {
