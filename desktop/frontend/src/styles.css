@@ -3066,7 +3066,7 @@ a[href] {
   overflow-y: auto;
   overflow-y: overlay;
   overflow-x: hidden;
-  scrollbar-gutter: auto;
+  scrollbar-gutter: stable both-edges;
   padding: 24px 32px 32px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
