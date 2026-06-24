@@ -5574,14 +5574,19 @@ a[href] {
   flex-shrink: 0;
 }
 
-@container (max-width: 620px) {
+@container (max-width: 760px) {
   .composer-meta {
     gap: 8px;
     padding-inline: 10px;
   }
 
   .composer-meta__control--model {
-    flex: 0 0 auto;
+    flex: 1 1 160px;
+    max-width: min(320px, 50vw);
+  }
+
+  .composer-meta--has-intent-chip .composer-meta__control--model {
+    flex: 1 1 160px;
     max-width: min(320px, 50vw);
   }
 
