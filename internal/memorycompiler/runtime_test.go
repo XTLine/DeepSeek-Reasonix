@@ -349,6 +349,35 @@ func TestCompilerContractCanonicalizesSemanticOrder(t *testing.T) {
 	}
 }
 
+func TestCompilerContractIncludesBoundedIRExplanation(t *testing.T) {
+	ir := PlannerIR{
+		Version:     version,
+		Goal:        "optimize a workflow",
+		SourceEvent: "optimize a workflow",
+		RuntimeMode: "control",
+		Constraints: []Constraint{
+			{Type: "must_use", Text: "prefer low latency", Source: "memory:latency"},
+		},
+		MemoryReferences: []MemoryRef{
+			{ID: "memory:latency", Content: "user prefers low latency", Quality: string(QualityHighSignal), Influence: "constraint"},
+		},
+		StrategySelection: &StrategyPick{Selected: "general", Reason: "matched prior low-latency pattern"},
+	}
+	contract, err := compileExecutionContract(ir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(contract, `"ir_explanation"`) {
+		t.Fatalf("compiled contract missing IR explanation:\n%s", contract)
+	}
+	if !strings.Contains(contract, `"constraint_mapping":["must_use constraint from memory:latency: prefer low latency"]`) {
+		t.Fatalf("compiled contract missing constraint explanation:\n%s", contract)
+	}
+	if !strings.Contains(contract, `"memory_influence":["memory:latency influenced decision as constraint (HIGH_SIGNAL)"]`) {
+		t.Fatalf("compiled contract missing memory influence explanation:\n%s", contract)
+	}
+}
+
 func TestStrategyExplorationIsDeterministicAndBounded(t *testing.T) {
 	strategies := ensureBuiltInStrategies(nil)
 	var exploredGoal string
@@ -375,6 +404,107 @@ func TestStrategyExplorationIsDeterministicAndBounded(t *testing.T) {
 	if firstPick.ExplorationRate != 0.1 {
 		t.Fatalf("exploration rate = %v, want 0.1", firstPick.ExplorationRate)
 	}
+}
+
+func TestStrategyExplorationEntropyStaysAboveFloor(t *testing.T) {
+	strategies := ensureBuiltInStrategies(nil)
+	explored := 0
+	total := 400
+	for i := 0; i < total; i++ {
+		goal := "strategy entropy sample " + string(rune('a'+i%26)) + "-" + string(rune('a'+(i/26)%26))
+		if pick := selectStrategy(goal, rankStrategies(goal, strategies)); pick.Mode == "explore" {
+			explored++
+		}
+	}
+	rate := float64(explored) / float64(total)
+	if rate <= 0.03 {
+		t.Fatalf("exploration rate = %.3f, want > 0.03", rate)
+	}
+	if rate > 0.15 {
+		t.Fatalf("exploration rate = %.3f, want bounded near configured rate", rate)
+	}
+}
+
+func TestTraceSplitterKeepsRuntimeTraceSmall(t *testing.T) {
+	tr := ExecutionTrace{
+		ID:        "trace-large",
+		IRVersion: version,
+		Goal:      "debug trace split",
+		Steps:     []Step{{ID: "run", Action: "Run a large command"}},
+		Outcome:   "success",
+		ToolResults: []ToolRecord{{
+			Name:   "bash",
+			Output: strings.Repeat("large-output ", 2000),
+		}},
+		CausalEdges: []CausalEdge{{From: "tool:trace-large:0", To: "outcome:trace-large", Relation: "supported_outcome"}},
+	}
+	bundle := splitTrace(tr, SystemLearning{TraceID: tr.ID, CausalFindings: []string{"tool result supported success"}}, true)
+	runtimeBytes, err := json.Marshal(bundle.RuntimeTrace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	debugBytes, err := json.Marshal(bundle.DebugTrace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runtimeBytes)*100 >= len(debugBytes)*30 {
+		t.Fatalf("runtime trace is too large: runtime=%d debug=%d", len(runtimeBytes), len(debugBytes))
+	}
+	if len(bundle.RuntimeTrace.ToolResults) != 0 || len(bundle.RuntimeTrace.CausalEdges) != 0 {
+		t.Fatalf("runtime trace leaked debug telemetry: %+v", bundle.RuntimeTrace)
+	}
+	if bundle.LearningTrace == nil || len(bundle.LearningTrace.CausalFindings) == 0 {
+		t.Fatalf("learning trace missing structured signal: %+v", bundle.LearningTrace)
+	}
+}
+
+func TestDriftControlReportsStaleConflictingAndOverusedState(t *testing.T) {
+	now := time.Now().UTC()
+	st := state{
+		Strategies: []Strategy{{ID: "general", Successes: 10, Failures: 0}},
+		Nodes: []MemoryNode{
+			{
+				ID:         "old-fact",
+				Type:       "fact",
+				Content:    "old preference",
+				Timestamp:  now.AddDate(0, 0, -365),
+				Confidence: 0.1,
+				Quality:    QualityMediumSignal,
+			},
+			{
+				ID:          "tool-success",
+				Type:        "tool_result",
+				Content:     "go test succeeded",
+				Timestamp:   now,
+				Confidence:  0.9,
+				Quality:     QualityHighSignal,
+				TruthLocked: true,
+			},
+			{
+				ID:          "tool-fail",
+				Type:        "tool_result",
+				Content:     "go test failed: timeout",
+				Timestamp:   now,
+				Confidence:  0.9,
+				Quality:     QualityMediumSignal,
+				TruthLocked: true,
+			},
+		},
+	}
+	next, report := applyDriftControl(st, now, "trace-drift")
+	if !containsString(report.OverusedStrategies, "general") {
+		t.Fatalf("missing overused strategy report: %+v", report)
+	}
+	if !containsString(report.StaleMemoryNodes, "old-fact") {
+		t.Fatalf("missing stale memory report: %+v", report)
+	}
+	if len(report.ConflictingFacts) == 0 {
+		t.Fatalf("missing conflicting fact report: %+v", report)
+	}
+	assertEdge(t, next.Edges, "contradicts")
+	assertNode(t, next.Nodes, func(n MemoryNode) bool {
+		return n.ID == "old-fact" && n.Quality == QualityNoise
+	}, "stale node marked as noise")
 }
 
 func TestTruthLockedNodeCannotBeOverwritten(t *testing.T) {

@@ -27,12 +27,14 @@ const (
 	learningTracesFile = "learning_traces.jsonl"
 	debugTracesFile    = "debug_traces.jsonl"
 	debugTraceEnv      = "REASONIX_MEMORY_COMPILER_DEBUG_TRACE"
-	version            = "v5.1"
+	version            = "v5.2"
 
 	explorationRatePercent   = 10
 	mutationMinEvalTrials    = 2
 	mutationAcceptThreshold  = 0.60
 	mutationRegressionMargin = 0.05
+	strategyDecayK           = 10.0
+	staleConfidenceThreshold = 0.2
 )
 
 var runtimeLocks sync.Map
@@ -193,6 +195,19 @@ type MutationEvaluation struct {
 	Trials   int     `json:"trials"`
 }
 
+type IRExplanation struct {
+	DecisionSummary   string   `json:"decision_summary"`
+	ConstraintMapping []string `json:"constraint_mapping"`
+	MemoryInfluence   []string `json:"memory_influence"`
+	StrategyReason    string   `json:"strategy_reason"`
+}
+
+type TraceBundle struct {
+	RuntimeTrace  ExecutionTrace  `json:"runtime_trace"`
+	LearningTrace *LearningTrace  `json:"learning_trace,omitempty"`
+	DebugTrace    *ExecutionTrace `json:"debug_trace,omitempty"`
+}
+
 type LearningTrace struct {
 	ID                   string               `json:"id"`
 	IRVersion            string               `json:"ir_version"`
@@ -207,6 +222,14 @@ type LearningTrace struct {
 	MutationEvaluations  []MutationEvaluation `json:"mutation_evaluations,omitempty"`
 	Cost                 CostMetrics          `json:"cost,omitempty"`
 	CreatedAt            time.Time            `json:"created_at"`
+}
+
+type DriftReport struct {
+	TraceID            string    `json:"trace_id,omitempty"`
+	OverusedStrategies []string  `json:"overused_strategies,omitempty"`
+	StaleMemoryNodes   []string  `json:"stale_memory_nodes,omitempty"`
+	ConflictingFacts   []string  `json:"conflicting_facts,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type MemoryQuality string
@@ -290,6 +313,7 @@ type state struct {
 	Strategies     []Strategy         `json:"strategies,omitempty"`
 	Mutations      []CompilerMutation `json:"mutations,omitempty"`
 	Learnings      []SystemLearning   `json:"learnings,omitempty"`
+	DriftReports   []DriftReport      `json:"drift_reports,omitempty"`
 	NoisyRefs      map[string]int     `json:"noisy_refs,omitempty"`
 	UpdatedAt      time.Time          `json:"updated_at,omitempty"`
 }
@@ -351,6 +375,8 @@ func (r *Runtime) StartTurn(ctx context.Context, input string, _ []provider.Mess
 }
 
 func buildIR(goal, sourceEvent string, st state) PlannerIR {
+	now := time.Now().UTC()
+	st, drift := applyDriftControl(st, now, "")
 	ir := PlannerIR{
 		Version:     version,
 		Goal:        goal,
@@ -378,7 +404,8 @@ func buildIR(goal, sourceEvent string, st state) PlannerIR {
 			ir.RiskNotes = append(ir.RiskNotes, "quarantined noisy memory pattern "+ref)
 		}
 	}
-	for _, node := range usableSubgraphNodes(st.Nodes, st.Edges, time.Now().UTC()) {
+	ir.RiskNotes = append(ir.RiskNotes, driftRiskNotes(drift)...)
+	for _, node := range usableSubgraphNodes(st.Nodes, st.Edges, now) {
 		if node.Constraint != nil {
 			ir.Constraints = appendConstraint(ir.Constraints, *node.Constraint)
 		}
@@ -450,12 +477,14 @@ func hasUsefulIR(ir PlannerIR) bool {
 func compileExecutionContract(ir PlannerIR) (string, error) {
 	ir = canonicalizeIR(ir)
 	contract := struct {
-		Type        string    `json:"type"`
-		Instruction string    `json:"instruction"`
-		PlannerIR   PlannerIR `json:"planner_ir"`
+		Type        string        `json:"type"`
+		Instruction string        `json:"instruction"`
+		Explanation IRExplanation `json:"ir_explanation"`
+		PlannerIR   PlannerIR     `json:"planner_ir"`
 	}{
 		Type:        "memory_v5_execution_contract",
 		Instruction: "Execute source_event through planner_ir. Treat constraints, risk_notes, strategy_selection, and execution_steps as the controlling plan for this turn. Do not bypass contradictory or quarantined memory outside this IR.",
+		Explanation: explainIR(ir, nil),
 		PlannerIR:   ir,
 	}
 	body, err := json.Marshal(contract)
@@ -463,6 +492,68 @@ func compileExecutionContract(ir PlannerIR) (string, error) {
 		return "", err
 	}
 	return "<memory-compiler-execution>\n" + string(body) + "\n</memory-compiler-execution>", nil
+}
+
+func explainIR(ir PlannerIR, result *ExecutionTrace) IRExplanation {
+	ir = canonicalizeIR(ir)
+	explanation := IRExplanation{
+		DecisionSummary:   "Use strategy " + selectedStrategy(ir) + " for goal: " + ir.Goal,
+		ConstraintMapping: []string{},
+		MemoryInfluence:   []string{},
+		StrategyReason:    "default strategy selection",
+	}
+	if ir.StrategySelection != nil {
+		explanation.StrategyReason = ir.StrategySelection.Reason
+		if result != nil && result.Outcome != "" {
+			explanation.DecisionSummary += " with prior outcome context: " + result.Outcome
+		}
+	}
+	for _, c := range ir.Constraints {
+		entry := c.Type + " constraint"
+		if c.Source != "" {
+			entry += " from " + c.Source
+		}
+		entry += ": " + c.Text
+		explanation.ConstraintMapping = append(explanation.ConstraintMapping, entry)
+		if len(explanation.ConstraintMapping) >= 5 {
+			break
+		}
+	}
+	for _, ref := range ir.MemoryReferences {
+		entry := ref.ID + " influenced decision"
+		if ref.Influence != "" {
+			entry += " as " + ref.Influence
+		}
+		if ref.Quality != "" {
+			entry += " (" + ref.Quality + ")"
+		}
+		explanation.MemoryInfluence = append(explanation.MemoryInfluence, entry)
+		if len(explanation.MemoryInfluence) >= 5 {
+			break
+		}
+	}
+	return canonicalizeExplanation(explanation)
+}
+
+func selectedStrategy(ir PlannerIR) string {
+	if ir.StrategySelection != nil && strings.TrimSpace(ir.StrategySelection.Selected) != "" {
+		return strings.TrimSpace(ir.StrategySelection.Selected)
+	}
+	return "general"
+}
+
+func canonicalizeExplanation(in IRExplanation) IRExplanation {
+	in.DecisionSummary = summarizeText(in.DecisionSummary, 220)
+	in.StrategyReason = summarizeText(in.StrategyReason, 180)
+	in.ConstraintMapping = limitStrings(canonicalStrings(in.ConstraintMapping), 5)
+	in.MemoryInfluence = limitStrings(canonicalStrings(in.MemoryInfluence), 5)
+	if in.ConstraintMapping == nil {
+		in.ConstraintMapping = []string{}
+	}
+	if in.MemoryInfluence == nil {
+		in.MemoryInfluence = []string{}
+	}
+	return in
 }
 
 func canonicalizeIR(ir PlannerIR) PlannerIR {
@@ -639,6 +730,31 @@ func canonicalStrings(in []string) []string {
 	out := dedupeStrings(in)
 	sort.Strings(out)
 	return out
+}
+
+func limitStrings(in []string, n int) []string {
+	if n < 0 {
+		n = 0
+	}
+	if len(in) > n {
+		return in[:n]
+	}
+	if in == nil {
+		return []string{}
+	}
+	return in
+}
+
+func summarizeText(s string, maxRunes int) string {
+	s = strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
+	if maxRunes <= 0 {
+		return ""
+	}
+	if len([]rune(s)) <= maxRunes {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:maxRunes]) + "..."
 }
 
 func roundScore(v float64) float64 {
@@ -947,10 +1063,18 @@ func normalizedOutcomeScore(s Strategy) (float64, string) {
 	if samples == 0 {
 		return 0.5, "neutral prior"
 	}
-	// Usage-normalized scoring prevents a single early win from permanently
-	// dominating strategy selection while still preserving the observed rate.
-	score := s.SuccessRate() / float64(samples)
-	return score, fmt.Sprintf("%.0f%% prior success normalized by %d use(s)", s.SuccessRate()*100, samples)
+	// Usage decay prevents a previously strong strategy from becoming a
+	// permanent attractor when long-running sessions accumulate biased wins.
+	decay := strategyUsageDecay(samples)
+	score := s.SuccessRate() * decay
+	return score, fmt.Sprintf("%.0f%% prior success with %.2f usage decay after %d use(s)", s.SuccessRate()*100, decay, samples)
+}
+
+func strategyUsageDecay(samples int) float64 {
+	if samples <= 0 {
+		return 1
+	}
+	return math.Exp(-float64(samples) / strategyDecayK)
 }
 
 func lowSuccessStrategy(s Strategy) bool {
@@ -1142,15 +1266,32 @@ func (r *Runtime) writeTraceAndLearn(tr ExecutionTrace, strategyID string) {
 	st.ExecutionState = updateExecutionState(st.ExecutionState, tr, learning)
 	st.NoisyRefs = updateNoisyRefs(st.NoisyRefs, learning)
 	st.Mutations = mergeMutations(st.Mutations, mutationsFromLearning(learning, baseline)...)
-	st.UpdatedAt = time.Now().UTC()
-	_ = appendJSONL(filepath.Join(r.dir, tracesFile), executionTraceProjection(tr))
-	if lt, ok := learningTraceFor(tr, learning); ok {
-		_ = appendJSONL(filepath.Join(r.dir, learningTracesFile), lt)
+	st, drift := applyDriftControl(st, time.Now().UTC(), tr.ID)
+	if hasDrift(drift) {
+		st.DriftReports = appendDriftReport(st.DriftReports, drift)
 	}
-	if debugTraceEnabled() {
-		_ = appendJSONL(filepath.Join(r.dir, debugTracesFile), tr)
+	st.UpdatedAt = time.Now().UTC()
+	bundle := splitTrace(tr, learning, debugTraceEnabled())
+	_ = appendJSONL(filepath.Join(r.dir, tracesFile), bundle.RuntimeTrace)
+	if bundle.LearningTrace != nil {
+		_ = appendJSONL(filepath.Join(r.dir, learningTracesFile), *bundle.LearningTrace)
+	}
+	if bundle.DebugTrace != nil {
+		_ = appendJSONL(filepath.Join(r.dir, debugTracesFile), *bundle.DebugTrace)
 	}
 	_ = writeJSON(filepath.Join(r.dir, stateFile), st)
+}
+
+func splitTrace(tr ExecutionTrace, learning SystemLearning, includeDebug bool) TraceBundle {
+	bundle := TraceBundle{RuntimeTrace: executionTraceProjection(tr)}
+	if lt, ok := learningTraceFor(tr, learning); ok {
+		bundle.LearningTrace = &lt
+	}
+	if includeDebug {
+		debug := tr
+		bundle.DebugTrace = &debug
+	}
+	return bundle
 }
 
 func executionTraceProjection(tr ExecutionTrace) ExecutionTrace {
@@ -1424,6 +1565,117 @@ func updateNoisyRefs(existing map[string]int, learning SystemLearning) map[strin
 		existing[pattern]++
 	}
 	return existing
+}
+
+func applyDriftControl(st state, now time.Time, traceID string) (state, DriftReport) {
+	report := DriftReport{TraceID: traceID, CreatedAt: now}
+	st.Strategies = ensureBuiltInStrategies(st.Strategies)
+	for _, s := range st.Strategies {
+		if s.Samples() >= 5 && strategyUsageDecay(s.Samples()) < 0.65 {
+			report.OverusedStrategies = append(report.OverusedStrategies, s.ID)
+		}
+	}
+	for i := range st.Nodes {
+		node := &st.Nodes[i]
+		if node.TruthLocked || node.Quality == QualityCorrupted {
+			continue
+		}
+		decayed := decayedConfidence(*node, now)
+		node.Confidence = decayed
+		if decayed < staleConfidenceThreshold {
+			node.Quality = QualityNoise
+			report.StaleMemoryNodes = append(report.StaleMemoryNodes, node.ID)
+		}
+	}
+	conflicts, edges := detectMemoryConflicts(st.Nodes)
+	for _, edge := range edges {
+		st.Edges = appendEdge(st.Edges, edge)
+	}
+	if len(st.Edges) > 600 {
+		st.Edges = st.Edges[len(st.Edges)-600:]
+	}
+	report.ConflictingFacts = conflicts
+	report.OverusedStrategies = limitStrings(canonicalStrings(report.OverusedStrategies), 10)
+	report.StaleMemoryNodes = limitStrings(canonicalStrings(report.StaleMemoryNodes), 10)
+	report.ConflictingFacts = limitStrings(canonicalStrings(report.ConflictingFacts), 10)
+	return st, report
+}
+
+func detectMemoryConflicts(nodes []MemoryNode) ([]string, []MemoryEdge) {
+	var conflicts []string
+	var edges []MemoryEdge
+	for i := 0; i < len(nodes); i++ {
+		for j := i + 1; j < len(nodes); j++ {
+			if !factsContradict(nodes[i], nodes[j]) {
+				continue
+			}
+			conflicts = append(conflicts, nodes[i].ID+" contradicts "+nodes[j].ID)
+			edges = appendEdge(edges, MemoryEdge{From: nodes[i].ID, To: nodes[j].ID, Relation: "contradicts"})
+			if len(conflicts) >= 25 {
+				return conflicts, edges
+			}
+		}
+	}
+	return conflicts, edges
+}
+
+func factsContradict(a, b MemoryNode) bool {
+	if a.ID == b.ID || a.Quality == QualityCorrupted || b.Quality == QualityCorrupted {
+		return false
+	}
+	aSubject, aOK := toolResultPolarity(a.Content)
+	bSubject, bOK := toolResultPolarity(b.Content)
+	return aOK && bOK && aSubject.name == bSubject.name && aSubject.success != bSubject.success
+}
+
+type toolPolarity struct {
+	name    string
+	success bool
+}
+
+func toolResultPolarity(content string) (toolPolarity, bool) {
+	content = strings.TrimSpace(content)
+	if strings.HasSuffix(content, " succeeded") {
+		name := strings.TrimSpace(strings.TrimSuffix(content, " succeeded"))
+		return toolPolarity{name: name, success: true}, name != ""
+	}
+	if name, _, ok := strings.Cut(content, " failed:"); ok {
+		name = strings.TrimSpace(name)
+		return toolPolarity{name: name, success: false}, name != ""
+	}
+	return toolPolarity{}, false
+}
+
+func appendDriftReport(existing []DriftReport, report DriftReport) []DriftReport {
+	if !hasDrift(report) {
+		return existing
+	}
+	existing = append(existing, report)
+	if len(existing) > 30 {
+		existing = existing[len(existing)-30:]
+	}
+	return existing
+}
+
+func hasDrift(report DriftReport) bool {
+	return len(report.OverusedStrategies) > 0 || len(report.StaleMemoryNodes) > 0 || len(report.ConflictingFacts) > 0
+}
+
+func driftRiskNotes(report DriftReport) []string {
+	if !hasDrift(report) {
+		return nil
+	}
+	var out []string
+	for _, id := range report.OverusedStrategies {
+		out = append(out, "drift control: reduce overused strategy "+id)
+	}
+	for _, id := range report.StaleMemoryNodes {
+		out = append(out, "drift control: ignore stale memory "+id)
+	}
+	for _, conflict := range report.ConflictingFacts {
+		out = append(out, "drift control: resolve memory conflict "+conflict)
+	}
+	return limitStrings(canonicalStrings(out), 6)
 }
 
 func dedupeLearning(l SystemLearning) SystemLearning {
