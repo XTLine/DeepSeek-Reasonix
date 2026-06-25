@@ -375,6 +375,27 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	}
 }
 
+func TestRenderTOMLDocumentsPlanModeAllowedTools(t *testing.T) {
+	cfg := Default()
+	cfg.Agent.PlanModeAllowedTools = []string{"custom_reader"}
+
+	rendered := RenderTOML(cfg)
+	if !strings.Contains(rendered, `plan_mode_allowed_tools = ["custom_reader"]`) {
+		t.Fatalf("rendered config should preserve plan_mode_allowed_tools:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "extra read-only declarations") || !strings.Contains(rendered, "cannot unlock known blocked tools or unsafe bash") {
+		t.Fatalf("rendered config should document tightened plan_mode_allowed_tools semantics:\n%s", rendered)
+	}
+
+	var got Config
+	if _, err := toml.Decode(rendered, &got); err != nil {
+		t.Fatalf("rendered TOML does not parse: %v\n%s", err, rendered)
+	}
+	if !reflect.DeepEqual(got.Agent.PlanModeAllowedTools, cfg.Agent.PlanModeAllowedTools) {
+		t.Fatalf("PlanModeAllowedTools round trip = %v, want %v", got.Agent.PlanModeAllowedTools, cfg.Agent.PlanModeAllowedTools)
+	}
+}
+
 func TestRenderTOMLCreationLayoutStyle(t *testing.T) {
 	c := Default()
 	if err := c.SetDesktopLayoutStyle("creation"); err != nil {

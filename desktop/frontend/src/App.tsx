@@ -680,6 +680,11 @@ function sessionsForScope(sessions: SessionMeta[], filter: HistoryScopeFilter): 
   return sessions.filter((session) => (session.scope || "global") === "global");
 }
 
+function isMissingSessionError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  return /no such file|cannot find the file|file does not exist|session is pending cleanup|session .*not found/i.test(message);
+}
+
 function workspaceDisplayName(path?: string): string {
   if (!path) return "";
   const parts = path.split(/[/\\]/).filter(Boolean);
@@ -2266,6 +2271,17 @@ export default function App() {
     closeTransientOverlays();
     setHistView(null);
   }, [closeTransientOverlays]);
+  const refreshHistoryView = useCallback(async () => {
+    const sessions = await listSessions().catch(() => null);
+    if (!sessions) return;
+    setHistView((cur) =>
+      cur === null || cur.kind !== "history"
+        ? cur
+        : cur.source === "scope"
+          ? { ...cur, sessions: sessionsForScope(sessions, cur.filter) }
+          : { ...cur, sessions },
+    );
+  }, [listSessions]);
 
   const onResumeSession = useCallback(
     async (session: SessionMeta) => {
@@ -2299,6 +2315,8 @@ export default function App() {
         setTabRevealSignal((value) => value + 1);
         setTranscriptRevealSignal((value) => value + 1);
       } catch (err: any) {
+        await refreshHistoryView();
+        if (isMissingSessionError(err)) return;
         setHistView(null);
         if (scope === "project" && session.workspaceRoot) {
           const name = workspaceDisplayName(session.workspaceRoot);
@@ -2308,7 +2326,7 @@ export default function App() {
         }
       }
     },
-    [activateTopic, ensureBlankSurface, ensureBlankTab, openChannelSession, openGlobalTab, openProjectTab, refreshTabMetas, state.running, resumeSession, singleSurfaceLayout, t, showToast],
+    [activateTopic, ensureBlankSurface, ensureBlankTab, openChannelSession, openGlobalTab, openProjectTab, refreshHistoryView, refreshTabMetas, state.running, resumeSession, singleSurfaceLayout, t, showToast],
   );
 
   // Command palette: ⌘K / Ctrl+K opens a fuzzy navigator over commands and
@@ -2397,10 +2415,7 @@ export default function App() {
       try {
         await deleteSession(path);
       } catch {
-        // If the backend could not delete the session (validation, snapshot,
-        // or I/O failure), keep it in the history panel.  The old
-        // listSessions() refresh masked this by re-reading disk; with local
-        // state removal we must let the error propagate.
+        await refreshHistoryView();
         return;
       }
       // Local state removal: filter the deleted session out of the current
@@ -2411,7 +2426,7 @@ export default function App() {
           : { ...cur, sessions: cur.sessions.filter((s) => s.path !== path) },
       );
     },
-    [state.running, deleteSession],
+    [state.running, deleteSession, refreshHistoryView],
   );
   const onRenameSession = useCallback(
     async (path: string, title: string) => {

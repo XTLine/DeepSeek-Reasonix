@@ -130,9 +130,10 @@ func TestTaskToolFiltersTools(t *testing.T) {
 	task := newTestTaskTool(t, sub, parentReg, "sys", "", "", nil)
 	parentReg.Add(task) // simulate the wiring in cli.setup
 	parentReg.Add(fakeTool{name: "run_skill", readOnly: false})
+	parentReg.Add(fakeTool{name: "read_only_skill", readOnly: true})
 	parentReg.Add(fakeTool{name: "research", readOnly: false})
 
-	args := []byte(`{"prompt":"x","tools":["read_file","task","write_file","run_skill","research"]}`)
+	args := []byte(`{"prompt":"x","tools":["read_file","task","write_file","run_skill","read_only_skill","research"]}`)
 	if _, err := task.Execute(testTaskContext(), args); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -141,7 +142,7 @@ func TestTaskToolFiltersTools(t *testing.T) {
 	for _, s := range sub.lastReq.Tools {
 		got[s.Name] = true
 	}
-	if !got["read_file"] || !got["write_file"] || got["task"] || got["run_skill"] || got["research"] || got["bash"] {
+	if !got["read_file"] || !got["write_file"] || got["task"] || got["run_skill"] || got["read_only_skill"] || got["research"] || got["bash"] {
 		t.Errorf("sub-agent tools = %v, want {read_file, write_file} (meta-tools stripped, bash not requested)", got)
 	}
 }
@@ -159,6 +160,7 @@ func TestTaskToolDefaultsToParentToolsWithoutMetaTools(t *testing.T) {
 	task := newTestTaskTool(t, sub, parentReg, "sys", "", "", nil)
 	parentReg.Add(task)
 	parentReg.Add(fakeTool{name: "run_skill", readOnly: false})
+	parentReg.Add(fakeTool{name: "read_only_skill", readOnly: true})
 	parentReg.Add(fakeTool{name: "explore", readOnly: false})
 	parentReg.Add(fakeTool{name: "research", readOnly: false})
 	parentReg.Add(fakeTool{name: "review", readOnly: false})
@@ -173,7 +175,7 @@ func TestTaskToolDefaultsToParentToolsWithoutMetaTools(t *testing.T) {
 		got[s.Name] = true
 	}
 	if !got["read_file"] || !got["grep"] || !got["remember"] ||
-		got["task"] || got["run_skill"] || got["explore"] || got["research"] || got["review"] || got["security_review"] {
+		got["task"] || got["run_skill"] || got["read_only_skill"] || got["explore"] || got["research"] || got["review"] || got["security_review"] {
 		t.Errorf("default sub-agent tools = %v, want normal tools inherited and meta-tools stripped", got)
 	}
 }
@@ -254,6 +256,54 @@ func TestTaskToolRunsEphemerallyWithoutParentSession(t *testing.T) {
 	}
 	if strings.Contains(out, "Subagent reference") {
 		t.Fatalf("ephemeral run should not emit a transcript reference: %q", out)
+	}
+}
+
+func TestReadOnlyTaskToolRunsEphemerallyWithReadOnlyRegistry(t *testing.T) {
+	sub := &mockProvider{name: "sub", chunks: []provider.Chunk{
+		{Type: provider.ChunkText, Text: "read-only findings"},
+		{Type: provider.ChunkDone},
+	}}
+	parentReg := tool.NewRegistry()
+	parentReg.Add(fakeTool{name: "read_file", readOnly: true})
+	parentReg.Add(fakeTool{name: "write_file", readOnly: false})
+	parentReg.Add(fakeTool{name: "todo_write", readOnly: true})
+	parentReg.Add(fakeTool{name: "complete_step", readOnly: true})
+	parentReg.Add(fakeTool{name: "connect_tool_source", readOnly: true})
+	parentReg.Add(fakeTool{name: "read_only_skill", readOnly: true})
+	parentReg.Add(fakeTool{name: "bash", readOnly: false})
+	task := newTestTaskTool(t, sub, parentReg, "writer sys", "", "", nil)
+	readonly := NewReadOnlyTaskTool(task)
+	parentReg.Add(task)
+	parentReg.Add(readonly)
+
+	out, err := readonly.Execute(testTaskContext(), []byte(`{"prompt":"inspect callers"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "read-only findings") {
+		t.Fatalf("output = %q, want final answer", out)
+	}
+	if strings.Contains(out, "Subagent reference") {
+		t.Fatalf("read_only_task should not persist transcript refs: %q", out)
+	}
+	if sys := sub.lastReq.Messages[0]; sys.Role != provider.RoleSystem || sys.Content != DefaultReadOnlyTaskSystemPrompt {
+		t.Fatalf("read_only_task system prompt = %+v, want read-only prompt", sys)
+	}
+
+	got := map[string]bool{}
+	for _, s := range sub.lastReq.Tools {
+		got[s.Name] = true
+	}
+	for _, want := range []string{"read_file", "bash"} {
+		if !got[want] {
+			t.Fatalf("read_only_task sub-agent missing %q; tools=%v", want, toolSchemaNames(sub.lastReq.Tools))
+		}
+	}
+	for _, hidden := range []string{"write_file", "todo_write", "complete_step", "connect_tool_source", "task", "read_only_task", "read_only_skill"} {
+		if got[hidden] {
+			t.Fatalf("read_only_task sub-agent should hide %q; tools=%v", hidden, toolSchemaNames(sub.lastReq.Tools))
+		}
 	}
 }
 

@@ -280,6 +280,7 @@ export interface AppBindings {
   SetDesktopCheckUpdates(enabled: boolean): Promise<void>;
   SetDesktopTelemetry(enabled: boolean): Promise<void>;
   SetDesktopMetrics(enabled: boolean): Promise<void>;
+  SetMemoryCompilerEnabled(enabled: boolean): Promise<void>;
   SetExpandThinking(on: boolean): Promise<void>;
   MigrateDesktopPreferences(language: string, theme: string, style: string): Promise<void>;
   SetAgentParams(temperature: number, maxSteps: number, plannerMaxSteps: number, systemPrompt: string): Promise<void>;
@@ -530,7 +531,7 @@ function bridgeBreadcrumb(method: string): string {
     return `turn ${method}`;
   if (/^(SetModel|SetEffort|SetTokenMode|SetDefaultModel|SetPlannerModel|SetSubagentModel|SetSubagentEffort)/.test(method))
     return `model ${method}`;
-  if (/^(SetDesktop|SetCloseBehavior|SetDisplayMode|SetStatusBar|SetExpandThinking|SetAutoPlan|SetReasoningLanguage)/.test(method))
+  if (/^(SetDesktop|SetCloseBehavior|SetDisplayMode|SetStatusBar|SetExpandThinking|SetAutoPlan|SetMemoryCompilerEnabled|SetReasoningLanguage)/.test(method))
     return `settings ${method}`;
   if (/^(SaveProvider|AddOfficialProviderAccess|RemoveProviderAccess|DeleteProvider|SetProviderKey|ClearProviderKey|FetchProviderModels|ConnectKey)/.test(method))
     return `provider ${method}`;
@@ -924,6 +925,7 @@ function makeMockApp(): AppBindings {
     checkUpdates: true,
     telemetry: true,
     metrics: true,
+    memoryCompilerEnabled: true,
     configPath: "~/projects/reasonix/reasonix.toml",
     providerKinds: ["openai"],
     autoApproveTools: false,
@@ -2639,6 +2641,9 @@ function makeMockApp(): AppBindings {
         },
         async SetDesktopMetrics(enabled: boolean) {
           settings.metrics = enabled;
+        },
+        async SetMemoryCompilerEnabled(enabled: boolean) {
+          settings.memoryCompilerEnabled = enabled;
         },
         async SetExpandThinking(_on: boolean) {},
         async MigrateDesktopPreferences(language: string, theme: string, style: string) {

@@ -25,6 +25,7 @@ func (o *turnOrchestrator) runTurnWithRawDisplay(ctx context.Context, input, raw
 	ctx = agent.WithParentSession(ctx, parentSession)
 	ctx = jobs.WithSession(ctx, parentSession)
 	ctx = agent.WithUserImages(ctx, c.inputImages(input))
+	ctx = agent.WithMemoryCompilerSourceInput(ctx, raw)
 	input = c.Compose(input)
 	startMessages := c.messageCount()
 	defer c.snapshotActivityIfChanged(startMessages)

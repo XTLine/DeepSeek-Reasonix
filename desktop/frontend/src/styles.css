@@ -4052,6 +4052,71 @@ a[href] {
   transform: rotate(90deg);
 }
 
+.msg-memory-citations {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+  color: var(--fg-faint);
+  font-size: 13px;
+}
+.msg-memory-citations__toggle {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  min-height: 24px;
+  padding: 2px 8px 2px 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.msg-memory-citations__toggle:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.msg-memory-citations__chevron {
+  flex: 0 0 auto;
+  transition: transform 0.2s;
+}
+.msg-memory-citations__chevron--open {
+  transform: rotate(90deg);
+}
+.msg-memory-citations__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 0 2px 32px;
+  max-width: min(760px, 100%);
+}
+.msg-memory-citations__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.msg-memory-citations__source {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 560;
+  line-height: 1.35;
+}
+.msg-memory-citations__lines {
+  color: var(--fg-faint);
+  font-weight: 450;
+}
+.msg-memory-citations__note {
+  color: var(--fg-dim);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 /* ── Shimmer sweep for running items ──────────────────────────────── */
 .tool__head[data-running],
 .reasoning__head[data-running] {

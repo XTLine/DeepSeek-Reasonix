@@ -96,6 +96,78 @@ func TestRunSkillSubagentCancellationReachesRunner(t *testing.T) {
 	}
 }
 
+func TestReadOnlySkillInlineAndIsReadOnly(t *testing.T) {
+	home := t.TempDir()
+	writeSkill(t, home, ".reasonix/skills/note.md", "---\ndescription: take a note\n---\nDo the thing.")
+	tl := NewReadOnlySkillTool(New(Options{HomeDir: home, DisableBuiltins: true}), nil)
+
+	if !tl.ReadOnly() {
+		t.Fatal("read_only_skill must be ReadOnly so it works in plan mode")
+	}
+	out, err := tl.Execute(context.Background(), json.RawMessage(`{"name":"note","arguments":"with args"}`))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !strings.Contains(out, "Do the thing.") || !strings.Contains(out, "Arguments: with args") {
+		t.Errorf("inline body/args missing:\n%s", out)
+	}
+}
+
+func TestReadOnlySkillSubagentRunsWithoutContinuation(t *testing.T) {
+	home := t.TempDir()
+	writeSkill(t, home, ".reasonix/skills/dig.md", "---\ndescription: dig\nrunAs: subagent\n---\nbody")
+	var gotTask string
+	var gotOpts SubagentRunOptions
+	runner := func(_ context.Context, sk Skill, task string, opts SubagentRunOptions) (string, error) {
+		gotTask = task
+		gotOpts = opts
+		return "read-only answer from " + sk.Name, nil
+	}
+	tl := NewReadOnlySkillTool(New(Options{HomeDir: home, DisableBuiltins: true}), runner)
+	out, err := tl.Execute(context.Background(), json.RawMessage(`{"name":"dig","arguments":"find X"}`))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if gotTask != "find X" {
+		t.Errorf("runner got task %q", gotTask)
+	}
+	if gotOpts.ContinueFrom != "" || gotOpts.ForkFrom != "" {
+		t.Fatalf("read_only_skill should not pass continuation opts, got %+v", gotOpts)
+	}
+	if out != "read-only answer from dig" {
+		t.Errorf("runner output not returned: %q", out)
+	}
+}
+
+func TestReadOnlySkillSubagentRequiresArgs(t *testing.T) {
+	home := t.TempDir()
+	writeSkill(t, home, ".reasonix/skills/dig.md", "---\ndescription: dig\nrunAs: subagent\n---\nbody")
+	runner := func(_ context.Context, _ Skill, _ string, _ SubagentRunOptions) (string, error) {
+		return "x", nil
+	}
+	tl := NewReadOnlySkillTool(New(Options{HomeDir: home, DisableBuiltins: true}), runner)
+	if _, err := tl.Execute(context.Background(), json.RawMessage(`{"name":"dig"}`)); err == nil {
+		t.Error("read_only_skill subagent should require arguments")
+	}
+}
+
+func TestReadOnlySkillSubagentResolvesProfile(t *testing.T) {
+	home := t.TempDir()
+	writeSkill(t, home, ".reasonix/skills/deep.md", "---\ndescription: deep\nrunAs: subagent\nmodel: deepseek-pro\neffort: max\n---\nbody")
+	tl := NewReadOnlySkillTool(New(Options{HomeDir: home, DisableBuiltins: true}), nil)
+
+	pr, ok := tl.(interface {
+		ResolveProfile(json.RawMessage) *event.Profile
+	})
+	if !ok {
+		t.Fatal("read_only_skill should expose ResolveProfile")
+	}
+	got := pr.ResolveProfile(json.RawMessage(`{"name":"deep","arguments":"x"}`))
+	if got == nil || got.Model != "deepseek-pro" || got.Effort != "max" {
+		t.Fatalf("profile = %+v, want deepseek-pro/max", got)
+	}
+}
+
 func TestRunSkillSubagentResolvesProfile(t *testing.T) {
 	home := t.TempDir()
 	writeSkill(t, home, ".reasonix/skills/deep.md", "---\ndescription: deep\nrunAs: subagent\nmodel: deepseek-pro\neffort: max\n---\nbody")

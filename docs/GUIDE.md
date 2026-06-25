@@ -55,6 +55,8 @@ default_model = "deepseek-flash"   # executor; set [agent].planner_model to add 
 max_steps = 0                    # user/global only; executor tool-call rounds; 0 = no limit
 planner_max_steps = 0            # user/global only; planner read-only tool-call rounds; 0 = no limit
 reasoning_language = "auto"      # visible reasoning text: auto|zh|en
+# plan_mode_allowed_tools = ["custom_reader"]   # extra read-only custom tools only;
+#                                                # does not unlock blocked tools or unsafe bash
 # planner_model = "deepseek-pro"      # optional low-frequency planner
 # subagent_model = "deepseek-pro"     # optional default for runAs=subagent skills
 # subagent_models = { review = "deepseek-pro", security_review = "deepseek-pro" }
@@ -99,6 +101,15 @@ command = "reasonix-plugin-example"
 ```
 
 For the full schema and every field's contract, see [`SPEC.md` §5](./SPEC.md#5-configuration-toml).
+
+`[agent].plan_mode_allowed_tools` is an extra read-only declaration for custom or
+external tools Reasonix cannot classify itself — it is also the escape valve for
+MCP/plugin tools whose read-only flag comes from an untrusted server
+`readOnlyHint`, which plan mode does not trust and so fails closed on until
+declared here (first-party `ReadOnlyToolNames` overrides and built-ins stay
+trusted). It never unlocks known blocked plan-mode tools such as `bash`, `task`,
+writers, installers, or memory mutation tools, and it never bypasses bash's
+plan-mode safety checks.
 
 ## Serve web frontend
 
@@ -334,8 +345,8 @@ convenient.
 
 In an interactive `reasonix` session, built-in commands (`/compact`, `/new`, `/clear`, `/rewind`,
 `/tree`, `/branch`, `/switch`, `/todo`, `/model`, `/mcp`, `/skills`, `/hooks`,
-`/memory`, `/goal`, `/output-style`, `/sandbox`, `/language`, `/auto-plan`,
-`/reasoning-language`, `/help`) run
+`/memory`, `/memory-v5`, `/goal`, `/output-style`, `/sandbox`, `/language`,
+`/auto-plan`, `/reasoning-language`, `/help`) run
 locally — `/help` lists them all. `/new` starts a new session while saving the
 previous transcript for history/resume; `/clear` asks for confirmation, then
 discards the current context without saving it. `/tree` shows saved conversation
@@ -357,6 +368,41 @@ Agent-initiated `remember` and `forget` calls always ask for fresh approval and
 show a compact preview of the saved or archived memory before they run.
 Retrieval keeps the top BM25 result while trimming weak common-word matches, and
 0-result responses suggest narrower, more distinctive follow-up searches.
+Memory v5 is enabled by default across the CLI/TUI, `reasonix serve`, and the
+desktop app because they all share the same local controller. It records local,
+project-scoped execution traces and compiler state under Reasonix home, then
+compiles the next user turn into a compact execution contract only when prior
+outcomes produce actionable constraints. Early turns may only write traces and
+inject nothing. Memory v5 never bypasses memory approvals, never uploads memory
+content, and never mutates the cache-stable system prompt, provider prefix, or
+tool schemas.
+
+Toggle future turns with `/memory-v5 off|on|status` inside an interactive
+session, or with `reasonix config memory-v5 off|on|status` from a shell/script.
+Desktop users can also use Settings → General → Memory v5. Settings → Updates →
+Share aggregate quality metrics controls the optional aggregate upload. When
+enabled, that upload may include only anonymous
+count/size buckets such as injection on/off, compiled-token bucket, IR-overhead
+bucket, memory-reference count, constraint/risk/step counts, and memory-graph
+size buckets. It never includes memory text, prompts, tool outputs, file paths,
+IDs, keys, base URLs, or file contents.
+
+CLI/TUI and `reasonix serve` use the same user/global config. Project
+`reasonix.toml` files cannot override this user/global setting. The CLI command
+updates this underlying config; advanced users may also edit it manually under
+Reasonix home:
+
+```toml
+[agent]
+memory_compiler = { enabled = false }
+```
+
+The CLI can use Memory v5 for local turns, but it does not run the desktop
+aggregate metrics upload pipeline. When `reasonix run --metrics <path>` is used,
+the JSON also includes content-free `memory_compiler_*` summary fields and a
+`memory_compiler_turn_details` array with per-turn injection state, compiled token
+and IR-overhead estimates, referenced-memory/constraint/risk/step counts, and
+current memory-graph counts.
 For implementation details, see
 [`SESSION_MEMORY_RETRIEVAL.md`](SESSION_MEMORY_RETRIEVAL.md).
 
@@ -452,6 +498,15 @@ Subagent skills inherit the executor model by default. Set `subagent_model` to
 run them on another configured model, or use `subagent_models` to override only
 specific skills such as `review` or `security_review`.
 
+Use `read_only_task` when planning needs isolated, deeper research without
+granting write-capable delegation. Use `read_only_skill` when the same need is
+best expressed through an existing skill. Both run ephemeral read-only
+subagents with only read-only research tools plus safe foreground bash, return
+only the final answer, and do not create resumable subagent transcripts. In
+token economy mode, connect only this narrow surface with
+`connect_tool_source(source="read_only_skill")`; the full `skills` source still
+enables writer-capable skill tools and remains blocked in plan mode.
+
 For interactive frontends, plan mode is manual by default. Set
 `agent.auto_plan = "on"` to make complex-looking tasks enter plan mode
 automatically: Reasonix first drafts a read-only plan, then waits for approval
@@ -463,8 +518,10 @@ inputs and falls back to the heuristic if classification fails. Use
 only; `agent.auto_plan` in a project `reasonix.toml` is ignored. The visible
 reasoning language uses a similar shape: `/reasoning-language auto|zh|en` in the
 session, or `reasonix config reasoning-language auto|zh|en` in a shell/script.
-Pass `--local` to the reasoning-language shell command only when you
-intentionally want a project-local override.
+Memory v5 uses `/memory-v5 off|on|status` or
+`reasonix config memory-v5 off|on|status` and is user-level only. Pass `--local`
+to the reasoning-language shell command only when you intentionally want a
+project-local override.
 
 The why behind separate sessions (keeping each model's prefix cache-stable) is in
 [`SPEC.md` §3.5](./SPEC.md#35-two-model-collaboration-coordinator).

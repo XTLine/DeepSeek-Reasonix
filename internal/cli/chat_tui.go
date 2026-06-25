@@ -3249,6 +3249,9 @@ func (m *chatTUI) runSlashCommand(input string) tea.Cmd {
 	case "/reasoning-language":
 		m.echoLocalCommand(input)
 		m.runReasoningLanguageCommand(input)
+	case "/memory-v5":
+		m.echoLocalCommand(input)
+		m.runMemoryV5Command(input)
 	case "/rewind":
 		m.echoLocalCommand(input)
 		m.openRewind()

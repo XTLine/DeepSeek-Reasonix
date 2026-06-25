@@ -35,6 +35,30 @@ const confirmed = reducer(sent, { type: "event", e: { kind: "text", text: "hi" }
 eq(confirmed.items.filter((it) => it.kind === "user").length, 1, "first backend event confirms without duplicating");
 eq(confirmed.pendingUser, undefined, "confirmation clears the pending marker");
 
+const memoryStatsEvent = {
+  kind: "memory_compiler_stats",
+  memoryCompiler: {
+    injected: true,
+    usefulIR: true,
+    compiledTokens: 640,
+    irOverheadTokens: 120,
+    memoryReferences: 2,
+    constraints: 1,
+    riskNotes: 0,
+    executionSteps: 3,
+    totalNodes: 18,
+    highSignalNodes: 4,
+    toolResultNodes: 6,
+    decisionNodes: 2,
+    strategyCount: 5,
+    learningCount: 3,
+  },
+} as WireEvent;
+const statsOnly = reducer(sent, { type: "event", e: memoryStatsEvent });
+eq(statsOnly, sent, "memory compiler stats do not confirm or mutate the visible turn");
+const startedThenStats = reducer(reducer(sent, { type: "event", e: { kind: "turn_started" } as WireEvent }), { type: "event", e: memoryStatsEvent });
+eq(startedThenStats.items.length, 2, "memory compiler stats do not add transcript items after turn start");
+
 const failedState = reducer(sent, { type: "send_failed", error: "Send failed: bridge unavailable" });
 const failedBubble = failedState.items.find((it) => it.kind === "user");
 eq(failedBubble?.kind === "user" && failedBubble.failed, true, "send_failed marks the bubble failed");

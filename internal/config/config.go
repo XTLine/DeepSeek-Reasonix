@@ -792,11 +792,27 @@ type AgentConfig struct {
 	// ColdResumePrune elides stale tool results when a session reopens past the
 	// provider cache window. nil = default enabled.
 	ColdResumePrune *bool `toml:"cold_resume_prune"`
-	// PlanModeAllowedTools names tools that are exempt from the plan-mode read-only
-	// gate. When a tool named here is called while in plan mode, it executes without
-	// the "plan mode is read-only" block. Use sparingly — prefer the built-in safe
-	// bash commands for read-only exploration.
+	// PlanModeAllowedTools names extra custom tools the plan-mode policy may treat
+	// as read-only. It cannot unlock known blocked tools or unsafe bash commands.
 	PlanModeAllowedTools []string `toml:"plan_mode_allowed_tools"`
+	// MemoryCompiler controls the v5 execution-memory compiler. Missing configs
+	// default to enabled so users get the self-improving planner unless they opt
+	// out explicitly.
+	MemoryCompiler MemoryCompilerConfig `toml:"memory_compiler"`
+}
+
+// MemoryCompilerConfig controls the v5 execution-memory compiler.
+type MemoryCompilerConfig struct {
+	Enabled *bool `toml:"enabled"`
+}
+
+// MemoryCompilerEnabled reports whether the v5 execution-memory compiler should
+// participate in future turns. Missing config defaults to true.
+func (c *Config) MemoryCompilerEnabled() bool {
+	if c == nil || c.Agent.MemoryCompiler.Enabled == nil {
+		return true
+	}
+	return *c.Agent.MemoryCompiler.Enabled
 }
 
 // ProviderEntry declares a model provider instance. ContextWindow is the model's

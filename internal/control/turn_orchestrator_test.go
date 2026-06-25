@@ -34,12 +34,16 @@ func TestTurnOrchestratorRunsForegroundUnit(t *testing.T) {
 }
 
 type recordingSessionRunner struct {
-	session *agent.Session
-	inputs  []string
+	session              *agent.Session
+	inputs               []string
+	memoryCompilerInputs []string
 }
 
-func (r *recordingSessionRunner) Run(_ context.Context, input string) error {
+func (r *recordingSessionRunner) Run(ctx context.Context, input string) error {
 	r.inputs = append(r.inputs, input)
+	if source, ok := agent.MemoryCompilerSourceInputFromContext(ctx); ok {
+		r.memoryCompilerInputs = append(r.memoryCompilerInputs, source)
+	}
 	r.session.Add(provider.Message{Role: provider.RoleUser, Content: input})
 	return nil
 }
@@ -174,6 +178,9 @@ func TestTurnOrchestratorRefTurnRecordsVisibleDisplay(t *testing.T) {
 	}
 	if !strings.Contains(runner.inputs[0], "Referenced context:") || !strings.Contains(runner.inputs[0], "referenced evidence") {
 		t.Fatalf("model input should include resolved reference context, got %q", runner.inputs[0])
+	}
+	if len(runner.memoryCompilerInputs) != 1 || runner.memoryCompilerInputs[0] != visible {
+		t.Fatalf("memory compiler source input = %+v, want %q", runner.memoryCompilerInputs, visible)
 	}
 	if gotDisplay != visible {
 		t.Fatalf("display recorder display = %q, want visible prompt %q", gotDisplay, visible)
