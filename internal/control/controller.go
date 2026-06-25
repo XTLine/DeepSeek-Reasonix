@@ -1115,7 +1115,7 @@ func (c *Controller) Run(ctx context.Context, input string) error {
 		if block, _ := c.hooks.PromptSubmit(ctx, input, c.turn); block {
 			return nil
 		}
-		defer func() { c.hooks.Stop(ctx, lastAssistantText(c.History()), c.turn) }()
+		defer func() { c.hooks.Stop(context.Background(), lastAssistantText(c.History()), c.turn) }()
 	}
 	return c.runner.Run(ctx, input)
 }
