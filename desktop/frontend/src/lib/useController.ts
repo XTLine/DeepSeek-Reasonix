@@ -204,6 +204,7 @@ export function sameMeta(a?: Meta, b?: Meta): boolean {
     a.workspaceName === b.workspaceName &&
     a.workspacePath === b.workspacePath &&
     a.gitBranch === b.gitBranch &&
+    a.imageInputEnabled === b.imageInputEnabled &&
     a.autoApproveTools === b.autoApproveTools &&
     a.bypass === b.bypass &&
     a.collaborationMode === b.collaborationMode &&

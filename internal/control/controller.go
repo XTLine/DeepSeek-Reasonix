@@ -2522,6 +2522,23 @@ func (c *Controller) Label() string { return c.label }
 // Empty means no scoping is in effect.
 func (c *Controller) WorkspaceRoot() string { return c.workspaceRoot }
 
+func (c *Controller) imageInputEnabled() bool {
+	ref := c.modelRef
+	cfg, err := config.LoadForRoot(c.workspaceRoot)
+	if err == nil && ref == "" {
+		ref = cfg.DefaultModel
+	}
+	if err != nil || ref == "" {
+		return false
+	}
+	entry, ok := cfg.ResolveModel(ref)
+	return ok && config.EffectiveVision(entry)
+}
+
+// ImageInputEnabled reports whether the current model accepts direct image
+// inputs, so frontends can gate image-only UX before a turn starts.
+func (c *Controller) ImageInputEnabled() bool { return c.imageInputEnabled() }
+
 // InheritLifecycleFrom carries same-session lifecycle state across controller
 // rebuilds, such as model switches that preserve the conversation.
 func (c *Controller) InheritLifecycleFrom(prev *Controller) {

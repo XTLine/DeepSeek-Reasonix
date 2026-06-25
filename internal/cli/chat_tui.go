@@ -1173,6 +1173,10 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			sentLine := m.expandPastedBlocks(line)
+			if m.hasActiveImagePaste(line, sentLine) && !m.ctrl.ImageInputEnabled() {
+				m.notice("current model does not support image input; remove the image or switch to an image-capable model")
+				return m, finalize(m, cmds)
+			}
 			m.input.Reset()
 			if goal, ok := m.ctrl.AutoStartResearchGoal(sentLine); ok {
 				m.pastedBlocks = nil

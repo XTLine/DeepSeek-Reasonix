@@ -88,6 +88,15 @@ func (m *chatTUI) pasteLabelsIn(s string) []string {
 	return labels
 }
 
+func (m *chatTUI) hasActiveImagePaste(displayed, sent string) bool {
+	for _, block := range m.pastedBlocks {
+		if block.image && strings.Contains(displayed, block.label) {
+			return true
+		}
+	}
+	return cliImageRefRe.MatchString(sent)
+}
+
 func (m *chatTUI) clearSubmittedPastes() {
 	if len(m.pendingPastes) == 0 {
 		return

@@ -3646,6 +3646,7 @@ type Meta struct {
 	WorkspaceName     string `json:"workspaceName,omitempty"`
 	WorkspacePath     string `json:"workspacePath,omitempty"`
 	GitBranch         string `json:"gitBranch,omitempty"`
+	ImageInputEnabled bool   `json:"imageInputEnabled"`
 	AutoApproveTools  bool   `json:"autoApproveTools"`
 	Bypass            bool   `json:"bypass"` // legacy JSON key for YOLO/full-access tool auto-approval
 	CollaborationMode string `json:"collaborationMode"`
@@ -3660,6 +3661,26 @@ type Meta struct {
 // subscribes to.
 func (a *App) Meta() Meta {
 	return a.MetaForTab("")
+}
+
+func (a *App) imageInputEnabledForTab(tabID string) bool {
+	var tab *WorkspaceTab
+	a.mu.RLock()
+	tab = a.tabByIDLocked(tabID)
+	a.mu.RUnlock()
+	if tab == nil {
+		return false
+	}
+	ref := tab.model
+	cfg, err := config.LoadForRoot(tab.WorkspaceRoot)
+	if err == nil && ref == "" {
+		ref = cfg.DefaultModel
+	}
+	if err != nil || ref == "" {
+		return false
+	}
+	entry, ok := cfg.ResolveModel(ref)
+	return ok && config.EffectiveVision(entry)
 }
 
 func (a *App) MetaForTab(tabID string) Meta {
@@ -3687,6 +3708,7 @@ func (a *App) MetaForTab(tabID string) Meta {
 		WorkspaceName:     tabWorkspaceName(tab, cwd),
 		WorkspacePath:     cwd,
 		GitBranch:         workspaceGitBranch(cwd),
+		ImageInputEnabled: a.imageInputEnabledForTab(tabID),
 		AutoApproveTools:  autoApproveTools,
 		Bypass:            autoApproveTools,
 		CollaborationMode: collaborationMode,

@@ -285,6 +285,7 @@ export const zhTW: Record<DictKey, string> = {
   "composer.pastedExpand": "展開",
   "composer.pastedRemove": "刪除貼上文字",
   "composer.removeImage": "移除圖片",
+  "composer.imageInputUnsupported": "目前模型不支援圖片輸入。請移除圖片，或切換到支援圖片的模型。",
   "composer.contextItems": "上下文項目",
   "composer.workspaceReferences": "工作區引用",
   "composer.removeReference": "移除引用",

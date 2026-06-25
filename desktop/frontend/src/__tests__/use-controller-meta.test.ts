@@ -26,6 +26,7 @@ function meta(overrides: Partial<Meta> = {}): Meta {
     workspaceName: "repo",
     workspacePath: "/repo",
     gitBranch: "main",
+    imageInputEnabled: true,
     autoApproveTools: false,
     bypass: false,
     collaborationMode: "normal",
@@ -59,6 +60,7 @@ console.log("\nuse controller meta");
   eq(sameMeta(meta({ collaborationMode: "normal" }), meta({ collaborationMode: "plan" })), false, "collaboration mode changes invalidate meta equality");
   eq(sameMeta(meta({ workspacePath: "/repo" }), meta({ workspacePath: "/other" })), false, "workspace path changes invalidate meta equality");
   eq(sameMeta(meta({ gitBranch: "main" }), meta({ gitBranch: "feature" })), false, "git branch changes invalidate meta equality");
+  eq(sameMeta(meta({ imageInputEnabled: true }), meta({ imageInputEnabled: false })), false, "image input capability changes invalidate meta equality");
 }
 
 {

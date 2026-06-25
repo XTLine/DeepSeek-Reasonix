@@ -411,6 +411,7 @@ export const zh: Record<DictKey, string> = {
   "composer.removeImage": "移除图片",
   "composer.attachImageFailed": "图片粘贴失败",
   "composer.pasteImageFailed": "未能读取剪贴板图片",
+  "composer.imageInputUnsupported": "当前模型不支持图片输入。请移除图片，或切换到支持图片的模型。",
   "composer.contextItems": "上下文项目",
   "composer.workspaceReferences": "工作区引用",
   "composer.removeReference": "移除引用",

@@ -410,6 +410,7 @@ export const en = {
   "composer.removeImage": "Remove image",
   "composer.attachImageFailed": "Image paste failed",
   "composer.pasteImageFailed": "Could not read clipboard image",
+  "composer.imageInputUnsupported": "Current model does not support image input. Remove the image or switch to an image-capable model.",
   "composer.contextItems": "Context items",
   "composer.workspaceReferences": "Workspace references",
   "composer.removeReference": "Remove reference",

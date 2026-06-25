@@ -1990,6 +1990,80 @@ func TestSetTokenModeMigratesStaleOfficialDeepSeekTabModel(t *testing.T) {
 	}
 }
 
+func TestMetaForTabReportsImageInputCapability(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	setDesktopTestCredential(t, "CUSTOM_KEY", "sk-test")
+
+	cfg := config.Default()
+	cfg.DefaultModel = "custom/text-only"
+	cfg.Desktop.ProviderAccess = []string{"custom"}
+	cfg.Providers = []config.ProviderEntry{{
+		Name:         "custom",
+		Kind:         "openai",
+		BaseURL:      "https://example.invalid/v1",
+		APIKeyEnv:    "CUSTOM_KEY",
+		Models:       []string{"text-only", "vision-pro"},
+		VisionModels: []string{"vision-pro"},
+	}}
+	if err := cfg.SaveTo(config.UserConfigPath()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	app := NewApp()
+	app.ctx = context.Background()
+	app.readyHook = func() {}
+	app.setTestCtrl(control.New(control.Options{Label: "custom/text-only"}), "custom/text-only")
+	defer func() {
+		if c := app.activeCtrl(); c != nil {
+			c.Close()
+		}
+	}()
+
+	if got := app.Meta().ImageInputEnabled; got {
+		t.Fatal("text-only meta should disable image input")
+	}
+	if err := app.SetModel("custom/vision-pro"); err != nil {
+		t.Fatalf("SetModel(custom/vision-pro): %v", err)
+	}
+	if got := app.Meta().ImageInputEnabled; !got {
+		t.Fatal("vision model meta should enable image input")
+	}
+}
+
+func TestMetaForTabImageInputCapabilityUsesCurrentRef(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	setDesktopTestCredential(t, "CUSTOM_KEY", "sk-test")
+
+	cfg := config.Default()
+	cfg.DefaultModel = "custom/vision-pro"
+	cfg.Desktop.ProviderAccess = []string{"custom"}
+	cfg.Providers = []config.ProviderEntry{{
+		Name:         "custom",
+		Kind:         "openai",
+		BaseURL:      "https://example.invalid/v1",
+		APIKeyEnv:    "CUSTOM_KEY",
+		Models:       []string{"text-only", "vision-pro"},
+		VisionModels: []string{"vision-pro"},
+	}}
+	if err := cfg.SaveTo(config.UserConfigPath()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	app := NewApp()
+	app.ctx = context.Background()
+	app.readyHook = func() {}
+	app.setTestCtrl(control.New(control.Options{Label: "deleted/model"}), "deleted/model")
+	defer func() {
+		if c := app.activeCtrl(); c != nil {
+			c.Close()
+		}
+	}()
+
+	if got := app.Meta().ImageInputEnabled; got {
+		t.Fatal("unknown model ref should not inherit image input from the default fallback model")
+	}
+}
+
 func TestSetTokenModeKeepsControllerWhenRebuildFails(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	t.Setenv("DEEPSEEK_API_KEY", "")

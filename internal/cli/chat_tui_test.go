@@ -29,6 +29,8 @@ type stubbornTurnRunner struct {
 	release chan struct{}
 }
 
+const tinyPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
 func TestMain(m *testing.M) {
 	old := detectTermuxTerminal
 	detectTermuxTerminal = func() bool { return false }
@@ -71,6 +73,32 @@ func waitForCLIEvent(t *testing.T, ch <-chan event.Event, kind event.Kind) {
 			t.Fatalf("timed out waiting for event %v", kind)
 		}
 	}
+}
+
+func writeTUIImageCapabilityConfig(t *testing.T, root string) {
+	t.Helper()
+	cfg := config.Default()
+	cfg.DefaultModel = "custom/text-only"
+	cfg.Providers = []config.ProviderEntry{{
+		Name:         "custom",
+		Kind:         "openai",
+		BaseURL:      "https://example.invalid/v1",
+		Models:       []string{"text-only", "vision-pro"},
+		VisionModels: []string{"vision-pro"},
+	}}
+	if err := cfg.SaveTo(filepath.Join(root, "reasonix.toml")); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+}
+
+func saveTestImageAttachment(t *testing.T, root string) string {
+	t.Helper()
+	t.Chdir(root)
+	path, err := control.SaveImageDataURL("data:image/png;base64," + tinyPNGBase64)
+	if err != nil {
+		t.Fatalf("SaveImageDataURL: %v", err)
+	}
+	return path
 }
 
 // TestEscCancelsRunningTurnWithCompletionOpen reproduces the report that Esc
@@ -1565,6 +1593,82 @@ func TestFoldedPasteUsesPlaceholderAndExpandsOnSend(t *testing.T) {
 		if !strings.Contains(sent, want) {
 			t.Fatalf("expanded paste missing %q in:\n%s", want, sent)
 		}
+	}
+}
+
+func TestTextOnlyModelBlocksSendingPastedImageRefs(t *testing.T) {
+	workspace := t.TempDir()
+	writeTUIImageCapabilityConfig(t, workspace)
+	path := saveTestImageAttachment(t, workspace)
+
+	runner := &recordingTurnRunner{}
+	m := newTestChatTUI()
+	m.ctrl = control.New(control.Options{
+		Runner:        runner,
+		Sink:          event.Discard,
+		WorkspaceRoot: workspace,
+		ModelRef:      "custom/text-only",
+	})
+	m.pastedBlocks = []pastedBlock{{label: "[image #1]", text: "@" + path, image: true}}
+	m.input.SetValue("describe [image #1] please")
+
+	model, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = model.(chatTUI)
+
+	if len(runner.inputs) != 0 {
+		t.Fatalf("text-only model should not start a turn, inputs=%q", runner.inputs)
+	}
+	if got := m.input.Value(); got != "describe [image #1] please" {
+		t.Fatalf("blocked send should keep the image token in place, got %q", got)
+	}
+	if len(m.pastedBlocks) != 1 || m.pastedBlocks[0].text != "@"+path {
+		t.Fatalf("blocked send should keep pasted image refs, got %#v", m.pastedBlocks)
+	}
+	if got := strings.Join(m.transcript, "\n"); !strings.Contains(got, "does not support image input") {
+		t.Fatalf("blocked send should show an image capability warning, transcript=%q", got)
+	}
+}
+
+func TestVisionModelAllowsSendingPastedImageRefs(t *testing.T) {
+	workspace := t.TempDir()
+	writeTUIImageCapabilityConfig(t, workspace)
+	path := saveTestImageAttachment(t, workspace)
+
+	runner := &recordingTurnRunner{}
+	events := make(chan event.Event, 8)
+	m := newTestChatTUI()
+	m.ctrl = control.New(control.Options{
+		Runner: runner,
+		Sink: event.FuncSink(func(e event.Event) {
+			events <- e
+		}),
+		WorkspaceRoot: workspace,
+		ModelRef:      "custom/vision-pro",
+	})
+	m.pastedBlocks = []pastedBlock{{label: "[image #1]", text: "@" + path, image: true}}
+	m.input.SetValue("describe [image #1] please")
+
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = model.(chatTUI)
+	if cmd == nil {
+		t.Fatal("vision model send should resolve refs before starting the turn")
+	}
+	msg := cmd()
+	if _, ok := msg.(refsResolvedMsg); !ok {
+		t.Fatalf("enter cmd = %T, want refsResolvedMsg", msg)
+	}
+	model, _ = m.Update(msg)
+	m = model.(chatTUI)
+	waitForCLIEvent(t, events, event.TurnDone)
+
+	if len(runner.inputs) != 1 {
+		t.Fatalf("vision model should send exactly one turn, inputs=%q", runner.inputs)
+	}
+	if !strings.Contains(runner.inputs[0], "@"+path) {
+		t.Fatalf("runner input should retain the image ref context, got %q", runner.inputs[0])
+	}
+	if got := strings.Join(m.transcript, "\n"); strings.Contains(got, "does not support image input") {
+		t.Fatalf("vision-capable model should not warn about image input, transcript=%q", got)
 	}
 }
 

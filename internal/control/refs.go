@@ -154,6 +154,9 @@ func (c *Controller) HasRefs(line string) bool {
 // turn can carry them to a vision-capable model. Best-effort: an unreadable image
 // is skipped — the @ref still lands as text via ResolveRefs.
 func (c *Controller) inputImages(line string) []string {
+	if !c.imageInputEnabled() {
+		return nil
+	}
 	var urls []string
 	for _, r := range c.detectRefs(line) {
 		if url, err := visionRefImageDataURL(r, c.workspaceRoot); err == nil {

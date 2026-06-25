@@ -22734,7 +22734,7 @@ a[href] {
 .toast {
   pointer-events: auto;
   cursor: pointer;
-  background: var(--bg);
+  background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 20px;
@@ -22749,26 +22749,14 @@ a[href] {
   user-select: none;
 }
 .toast--warn {
-  border-color: #eab308;
-  background: #fefce8;
-  color: #713f12;
+  border-color: color-mix(in srgb, var(--warn) 38%, var(--border));
+  background: color-mix(in srgb, var(--warn) 12%, var(--bg-elev));
+  color: color-mix(in srgb, var(--warn) 78%, var(--fg));
 }
 .toast--error {
-  border-color: #ef4444;
-  background: #fef2f2;
-  color: #991b1b;
-}
-@media (prefers-color-scheme: dark) {
-  .toast--warn {
-    background: #422006;
-    border-color: #a16207;
-    color: #fde68a;
-  }
-  .toast--error {
-    background: #450a0a;
-    border-color: #dc2626;
-    color: #fca5a5;
-  }
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--border));
+  background: color-mix(in srgb, var(--danger) 12%, var(--bg-elev));
+  color: color-mix(in srgb, var(--danger) 78%, var(--fg));
 }
 .toast__icon {
   flex: 0 0 auto;

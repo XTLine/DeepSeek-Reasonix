@@ -182,6 +182,7 @@ type Input interface {
 	ComposeSynthetic(text string) string
 	ResolveRefs(ctx context.Context, line string) (block string, errs []string)
 	HasRefs(line string) bool
+	ImageInputEnabled() bool
 }
 
 // Settings covers runtime session settings that don't fit a richer domain.
