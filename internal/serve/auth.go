@@ -458,8 +458,10 @@ func (ag *authGate) signSession() string {
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		// crypto/rand.Read cannot fail on modern systems; panic rather than
-		// fall back to an all-zero nonce that would make the session cookie
-		// trivially forgeable and bypass authentication.
+		// fall back to an all-zero nonce. Forging a cookie still requires the
+		// PBKDF2-derived sessKey, so this is not an auth bypass, but a constant
+		// nonce weakens session token uniqueness/unpredictability and is the
+		// same anti-pattern generateToken/sessionKeyForPasswordHash panic on.
 		panic("serve/auth: crypto/rand.Read failed: " + err.Error())
 	}
 
