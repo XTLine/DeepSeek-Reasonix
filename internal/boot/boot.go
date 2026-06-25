@@ -1030,6 +1030,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		PluginCtx:              ctx,
 		WorkspaceRoot:          root,
 		AutoPlan:               cfg.Agent.AutoPlan,
+		ResponseLanguage:       cfg.ResponseLanguage(),
 		ReasoningLanguage:      cfg.ReasoningLanguage(),
 		DisableColdResumePrune: !cfg.ColdResumePruneEnabled(),
 		Shell:                  shell,

@@ -519,6 +519,45 @@ model = "x"
 	}
 }
 
+func TestBuildUsesConfiguredLanguageForResponsePreference(t *testing.T) {
+	isolateConfigHome(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+
+	registerBootSubagentTestProvider()
+	prov := &bootSubagentTestProvider{}
+	setBootSubagentTestProvider(t, prov)
+	writeFile(t, dir, "reasonix.toml", `
+default_model = "test-model"
+language = "en"
+
+[agent]
+system_prompt = "BASE"
+
+[[providers]]
+name = "test-model"
+kind = "boot-subagent-test"
+model = "x"
+`)
+
+	ctrl, err := Build(context.Background(), Options{Sink: event.Discard})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	defer ctrl.Close()
+
+	if err := ctrl.Run(context.Background(), "first review"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	reqs := prov.requestsSnapshot()
+	if len(reqs) == 0 {
+		t.Fatal("provider requests = 0, want at least one")
+	}
+	if got := bootLastUser(reqs[0]); !strings.Contains(got, "<response-language>") || !strings.Contains(got, "use English") {
+		t.Fatalf("first user turn = %q, want English response preference", got)
+	}
+}
+
 func TestBuildSubagentSkillGetsForegroundOnlyBash(t *testing.T) {
 	isolateConfigHome(t)
 	dir := robustTempDir(t)
