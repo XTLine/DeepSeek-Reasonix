@@ -106,6 +106,7 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	orig.Desktop.DisplayMode = "compact"
 	orig.Desktop.StatusBarStyle = "text"
 	orig.Desktop.StatusBarItems = []string{"model", "balance", "cache"}
+	orig.Desktop.DefaultToolApprovalMode = "auto"
 	orig.Desktop.CheckUpdates = boolPtr(false)
 	orig.Desktop.Telemetry = boolPtr(false)
 	orig.Notifications.Enabled = true
@@ -235,6 +236,9 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	}
 	if want := []string{"model", "balance", "cache"}; !reflect.DeepEqual(got.Desktop.StatusBarItems, want) {
 		t.Errorf("desktop.status_bar_items = %v, want %v", got.Desktop.StatusBarItems, want)
+	}
+	if got.DesktopDefaultToolApprovalMode() != "auto" {
+		t.Errorf("desktop.default_tool_approval_mode = %q, want auto", got.DesktopDefaultToolApprovalMode())
 	}
 	if got.Desktop.CheckUpdates == nil || *got.Desktop.CheckUpdates {
 		t.Errorf("desktop.check_updates = %+v, want false", got.Desktop.CheckUpdates)
@@ -536,17 +540,18 @@ func TestScopedRenderSeparatesUserAndProjectConfig(t *testing.T) {
 	c.Desktop.ThemeStyle = "graphite"
 	c.Desktop.CloseBehavior = "background"
 	c.Desktop.StatusBarStyle = "text"
+	c.Desktop.DefaultToolApprovalMode = "auto"
 	c.Desktop.CheckUpdates = boolPtr(false)
 
 	user := RenderTOMLForScope(c, RenderScopeUser)
-	for _, want := range []string{"config_version = 3", "[desktop]", `theme = "dark"`, `close_behavior = "background"`, `status_bar_style = "text"`, `check_updates = false`, "[notifications]", "[tools.shell]"} {
+	for _, want := range []string{"config_version = 3", "[desktop]", `theme = "dark"`, `close_behavior = "background"`, `status_bar_style = "text"`, `default_tool_approval_mode = "auto"`, `check_updates = false`, "[notifications]", "[tools.shell]"} {
 		if !strings.Contains(user, want) {
 			t.Fatalf("user render missing %q:\n%s", want, user)
 		}
 	}
 
 	project := RenderTOMLForScope(c, RenderScopeProject)
-	for _, forbidden := range []string{"[desktop]", "[notifications]", "close_behavior =", "check_updates =", "max_steps", "planner_max_steps"} {
+	for _, forbidden := range []string{"[desktop]", "[notifications]", "close_behavior =", "default_tool_approval_mode =", "check_updates =", "max_steps", "planner_max_steps"} {
 		if strings.Contains(project, forbidden) {
 			t.Fatalf("project render should not contain %q:\n%s", forbidden, project)
 		}

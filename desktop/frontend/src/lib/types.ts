@@ -951,6 +951,7 @@ export interface SettingsView {
   displayMode: string;   // "standard" | "compact"
   statusBarStyle: string; // "icon" | "text"
   statusBarItems: string[]; // ordered visible status bar item ids
+  defaultToolApprovalMode: ToolApprovalMode | string; // default for newly-created sessions
   checkUpdates: boolean; // check for new versions on startup
   telemetry: boolean; // anonymous launch ping (install id + version + OS)
   metrics: boolean; // aggregate desktop metrics (anonymous signal/bucket counts)

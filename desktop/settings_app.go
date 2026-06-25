@@ -142,32 +142,33 @@ type BotSettingsView struct {
 
 // SettingsView is the whole Settings panel payload.
 type SettingsView struct {
-	DefaultModel       string          `json:"defaultModel"`
-	PlannerModel       string          `json:"plannerModel"`
-	SubagentModel      string          `json:"subagentModel"`
-	SubagentEffort     string          `json:"subagentEffort"`
-	AutoPlan           string          `json:"autoPlan"`
-	Providers          []ProviderView  `json:"providers"`
-	OfficialProviders  []ProviderView  `json:"officialProviders"`
-	Permissions        PermissionsView `json:"permissions"`
-	Sandbox            SandboxView     `json:"sandbox"`
-	Network            NetworkView     `json:"network"`
-	Agent              AgentView       `json:"agent"`
-	Bot                BotSettingsView `json:"bot"`
-	DesktopLanguage    string          `json:"desktopLanguage"`
-	DesktopLayoutStyle string          `json:"desktopLayoutStyle"`
-	DesktopTheme       string          `json:"desktopTheme"`
-	DesktopThemeStyle  string          `json:"desktopThemeStyle"`
-	CloseBehavior      string          `json:"closeBehavior"`
-	DisplayMode        string          `json:"displayMode"`
-	StatusBarStyle     string          `json:"statusBarStyle"`
-	StatusBarItems     []string        `json:"statusBarItems"`
-	CheckUpdates       bool            `json:"checkUpdates"`
-	Telemetry          bool            `json:"telemetry"`
-	Metrics            bool            `json:"metrics"`
-	MemoryCompiler     bool            `json:"memoryCompilerEnabled"`
-	ExpandThinking     bool            `json:"expandThinking"`
-	ConfigPath         string          `json:"configPath"`
+	DefaultModel            string          `json:"defaultModel"`
+	PlannerModel            string          `json:"plannerModel"`
+	SubagentModel           string          `json:"subagentModel"`
+	SubagentEffort          string          `json:"subagentEffort"`
+	AutoPlan                string          `json:"autoPlan"`
+	Providers               []ProviderView  `json:"providers"`
+	OfficialProviders       []ProviderView  `json:"officialProviders"`
+	Permissions             PermissionsView `json:"permissions"`
+	Sandbox                 SandboxView     `json:"sandbox"`
+	Network                 NetworkView     `json:"network"`
+	Agent                   AgentView       `json:"agent"`
+	Bot                     BotSettingsView `json:"bot"`
+	DesktopLanguage         string          `json:"desktopLanguage"`
+	DesktopLayoutStyle      string          `json:"desktopLayoutStyle"`
+	DesktopTheme            string          `json:"desktopTheme"`
+	DesktopThemeStyle       string          `json:"desktopThemeStyle"`
+	CloseBehavior           string          `json:"closeBehavior"`
+	DisplayMode             string          `json:"displayMode"`
+	StatusBarStyle          string          `json:"statusBarStyle"`
+	StatusBarItems          []string        `json:"statusBarItems"`
+	DefaultToolApprovalMode string          `json:"defaultToolApprovalMode"`
+	CheckUpdates            bool            `json:"checkUpdates"`
+	Telemetry               bool            `json:"telemetry"`
+	Metrics                 bool            `json:"metrics"`
+	MemoryCompiler          bool            `json:"memoryCompilerEnabled"`
+	ExpandThinking          bool            `json:"expandThinking"`
+	ConfigPath              string          `json:"configPath"`
 	// ProviderKinds lists the provider implementations the kernel actually
 	// registered (provider.Kinds()), so the editor's "kind" picker offers only
 	// kinds that resolve — selecting an unregistered one would fail the rebuild.
@@ -414,22 +415,23 @@ func (a *App) Settings() SettingsView {
 				Ask:   []string{},
 				Deny:  []string{},
 			},
-			Sandbox:            SandboxView{Bash: "enforce", AllowWrite: []string{}, Shell: "auto"},
-			Agent:              AgentView{PlannerMaxSteps: 0, ColdResumePrune: true, ReasoningLanguage: "auto"},
-			Bot:                botSettingsView(config.BotConfig{}),
-			AutoPlan:           "off",
-			DesktopLayoutStyle: "workbench",
-			DesktopTheme:       "auto",
-			DesktopThemeStyle:  "graphite",
-			CloseBehavior:      "background",
-			DisplayMode:        "standard",
-			StatusBarStyle:     "text",
-			StatusBarItems:     config.DefaultDesktopStatusBarItems(),
-			CheckUpdates:       true,
-			Telemetry:          true,
-			Metrics:            true,
-			MemoryCompiler:     true,
-			ExpandThinking:     false,
+			Sandbox:                 SandboxView{Bash: "enforce", AllowWrite: []string{}, Shell: "auto"},
+			Agent:                   AgentView{PlannerMaxSteps: 0, ColdResumePrune: true, ReasoningLanguage: "auto"},
+			Bot:                     botSettingsView(config.BotConfig{}),
+			AutoPlan:                "off",
+			DesktopLayoutStyle:      "workbench",
+			DesktopTheme:            "auto",
+			DesktopThemeStyle:       "graphite",
+			CloseBehavior:           "background",
+			DisplayMode:             "standard",
+			StatusBarStyle:          "text",
+			StatusBarItems:          config.DefaultDesktopStatusBarItems(),
+			DefaultToolApprovalMode: "ask",
+			CheckUpdates:            true,
+			Telemetry:               true,
+			Metrics:                 true,
+			MemoryCompiler:          true,
+			ExpandThinking:          false,
 		}
 	}
 	ctrl := a.activeCtrl()
@@ -472,25 +474,26 @@ func (a *App) Settings() SettingsView {
 				Password: cfg.Network.Proxy.Password,
 			},
 		},
-		Agent:              AgentView{Temperature: cfg.Agent.Temperature, MaxSteps: cfg.Agent.MaxSteps, PlannerMaxSteps: cfg.Agent.PlannerMaxSteps, SystemPrompt: cfg.Agent.SystemPrompt, ColdResumePrune: cfg.ColdResumePruneEnabled(), ReasoningLanguage: cfg.ReasoningLanguage()},
-		Bot:                botSettingsView(cfg.Bot),
-		DesktopLanguage:    cfg.DesktopLanguage(),
-		DesktopLayoutStyle: cfg.DesktopLayoutStyle(),
-		DesktopTheme:       cfg.DesktopTheme(),
-		DesktopThemeStyle:  cfg.DesktopThemeStyle(),
-		CloseBehavior:      cfg.DesktopCloseBehavior(),
-		DisplayMode:        cfg.DesktopDisplayMode(),
-		StatusBarStyle:     cfg.DesktopStatusBarStyle(),
-		StatusBarItems:     cfg.DesktopStatusBarItems(),
-		CheckUpdates:       cfg.DesktopCheckUpdates(),
-		Telemetry:          cfg.DesktopTelemetry(),
-		Metrics:            cfg.DesktopMetrics(),
-		MemoryCompiler:     cfg.MemoryCompilerEnabled(),
-		ExpandThinking:     cfg.Desktop.ExpandThinking,
-		ConfigPath:         cfgPath,
-		ProviderKinds:      nonNil(provider.Kinds()),
-		AutoApproveTools:   ctrl != nil && ctrl.AutoApproveTools(),
-		Bypass:             ctrl != nil && ctrl.AutoApproveTools(),
+		Agent:                   AgentView{Temperature: cfg.Agent.Temperature, MaxSteps: cfg.Agent.MaxSteps, PlannerMaxSteps: cfg.Agent.PlannerMaxSteps, SystemPrompt: cfg.Agent.SystemPrompt, ColdResumePrune: cfg.ColdResumePruneEnabled(), ReasoningLanguage: cfg.ReasoningLanguage()},
+		Bot:                     botSettingsView(cfg.Bot),
+		DesktopLanguage:         cfg.DesktopLanguage(),
+		DesktopLayoutStyle:      cfg.DesktopLayoutStyle(),
+		DesktopTheme:            cfg.DesktopTheme(),
+		DesktopThemeStyle:       cfg.DesktopThemeStyle(),
+		CloseBehavior:           cfg.DesktopCloseBehavior(),
+		DisplayMode:             cfg.DesktopDisplayMode(),
+		StatusBarStyle:          cfg.DesktopStatusBarStyle(),
+		StatusBarItems:          cfg.DesktopStatusBarItems(),
+		DefaultToolApprovalMode: cfg.DesktopDefaultToolApprovalMode(),
+		CheckUpdates:            cfg.DesktopCheckUpdates(),
+		Telemetry:               cfg.DesktopTelemetry(),
+		Metrics:                 cfg.DesktopMetrics(),
+		MemoryCompiler:          cfg.MemoryCompilerEnabled(),
+		ExpandThinking:          cfg.Desktop.ExpandThinking,
+		ConfigPath:              cfgPath,
+		ProviderKinds:           nonNil(provider.Kinds()),
+		AutoApproveTools:        ctrl != nil && ctrl.AutoApproveTools(),
+		Bypass:                  ctrl != nil && ctrl.AutoApproveTools(),
 	}
 	added := providerAccessSet(cfg.Desktop.ProviderAccess)
 	root := a.activeWorkspaceRoot()
@@ -1057,6 +1060,14 @@ func (a *App) SetAutoPlan(mode string) error {
 		return a.rebuild()
 	}
 	return nil
+}
+
+// SetDefaultToolApprovalMode updates the global Ask/Auto/YOLO default used only
+// for newly-created desktop sessions. Existing tabs keep their persisted mode.
+func (a *App) SetDefaultToolApprovalMode(mode string) error {
+	return a.applyConfigOnly(func(c *config.Config) error {
+		return c.SetDesktopDefaultToolApprovalMode(mode)
+	})
 }
 
 // SetMemoryCompilerEnabled toggles the Memory v5 execution compiler.

@@ -541,16 +541,23 @@ func (a *App) createTabEntry(scope, workspaceRoot, topicID string) *WorkspaceTab
 	return a.createTabEntryWithID(scope, workspaceRoot, topicID, newTabID())
 }
 
+func desktopNewSessionDefaults() (string, string) {
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	return strings.TrimSpace(cfg.DefaultModel), normalizeToolApprovalMode(cfg.DesktopDefaultToolApprovalMode())
+}
+
 func (a *App) createTabEntryWithID(scope, workspaceRoot, topicID, id string) *WorkspaceTab {
+	model, toolApprovalMode := desktopNewSessionDefaults()
 	return &WorkspaceTab{
 		ID:               id,
 		Scope:            scope,
 		WorkspaceRoot:    workspaceRoot,
 		TopicID:          topicID,
 		TopicTitle:       topicTitleForTab(scope, workspaceRoot, topicID),
+		model:            model,
 		tokenMode:        boot.TokenModeFull,
-		mode:             "normal",
-		toolApprovalMode: control.ToolApprovalAsk,
+		mode:             tabModeFromAxes(false, toolApprovalMode == control.ToolApprovalYolo),
+		toolApprovalMode: toolApprovalMode,
 		disabledMCP:      map[string]ServerView{},
 	}
 }

@@ -747,6 +747,29 @@ func TestSetDesktopCheckUpdatesPersistsToUserConfig(t *testing.T) {
 	}
 }
 
+func TestSetDefaultToolApprovalModePersistsToUserConfig(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	app := NewApp()
+	if app.Settings().DefaultToolApprovalMode != control.ToolApprovalAsk {
+		t.Fatalf("Settings().DefaultToolApprovalMode = %q, want ask", app.Settings().DefaultToolApprovalMode)
+	}
+	if err := app.SetDefaultToolApprovalMode(control.ToolApprovalAuto); err != nil {
+		t.Fatalf("SetDefaultToolApprovalMode: %v", err)
+	}
+	view := app.Settings()
+	if view.DefaultToolApprovalMode != control.ToolApprovalAuto {
+		t.Fatalf("Settings().DefaultToolApprovalMode = %q, want auto", view.DefaultToolApprovalMode)
+	}
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	if cfg.Desktop.DefaultToolApprovalMode != control.ToolApprovalAuto {
+		t.Fatalf("desktop.default_tool_approval_mode = %q, want auto", cfg.Desktop.DefaultToolApprovalMode)
+	}
+	if cfg.DesktopDefaultToolApprovalMode() != control.ToolApprovalAuto {
+		t.Fatalf("DesktopDefaultToolApprovalMode() = %q, want auto", cfg.DesktopDefaultToolApprovalMode())
+	}
+}
+
 func TestSetDesktopMetricsDefaultsOnAndPersistsOff(t *testing.T) {
 	isolateDesktopUserDirs(t)
 

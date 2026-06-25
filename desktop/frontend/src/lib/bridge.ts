@@ -252,6 +252,7 @@ export interface AppBindings {
   SetSubagentModel(ref: string): Promise<void>;
   SetSubagentEffort(level: string): Promise<void>;
   SetAutoPlan(mode: string): Promise<void>;
+  SetDefaultToolApprovalMode(mode: string): Promise<void>;
   SaveProvider(p: ProviderView): Promise<void>;
   AddOfficialProviderAccess(kind: string, key: string): Promise<string>;
   FetchProviderModels(p: ProviderView): Promise<string[]>;
@@ -533,7 +534,7 @@ function bridgeBreadcrumb(method: string): string {
     return `turn ${method}`;
   if (/^(SetModel|SetEffort|SetTokenMode|SetDefaultModel|SetPlannerModel|SetSubagentModel|SetSubagentEffort)/.test(method))
     return `model ${method}`;
-  if (/^(SetDesktop|SetCloseBehavior|SetDisplayMode|SetStatusBar|SetExpandThinking|SetAutoPlan|SetMemoryCompilerEnabled|SetReasoningLanguage)/.test(method))
+  if (/^(SetDesktop|SetCloseBehavior|SetDisplayMode|SetStatusBar|SetExpandThinking|SetAutoPlan|SetDefaultToolApprovalMode|SetMemoryCompilerEnabled|SetReasoningLanguage)/.test(method))
     return `settings ${method}`;
   if (/^(SaveProvider|AddOfficialProviderAccess|RemoveProviderAccess|DeleteProvider|SetProviderKey|ClearProviderKey|FetchProviderModels|ConnectKey)/.test(method))
     return `provider ${method}`;
@@ -930,6 +931,7 @@ function makeMockApp(): AppBindings {
     displayMode: "compact",
     statusBarStyle: "text",
     statusBarItems: [...DEFAULT_STATUS_BAR_ITEMS],
+    defaultToolApprovalMode: "ask",
     checkUpdates: true,
     telemetry: true,
     metrics: true,
@@ -1755,6 +1757,7 @@ function makeMockApp(): AppBindings {
     async Rewind() {},
     async Fork() {
       const active = mockTabs.find((tab) => tab.active) ?? mockTabs[0];
+      const defaultToolApprovalMode = normalizeToolApprovalMode(settings.defaultToolApprovalMode);
       const tab: TabMeta = {
         ...active,
         id: "tab_fork_" + Date.now(),
@@ -2463,6 +2466,9 @@ function makeMockApp(): AppBindings {
     async SetAutoPlan(mode: string) {
       settings.autoPlan = mode;
     },
+    async SetDefaultToolApprovalMode(mode: string) {
+      settings.defaultToolApprovalMode = normalizeToolApprovalMode(mode);
+    },
     async SaveProvider(p: ProviderView) {
       p.added = true;
       const i = settings.providers.findIndex((x) => x.name === p.name);
@@ -2769,12 +2775,12 @@ function makeMockApp(): AppBindings {
         topicTitle: topicLabel(_topicID, t("mock.newSession")),
         sessionPath: `/mock/sessions/${_topicID}.jsonl`,
         projectColor: mockProjectTree.find((node) => node.root === workspaceRoot)?.projectColor,
-        label: "deepseek-v4-flash",
+        label: mockModelLabel(settings.defaultModel),
         ready: true,
         running: mockTopicRunsInScenario(_topicID),
-        mode: "normal",
+        mode: modeWithAutoApproveTools("normal", defaultToolApprovalMode === "yolo"),
         collaborationMode: "normal",
-        toolApprovalMode: "ask",
+        toolApprovalMode: defaultToolApprovalMode,
         tokenMode: "full",
         active: true,
         cwd: workspaceRoot,
@@ -2788,6 +2794,7 @@ function makeMockApp(): AppBindings {
         setMockActiveTab(existing.id);
         return { ...existing, active: true };
       }
+      const defaultToolApprovalMode = normalizeToolApprovalMode(settings.defaultToolApprovalMode);
       const tab: TabMeta = {
         id: "tab_" + Date.now(),
         scope: "global",
@@ -2797,12 +2804,12 @@ function makeMockApp(): AppBindings {
         topicId: _topicID,
         topicTitle: topicLabel(_topicID, "Global"),
         sessionPath: `/mock/sessions/${_topicID}.jsonl`,
-        label: "deepseek-v4-flash",
+        label: mockModelLabel(settings.defaultModel),
         ready: true,
         running: false,
-        mode: "normal",
+        mode: modeWithAutoApproveTools("normal", defaultToolApprovalMode === "yolo"),
         collaborationMode: "normal",
-        toolApprovalMode: "ask",
+        toolApprovalMode: defaultToolApprovalMode,
         tokenMode: "full",
         active: true,
         cwd: "",

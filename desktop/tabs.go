@@ -1203,6 +1203,7 @@ func (a *App) EnsureBlankTab(scope, workspaceRoot string) (TabMeta, error) {
 	if scope == "global" {
 		actualRoot = globalRoot
 	}
+	defaultModel, defaultToolApprovalMode := desktopNewSessionDefaults()
 
 	a.mu.Lock()
 	for _, id := range a.orderedTabIDsLocked() {
@@ -1220,21 +1221,20 @@ func (a *App) EnsureBlankTab(scope, workspaceRoot string) (TabMeta, error) {
 		}
 	}
 
-	// Inherit model, effort, token mode, mode, tool-approval, and MCP state from the
-	// active tab so a new blank session keeps the same settings (#4019).
-	var inheritedModel string
+	// New blank sessions start from global session defaults for model and
+	// Ask/Auto/YOLO approval posture. Keep the remaining execution-local settings
+	// from the active tab so a new blank session preserves effort/token/MCP
+	// continuity without letting the active tab override global defaults (#4019).
+	inheritedModel := defaultModel
 	var inheritedEffort *string
 	inheritedTokenMode := boot.TokenModeFull
-	inheritedMode := "normal"
-	inheritedToolApprovalMode := control.ToolApprovalAsk
+	inheritedMode := tabModeFromAxes(false, defaultToolApprovalMode == control.ToolApprovalYolo)
+	inheritedToolApprovalMode := defaultToolApprovalMode
 	inheritedDisabledMCP := map[string]ServerView{}
 	var inheritedMCPOrder []string
 	if active := a.activeTabLocked(); active != nil {
-		inheritedModel = active.model
 		inheritedEffort = cloneStringPtr(active.effort)
 		inheritedTokenMode = currentTabTokenMode(active)
-		inheritedMode = currentTabMode(active)
-		inheritedToolApprovalMode = currentTabToolApprovalMode(active)
 		inheritedDisabledMCP = cloneServerViewMap(active.disabledMCP)
 		inheritedMCPOrder = append([]string(nil), active.mcpOrder...)
 	}

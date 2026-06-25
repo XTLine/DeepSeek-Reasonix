@@ -85,19 +85,20 @@ type UIConfig struct {
 // separate from top-level language and [ui] so desktop choices do not affect CLI
 // language, terminal colours, or provider-visible prompt/request data.
 type DesktopConfig struct {
-	Language       string   `toml:"language"`         // auto|en|zh; empty/auto = browser/OS auto-detect
-	LayoutStyle    string   `toml:"layout_style"`     // classic|workbench|creation; desktop layout style
-	Theme          string   `toml:"theme"`            // auto|dark|light; empty resolves to auto
-	ThemeStyle     string   `toml:"theme_style"`      // graphite|aurora|slate|carbon|nocturne|amber and legacy aliases
-	CloseBehavior  string   `toml:"close_behavior"`   // quit|background; desktop window close behavior
-	DisplayMode    string   `toml:"display_mode"`     // standard|compact (legacy "minimal" maps to compact); transcript display mode
-	StatusBarStyle string   `toml:"status_bar_style"` // icon|text; desktop status bar metric labels
-	StatusBarItems []string `toml:"status_bar_items"` // ordered visible desktop status bar items
-	CheckUpdates   *bool    `toml:"check_updates"`    // startup update checks; nil keeps the default enabled
-	Telemetry      *bool    `toml:"telemetry"`        // anonymous launch ping (install id + version + OS); nil keeps the default enabled
-	Metrics        *bool    `toml:"metrics"`          // aggregate desktop metrics (anonymous signal/bucket counts; no content); nil keeps the default enabled
-	ProviderAccess []string `toml:"provider_access"`  // desktop-only list of provider entries shown in Settings > Model > Access
-	ExpandThinking bool     `toml:"expand_thinking"`  // true = show reasoning text expanded by default; false = collapsed
+	Language                string   `toml:"language"`                   // auto|en|zh; empty/auto = browser/OS auto-detect
+	LayoutStyle             string   `toml:"layout_style"`               // classic|workbench|creation; desktop layout style
+	Theme                   string   `toml:"theme"`                      // auto|dark|light; empty resolves to auto
+	ThemeStyle              string   `toml:"theme_style"`                // graphite|aurora|slate|carbon|nocturne|amber and legacy aliases
+	CloseBehavior           string   `toml:"close_behavior"`             // quit|background; desktop window close behavior
+	DisplayMode             string   `toml:"display_mode"`               // standard|compact (legacy "minimal" maps to compact); transcript display mode
+	StatusBarStyle          string   `toml:"status_bar_style"`           // icon|text; desktop status bar metric labels
+	StatusBarItems          []string `toml:"status_bar_items"`           // ordered visible desktop status bar items
+	DefaultToolApprovalMode string   `toml:"default_tool_approval_mode"` // ask|auto|yolo; default for newly-created desktop sessions
+	CheckUpdates            *bool    `toml:"check_updates"`              // startup update checks; nil keeps the default enabled
+	Telemetry               *bool    `toml:"telemetry"`                  // anonymous launch ping (install id + version + OS); nil keeps the default enabled
+	Metrics                 *bool    `toml:"metrics"`                    // aggregate desktop metrics (anonymous signal/bucket counts; no content); nil keeps the default enabled
+	ProviderAccess          []string `toml:"provider_access"`            // desktop-only list of provider entries shown in Settings > Model > Access
+	ExpandThinking          bool     `toml:"expand_thinking"`            // true = show reasoning text expanded by default; false = collapsed
 }
 
 // NotificationsConfig controls optional system notifications for CLI chat/run.
@@ -239,6 +240,29 @@ func (c *Config) DesktopDisplayMode() string {
 	default:
 		return "standard"
 	}
+}
+
+// NormalizeToolApprovalMode returns the canonical desktop/session tool approval
+// posture. Unknown or missing values fall back to ask for safety.
+func NormalizeToolApprovalMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "auto":
+		return "auto"
+	case "yolo", "full", "full-access", "bypass":
+		return "yolo"
+	default:
+		return "ask"
+	}
+}
+
+// DesktopDefaultToolApprovalMode is the Ask/Auto/YOLO default used only when
+// creating a new desktop session. Existing tabs and restored sessions keep their
+// own persisted runtime state.
+func (c *Config) DesktopDefaultToolApprovalMode() string {
+	if c == nil {
+		return "ask"
+	}
+	return NormalizeToolApprovalMode(c.Desktop.DefaultToolApprovalMode)
 }
 
 // DesktopStatusBarStyle normalizes the desktop status bar metric label style.
