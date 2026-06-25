@@ -1958,6 +1958,7 @@ export default function App() {
     if (!workspacePanelOpen) {
       return;
     }
+    setLiveWorkspacePanelRenderWidth(null);
     setWorkspacePanelMaximized(false);
     setWorkspacePanelOpen(false);
   }, [closeTransientOverlays, workspacePanelOpen]);

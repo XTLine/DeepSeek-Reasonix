@@ -1969,6 +1969,12 @@ a[href] {
   min-width: min(560px, 100vw);
   grid-template-columns: 0px minmax(0, 1fr) minmax(0, var(--workspace-width));
 }
+/* Skip dock-column interpolation in creation mode. WebKit can mount the
+   overview at zero inline size and fail to repaint its text on reopen. */
+.app--creation .layout.layout--workspace-open,
+.app--creation .layout.layout--workspace-open.layout--sidebar-collapsed {
+  transition: grid-template-columns 0s, min-width 0s;
+}
 .layout--workspace-maximized {
   min-width: 0;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
@@ -24038,7 +24044,7 @@ a[href] {
 .app--creation .sidebar,
 :root[data-theme-style] .app--creation .sidebar {
   --project-tree-row-radius: 9px;
-  padding: 18px 12px 14px;
+  padding: 38px 12px 14px;
   border-right: 0;
   background:
     radial-gradient(110% 70% at 18% 0%, color-mix(in srgb, var(--accent) 5%, transparent) 0%, transparent 52%),
@@ -24547,8 +24553,8 @@ a[href] {
 
 .app--creation .transcript::-webkit-scrollbar,
 :root[data-theme-style] .app--creation .transcript::-webkit-scrollbar {
-  width: 2px !important;
-  height: 2px !important;
+  width: 6px !important;
+  height: 6px !important;
   background: transparent !important;
 }
 
@@ -25631,6 +25637,7 @@ a[href] {
 
 .app--creation .context-panel__overview {
   gap: 10px;
+  min-width: 0;
 }
 
 .app--creation .context-panel__usage,
@@ -25638,13 +25645,16 @@ a[href] {
 :root[data-theme-style] .app--creation .context-panel__usage,
 :root[data-theme-style] .app--creation .context-panel__section {
   gap: 12px;
+  min-width: 0;
   padding: 11px;
+  overflow: hidden;
   border: 1px solid var(--creation-panel-border);
   border-radius: 12px;
   background: var(--creation-panel-card);
   box-shadow: var(--creation-panel-shadow);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  animation: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .app--creation .context-panel__section {
@@ -25724,16 +25734,16 @@ a[href] {
 
 .app--creation .context-panel__mini-stat {
   min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   align-items: baseline;
-  gap: 12px;
+  gap: 8px;
   color: color-mix(in srgb, var(--fg-dim) 84%, transparent);
   font-size: 12px;
   line-height: 1.2;
 }
 
 .app--creation .context-panel__mini-stat span {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -25742,6 +25752,12 @@ a[href] {
 }
 
 .app--creation .context-panel__mini-stat strong {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--fg);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -25789,8 +25805,8 @@ a[href] {
   border-radius: 10px;
   background: var(--creation-panel-card);
   box-shadow: var(--creation-panel-shadow);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .app--creation .context-panel__metric span,
