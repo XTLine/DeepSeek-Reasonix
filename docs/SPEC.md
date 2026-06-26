@@ -289,21 +289,26 @@ func (p Policy) Decide(toolName string, readOnly bool, args json.RawMessage) Dec
   `ReadOnly()==true` — a built-in, a first-party MCP `ReadOnlyToolNames`
   override, a plugin-level `trusted_read_only_tools` declaration, or a concrete
   MCP name listed in `[agent].plan_mode_allowed_tools` — or self-reports
-  plan-safe via `tool.PlanModeClassifier`. An MCP tool's `ReadOnly()` may instead come from the server's self-reported
-  `readOnlyHint`, which plan mode does not trust (`tool.PlanModeUntrustedReadOnly`):
-  such a tool is gated like a writer. Writers, installers, memory mutation, process
+  plan-safe via `tool.PlanModeClassifier`. An MCP tool's `ReadOnly()` may
+  instead come from the server's self-reported `readOnlyHint`, which plan mode
+  treats as untrusted (`tool.PlanModeUntrustedReadOnly`): interactive
+  controllers may ask once before executing it and may remember a persistent
+  approval as `trusted_read_only_tools`; non-interactive sessions and declined
+  approvals remain fail-closed. Writers, installers, memory mutation, process
   control, and `complete_step` (read-only yet post-approval only, so it
   self-reports plan-unsafe) are refused; the enforced invariant is
-  PlanSafe ⇒ ReadOnly. An untrusted read-only MCP/plugin tool is therefore blocked
-  until explicitly trusted, and is likewise excluded from planner/read-only
-  research sub-agents. Plan mode still allows `read_only_task` and
+  PlanSafe ⇒ ReadOnly. An untrusted read-only MCP/plugin tool is therefore
+  blocked until the user approves or pre-trusts it, and it is excluded from
+  planner/read-only research sub-agents until the tool is part of the trusted
+  read-only registry. Plan mode still allows `read_only_task` and
   `read_only_skill`, whose sub-agents receive only read-only research tools and
   safe foreground bash; writer-capable `task` delegation and full skill execution
   remain blocked. The desktop MCP panel writes the same
-  `trusted_read_only_tools` raw-name list: **Trust read-only** adds currently
-  listed `readOnlyHint` tools, per-tool **Trust** adds an audited reader
-  manually, and **Untrust** removes it again. These UI actions do not make MCP
-  `readOnlyHint` globally trusted by default.
+  `trusted_read_only_tools` raw-name list as an advanced management surface:
+  **Pre-trust read-only** adds currently listed `readOnlyHint` tools, per-tool
+  **Pre-trust** adds an audited reader manually, and **Untrust** removes it
+  again. These UI actions do not make MCP `readOnlyHint` globally trusted by
+  default.
 - **User decisions are separate from tool approvals.** Runtime tool approval has
   three user-facing postures: `ask` ("需要批准"), `auto` ("自动批准"), and
   `yolo` ("Yolo批准"). `auto` lets the permission policy auto-approve the writer
@@ -542,7 +547,7 @@ name    = "example"            # type defaults to "stdio"
 command = "reasonix-plugin-example"
 args    = []
 # env   = { FOO = "bar" }
-# trusted_read_only_tools = ["search"]   # raw MCP tool names trusted for planner/read-only research
+# trusted_read_only_tools = ["search"]   # optional pre-seeded MCP read-only trust
 
 # [[plugins]]                   # a remote MCP server over Streamable HTTP
 # name    = "stripe"

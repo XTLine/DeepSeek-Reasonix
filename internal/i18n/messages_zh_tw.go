@@ -70,6 +70,9 @@ var ChineseTraditional = Messages{
 	PermissionSavedFmt:          "授權已儲存到 %s：%s",
 	PermissionAlreadyAllowedFmt: "授權已由 %s 中的規則覆蓋：%s",
 	PermissionSaveFailedFmt:     "儲存授權 %s 失敗：%v",
+	MCPReadOnlyTrustSavedFmt:    "MCP 唯讀信任已儲存到 %s：%s/%s",
+	MCPReadOnlyTrustAlreadyFmt:  "MCP 唯讀信任已儲存在 %s：%s/%s",
+	MCPReadOnlyTrustFailedFmt:   "儲存 MCP 唯讀信任 %s/%s 失敗：%v",
 	DiffFoldedFmt:               "… 還有 %d 行",
 
 	OutputStyleNone:    "沒有可用的輸出風格",

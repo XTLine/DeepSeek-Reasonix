@@ -104,14 +104,16 @@ and DeepSeek prefix-cache–oriented design.
   read-only custom/external tools. It no longer unlocks known blocked plan-mode
   tools such as `bash`, `task`, writers, installers, or memory mutation tools, and
   unsafe bash commands still remain blocked. An MCP/plugin tool whose read-only
-  status comes from the server's untrusted `readOnlyHint` is not trusted by plan
-  mode; declare a concrete `mcp__<server>__<tool>` here or use the plugin-level
-  `trusted_read_only_tools` raw-name list to trust audited readers — otherwise
-  plan mode fails closed on it. In the desktop MCP panel, expand a server and
-  use **Trust read-only** for currently listed `readOnlyHint` tools, per-tool
-  **Trust** for audited readers, or **Untrust** to remove a tool; those actions
-  write the same `trusted_read_only_tools` list. First-party
-  `ReadOnlyToolNames` overrides and built-ins stay trusted.
+  status comes from the server's untrusted `readOnlyHint` is confirmed the first
+  time an interactive plan-mode run needs it; choose the persistent option to
+  write the plugin-level `trusted_read_only_tools` raw-name list. Non-interactive
+  runs still fail closed, so pre-seed `trusted_read_only_tools` or declare a
+  concrete `mcp__<server>__<tool>` when no user can approve. In the desktop MCP
+  panel, expand a server and use **Pre-trust read-only** for currently listed
+  `readOnlyHint` tools, per-tool **Pre-trust** for audited readers, or
+  **Untrust** to remove a tool; those actions write the same
+  `trusted_read_only_tools` list. First-party `ReadOnlyToolNames` overrides and
+  built-ins stay trusted.
 - **Read-only subagent research**: use `read_only_task` for generic isolated
   research in plan mode, or `read_only_skill` when the work should follow an
   existing skill. Both expose only read-only tools and safe foreground bash, do

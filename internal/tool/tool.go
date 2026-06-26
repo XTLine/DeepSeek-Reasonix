@@ -87,6 +87,15 @@ type PlanModeUntrustedReadOnly interface {
 	PlanModeUntrustedReadOnly() bool
 }
 
+// MCPMetadata exposes the original MCP identity behind a model-visible
+// "mcp__<server>__<tool>" adapter. The model name may be normalized for provider
+// function-name rules; config such as trusted_read_only_tools must use the raw
+// server-local tool name.
+type MCPMetadata interface {
+	MCPServerName() string
+	MCPRawToolName() string
+}
+
 // --- process-global built-in set (populated by builtin subpackage init) ---
 
 var builtins = map[string]Tool{}

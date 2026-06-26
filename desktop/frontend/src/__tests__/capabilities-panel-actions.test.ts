@@ -124,7 +124,8 @@ console.log("capabilities panel MCP actions");
     label: "Test",
     ready: true,
     running: false,
-    mode: "auto",
+    mode: "normal",
+    toolApprovalMode: "auto",
     active: true,
     cwd: "/tmp/reasonix-test",
   }];
@@ -189,8 +190,8 @@ console.log("capabilities panel MCP actions");
     await flush();
   });
 
-  const trustReadOnly = findButton("Trust read-only (1)");
-  if (!trustReadOnly) throw new Error("missing bulk Trust read-only button");
+  const trustReadOnly = findButton("Pre-trust read-only (1)");
+  if (!trustReadOnly) throw new Error("missing bulk Pre-trust read-only button");
   await act(async () => {
     trustReadOnly.click();
     await flush();
@@ -213,16 +214,16 @@ console.log("capabilities panel MCP actions");
   });
   await waitFor("untrusted tool", () => !(servers[0]?.trustedReadOnlyTools?.includes("issue_read") ?? false));
 
-  await waitFor("Trust button", () => Boolean(findButton("Trust")));
-  const trust = findButton("Trust");
-  if (!trust) throw new Error("missing Trust button");
+  await waitFor("Pre-trust button", () => Boolean(findButton("Pre-trust")));
+  const trust = findButton("Pre-trust");
+  if (!trust) throw new Error("missing Pre-trust button");
   await act(async () => {
     trust.click();
     await flush();
   });
 
   await waitFor("trusted badge", () => Boolean(document.querySelector(".cap-tool-trust")?.textContent?.includes("Trusted")));
-  ok(bulkTrustCalls === 1, "clicking Trust read-only invokes the MCP bulk trust action once");
+  ok(bulkTrustCalls === 1, "clicking Pre-trust read-only invokes the MCP bulk trust action once");
   ok(untrustCalls === 1, "clicking Untrust invokes the MCP untrust action once");
   ok(trustCalls === 1, "clicking Trust invokes the MCP trust action once");
   ok(servers[0]?.trustedReadOnlyTools?.includes("issue_read") ?? false, "trusted raw tool name is added to the server snapshot");

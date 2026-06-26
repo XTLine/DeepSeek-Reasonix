@@ -96,8 +96,8 @@ command = "reasonix-plugin-example"
 
 `[agent].plan_mode_allowed_tools` 用于把 Reasonix 无法自动分类的自定义/外部工具声明为额外只读工具。
 对 MCP/plugin 工具，像 `mcp__github__issue_read` 这样的具体模型可见名也会把该工具提升为
-planner / read-only research 可用的可信只读工具。稳定 MCP 配置更推荐在 plugin 上写
-`trusted_read_only_tools`，`plan_mode_allowed_tools` 保留为兼容逃生阀。它不再解锁 `bash`、`task`、
+planner / read-only research 可用的可信只读工具。优先使用 MCP 只读信任的一次性确认；需要预置已审过工具时，
+再在 plugin 上写 `trusted_read_only_tools`，`plan_mode_allowed_tools` 保留为兼容逃生阀。它不再解锁 `bash`、`task`、
 写文件工具、安装器、记忆变更工具等计划模式已知阻断项，也不会绕过 bash 在计划模式下的安全检查。
 
 ## Serve Web 前端
@@ -268,8 +268,9 @@ Reasonix 是一个 MCP 客户端。`[[plugins]]` 的 `type` 选择传输：`stdi
 程（`command`/`args`/`env`）；`http`（Streamable HTTP）连接远程 `url`，可带静态
 `headers`（`${VAR}` / `${VAR:-default}` 从环境展开，密钥不入文件）。工具以
 `mcp__<server>__<tool>` 暴露给模型，与 Claude Code 一致；声明 MCP `readOnlyHint: true`
-的工具会参与并行调度并命中权限层的只读默认放行，但 planner / read-only research 默认不信任第三方
-自报只读。对审过的第三方读工具，在 plugin 上声明 raw MCP tool 名：
+的工具会参与并行调度并命中权限层的只读默认放行，但 planner / read-only research 会先确认第三方
+自报只读。交互式会话里，第一次需要时允许即可；选择持久允许会把 raw MCP tool name 记住。
+高级用户也可以在 plugin 上预置审过的第三方读工具：
 
 ```toml
 [[plugins]]
@@ -278,13 +279,11 @@ command = "github-mcp"
 trusted_read_only_tools = ["issue_read", "pull_request_read"]
 ```
 
-在桌面端 MCP 面板中，展开已配置的服务器并打开工具列表。点击 **信任只读** 会把当前列表里
-由服务器通过 MCP `readOnlyHint: true` 自报为只读的工具一次性加入清单；也可以在单个工具
-旁点击 **信任** 手动加入审过的读工具，并用 **取消信任** 从 planner / read-only research
-allowlist 中移除。桌面端会把 raw MCP tool name 写入拥有该服务器的配置源：项目 `.mcp.json`
-里的服务器会更新到 `mcpServers.<server>.trusted_read_only_tools`，普通 Reasonix plugin
-会写入用户级 Reasonix config。只信任无副作用的读取工具；create/update/delete 这类写工具应
-保持未信任。
+桌面端 MCP 面板保留为高级管理入口：展开已配置的服务器并打开工具列表；只有在想提前批准工具时，
+才使用 **预先信任只读** 或单个工具旁的 **预先信任**。用 **取消信任** 可以移除已记住的读工具。
+桌面端会把 raw MCP tool name 写入拥有该服务器的配置源：项目 `.mcp.json` 里的服务器会更新到
+`mcpServers.<server>.trusted_read_only_tools`，普通 Reasonix plugin 会写入用户级 Reasonix config。
+只信任无副作用的读取工具；create/update/delete 这类写工具应保持未信任。
 
 服务器的 **prompts** 会暴露成 `/mcp__<server>__<prompt>` 斜杠命令（命令后空格分隔参
 数）；**resources** 通过在消息里写 `@<server>:<uri>` 拉入；`/mcp` 列出已连接服务器及

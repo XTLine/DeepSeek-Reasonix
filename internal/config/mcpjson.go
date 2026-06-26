@@ -269,6 +269,28 @@ func RemoveMCPJSONPlugin(path, name string) (bool, error) {
 	return true, nil
 }
 
+func trustMCPJSONReadOnlyTool(path, name, toolName string) (PluginEntry, bool, error) {
+	entry, found, err := LoadMCPJSONPlugin(path, name)
+	if err != nil {
+		return PluginEntry{}, false, err
+	}
+	if !found {
+		return PluginEntry{}, false, fmt.Errorf("trust plugin read-only tool: no plugin %q", name)
+	}
+	cfg := &Config{Plugins: []PluginEntry{entry}}
+	updated, changed, err := cfg.TrustPluginReadOnlyTool(name, toolName)
+	if err != nil {
+		return PluginEntry{}, false, err
+	}
+	if !changed {
+		return updated, false, nil
+	}
+	if _, err := UpsertMCPJSONPlugin(path, updated); err != nil {
+		return PluginEntry{}, false, err
+	}
+	return updated, true, nil
+}
+
 func readMCPJSONRaw(path string) (map[string]json.RawMessage, map[string]json.RawMessage, error) {
 	root := map[string]json.RawMessage{}
 	servers := map[string]json.RawMessage{}

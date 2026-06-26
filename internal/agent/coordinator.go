@@ -169,6 +169,20 @@ func (c *Coordinator) SetPlanMode(v bool) {
 	}
 }
 
+// SetPlanModeReadOnlyTrustGate propagates MCP read-only trust approvals to both
+// tool-using agents in two-model mode.
+func (c *Coordinator) SetPlanModeReadOnlyTrustGate(g PlanModeReadOnlyTrustGate) {
+	if c == nil {
+		return
+	}
+	if c.plannerAgent != nil {
+		c.plannerAgent.SetPlanModeReadOnlyTrustGate(g)
+	}
+	if c.executor != nil {
+		c.executor.SetPlanModeReadOnlyTrustGate(g)
+	}
+}
+
 // Run plans with the planner model, then hands the plan to the executor.
 func (c *Coordinator) Run(ctx context.Context, input string) error {
 	c.sink.Emit(event.Event{Kind: event.TurnStarted})

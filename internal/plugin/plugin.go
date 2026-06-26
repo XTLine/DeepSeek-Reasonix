@@ -1134,6 +1134,13 @@ type remoteTool struct {
 
 func (t *remoteTool) Name() string        { return t.name }
 func (t *remoteTool) Description() string { return t.desc }
+func (t *remoteTool) MCPServerName() string {
+	if t.client == nil {
+		return ""
+	}
+	return t.client.name
+}
+func (t *remoteTool) MCPRawToolName() string { return t.rawName }
 
 // ReadOnly reflects MCP readOnlyHint, plus trusted first-party Spec overrides.
 // It defaults to false: opaque third-party tools must declare readOnlyHint

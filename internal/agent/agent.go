@@ -130,6 +130,23 @@ type Gate interface {
 	Check(ctx context.Context, toolName string, args json.RawMessage, readOnly bool) (allow bool, reason string, err error)
 }
 
+// PlanModeReadOnlyTrustRequest describes an external read-only hint that plan
+// mode will not trust without a user decision. ToolName is the provider-visible
+// name; ServerName and RawToolName are the MCP identifiers persisted in config.
+type PlanModeReadOnlyTrustRequest struct {
+	ToolName    string
+	ServerName  string
+	RawToolName string
+	Args        json.RawMessage
+}
+
+// PlanModeReadOnlyTrustGate optionally confirms an MCP server's self-reported
+// read-only hint at execution time. It is separate from Gate because the
+// plan-mode check runs before ordinary permission policy.
+type PlanModeReadOnlyTrustGate interface {
+	CheckPlanModeReadOnlyTrust(ctx context.Context, req PlanModeReadOnlyTrustRequest) (allow bool, reason string, err error)
+}
+
 // ToolHooks fires user-configured shell hooks around each tool call. PreToolUse
 // runs before the call and may block it (block=true; message is the reason fed
 // back to the model); PostToolUse runs after and only surfaces output to the
@@ -205,6 +222,10 @@ type Agent struct {
 	// gate, when non-nil, is the per-call permission gate consulted after the
 	// plan-mode check. nil disables gating entirely.
 	gate Gate
+
+	// planModeReadOnlyTrust, when non-nil, can ask the user to trust an MCP
+	// server's readOnlyHint for plan-mode execution without changing tool schemas.
+	planModeReadOnlyTrust PlanModeReadOnlyTrustGate
 
 	// hooks, when non-nil, fires PreToolUse / PostToolUse shell hooks around each
 	// tool call. nil disables hook firing.
@@ -386,6 +407,15 @@ func (a *Agent) SetGate(g Gate) {
 	a.gate = g
 }
 
+// SetPlanModeReadOnlyTrustGate installs the optional confirmation path for MCP
+// tools whose read-only flag comes from an external readOnlyHint.
+func (a *Agent) SetPlanModeReadOnlyTrustGate(g PlanModeReadOnlyTrustGate) {
+	if nilutil.IsNil(g) {
+		g = nil
+	}
+	a.planModeReadOnlyTrust = g
+}
+
 func (a *Agent) withTurnPreferences(input string) string {
 	if a == nil {
 		return input
@@ -552,6 +582,10 @@ type Options struct {
 	// Gate is the per-call permission gate. nil disables gating.
 	Gate Gate
 
+	// PlanModeReadOnlyTrustGate confirms untrusted external read-only hints when
+	// plan mode would otherwise block them. nil keeps fail-closed behavior.
+	PlanModeReadOnlyTrustGate PlanModeReadOnlyTrustGate
+
 	// Context management. ContextWindow <= 0 disables compaction. Ratios and
 	// RecentKeep fall back to defaults when unset.
 	ContextWindow     int
@@ -613,6 +647,10 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 	if nilutil.IsNil(gate) {
 		gate = nil
 	}
+	planModeReadOnlyTrust := opts.PlanModeReadOnlyTrustGate
+	if nilutil.IsNil(planModeReadOnlyTrust) {
+		planModeReadOnlyTrust = nil
+	}
 	hooks := opts.Hooks
 	if nilutil.IsNil(hooks) {
 		hooks = nil
@@ -622,29 +660,30 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		maxStepsKey = "agent.max_steps"
 	}
 	a := &Agent{
-		prov:                 prov,
-		tools:                tools,
-		session:              session,
-		maxSteps:             opts.MaxSteps,
-		maxStepsKey:          maxStepsKey,
-		temperature:          opts.Temperature,
-		pricing:              opts.Pricing,
-		usageSource:          usageSourceOrDefault(opts.UsageSource, event.UsageSourceExecutor),
-		sink:                 sink,
-		gate:                 gate,
-		hooks:                hooks,
-		jobs:                 opts.Jobs,
-		evidence:             evidence.NewLedger(),
-		projectChecks:        append([]instruction.VerifyCheck(nil), opts.ProjectChecks...),
-		contextWindow:        opts.ContextWindow,
-		softCompactRatio:     opts.SoftCompactRatio,
-		compactRatio:         opts.CompactRatio,
-		compactForceRatio:    opts.CompactForceRatio,
-		recentKeep:           opts.RecentKeep,
-		archiveDir:           opts.ArchiveDir,
-		keepPolicy:           opts.KeepPolicy,
-		planModeAllowedTools: append([]string(nil), opts.PlanModeAllowedTools...),
-		memoryCompiler:       opts.MemoryCompiler,
+		prov:                  prov,
+		tools:                 tools,
+		session:               session,
+		maxSteps:              opts.MaxSteps,
+		maxStepsKey:           maxStepsKey,
+		temperature:           opts.Temperature,
+		pricing:               opts.Pricing,
+		usageSource:           usageSourceOrDefault(opts.UsageSource, event.UsageSourceExecutor),
+		sink:                  sink,
+		gate:                  gate,
+		planModeReadOnlyTrust: planModeReadOnlyTrust,
+		hooks:                 hooks,
+		jobs:                  opts.Jobs,
+		evidence:              evidence.NewLedger(),
+		projectChecks:         append([]instruction.VerifyCheck(nil), opts.ProjectChecks...),
+		contextWindow:         opts.ContextWindow,
+		softCompactRatio:      opts.SoftCompactRatio,
+		compactRatio:          opts.CompactRatio,
+		compactForceRatio:     opts.CompactForceRatio,
+		recentKeep:            opts.RecentKeep,
+		archiveDir:            opts.ArchiveDir,
+		keepPolicy:            opts.KeepPolicy,
+		planModeAllowedTools:  append([]string(nil), opts.PlanModeAllowedTools...),
+		memoryCompiler:        opts.MemoryCompiler,
 	}
 	a.SetResponseLanguage(opts.ResponseLanguage)
 	a.SetReasoningLanguage(opts.ReasoningLanguage)
@@ -1820,10 +1859,21 @@ func (a *Agent) executeOne(ctx context.Context, call provider.ToolCall) toolOutc
 			untrusted = u.PlanModeUntrustedReadOnly()
 		}
 		if blocked, msg := a.planModeBlocked(call.Name, t.ReadOnly(), untrusted, safety, json.RawMessage(call.Arguments)); blocked {
-			return toolOutcome{
-				output:  msg,
-				blocked: true,
-				errMsg:  "blocked: plan mode is read-only",
+			trustAllowed := false
+			if t.ReadOnly() && untrusted && safety != planmode.PlanSafetyUnsafe {
+				if allow, outcome, handled := a.checkPlanModeReadOnlyTrust(ctx, call, t); handled {
+					if !allow {
+						return outcome
+					}
+					trustAllowed = true
+				}
+			}
+			if !trustAllowed {
+				return toolOutcome{
+					output:  msg,
+					blocked: true,
+					errMsg:  "blocked: plan mode is read-only",
+				}
 			}
 		}
 	}
@@ -1939,6 +1989,53 @@ func (a *Agent) executeOne(ctx context.Context, call provider.ToolCall) toolOutc
 	}
 	body, truncMsg := truncateToolOutput(result)
 	return toolOutcome{output: body, truncated: truncMsg != "", truncMsg: truncMsg}
+}
+
+func (a *Agent) checkPlanModeReadOnlyTrust(ctx context.Context, call provider.ToolCall, t tool.Tool) (bool, toolOutcome, bool) {
+	if a.planModeReadOnlyTrust == nil {
+		return false, toolOutcome{}, false
+	}
+	server, rawTool, ok := planModeMCPTrustTarget(call.Name, t)
+	if !ok {
+		return false, toolOutcome{}, false
+	}
+	req := PlanModeReadOnlyTrustRequest{
+		ToolName:    call.Name,
+		ServerName:  server,
+		RawToolName: rawTool,
+		Args:        json.RawMessage(call.Arguments),
+	}
+	allow, reason, err := a.planModeReadOnlyTrust.CheckPlanModeReadOnlyTrust(ctx, req)
+	if err != nil {
+		return false, toolOutcome{
+			output:  fmt.Sprintf("blocked: plan-mode read-only trust approval aborted (%v)", err),
+			blocked: true,
+			errMsg:  fmt.Sprintf("blocked: %v", err),
+		}, true
+	}
+	if !allow {
+		if strings.TrimSpace(reason) == "" {
+			reason = "the user declined to trust this MCP read-only hint — do not retry it; continue planning with other trusted read-only tools."
+		}
+		return false, toolOutcome{
+			output:  "blocked: " + reason,
+			blocked: true,
+			errMsg:  "blocked by plan-mode MCP read-only trust",
+		}, true
+	}
+	return true, toolOutcome{}, true
+}
+
+func planModeMCPTrustTarget(toolName string, t tool.Tool) (server, rawTool string, ok bool) {
+	if meta, metaOK := t.(tool.MCPMetadata); metaOK {
+		server = strings.TrimSpace(meta.MCPServerName())
+		rawTool = strings.TrimSpace(meta.MCPRawToolName())
+		if server != "" && rawTool != "" {
+			return server, rawTool, true
+		}
+	}
+	server, rawTool, ok = tool.SplitMCPName(toolName)
+	return server, rawTool, ok
 }
 
 func (a *Agent) planModeBlocked(toolName string, readOnly, untrusted bool, safety planmode.PlanSafety, args json.RawMessage) (blocked bool, message string) {

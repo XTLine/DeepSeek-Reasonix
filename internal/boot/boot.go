@@ -1041,6 +1041,9 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		OnRemember: func(rule string) control.RememberResult {
 			return rememberPermissionRule(root, rule)
 		},
+		OnRememberMCPReadOnlyTrust: func(serverName, rawToolName string) control.MCPReadOnlyTrustResult {
+			return rememberMCPReadOnlyTrust(root, serverName, rawToolName)
+		},
 	}
 	// Guardian: when guardian_model is configured, spawn an LLM safety reviewer
 	// that can auto-allow safe Ask decisions and annotate risky ones before
@@ -1101,6 +1104,25 @@ func rememberPermissionConfigPath(workspaceRoot string) string {
 		path = "reasonix.toml" // match Config.Save() fallback
 	}
 	return path
+}
+
+func rememberMCPReadOnlyTrust(workspaceRoot, serverName, rawToolName string) control.MCPReadOnlyTrustResult {
+	serverName = strings.TrimSpace(serverName)
+	rawToolName = strings.TrimSpace(rawToolName)
+	result := control.MCPReadOnlyTrustResult{Server: serverName, Tool: rawToolName}
+	_, changed, path, err := config.TrustPluginReadOnlyToolInSourceForRoot(workspaceRoot, serverName, rawToolName)
+	result.Path = path
+	if err != nil {
+		slog.Warn("persist MCP read-only trust", "server", serverName, "tool", rawToolName, "err", err)
+		result.Err = err
+		return result
+	}
+	if changed {
+		result.Saved = true
+		return result
+	}
+	result.CoveredBy = rawToolName
+	return result
 }
 
 func coveredPermissionRule(rules []string, rule string) string {

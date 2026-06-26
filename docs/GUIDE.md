@@ -106,10 +106,11 @@ For the full schema and every field's contract, see [`SPEC.md` §5](./SPEC.md#5-
 external tools Reasonix cannot classify itself. For MCP/plugin tools, a concrete
 model-visible name such as `mcp__github__issue_read` also promotes that tool to a
 trusted read-only reader for planner and read-only research surfaces. Prefer the
-plugin-level `trusted_read_only_tools` field for stable MCP config; keep
-`plan_mode_allowed_tools` as the compatibility escape valve. It never unlocks
-known blocked plan-mode tools such as `bash`, `task`, writers, installers, or
-memory mutation tools, and it never bypasses bash's plan-mode safety checks.
+one-time MCP read-only trust prompt, or plugin-level `trusted_read_only_tools`
+when you want to pre-seed audited tools; keep `plan_mode_allowed_tools` as the
+compatibility escape valve. It never unlocks known blocked plan-mode tools such
+as `bash`, `task`, writers, installers, or memory mutation tools, and it never
+bypasses bash's plan-mode safety checks.
 
 ## Serve web frontend
 
@@ -297,9 +298,10 @@ Reasonix is an MCP client. A `[[plugins]]` entry's `type` selects the transport:
 (`${VAR}` / `${VAR:-default}` expanded from the environment, so tokens stay out
 of the file). Tools surface to the model as `mcp__<server>__<tool>`; a tool
 declaring MCP's `readOnlyHint: true` joins parallel dispatch and the permission
-reader-default, but planner / read-only research does not trust third-party
-read-only hints by default. For audited third-party readers, declare raw MCP tool
-names on the plugin:
+reader-default, but planner / read-only research confirms third-party read-only
+hints before relying on them. In interactive sessions, approve the first trust
+prompt once, or choose the persistent option to remember the raw MCP tool name.
+Advanced users can also pre-seed audited third-party readers on the plugin:
 
 ```toml
 [[plugins]]
@@ -308,15 +310,15 @@ command = "github-mcp"
 trusted_read_only_tools = ["issue_read", "pull_request_read"]
 ```
 
-In the desktop MCP panel, expand a configured server and open its tools list.
-Click **Trust read-only** to add every currently listed tool that the server
-reports with MCP `readOnlyHint: true`, click a single tool's **Trust** button to
-add an audited reader manually, and use **Untrust** to remove a tool from the
-planner / read-only research allowlist. The desktop writes the raw MCP tool names
-to `trusted_read_only_tools` in the owning config source: project `.mcp.json`
-servers are updated under `mcpServers.<server>.trusted_read_only_tools`, while
-ordinary Reasonix plugins are updated in the user's Reasonix config. Trust only
-side-effect-free readers; create/update/delete tools should remain untrusted.
+The desktop MCP panel keeps this as an advanced management surface: expand a
+configured server and open its tools list, then use **Pre-trust read-only** or a
+per-tool **Pre-trust** button only when you want to approve tools before they are
+needed. Use **Untrust** to remove a remembered reader. The desktop writes the raw
+MCP tool names to `trusted_read_only_tools` in the owning config source: project
+`.mcp.json` servers are updated under
+`mcpServers.<server>.trusted_read_only_tools`, while ordinary Reasonix plugins
+are updated in the user's Reasonix config. Trust only side-effect-free readers;
+create/update/delete tools should remain untrusted.
 
 A server's **prompts** surface as `/mcp__<server>__<prompt>` slash commands
 (positional args after the command); its **resources** are pulled in by writing

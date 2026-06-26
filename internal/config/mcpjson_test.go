@@ -71,6 +71,78 @@ func TestMCPJSONTrustedReadOnlyToolsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTrustPluginReadOnlyToolInSourceForRootUpdatesProjectTOML(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	root := t.TempDir()
+	projectTOML := filepath.Join(root, "reasonix.toml")
+	if err := os.WriteFile(projectTOML, []byte(`[[plugins]]
+name = "github"
+command = "github-mcp"
+trusted_read_only_tools = ["issue_read"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, changed, source, err := TrustPluginReadOnlyToolInSourceForRoot(root, "github", " pull_request_read ")
+	if err != nil {
+		t.Fatalf("TrustPluginReadOnlyToolInSourceForRoot: %v", err)
+	}
+	if !changed || source != projectTOML {
+		t.Fatalf("changed/source = %v/%q, want true/%q", changed, source, projectTOML)
+	}
+	if got := strings.Join(updated.TrustedReadOnlyTools, ","); got != "issue_read,pull_request_read" {
+		t.Fatalf("updated trusted tools = %q", got)
+	}
+	cfg := LoadForEdit(projectTOML)
+	if got := strings.Join(cfg.Plugins[0].TrustedReadOnlyTools, ","); got != "issue_read,pull_request_read" {
+		t.Fatalf("saved trusted tools = %q", got)
+	}
+
+	_, changed, _, err = TrustPluginReadOnlyToolInSourceForRoot(root, "github", "pull_request_read")
+	if err != nil {
+		t.Fatalf("second TrustPluginReadOnlyToolInSourceForRoot: %v", err)
+	}
+	if changed {
+		t.Fatal("trusting an already trusted tool should report unchanged")
+	}
+}
+
+func TestTrustPluginReadOnlyToolInSourceForRootUpdatesMCPJSON(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	root := t.TempDir()
+	path := filepath.Join(root, mcpJSONFile)
+	if _, err := UpsertMCPJSONPlugin(path, PluginEntry{Name: "github", Command: "github-mcp"}); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, changed, source, err := TrustPluginReadOnlyToolInSourceForRoot(root, "github", "issue_read")
+	if err != nil {
+		t.Fatalf("TrustPluginReadOnlyToolInSourceForRoot: %v", err)
+	}
+	if !changed || source != path {
+		t.Fatalf("changed/source = %v/%q, want true/%q", changed, source, path)
+	}
+	if got := strings.Join(updated.TrustedReadOnlyTools, ","); got != "issue_read" {
+		t.Fatalf("updated trusted tools = %q", got)
+	}
+	entries, err := loadMCPJSON(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(entries[0].TrustedReadOnlyTools, ","); got != "issue_read" {
+		t.Fatalf(".mcp.json trusted tools = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, "reasonix.toml")); !os.IsNotExist(err) {
+		t.Fatalf("project TOML should not be created for .mcp.json-owned server, stat err=%v", err)
+	}
+}
+
 func TestNormalizePluginCommandLine(t *testing.T) {
 	cases := []struct {
 		name        string

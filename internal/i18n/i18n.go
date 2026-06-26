@@ -91,6 +91,9 @@ type Messages struct {
 	PermissionSavedFmt          string // permission rule saved notice: path, rule
 	PermissionAlreadyAllowedFmt string // permission rule already covered notice: path, rule
 	PermissionSaveFailedFmt     string // permission rule save failure notice: rule, error
+	MCPReadOnlyTrustSavedFmt    string // MCP trusted read-only saved notice: path, server, tool
+	MCPReadOnlyTrustAlreadyFmt  string // MCP trusted read-only already covered notice: path, server, tool
+	MCPReadOnlyTrustFailedFmt   string // MCP trusted read-only save failure notice: server, tool, error
 	DiffFoldedFmt               string // "… +%d more lines" footer when a writer diff is folded
 	DiffFoldEnabledFmt          string // notice when /diff-fold enables folding, %d = line limit
 	DiffFoldDisabled            string // notice when /diff-fold disables folding (shows all lines)

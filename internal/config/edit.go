@@ -734,6 +734,35 @@ func (c *Config) ClearPluginAuthentication(name string) (PluginEntry, bool, erro
 	return PluginEntry{}, false, fmt.Errorf("clear plugin authentication: no plugin %q", name)
 }
 
+// TrustPluginReadOnlyTool adds one raw MCP tool name to a plugin's trusted
+// read-only list. It reports changed=false when the entry already contains it.
+func (c *Config) TrustPluginReadOnlyTool(name, toolName string) (PluginEntry, bool, error) {
+	name = strings.TrimSpace(name)
+	toolName = strings.TrimSpace(toolName)
+	if name == "" {
+		return PluginEntry{}, false, fmt.Errorf("trust plugin read-only tool: plugin name is required")
+	}
+	if toolName == "" {
+		return PluginEntry{}, false, fmt.Errorf("trust plugin read-only tool: tool name is required")
+	}
+	for i := range c.Plugins {
+		if c.Plugins[i].Name != name {
+			continue
+		}
+		trusted := uniqueStrings(c.Plugins[i].TrustedReadOnlyTools)
+		for _, existing := range trusted {
+			if existing == toolName {
+				c.Plugins[i].TrustedReadOnlyTools = trusted
+				return c.Plugins[i], false, nil
+			}
+		}
+		trusted = append(trusted, toolName)
+		c.Plugins[i].TrustedReadOnlyTools = trusted
+		return c.Plugins[i], true, nil
+	}
+	return PluginEntry{}, false, fmt.Errorf("trust plugin read-only tool: no plugin %q", name)
+}
+
 // ClearPluginAuthenticationInSource clears auth material in the file that actually
 // owns the MCP server. Load() merges user/project TOML and project .mcp.json into
 // one Config, so callers must not mutate that merged view and Save() it back: a
@@ -762,7 +791,47 @@ func ClearPluginAuthenticationInSource(name string) (PluginEntry, bool, string, 
 }
 
 func pluginTOMLSourcePath(name string) string {
-	paths := append([]string{"reasonix.toml"}, userConfigCandidatePaths()...)
+	return pluginTOMLSourcePathForRoot(".", name)
+}
+
+// TrustPluginReadOnlyToolInSourceForRoot persists one trusted MCP read-only tool
+// into the file that owns the server for root. TOML declarations win over
+// .mcp.json, matching LoadForRoot merge precedence.
+func TrustPluginReadOnlyToolInSourceForRoot(root, name, toolName string) (PluginEntry, bool, string, error) {
+	if path := pluginTOMLSourcePathForRoot(root, name); path != "" {
+		cfg := LoadForEdit(path)
+		updated, changed, err := cfg.TrustPluginReadOnlyTool(name, toolName)
+		if err != nil {
+			return PluginEntry{}, false, path, err
+		}
+		if changed {
+			if err := cfg.SaveTo(path); err != nil {
+				return PluginEntry{}, false, path, err
+			}
+		}
+		return updated, changed, path, nil
+	}
+	mcpPath := mcpJSONFile
+	if resolved := resolveRoot(root); resolved != "." {
+		mcpPath = filepath.Join(resolved, mcpJSONFile)
+	}
+	updated, changed, err := trustMCPJSONReadOnlyTool(mcpPath, name, toolName)
+	if err != nil {
+		return PluginEntry{}, false, mcpPath, err
+	}
+	return updated, changed, mcpPath, nil
+}
+
+func TrustPluginReadOnlyToolInSource(name, toolName string) (PluginEntry, bool, string, error) {
+	return TrustPluginReadOnlyToolInSourceForRoot(".", name, toolName)
+}
+
+func pluginTOMLSourcePathForRoot(root, name string) string {
+	projectTOML := "reasonix.toml"
+	if resolved := resolveRoot(root); resolved != "." {
+		projectTOML = filepath.Join(resolved, "reasonix.toml")
+	}
+	paths := append([]string{projectTOML}, userConfigCandidatePaths()...)
 	for _, path := range paths {
 		if strings.TrimSpace(path) == "" {
 			continue

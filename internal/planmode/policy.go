@@ -180,7 +180,7 @@ func (p Policy) Decide(call Call) Decision {
 	if call.ReadOnly && call.Untrusted {
 		return Decision{
 			Blocked: true,
-			Message: fmt.Sprintf("blocked: %q reports read-only, but that flag is self-reported by an untrusted external source (e.g. an MCP server's readOnlyHint) that plan mode does not trust. Declare the concrete tool in plan_mode_allowed_tools, or add its raw MCP name to the plugin's trusted_read_only_tools, to use it while planning.", name),
+			Message: fmt.Sprintf("blocked: %q reports read-only, but that flag is self-reported by an untrusted external source (e.g. an MCP server's readOnlyHint). Interactive sessions can ask once and remember the decision; non-interactive sessions should pre-seed trusted_read_only_tools or declare the concrete tool in plan_mode_allowed_tools.", name),
 		}
 	}
 	return Decision{

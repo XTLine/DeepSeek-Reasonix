@@ -1205,6 +1205,63 @@ func TestApprovalPersistentBashPrefixRememberRule(t *testing.T) {
 	}
 }
 
+func TestPlanModeReadOnlyTrustApprovalPersistsMCPTrust(t *testing.T) {
+	ids := make(chan string, 2)
+	var approval event.Approval
+	var notices []string
+	var rememberedServer, rememberedTool string
+	prompts := 0
+	c := New(Options{
+		Sink: event.FuncSink(func(e event.Event) {
+			if e.Kind == event.ApprovalRequest {
+				prompts++
+				approval = e.Approval
+				ids <- e.Approval.ID
+			}
+			if e.Kind == event.Notice {
+				notices = append(notices, e.Text)
+			}
+		}),
+		OnRememberMCPReadOnlyTrust: func(serverName, rawToolName string) MCPReadOnlyTrustResult {
+			rememberedServer, rememberedTool = serverName, rawToolName
+			return MCPReadOnlyTrustResult{Server: serverName, Tool: rawToolName, Path: "reasonix.toml", Saved: true}
+		},
+	})
+
+	go func() {
+		c.Approve(<-ids, true, true, true)
+	}()
+	req := agent.PlanModeReadOnlyTrustRequest{
+		ToolName:    "mcp__github__issue_read",
+		ServerName:  "github",
+		RawToolName: "issue/read",
+		Args:        json.RawMessage(`{"issue":1}`),
+	}
+	allow, reason, err := planModeReadOnlyTrustApprover{c}.CheckPlanModeReadOnlyTrust(context.Background(), req)
+	if err != nil || !allow || reason != "" {
+		t.Fatalf("CheckPlanModeReadOnlyTrust = (%v,%q,%v), want allow", allow, reason, err)
+	}
+	if approval.Tool != "mcp__github__issue_read" || !strings.Contains(approval.Subject, "github/issue/read") || !strings.Contains(approval.Reason, "read-only") {
+		t.Fatalf("approval = %+v, want MCP read-only trust prompt", approval)
+	}
+	if rememberedServer != "github" || rememberedTool != "issue/read" {
+		t.Fatalf("remembered MCP trust = %s/%s, want github/issue/read", rememberedServer, rememberedTool)
+	}
+	if len(notices) != 1 || !strings.Contains(notices[0], "github/issue/read") {
+		t.Fatalf("notices = %v, want MCP trust saved notice", notices)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	allow, reason, err = planModeReadOnlyTrustApprover{c}.CheckPlanModeReadOnlyTrust(ctx, req)
+	if err != nil || !allow || reason != "" {
+		t.Fatalf("second CheckPlanModeReadOnlyTrust = (%v,%q,%v), want session grant", allow, reason, err)
+	}
+	if prompts != 1 {
+		t.Fatalf("approval prompts = %d, want 1", prompts)
+	}
+}
+
 func TestApprovalSessionGrantGroupsFileMutationTools(t *testing.T) {
 	c, ids, prompts := approvalIDs()
 	go func() { c.Approve(<-ids, true, true, false) }()
