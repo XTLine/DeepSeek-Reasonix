@@ -66,11 +66,19 @@ func (r *stubbornTurnRunner) Run(ctx context.Context, _ string) error {
 }
 
 type recordingTurnRunner struct {
-	inputs []string
+	inputs               []string
+	memoryCompilerInputs []string
 }
 
-func (r *recordingTurnRunner) Run(_ context.Context, input string) error {
+func (r *recordingTurnRunner) Run(ctx context.Context, input string) error {
 	r.inputs = append(r.inputs, input)
+	// The memory compiler's source_event is set by the orchestrator from the
+	// controller's `raw` value. Capture it so we can prove the CLI passes the
+	// EXPANDED paste (not the folded label) — the label would starve the model
+	// of the pasted content once the compiler's contract replaces the user turn.
+	if source, ok := agent.MemoryCompilerSourceInputFromContext(ctx); ok {
+		r.memoryCompilerInputs = append(r.memoryCompilerInputs, source)
+	}
 	return nil
 }
 
@@ -1609,6 +1617,78 @@ func TestFoldedPasteUsesPlaceholderAndExpandsOnSend(t *testing.T) {
 		if !strings.Contains(sent, want) {
 			t.Fatalf("expanded paste missing %q in:\n%s", want, sent)
 		}
+	}
+}
+
+// TestPasteFoldExpandOnSubmit verifies that a folded paste is fully expanded
+// before being sent to the controller (the LLM sees the actual content, not just
+// the placeholder label).
+func TestPasteFoldExpandOnSubmit(t *testing.T) {
+	r := &recordingTurnRunner{}
+	events := make(chan event.Event, 64)
+	ctrl := control.New(control.Options{
+		Runner:     r,
+		Sink:       event.FuncSink(func(e event.Event) { events <- e }),
+		SessionDir: t.TempDir(),
+		Label:      "test",
+	})
+
+	m := newTestChatTUI()
+	m.ctrl = ctrl
+	m.eventCh = make(chan event.Event, 64)
+
+	// Simulate a multi-line paste that meets the fold threshold (≥5 lines).
+	pasted := strings.Repeat("line of pasted content\n", 10)
+	model, _ := m.Update(tea.PasteMsg{Content: pasted})
+	m = model.(chatTUI)
+
+	display := m.input.Value()
+	if !strings.Contains(display, "[Pasted text #1") {
+		t.Fatalf("paste should be folded, got: %q", display)
+	}
+	if len(m.pastedBlocks) != 1 {
+		t.Fatalf("expected 1 pastedBlock, got %d", len(m.pastedBlocks))
+	}
+
+	// Simulate pressing Enter to submit.
+	// NOTE: in a real terminal KeyEnter has empty Text, so String() returns "enter".
+	model, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = model.(chatTUI)
+
+	waitForCLIEvent(t, events, event.TurnDone)
+
+	if len(r.inputs) == 0 {
+		t.Fatal("runner.Run was not called — the paste was never submitted")
+	}
+	sentToRunner := r.inputs[0]
+	t.Logf("sent to runner (%d bytes):\n%s", len(sentToRunner), sentToRunner)
+
+	// The runner must receive the FULL expanded paste, not just the label.
+	if !strings.Contains(sentToRunner, "line of pasted content") {
+		t.Fatalf("runner received only the placeholder label, not the expanded paste content.\nGot: %q", sentToRunner)
+	}
+	// Verify the expanded markers are present.
+	if !strings.Contains(sentToRunner, "--- Begin [Pasted text #1") {
+		t.Fatalf("missing Begin marker in runner input.\nGot: %q", sentToRunner)
+	}
+	if !strings.Contains(sentToRunner, "--- End [Pasted text #1") {
+		t.Fatalf("missing End marker in runner input.\nGot: %q", sentToRunner)
+	}
+
+	// The memory compiler (enabled by default) replaces the user turn with an
+	// execution contract whose source_event is the controller's `raw` value.
+	// If `raw` were the folded label, the model would only ever see
+	// "[Pasted text #1 · N lines]" and never the pasted content. Assert the
+	// source_event carries the EXPANDED content.
+	if len(r.memoryCompilerInputs) == 0 {
+		t.Fatal("memory compiler source input was not set on the context")
+	}
+	mcSource := r.memoryCompilerInputs[0]
+	if strings.Contains(mcSource, "[Pasted text #1") && !strings.Contains(mcSource, "line of pasted content") {
+		t.Fatalf("memory compiler source_event has the folded label but not the expanded content:\n%q", mcSource)
+	}
+	if !strings.Contains(mcSource, "line of pasted content") {
+		t.Fatalf("memory compiler source_event must contain the expanded paste content, got:\n%q", mcSource)
 	}
 }
 
