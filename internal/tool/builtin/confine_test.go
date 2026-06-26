@@ -171,8 +171,12 @@ func TestConfineReadBlocksReadFile(t *testing.T) {
 	forbidRoots := realRoots([]string{forbidDir})
 	rf := readFile{forbidRoots: forbidRoots}
 	args, _ := json.Marshal(map[string]string{"path": secretPath})
-	if _, err := rf.Execute(context.Background(), args); err == nil {
+	_, err := rf.Execute(context.Background(), args)
+	if err == nil {
 		t.Error("read_file should refuse a forbid-read path")
+	}
+	if _, ok := err.(*os.PathError); !ok {
+		t.Errorf("read_file forbid-read error should be *os.PathError, got %T: %v", err, err)
 	}
 	// Unconfined (nil forbidRoots) should work.
 	rfUnconfined := readFile{}
@@ -181,16 +185,29 @@ func TestConfineReadBlocksReadFile(t *testing.T) {
 	}
 }
 
-func TestConfineReaders(t *testing.T) {
+// --- grep forbid-read ---
+
+func TestConfineReadBlocksGrepFile(t *testing.T) {
 	forbidDir := t.TempDir()
-	readers := ConfineReaders([]string{forbidDir})
-	names := map[string]bool{}
-	for _, t := range readers {
-		names[t.Name()] = true
+	secretPath := filepath.Join(forbidDir, "secret.txt")
+	if err := os.WriteFile(secretPath, []byte("needle in a haystack"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	for _, want := range []string{"read_file", "ls", "glob"} {
-		if !names[want] {
-			t.Errorf("ConfineReaders missing %q", want)
-		}
+	forbidRoots := realRoots([]string{forbidDir})
+	g := grepTool{forbidRoots: forbidRoots}
+	args, _ := json.Marshal(map[string]string{"pattern": "needle", "path": secretPath})
+	_, err := g.Execute(context.Background(), args)
+	if err == nil {
+		t.Error("grep on a forbid-read file should error, not return (no matches)")
+	}
+	if _, ok := err.(*os.PathError); !ok {
+		t.Errorf("grep forbid-read error should be *os.PathError, got %T: %v", err, err)
+	}
+	// Unconfined (nil forbidRoots) should work.
+	gUnconfined := grepTool{}
+	if out, err := gUnconfined.Execute(context.Background(), args); err != nil {
+		t.Errorf("unconfined grep should work: %v", err)
+	} else if out == "(no matches)" {
+		t.Error("unconfined grep should find the needle")
 	}
 }

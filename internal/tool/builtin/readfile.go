@@ -72,7 +72,7 @@ func (r readFile) Execute(ctx context.Context, args json.RawMessage) (string, er
 	}
 	p.Path = resolveIn(r.workDir, p.Path)
 	if confineRead(r.forbidRoots, p.Path) {
-		return "", fmt.Errorf("read %s: no such file or directory", p.Path)
+		return "", &os.PathError{Op: "open", Path: p.Path, Err: os.ErrNotExist}
 	}
 	if p.Offset < 0 {
 		p.Offset = 0

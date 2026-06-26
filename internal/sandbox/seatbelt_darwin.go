@@ -20,6 +20,17 @@ func Command(spec Spec, sh Shell, command string) ([]string, bool) {
 	return append([]string{"sandbox-exec", "-p", seatbeltProfile(spec)}, sh.argv(command)...), true
 }
 
+// CommandArgs is like Command but accepts the command as raw argv instead of a
+// shell command string. The args are appended directly after the sandbox prefix
+// without shell interpretation — suitable for direct binary invocations like
+// ripgrep that don't need a shell wrapper.
+func CommandArgs(spec Spec, args []string) ([]string, bool) {
+	if !spec.enforce() || !Available() {
+		return args, false
+	}
+	return append([]string{"sandbox-exec", "-p", seatbeltProfile(spec)}, args...), true
+}
+
 // Available reports whether sandbox-exec is on PATH (it ships with macOS).
 func Available() bool {
 	_, err := exec.LookPath("sandbox-exec")

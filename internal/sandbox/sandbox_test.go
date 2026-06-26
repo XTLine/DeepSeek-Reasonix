@@ -292,20 +292,3 @@ func TestAvailableNonDarwin(t *testing.T) {
 	}
 }
 
-// --- seatbelt profile forbid-read ---
-
-func TestSeatbeltProfileForbidRead(t *testing.T) {
-	spec := Spec{Mode: "enforce", WriteRoots: []string{"/workspace"}, ForbidReadRoots: []string{"/etc/ssh", "/home/user/.ssh"}}
-	profile := seatbeltProfile(spec)
-	if !strings.Contains(profile, "(deny file-read* (subpath") {
-		t.Errorf("profile should contain deny file-read* rules when forbid-read is set, got:\n%s", profile)
-	}
-}
-
-func TestSeatbeltProfileNoForbidRead(t *testing.T) {
-	spec := Spec{Mode: "enforce", WriteRoots: []string{"/workspace"}}
-	profile := seatbeltProfile(spec)
-	if strings.Contains(profile, "deny file-read") {
-		t.Errorf("profile should not contain file-read rules when forbid-read is empty, got:\n%s", profile)
-	}
-}

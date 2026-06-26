@@ -26,6 +26,21 @@ func Command(spec Spec, sh Shell, command string) ([]string, bool) {
 	return sh.argv(command), false
 }
 
+// CommandArgs is like Command but accepts the command as raw argv instead of a
+// shell command string. The args are appended directly after the bwrap sandbox
+// prefix without shell interpretation — suitable for direct binary invocations
+// like ripgrep that don't need a shell wrapper.
+func CommandArgs(spec Spec, args []string) ([]string, bool) {
+	if !spec.enforce() {
+		return args, false
+	}
+	if bwrap, err := exec.LookPath("bwrap"); err == nil {
+		argv := append([]string{bwrap}, bwrapArgsForArgs(spec, args)...)
+		return argv, true
+	}
+	return args, false
+}
+
 // Available reports whether an OS sandbox is available on this platform.
 // On Linux, this checks for bubblewrap (bwrap) on PATH.
 func Available() bool {
@@ -56,4 +71,28 @@ func bwrapArgs(spec Spec, sh Shell, command string) []string {
 		args = append(args, "--tmpfs", root)
 	}
 	return append(args, sh.argv(command)...)
+}
+
+// bwrapArgsForArgs is like bwrapArgs but accepts raw argv instead of a shell
+// command string. It builds the same sandbox prefix and appends the caller's
+// argv directly — no shell interpreter wrapping.
+func bwrapArgsForArgs(spec Spec, args []string) []string {
+	out := []string{
+		"--unshare-net", // deny network by default
+		"--ro-bind", "/", "/",
+		"--dev", "/dev",
+		"--proc", "/proc",
+		"--tmpfs", "/tmp",
+	}
+	if spec.Network {
+		// Re-allow network by removing the network namespace.
+		out = out[1:] // drop --unshare-net
+	}
+	for _, root := range spec.WriteRoots {
+		out = append(out, "--bind", root, root)
+	}
+	for _, root := range spec.ForbidReadRoots {
+		out = append(out, "--tmpfs", root)
+	}
+	return append(out, args...)
 }
