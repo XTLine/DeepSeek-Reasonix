@@ -126,7 +126,7 @@ import {
 import { useOverlayStore } from "./store/overlays";
 import { hydrateDisplayMode } from "./lib/displayMode";
 import { DEFAULT_STATUS_BAR_ITEMS, normalizeStatusBarItems, type StatusBarItemId } from "./lib/statusBarItems";
-import { sessionActivityTime } from "./lib/session";
+import { paletteSessionDisplayTitle, paletteSessionHint, paletteSessionKeywords, sessionActivityTime } from "./lib/session";
 import { enqueueNavigationRequest, type PendingNavigationRequest } from "./lib/openTopicCoalescing";
 import {
   applyTheme,
@@ -2523,8 +2523,9 @@ export default function App() {
     const sessionItems: PaletteItem[] = paletteSessions.slice(0, 12).map((s) => ({
       id: `sess-${s.path}`,
       group: t("palette.group.sessions"),
-      title: s.title?.trim() || s.preview || t("history.emptySession"),
-      hint: s.workspaceRoot || undefined,
+      title: paletteSessionDisplayTitle(s, t("history.emptySession")),
+      hint: paletteSessionHint(s),
+      keywords: paletteSessionKeywords(s),
       meta: dayLabel(sessionActivityTime(s)),
       badge: t(s.turns === 1 ? "history.turnOne" : "history.turnOther", { n: s.turns }),
       run: () => void onResumeSession(s),
