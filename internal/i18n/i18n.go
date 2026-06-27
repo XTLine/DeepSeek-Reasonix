@@ -156,6 +156,7 @@ type Messages struct {
 	CmdNew              string // /new
 	CmdClear            string // /clear
 	CmdCompact          string // /compact
+	CmdDoctor           string // /doctor
 	CmdRewind           string // /rewind
 	CmdTree             string // /tree
 	CmdBranch           string // /branch

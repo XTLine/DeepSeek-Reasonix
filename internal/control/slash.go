@@ -384,6 +384,8 @@ func (c *Controller) managementNotice(trimmed string) bool {
 		return false
 	}
 	switch fields[0] {
+	case "/doctor":
+		c.notice(c.doctorListText())
 	case "/model":
 		c.notice(c.modelListText())
 	case "/provider":

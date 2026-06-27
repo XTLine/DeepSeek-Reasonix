@@ -3992,6 +3992,7 @@ func (a *App) Commands() []CommandInfo {
 		{Name: "new", Description: i18n.M.CmdNew, Kind: "builtin"},
 		{Name: "clear", Description: i18n.M.CmdClear, Kind: "builtin"},
 		{Name: "compact", Description: i18n.M.CmdCompact, Kind: "builtin"},
+		{Name: "doctor", Description: i18n.M.CmdDoctor, Kind: "builtin"},
 		{Name: "model", Description: i18n.M.CmdModel, Kind: "builtin"},
 		{Name: "provider", Description: i18n.M.CmdProvider, Kind: "builtin"},
 		{Name: "effort", Description: i18n.M.CmdEffort, Kind: "builtin"},
