@@ -89,6 +89,7 @@ allow = ["Bash(go test:*)"]                  # never prompted
 [sandbox]
 # workspace_root = ""          # file-writers confined here; empty = current dir
 # allow_write    = ["/tmp"]    # extra dirs write_file/edit_file/multi_edit/move_file may touch
+# forbid_read    = ["${HOME}/.ssh"]   # dirs the agent must not read or list
 
 [serve]
 auth_mode = "none"             # none|token|password; use auth before binding beyond localhost
@@ -286,10 +287,14 @@ Permissions are *policy* (which calls to allow / prompt). The **sandbox** is
 *enforcement*: the file-writers (`write_file` / `edit_file` / `multi_edit` / `move_file`)
 refuse any path outside `[sandbox] workspace_root` (default: the current dir, so
 edits stay in the project), resolving symlinks and `..` so a link can't tunnel
-out. Reads are unrestricted. `bash` is itself jailed on macOS by default
-(`[sandbox] bash`, Seatbelt): commands may write only those same roots (plus
-temp and toolchain caches) and reach the network only when `[sandbox] network`
-is set. Other platforms fall back to running unconfined for now (see
+out. `forbid_read` optionally hides sensitive directories from the agent's
+read/list/search tools; use absolute paths or `${HOME}` / `${VAR}` references,
+not `~`, because config expansion is environment-variable based. `bash` is
+itself jailed on macOS by default (`[sandbox] bash`, Seatbelt): commands may
+write only those same roots (plus temp and toolchain caches), cannot read
+configured `forbid_read` roots while the OS sandbox is active, and reach the
+network only when `[sandbox] network` is set. Other platforms fall back to
+running unconfined when no OS sandbox is available (see
 [`SPEC.md` §9](./SPEC.md#9-roadmap-not-in-current-scope) for the escape-prompt and
 Linux support still to come).
 

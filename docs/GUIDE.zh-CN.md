@@ -81,6 +81,7 @@ allow = ["Bash(go test:*)"]                  # 从不询问
 [sandbox]
 # workspace_root = ""          # 文件写工具被限制在此目录；留空 = 当前目录
 # allow_write    = ["/tmp"]    # write_file/edit_file/multi_edit/move_file 额外可写的目录
+# forbid_read    = ["${HOME}/.ssh"]   # agent 不可读取或列出的目录
 
 [serve]
 auth_mode = "none"             # none|token|password；绑定到非 localhost 前请先开启认证
@@ -260,9 +261,11 @@ Goal、由 `todo_write` 工具驱动的实时 Todo 面板，以及已配置 prov
 权限是**策略**（哪些调用放行/询问），**沙盒**是**强制**：文件写工具
 （`write_file` / `edit_file` / `multi_edit` / `move_file`）拒绝 `[sandbox] workspace_root`
 之外的任何路径（默认当前目录，编辑不出项目），并解析符号链接与 `..`，使链接无法
-打洞越界。读不受限。`bash` 本身在 macOS 默认进沙盒（`[sandbox] bash`，Seatbelt）：
-命令只能写这些 root（外加临时目录与工具链缓存），`[sandbox] network` 为真时才能联网；
-其它平台暂回退为不沙盒运行（越界问一次与 Linux 支持见
+打洞越界。`forbid_read` 可选地隐藏敏感目录，使 agent 的读文件、列目录和搜索工具不能读取或列出它们；
+建议使用绝对路径或 `${HOME}` / `${VAR}`，不要写 `~`，因为配置只做环境变量展开。
+`bash` 本身在 macOS 默认进沙盒（`[sandbox] bash`，Seatbelt）：命令只能写这些 root（外加临时目录与工具链缓存），
+OS 沙盒生效时也不能读取配置的 `forbid_read` roots，`[sandbox] network` 为真时才能联网；
+其它平台在没有可用 OS 沙盒时会回退为不沙盒运行（越界问一次与 Linux 支持见
 [`SPEC.md` §9](./SPEC.md#9-roadmap-not-in-current-scope)）。
 
 ## 插件（MCP）
