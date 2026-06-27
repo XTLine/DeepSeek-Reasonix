@@ -1448,10 +1448,6 @@ func PluginSpecsForRootWithOptions(entries []config.PluginEntry, workspaceRoot s
 	return applyPlanModeAllowedMCPToolTrust(specs, opts.PlanModeAllowedTools)
 }
 
-func pluginSpecFromEntry(e config.PluginEntry, workspaceRoot string) plugin.Spec {
-	return pluginSpecFromEntryWithOptions(e, workspaceRoot, PluginSpecOptions{})
-}
-
 func pluginSpecFromEntryWithOptions(e config.PluginEntry, workspaceRoot string, opts PluginSpecOptions) plugin.Spec {
 	e = e.ExpandedPlugin() // resolve ${VAR} / ${VAR:-default} from the environment
 	return plugin.ApplyKnownOverrides(plugin.Spec{
