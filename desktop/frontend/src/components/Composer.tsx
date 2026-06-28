@@ -21,12 +21,13 @@ import {
 } from "../lib/workspaceDrag";
 import { SlashMenu } from "./SlashMenu";
 import { ArgMenu } from "./ArgMenu";
-import { VirtualMenu } from "./VirtualMenu";
 import { ANCHORED_POPOVER_CLOSE_MS, AnchoredPopover } from "./AnchoredPopover";
 import { EffortSwitcher } from "./EffortSwitcher";
 import { ModelSwitcher } from "./ModelSwitcher";
 import { Tooltip } from "./Tooltip";
 import { ComposerContextCard } from "./ComposerContextCard";
+import { VirtualMenu } from "./VirtualMenu";
+import { dirEntryMenuLabel, dirEntrySubmitPath } from "./FileReferenceMenu";
 
 interface Attachment {
   path: string;
@@ -130,14 +131,6 @@ function sortComposerAttachments(items: Attachment[]): Attachment[] {
 
 function workspaceReferenceKey(ref: WorkspaceReference): string {
   return `${ref.isDir ? "dir" : "file"}:${ref.path}`;
-}
-
-function dirEntrySubmitPath(entry: DirEntry, atDir: string): string {
-  return entry.path || atDir + entry.name;
-}
-
-function dirEntryMenuLabel(entry: DirEntry): string {
-  return entry.displayName || entry.name;
 }
 
 export function composerPickFileEntry(
