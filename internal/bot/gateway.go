@@ -97,6 +97,8 @@ type botController interface {
 type sessionState struct {
 	ctrl             botController
 	sink             *sessionEventSink
+	platform         Platform
+	connectionID     string
 	cancel           context.CancelFunc
 	pendingAsks      map[string][]event.AskQuestion
 	pendingApprovals map[string]event.Approval
@@ -857,6 +859,12 @@ func (gw *BotGateway) runTurn(ctx context.Context, adapter Adapter, key string, 
 func (gw *BotGateway) getOrCreateSession(ctx context.Context, key string, msg InboundMessage) *sessionState {
 	gw.mu.Lock()
 	if state, ok := gw.controllers[key]; ok {
+		if state.connectionID == "" {
+			state.connectionID = strings.TrimSpace(msg.ConnectionID)
+		}
+		if state.platform == "" {
+			state.platform = msg.Platform
+		}
 		state.lastActive = time.Now()
 		gw.mu.Unlock()
 		gw.logger.Info("bot session reused", "platform", msg.Platform, "chat_type", msg.ChatType, "chat", hashID(msg.ChatID), "session", key[:8])
@@ -899,11 +907,13 @@ func (gw *BotGateway) getOrCreateSession(ctx context.Context, key string, msg In
 		return existing
 	}
 	state := &sessionState{
-		ctrl:        ctrl,
-		sink:        sessionSink,
-		pendingAsks: make(map[string][]event.AskQuestion),
-		createdAt:   time.Now(),
-		lastActive:  time.Now(),
+		ctrl:         ctrl,
+		sink:         sessionSink,
+		platform:     msg.Platform,
+		connectionID: strings.TrimSpace(msg.ConnectionID),
+		pendingAsks:  make(map[string][]event.AskQuestion),
+		createdAt:    time.Now(),
+		lastActive:   time.Now(),
 	}
 	gw.controllers[key] = state
 	gw.mu.Unlock()
@@ -1088,4 +1098,47 @@ func normalizeAskSelection(q event.AskQuestion, raw string) []string {
 		out = append(out, part)
 	}
 	return out
+}
+
+// UpdateConnectionToolApprovalMode updates the in-memory tool approval mode for
+// a single bot connection without restarting the gateway. Empty mode clears the
+// connection override, so existing sessions inherit the current gateway default.
+func (gw *BotGateway) UpdateConnectionToolApprovalMode(connID, mode string) {
+	connID = strings.TrimSpace(connID)
+	if connID == "" {
+		return
+	}
+	mode = normalizeOptionalBotToolApprovalMode(mode)
+	type controllerMode struct {
+		ctrl botController
+		mode string
+	}
+	var updates []controllerMode
+
+	gw.mu.Lock()
+	if gw.cfg.ConnectionChannels == nil {
+		gw.cfg.ConnectionChannels = make(map[string]ChannelConfig)
+	}
+	ch := gw.cfg.ConnectionChannels[connID]
+	ch.ToolApprovalMode = mode
+	gw.cfg.ConnectionChannels[connID] = ch
+	// Update every active session that belongs to this connection.
+	for _, state := range gw.controllers {
+		if state == nil || state.ctrl == nil || strings.TrimSpace(state.connectionID) != connID {
+			continue
+		}
+		effectiveMode := mode
+		if effectiveMode == "" {
+			_, _, effectiveMode = gw.sessionOptionsForMessage(InboundMessage{
+				Platform:     state.platform,
+				ConnectionID: state.connectionID,
+			})
+		}
+		updates = append(updates, controllerMode{ctrl: state.ctrl, mode: effectiveMode})
+	}
+	gw.mu.Unlock()
+
+	for _, update := range updates {
+		update.ctrl.SetToolApprovalMode(update.mode)
+	}
 }

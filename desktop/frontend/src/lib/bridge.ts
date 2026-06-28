@@ -271,6 +271,7 @@ export interface AppBindings {
   SetSandbox(bash: string, network: boolean, workspaceRoot: string, allowWrite: string[], shell: string): Promise<void>;
   SetNetwork(n: NetworkView): Promise<void>;
   SetBotSettings(b: BotSettingsView): Promise<void>;
+  SetBotConnectionToolApprovalMode(connID: string, mode: string): Promise<void>;
   SetBotSecret(envName: string, value: string): Promise<void>;
   ClearBotSecret(envName: string): Promise<void>;
   StartBotConnectionInstall(provider: string, domain: string): Promise<BotInstallStartResult>;
@@ -2597,6 +2598,10 @@ function makeMockApp(): AppBindings {
         },
         async SetBotSettings(b: BotSettingsView) {
           settings.bot = JSON.parse(JSON.stringify(b)) as BotSettingsView;
+        },
+        async SetBotConnectionToolApprovalMode(connID, mode) {
+          const conn = settings.bot.connections.find((c) => c.id === connID);
+          if (conn) conn.toolApprovalMode = mode as any;
         },
         async SetBotSecret(envName: string, _value: string) {
           const name = envName.trim();

@@ -626,7 +626,6 @@ const BOT_TOOL_APPROVAL_MODES = ["", "ask", "auto", "yolo"] as const;
 
 type ProxyMode = (typeof PROXY_MODES)[number];
 type AutoPlanMode = (typeof AUTO_PLAN_MODES)[number];
-type BotConnectionToolApprovalMode = (typeof BOT_TOOL_APPROVAL_MODES)[number];
 
 function normalizeProxyMode(mode: string): ProxyMode {
   switch (mode) {
@@ -1787,6 +1786,11 @@ function BotsSection({ s, busy, apply, initialFocus }: BotsSectionProps) {
     setConnections((items) => items.map((item) => item.id === id ? { ...item, ...patch } : item));
   const persistConnection = (id: string, patch: Partial<BotConnectionView>) =>
     persistConnections((items) => items.map((item) => item.id === id ? { ...item, ...patch } : item));
+  const persistConnectionToolApprovalMode = (id: string, mode: string) => {
+    const normalizedMode = normalizeBotToolApprovalMode(mode, true);
+    setConnections((items) => items.map((item) => item.id === id ? { ...item, toolApprovalMode: normalizedMode } : item));
+    void apply(() => app.SetBotConnectionToolApprovalMode(id, normalizedMode));
+  };
   const updateConnectionCredential = (id: string, patch: Partial<BotConnectionView["credential"]>) =>
     setConnections((items) => items.map((item) => item.id === id ? { ...item, credential: { ...item.credential, ...patch } } : item));
   const persistConnectionCredential = (id: string, patch: Partial<BotConnectionView["credential"]>) =>
@@ -2604,7 +2608,7 @@ function BotsSection({ s, busy, apply, initialFocus }: BotsSectionProps) {
                         type="button"
                         className={selectedConnectionToolApprovalMode === mode ? "provider-add-segmented__item provider-add-segmented__item--active" : "provider-add-segmented__item"}
                         disabled={busy}
-                        onClick={() => void persistConnection(selectedConnection.id, { toolApprovalMode: mode as BotConnectionToolApprovalMode })}
+                        onClick={() => persistConnectionToolApprovalMode(selectedConnection.id, mode)}
                       >
                         {t(`settings.botToolApprovalMode.${mode || "inherit"}` as DictKey)}
                       </button>
