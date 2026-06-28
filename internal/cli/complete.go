@@ -64,6 +64,7 @@ func (m *chatTUI) slashItems() []compItem {
 		{label: "/compact", insert: "/compact ", hint: i18n.M.CmdCompact},
 		{label: "/new", insert: "/new ", hint: i18n.M.CmdNew},
 		{label: "/clear", insert: "/clear", hint: i18n.M.CmdClear},
+		{label: "/doctor", insert: "/doctor", hint: i18n.M.CmdDoctor},
 		{label: "/resume", insert: "/resume ", hint: i18n.M.CmdResume},
 		{label: "/rename", insert: "/rename ", hint: i18n.M.CmdRename},
 		{label: "/rewind", insert: "/rewind", hint: i18n.M.CmdRewind},

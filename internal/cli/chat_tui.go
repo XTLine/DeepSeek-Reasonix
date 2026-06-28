@@ -3309,6 +3309,9 @@ func (m *chatTUI) runSlashCommand(input string) tea.Cmd {
 	case "/clear":
 		m.echoLocalCommand(input)
 		m.clearConfirm = &clearConfirm{confirm: 1}
+	case "/doctor":
+		m.echoLocalCommand(input)
+		m.notice(m.ctrl.DoctorText())
 	case "/resume":
 		m.runResumeCommand(input)
 	case "/rename":

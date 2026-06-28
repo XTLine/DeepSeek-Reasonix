@@ -62,16 +62,21 @@ func (c *Controller) DoctorText() string {
 	if len(failures) > 0 {
 		warnings := make([]string, 0, len(failures))
 		for _, f := range failures {
-			warnings = append(warnings, fmt.Sprintf("MCP %s failed: %s", f.Name, f.Error))
+			warnings = append(warnings, fmt.Sprintf("MCP %s failed: %s", f.Name, redactMCPError(f.Error)))
 		}
 		fmt.Fprintf(&b, "  warnings     %s\n", strings.Join(warnings, "; "))
 	}
 
-	cfg, _ := config.LoadForRoot(c.workspaceRoot)
+	cfg, err := config.LoadForRoot(c.workspaceRoot)
+	if err != nil {
+		fmt.Fprintf(&b, "  warnings     config load failed: %v\n", err)
+	}
 	b.WriteString("\n")
 	b.WriteString(doctor.RenderText(doctor.Collect(doctor.Options{
-		Version: c.version,
-		Config:  cfg,
+		Version:    c.version,
+		Config:     cfg,
+		WorkingDir: c.workspaceRoot,
+		SessionDir: c.sessionDir,
 	})))
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -98,4 +103,40 @@ func valueOrText(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// redactMCPError truncates long error messages and redacts common credential
+// patterns (env dumps, auth headers, tokens) to prevent leaking sensitive MCP
+// connection details when /doctor output is shared.
+func redactMCPError(msg string) string {
+	const maxLen = 150
+	// Redact common credential leak patterns: replace value portions after known keys.
+	// Simple suffix removal after the marker — covers "token=abc", "password=xyz", etc.
+	for _, marker := range []string{
+		"Authorization: Bearer ",
+		"Bearer ",
+		"token=",
+		"password=",
+		"api_key=",
+		"apikey=",
+		"API_KEY=",
+		"APIKEY=",
+	} {
+		if idx := strings.Index(msg, marker); idx >= 0 {
+			start := idx + len(marker)
+			// Find the end of the value (space, quote, bracket, or end-of-string).
+			end := start
+			for end < len(msg) && msg[end] != ' ' && msg[end] != '"' && msg[end] != '\'' && msg[end] != ',' && msg[end] != ')' && msg[end] != ']' {
+				end++
+			}
+			msg = msg[:start] + "[REDACTED]" + msg[end:]
+		}
+	}
+	// Special case: "Authorization:" without "Bearer" following.
+	msg = strings.ReplaceAll(msg, "Authorization:", "Authorization:[REDACTED]")
+	// Truncate long errors to avoid walls of text in the one-line warnings field.
+	if len(msg) > maxLen {
+		msg = msg[:maxLen] + "..."
+	}
+	return msg
 }
