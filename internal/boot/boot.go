@@ -119,6 +119,9 @@ type Options struct {
 	// terminal. Headless/bot frontends pass a positive value so an unanswered
 	// prompt can't wedge the session indefinitely (#4626, #4402).
 	ApprovalTimeout time.Duration
+	// Version is the binary version string used in diagnostic output. Empty means
+	// the embedding frontend did not provide one.
+	Version string
 }
 
 // Build loads config, resolves the model(s), and returns a Controller wrapping a
@@ -1020,6 +1023,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		Sink:                   sink,
 		Policy:                 policy,
 		Label:                  label,
+		Version:                opts.Version,
 		ModelRef:               modelRef,
 		SystemPrompt:           sysPrompt,
 		SessionDir:             sessionDir,

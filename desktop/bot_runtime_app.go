@@ -94,6 +94,7 @@ func (r *desktopBotRuntime) apply(parent context.Context, cfg *config.Config, wo
 	modelName := botruntime.ModelName(cfg, "")
 	gwCfg := bot.GatewayConfig{
 		Model:              modelName,
+		Version:            version,
 		ToolApprovalMode:   cfg.Bot.ToolApprovalMode,
 		MaxSteps:           cfg.Bot.MaxSteps,
 		WorkspaceRoot:      workspaceRoot,

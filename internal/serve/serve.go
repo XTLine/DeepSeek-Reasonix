@@ -42,16 +42,22 @@ type Server struct {
 	titlePrice *provider.Pricing
 	titles     *titleCache
 	auth       *authGate // nil when auth is disabled
+	version    string
 }
 
 // New builds a Server. bc must be the controller's event sink.
 // serveCfg controls authentication (none, token, or password).
-func New(ctrl control.SessionAPI, bc *Broadcaster, serveCfg config.ServeConfig) *Server {
+func New(ctrl control.SessionAPI, bc *Broadcaster, serveCfg config.ServeConfig, version ...string) *Server {
+	serverVersion := ""
+	if len(version) > 0 {
+		serverVersion = version[0]
+	}
 	s := &Server{
-		ctrl:   ctrl,
-		bc:     bc,
-		titles: newTitleCache(ctrl.SessionDir()),
-		auth:   newAuthGate(serveCfg),
+		ctrl:    ctrl,
+		bc:      bc,
+		titles:  newTitleCache(ctrl.SessionDir()),
+		auth:    newAuthGate(serveCfg),
+		version: serverVersion,
 	}
 	s.initTitleProvider()
 	return s
@@ -125,9 +131,10 @@ func (s *Server) switchModel(ctx context.Context, ref string) error {
 	carried := cur.History()
 
 	newCtrl, err := boot.Build(ctx, boot.Options{
-		Model:  ref,
-		Sink:   s.bc,
-		Stderr: os.Stderr,
+		Model:   ref,
+		Sink:    s.bc,
+		Stderr:  os.Stderr,
+		Version: s.version,
 	})
 	if err != nil {
 		return fmt.Errorf("switch model: %w", err)

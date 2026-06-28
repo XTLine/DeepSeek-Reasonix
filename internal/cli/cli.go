@@ -69,7 +69,7 @@ func Run(args []string, version string) int {
 	}
 
 	if len(args) == 0 && cliIsInteractive() {
-		return runInteractiveSession(nil)
+		return runInteractiveSession(nil, version)
 	}
 	if len(args) == 0 {
 		configureCLIThemeFromConfigForTTYOutput()
@@ -77,17 +77,17 @@ func Run(args []string, version string) int {
 		return 0
 	}
 	if cmd == "" {
-		return runInteractiveSession(args)
+		return runInteractiveSession(args, version)
 	}
 
 	rest := args[1:]
 	switch cmd {
 	case "run":
-		return runAgent(rest)
+		return runAgent(rest, version)
 	case "chat", "code": // "code" is the v0.x name for the interactive session
-		return runInteractiveSession(rest)
+		return runInteractiveSession(rest, version)
 	case "serve":
-		return runServe(rest)
+		return runServe(rest, version)
 	case "setup":
 		configureCLIThemeFromConfigForTTYOutput()
 		return setupConfig(rest)
@@ -193,7 +193,7 @@ func configureCLIThemeFromConfigNoProbe() {
 // passes false so the session UI is reachable before a key is set. sink receives
 // the agent's typed event stream — runAgent passes a TextSink that renders to
 // stdout, the TUI passes an event-channel sink so events become tea.Msgs.
-func setup(ctx context.Context, modelName string, maxStepsOverride int, requireKey bool, sink event.Sink) (*control.Controller, error) {
+func setup(ctx context.Context, modelName string, maxStepsOverride int, requireKey bool, sink event.Sink, version string) (*control.Controller, error) {
 	migrateMCPConfigForCLIWorkspace()
 	return boot.Build(ctx, boot.Options{
 		Model:      modelName,
@@ -201,6 +201,7 @@ func setup(ctx context.Context, modelName string, maxStepsOverride int, requireK
 		RequireKey: requireKey,
 		Sink:       sink,
 		SessionDir: resolveCLISessionDir(),
+		Version:    version,
 	})
 }
 
@@ -221,13 +222,14 @@ func resolveCLISessionDir() string {
 // setupQuiet is like setup but suppresses plugin subprocess stderr output.
 // Used during model switch inside a bubbletea session to prevent plugin logs
 // from corrupting the TUI's terminal raw mode.
-func setupQuiet(ctx context.Context, modelName string, maxStepsOverride int, requireKey bool, sink event.Sink) (*control.Controller, error) {
+func setupQuiet(ctx context.Context, modelName string, maxStepsOverride int, requireKey bool, sink event.Sink, version string) (*control.Controller, error) {
 	return boot.Build(ctx, boot.Options{
 		Model:      modelName,
 		MaxSteps:   maxStepsOverride,
 		RequireKey: requireKey,
 		Sink:       sink,
 		Stderr:     io.Discard,
+		Version:    version,
 	})
 }
 
@@ -279,7 +281,7 @@ func withNotifications(sink event.Sink, cfg *config.Config) event.Sink {
 	return notify.NewSink(sink, newNotificationSender(), cfg.Notifications)
 }
 
-func runAgent(args []string) int {
+func runAgent(args []string, version string) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	model := fs.String("model", "", "provider name (default: config default_model)")
 	maxSteps := fs.Int("max-steps", 0, "max tool-call rounds (0 = use config/default)")
@@ -347,7 +349,7 @@ func runAgent(args []string) int {
 			*model = modelForResumePath(*model, sessions[0].Path, cfg)
 		}
 	}
-	ctrl, err := setup(ctx, *model, *maxSteps, true, sink)
+	ctrl, err := setup(ctx, *model, *maxSteps, true, sink, version)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 		return 1
@@ -397,7 +399,7 @@ func runAgent(args []string) int {
 // commands arrive as JSON POSTs. The Broadcaster is the controller's event sink,
 // so the same typed stream the chat TUI consumes reaches web clients — the
 // transport-agnostic controller driven by a second frontend.
-func runServe(args []string) int {
+func runServe(args []string, version string) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	model := fs.String("model", "", "provider name (default: config default_model)")
 	maxSteps := fs.Int("max-steps", 0, "max tool-call rounds (0 = use config/default)")
@@ -483,7 +485,7 @@ func runServe(args []string) int {
 			}
 		}
 	}
-	ctrl, err := setup(ctx, *model, *maxSteps, true, bc)
+	ctrl, err := setup(ctx, *model, *maxSteps, true, bc, version)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 		return 1
@@ -496,7 +498,7 @@ func runServe(args []string) int {
 	}
 	ctrl.EnsureSessionPath()
 
-	srv := serve.New(ctrl, bc, serveCfg)
+	srv := serve.New(ctrl, bc, serveCfg, version)
 	fmt.Printf("reasonix serve — %s on http://%s\n", ctrl.Label(), *addr)
 	if srv.AuthMode() == "token" {
 		fmt.Printf("  auth: token\n")
@@ -526,7 +528,7 @@ func runServe(args []string) int {
 // chatREPL is an interactive session: a single persistent agent/session and a
 // prompt loop that keeps conversation context across turns. Exit with
 // 'exit'/'quit' or Ctrl-D.
-func chatREPL(args []string) int {
+func chatREPL(args []string, version string) int {
 	fs := flag.NewFlagSet("reasonix", flag.ContinueOnError)
 	model := fs.String("model", "", "provider name (default: config default_model)")
 	maxSteps := fs.Int("max-steps", 0, "max tool-call rounds (0 = use config/default)")
@@ -577,7 +579,7 @@ func chatREPL(args []string) int {
 
 	var sink event.Sink = &eventSink{ch: eventCh}
 	sink = withNotifications(sink, cfg)
-	ctrl, err := setup(ctx, *model, *maxSteps, false, sink)
+	ctrl, err := setup(ctx, *model, *maxSteps, false, sink, version)
 	if err != nil && errors.Is(err, boot.ErrUnknownModel) && isInteractive() && config.SourcePath() == "" {
 		// True first run whose default model can't resolve: guide setup, then retry.
 		// With a config present, fall through to the descriptive error — re-running
@@ -586,7 +588,7 @@ func chatREPL(args []string) int {
 		if rc := interactiveSetup(defaultConfigTarget(), defaultEnvTarget()); rc != 0 {
 			return rc
 		}
-		ctrl, err = setup(ctx, *model, *maxSteps, false, sink)
+		ctrl, err = setup(ctx, *model, *maxSteps, false, sink, version)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
@@ -649,7 +651,7 @@ func chatREPL(args []string) int {
 	// runModelSubcommand performs the swap on the live copy. The same stable sink
 	// feeds the new controller, so events keep flowing to this TUI.
 	m.buildController = func(ref string, carry []provider.Message, resumePath string) (*control.Controller, error) {
-		c, err := setupQuiet(ctx, ref, *maxSteps, false, sink)
+		c, err := setupQuiet(ctx, ref, *maxSteps, false, sink, version)
 		if err != nil {
 			return nil, err
 		}

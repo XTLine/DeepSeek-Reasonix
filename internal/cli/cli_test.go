@@ -110,7 +110,7 @@ func TestRunResumeRejectsCleanupPending(t *testing.T) {
 	}
 
 	errOut := captureStderr(t, func() {
-		if rc := runAgent([]string{"--resume", path, "continue task"}); rc != 1 {
+		if rc := runAgent([]string{"--resume", path, "continue task"}, "test-version"); rc != 1 {
 			t.Fatalf("run --resume cleanup-pending rc = %d, want 1", rc)
 		}
 	})
@@ -129,7 +129,7 @@ func TestServeResumeRejectsCleanupPending(t *testing.T) {
 	}
 
 	errOut := captureStderr(t, func() {
-		if rc := runServe([]string{"--resume", path, "--addr", "127.0.0.1:0"}); rc != 1 {
+		if rc := runServe([]string{"--resume", path, "--addr", "127.0.0.1:0"}, "test-version"); rc != 1 {
 			t.Fatalf("serve --resume cleanup-pending rc = %d, want 1", rc)
 		}
 	})
@@ -142,7 +142,7 @@ func TestServeRejectsUnknownAuthMode(t *testing.T) {
 	isolateCLIConfigHome(t)
 
 	errOut := captureStderr(t, func() {
-		if rc := runServe([]string{"--auth", "tokne", "--addr", "127.0.0.1:0"}); rc != 1 {
+		if rc := runServe([]string{"--auth", "tokne", "--addr", "127.0.0.1:0"}, "test-version"); rc != 1 {
 			t.Fatalf("serve --auth tokne rc = %d, want 1", rc)
 		}
 	})
@@ -155,7 +155,7 @@ func TestServePasswordAuthRequiresPasswordMaterial(t *testing.T) {
 	isolateCLIConfigHome(t)
 
 	errOut := captureStderr(t, func() {
-		if rc := runServe([]string{"--auth", "password", "--addr", "127.0.0.1:0"}); rc != 1 {
+		if rc := runServe([]string{"--auth", "password", "--addr", "127.0.0.1:0"}, "test-version"); rc != 1 {
 			t.Fatalf("serve --auth password without password rc = %d, want 1", rc)
 		}
 	})
@@ -297,8 +297,10 @@ func TestRunDefaultsToInteractiveSession(t *testing.T) {
 	cliIsInteractive = func() bool { return true }
 
 	var gotArgs []string
-	runInteractiveSession = func(args []string) int {
+	gotVersion := ""
+	runInteractiveSession = func(args []string, version string) int {
 		gotArgs = append([]string(nil), args...)
+		gotVersion = version
 		return 17
 	}
 
@@ -307,6 +309,9 @@ func TestRunDefaultsToInteractiveSession(t *testing.T) {
 	}
 	if gotArgs != nil {
 		t.Fatalf("interactive args = %#v, want nil", gotArgs)
+	}
+	if gotVersion != "test-version" {
+		t.Fatalf("interactive version = %q, want test-version", gotVersion)
 	}
 }
 
@@ -320,7 +325,7 @@ func TestRunNoArgsNonInteractivePrintsUsage(t *testing.T) {
 		cliIsInteractive = prevInteractive
 	})
 	cliIsInteractive = func() bool { return false }
-	runInteractiveSession = func(args []string) int {
+	runInteractiveSession = func(args []string, version string) int {
 		t.Fatalf("non-interactive no-arg Run should not start session with %#v", args)
 		return 99
 	}
@@ -350,7 +355,7 @@ func TestRunRoutesBareInteractiveFlagsToSession(t *testing.T) {
 		{"--dangerously-skip-permissions=true"},
 	} {
 		var gotArgs []string
-		runInteractiveSession = func(args []string) int {
+		runInteractiveSession = func(args []string, version string) int {
 			gotArgs = append([]string(nil), args...)
 			return 23
 		}
@@ -371,7 +376,7 @@ func TestRunKeepsChatAndCodeCompatibilityAliases(t *testing.T) {
 	t.Cleanup(func() { runInteractiveSession = prev })
 
 	var calls [][]string
-	runInteractiveSession = func(args []string) int {
+	runInteractiveSession = func(args []string, version string) int {
 		calls = append(calls, append([]string(nil), args...))
 		return 0
 	}

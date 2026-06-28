@@ -167,6 +167,7 @@ var English = Messages{
 	CmdNew:              "start new session; save transcript",
 	CmdClear:            "discard current context",
 	CmdCompact:          "compact context",
+	CmdDoctor:           "show runtime diagnostics",
 	CmdRewind:           "rewind to an earlier turn",
 	CmdTree:             "show conversation branches",
 	CmdBranch:           "create a conversation branch",

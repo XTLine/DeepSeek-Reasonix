@@ -168,6 +168,7 @@ var Chinese = Messages{
 	CmdNew:              "开启新会话并保存历史",
 	CmdClear:            "丢弃当前上下文",
 	CmdCompact:          "压缩上下文",
+	CmdDoctor:           "显示运行时诊断",
 	CmdRewind:           "回滚到更早的一轮",
 	CmdTree:             "查看对话分支树",
 	CmdBranch:           "创建对话分支",

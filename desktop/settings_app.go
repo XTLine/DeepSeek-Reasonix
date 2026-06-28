@@ -887,6 +887,7 @@ func (a *App) rebuild() error {
 		TokenMode:                currentTabTokenMode(tab),
 		SharedHost:               sharedHost,
 		CleanupPendingReconciler: reconcileDesktopCleanupPending,
+		Version:                  version,
 	})
 	if err != nil {
 		a.mu.Lock()

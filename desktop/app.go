@@ -1139,6 +1139,7 @@ func (a *App) clearActiveSessionRuntime(tab *WorkspaceTab, oldCtrl control.Sessi
 		TokenMode:                currentTabTokenMode(tab),
 		SharedHost:               sharedHost,
 		CleanupPendingReconciler: reconcileDesktopCleanupPending,
+		Version:                  version,
 	})
 	if err != nil {
 		if teardownTimedOut {
@@ -4004,6 +4005,7 @@ func (a *App) Commands() []CommandInfo {
 		{Name: "new", Description: i18n.M.CmdNew, Kind: "builtin"},
 		{Name: "clear", Description: i18n.M.CmdClear, Kind: "builtin"},
 		{Name: "compact", Description: i18n.M.CmdCompact, Kind: "builtin"},
+		{Name: "doctor", Description: i18n.M.CmdDoctor, Kind: "builtin"},
 		{Name: "model", Description: i18n.M.CmdModel, Kind: "builtin"},
 		{Name: "provider", Description: i18n.M.CmdProvider, Kind: "builtin"},
 		{Name: "effort", Description: i18n.M.CmdEffort, Kind: "builtin"},
@@ -4039,6 +4041,17 @@ func (a *App) Commands() []CommandInfo {
 		}
 	}
 	return out
+}
+
+// Doctor returns runtime and static diagnostics for the requested tab. It is
+// safe to call while a turn is running because the controller only takes
+// short-held locks for this report.
+func (a *App) Doctor(tabID string) string {
+	ctrl := a.ctrlByTabID(tabID)
+	if ctrl == nil {
+		return "doctor: controller not ready"
+	}
+	return ctrl.DoctorText()
 }
 
 // SlashArgItem is one sub-command / argument suggestion for the composer's slash
@@ -5570,6 +5583,7 @@ func (a *App) SetModelForTab(tabID, name string) error {
 		TokenMode:                currentTabTokenMode(tab),
 		SharedHost:               sharedHost,
 		CleanupPendingReconciler: reconcileDesktopCleanupPending,
+		Version:                  version,
 	})
 	if err != nil {
 		return err
@@ -5669,6 +5683,7 @@ func (a *App) SetEffortForTab(tabID, level string) error {
 		TokenMode:                currentTabTokenMode(tab),
 		SharedHost:               sharedHost,
 		CleanupPendingReconciler: reconcileDesktopCleanupPending,
+		Version:                  version,
 	})
 	if err != nil {
 		return err
@@ -5744,6 +5759,7 @@ func (a *App) SetTokenModeForTab(tabID, mode string) error {
 		TokenMode:                mode,
 		SharedHost:               sharedHost,
 		CleanupPendingReconciler: reconcileDesktopCleanupPending,
+		Version:                  version,
 	})
 	if err != nil {
 		return err

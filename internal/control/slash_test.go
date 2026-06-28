@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"reasonix/internal/config"
 	"reasonix/internal/event"
@@ -241,6 +242,69 @@ func TestManagementHooksTrustUsesWorkspaceRoot(t *testing.T) {
 	}
 	if !hook.IsTrusted(project, "") {
 		t.Fatal("/hooks trust did not trust the controller workspace root")
+	}
+}
+
+func TestDoctorTextWhileRunningReturnsImmediately(t *testing.T) {
+	isolateControlConfigHome(t)
+	c := New(Options{
+		Label:   "deepseek/deepseek-v4-pro",
+		Version: "v1.0.0-test",
+	})
+
+	c.mu.Lock()
+	c.running = true
+	c.mu.Unlock()
+
+	done := make(chan string, 1)
+	go func() {
+		done <- c.DoctorText()
+	}()
+
+	select {
+	case out := <-done:
+		for _, want := range []string{
+			"runtime",
+			"turn         running",
+			"model        deepseek/deepseek-v4-pro",
+			"reasonix v1.0.0-test doctor",
+			"providers",
+			"permissions",
+		} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("DoctorText output missing %q:\n%s", want, out)
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("DoctorText blocked while a turn was running")
+	}
+}
+
+func TestManagementNoticeDoctor(t *testing.T) {
+	isolateControlConfigHome(t)
+	var notices []string
+	c := New(Options{
+		Label:   "deepseek/deepseek-v4-pro",
+		Version: "v1.0.0-test",
+		Sink: event.FuncSink(func(e event.Event) {
+			if e.Kind == event.Notice {
+				notices = append(notices, e.Text)
+			}
+		}),
+	})
+
+	if !c.managementNotice("/doctor") {
+		t.Fatal("/doctor was not handled")
+	}
+	joined := strings.Join(notices, "\n")
+	for _, want := range []string{
+		"runtime",
+		"reasonix v1.0.0-test doctor",
+		"providers",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("/doctor notice missing %q:\n%s", want, joined)
+		}
 	}
 }
 

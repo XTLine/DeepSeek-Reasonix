@@ -19,6 +19,7 @@ import (
 // GatewayConfig 是 BotGateway 的配置。
 type GatewayConfig struct {
 	Model            string
+	Version          string
 	ToolApprovalMode string
 	MaxSteps         int
 	// ApprovalTimeout bounds how long a tool-approval/ask prompt blocks a bot
@@ -876,6 +877,7 @@ func (gw *BotGateway) getOrCreateSession(ctx context.Context, key string, msg In
 		WorkspaceRoot:   workspaceRoot,
 		SessionDir:      botSessionDir(workspaceRoot),
 		ApprovalTimeout: gw.approvalTimeout(),
+		Version:         gw.cfg.Version,
 	})
 	if err != nil {
 		gw.logger.Error("build controller failed", "err", err)

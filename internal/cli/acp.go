@@ -40,7 +40,7 @@ func acpCommand(args []string, version string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	factory := &acpFactory{model: *model}
+	factory := &acpFactory{model: *model, version: version}
 	info := acp.AgentInfo{Name: "reasonix", Version: version}
 	if err := acp.Serve(ctx, os.Stdin, os.Stdout, factory, info); err != nil {
 		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
@@ -54,7 +54,8 @@ func acpCommand(args []string, version string) int {
 // desktop, and serve assembly while still adding the host-supplied MCP servers
 // for this session only.
 type acpFactory struct {
-	model string
+	model   string
+	version string
 }
 
 func (f *acpFactory) SessionDir() string {
@@ -82,6 +83,7 @@ func (f *acpFactory) NewSession(ctx context.Context, p acp.SessionParams) (*cont
 		WorkspaceRoot:            root,
 		ExtraPlugins:             p.MCPServers,
 		CleanupPendingReconciler: acp.ReconcileCleanupPending,
+		Version:                  f.version,
 	})
 }
 
