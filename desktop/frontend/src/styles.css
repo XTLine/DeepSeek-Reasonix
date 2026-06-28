@@ -3268,6 +3268,20 @@ a[href] {
   min-width: 0;
   word-break: break-word;
 }
+.notice-line--block {
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 10px 12px;
+  background: var(--bg-faint);
+}
+.notice-line--block .notice-line__text {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+  overflow-x: auto;
+}
 
 /* ── ReadOnly batch (parent fold for read/search tools) ────────────── */
 .readonly-batch {

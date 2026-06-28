@@ -1270,8 +1270,12 @@ function PhaseCard({ text }: { text: string }) {
 }
 
 function NoticeCard({ level, text }: { level: NoticeItem["level"]; text: string }) {
+  // Multi-line notices (e.g. /doctor diagnostics) ship column-aligned text that
+  // only reads correctly in a monospace, whitespace-preserving block; single-line
+  // notices stay inline next to the icon.
+  const multiline = text.includes("\n");
   return (
-    <div className={`notice-line notice-line--${level}`} data-entrance="true">
+    <div className={`notice-line notice-line--${level}${multiline ? " notice-line--block" : ""}`} data-entrance="true">
       <span className="notice-line__icon">{level === "warn" ? "⚠ " : "ℹ "}</span>
       <span className="notice-line__text">{text}</span>
     </div>
