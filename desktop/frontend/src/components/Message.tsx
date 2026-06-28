@@ -14,6 +14,7 @@ import { Tooltip } from "./Tooltip";
 import { useGSAPCollapse } from "../lib/useGSAPCollapse";
 import { displayReasoningText } from "../lib/reasoningDisplay";
 import { stripMemoryCompilerExecution } from "../lib/memoryCompilerDisplay";
+import { visibleTranscriptMemoryCitations } from "../lib/memoryCitationVisibility";
 import type { Item, MessageActionScope } from "../lib/useController";
 import type { CheckpointMeta, MemoryCitation } from "../lib/types";
 
@@ -84,7 +85,7 @@ function MemoryCitations({ citations }: { citations?: MemoryCitation[] }) {
   const t = useT();
   const bodyRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
-  const clean = (citations ?? [])
+  const clean = visibleTranscriptMemoryCitations(citations)
     .filter((citation) => (citation.source ?? citation.id ?? citation.note ?? "").trim() !== "")
     .slice(0, 5);
   useGSAPCollapse(bodyRef, open);

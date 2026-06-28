@@ -127,6 +127,42 @@ func TestStartTurnExposesMemoryCitations(t *testing.T) {
 	}
 }
 
+func TestMemoryCitationsHideEvidenceReferences(t *testing.T) {
+	citations := memoryCitationsForIR(PlannerIR{
+		Version:     version,
+		Goal:        "fix a bug",
+		SourceEvent: "fix a bug",
+		MemoryReferences: []MemoryRef{
+			{ID: "tool-1", Content: "bash succeeded", Quality: string(QualityHighSignal), Influence: "evidence"},
+			{ID: "mem-1", Content: "prefer focused tests", Quality: string(QualityHighSignal), Influence: "reference"},
+		},
+		Constraints: []Constraint{{Type: "avoid", Text: "repeat failed command", Source: "constraint-1"}},
+		RiskNotes:   []string{"verify before final answer"},
+	})
+
+	if len(citations) == 0 {
+		t.Fatal("expected non-evidence compiler citations to remain visible")
+	}
+	for _, c := range citations {
+		if strings.Contains(c.Note, "bash succeeded") || strings.Contains(c.Note, "evidence:") {
+			t.Fatalf("tool-result evidence citation leaked into user-facing citations: %+v", c)
+		}
+	}
+	foundReference := false
+	foundConstraint := false
+	for _, c := range citations {
+		if strings.Contains(c.Note, "reference: prefer focused tests") {
+			foundReference = true
+		}
+		if strings.Contains(c.Note, "avoid: repeat failed command") {
+			foundConstraint = true
+		}
+	}
+	if !foundReference || !foundConstraint {
+		t.Fatalf("expected reference and constraint citations to remain, got %+v", citations)
+	}
+}
+
 func TestStrategyPreconditionShortTokenMatchesOnWordBoundary(t *testing.T) {
 	// "ui" must match the real frontend keyword but not arbitrary substrings —
 	// otherwise the synthetic "Continue pursuing the active goal." turn (and any

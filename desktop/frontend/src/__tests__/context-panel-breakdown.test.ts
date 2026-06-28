@@ -51,6 +51,23 @@ eq(
 );
 eq(Math.round(mock.otherPct), 33, "donut endpoint follows used/window percent");
 
+const issue5283 = contextBreakdown(6888, 1_000_000, 6840, 48, 48);
+eq(
+  {
+    promptTokens: issue5283.promptTokens,
+    completionTokens: issue5283.completionTokens,
+    reasoningTokens: issue5283.reasoningTokens,
+    otherTokens: issue5283.otherTokens,
+  },
+  {
+    promptTokens: 6840,
+    completionTokens: 0,
+    reasoningTokens: 48,
+    otherTokens: 0,
+  },
+  "prompt tokens are not scaled down when used context includes completion tokens",
+);
+
 const oversized = contextBreakdown(61_000, 1_000_000, 1_622_277, 12_049, 3_217);
 eq(
   oversized.promptTokens + oversized.completionTokens + oversized.reasoningTokens + oversized.otherTokens,

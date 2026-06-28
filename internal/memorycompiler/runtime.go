@@ -477,10 +477,32 @@ func (r *Runtime) StartTurn(ctx context.Context, input string, _ []provider.Mess
 // MemoryCitations returns the local UI references that explain which memories
 // influenced this turn's compiled execution contract.
 func (t *Turn) MemoryCitations() []provider.MemoryCitation {
-	if t == nil || len(t.citations) == 0 {
+	if t == nil || !t.metrics.Injected || len(t.citations) == 0 {
 		return nil
 	}
 	return append([]provider.MemoryCitation(nil), t.citations...)
+}
+
+// SuppressInjection keeps the turn open for trace writeback and learning while
+// marking the compiled contract as not used for this user turn. Agent-level
+// throttles call this when Memory v5 should observe the turn but must not replace
+// the user prompt or surface compiler citations.
+func (t *Turn) SuppressInjection() {
+	if t == nil {
+		return
+	}
+	t.citations = nil
+	t.metrics.Injected = false
+	t.metrics.CompiledTokens = 0
+	t.metrics.IROverheadTokens = 0
+	t.trace.Cost.EstimatedCompiledTokens = 0
+	t.trace.Cost.EstimatedIROverheadTokens = 0
+	t.trace.Steps = nil
+	t.trace.MemoryUsed = nil
+	t.trace.DecisionBranches = nil
+	t.trace.CausalEdges = nil
+	t.trace.StrategyUsed = nil
+	t.strategy = ""
 }
 
 // Metrics returns a content-free Memory v5 usage snapshot for this turn.
@@ -721,6 +743,9 @@ func memoryCitationsForIR(ir PlannerIR) []provider.MemoryCitation {
 		out = append(out, c)
 	}
 	for _, ref := range ir.MemoryReferences {
+		if ref.Influence == "evidence" {
+			continue // tool_result nodes are internal graph state, not user-facing
+		}
 		note := ref.Content
 		if ref.Influence != "" {
 			note = ref.Influence + ": " + note
@@ -1705,13 +1730,15 @@ func (t *Turn) Finish(err error) {
 		t.trace.FailureReason = firstLine(err.Error())
 	}
 	t.trace.Cost = finishCostMetrics(t.trace.Cost, t.trace.ToolResults, t.trace.StartedAt, t.trace.CompletedAt)
-	validation := validateIRExecution(t.ir, t.trace)
-	t.trace.SemanticDrift = validation.Findings
-	t.trace.SemanticDriftHard = validation.HardFindings
-	t.trace.SemanticDriftSoft = validation.SoftFindings
-	if validation.Reject && t.trace.Outcome == "success" {
-		t.trace.Outcome = "partial_success"
-		t.trace.FailureReason = "IR validation rejected inconsistent execution: " + strings.Join(validation.HardFindings, "; ")
+	if t.metrics.Injected {
+		validation := validateIRExecution(t.ir, t.trace)
+		t.trace.SemanticDrift = validation.Findings
+		t.trace.SemanticDriftHard = validation.HardFindings
+		t.trace.SemanticDriftSoft = validation.SoftFindings
+		if validation.Reject && t.trace.Outcome == "success" {
+			t.trace.Outcome = "partial_success"
+			t.trace.FailureReason = "IR validation rejected inconsistent execution: " + strings.Join(validation.HardFindings, "; ")
+		}
 	}
 	for i, rec := range t.trace.ToolResults {
 		toolID := fmt.Sprintf("tool:%s:%d", t.trace.ID, i)
