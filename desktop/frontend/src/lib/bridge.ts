@@ -183,6 +183,7 @@ export interface AppBindings {
   Meta(): Promise<Meta>;
   MetaForTab(tabID: string): Promise<Meta>;
   Commands(): Promise<CommandInfo[]>;
+  Doctor(tabID: string): Promise<string>;
   Capabilities(): Promise<CapabilitiesView>;
   MCPServers(): Promise<ServerView[]>;
   SkillsSettings(): Promise<SkillsSettingsView>;
@@ -1993,12 +1994,57 @@ function makeMockApp(): AppBindings {
         { name: "new", description: "start new session; save transcript", kind: "builtin" as const },
         { name: "clear", description: "discard current context", kind: "builtin" as const },
         { name: "compact", description: "Summarize older history to free up context", kind: "builtin" as const },
+        { name: "doctor", description: "show runtime diagnostics", kind: "builtin" as const },
         { name: "model", description: "Switch model", kind: "builtin" as const },
         { name: "effort", description: "Set reasoning effort", kind: "builtin" as const },
         { name: "skill", description: "List skills", kind: "builtin" as const },
         { name: "explore", description: "Investigate the codebase in an isolated subagent", kind: "skill" as const },
         { name: "review", description: "Review the staged diff", hint: "[focus]", kind: "custom" as const },
       ];
+    },
+    async Doctor() {
+      return `runtime
+  turn         idle
+  model        deepseek/deepseek-v4-pro
+  context      4.2K / 128.0K (3.3%)
+  mcp          2 connected
+  session      12 messages, 8.1KB
+
+reasonix dev doctor
+  system       linux/amd64
+  cwd          ~/code/project
+  config       ~/code/project/reasonix.toml
+  user config  ~/.reasonix/config.toml
+  model        deepseek/deepseek-v4-pro
+
+providers
+  deepseek         openai   api.deepseek.com         key:present default
+
+plugins
+  none configured
+
+lsp
+  enabled      true
+  servers      0 configured overrides
+
+sessions
+  dir          ~/.reasonix/sessions
+  saved        3
+  bytes        24576
+
+sandbox
+  bash         enforce
+  network      false
+  write_roots  ~/code
+
+network
+  proxy_mode   off
+  proxy        (none)
+  no_proxy     []
+
+permissions
+  mode         ask
+  rules        allow:0 ask:0 deny:0`;
     },
     async Capabilities() {
       return {
