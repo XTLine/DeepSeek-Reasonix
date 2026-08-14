@@ -351,8 +351,9 @@ func projectionContentValid(st CompactionState, msgs []provider.Message, transcr
 	if st.TranscriptVersion == transcriptVersion || st.Projection.TranscriptVersion == transcriptVersion {
 		return true
 	}
-	// Append-only growth with a verified covered prefix.
-	return n < len(msgs)
+	// Growth or shrinkage with a verified covered prefix: a truncation that
+	// removes exactly the live tail (n == len) still matches the hash.
+	return n <= len(msgs)
 }
 
 // modelVisibleFromProjection splices the projection with any messages appended

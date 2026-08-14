@@ -75,6 +75,26 @@ func (a *Agent) InvalidateProjection() {
 	}
 }
 
+// InvalidateProjectionIfStale keeps the projection when it still matches the
+// current transcript and performs the full invalidation otherwise. History
+// rewrites that only touch messages past CoveredCount keep their fold.
+func (a *Agent) InvalidateProjectionIfStale() {
+	if a == nil {
+		return
+	}
+	a.sess.compactionMu.Lock()
+	st := a.sess.compactionState
+	if len(st.Projection.Messages) > 0 && a.sess.conversation != nil {
+		msgs, version := a.sess.conversation.snapshotMessagesVersion()
+		if projectionValid(st, msgs, version, a.currentPromptCacheKeyLocked()) {
+			a.sess.compactionMu.Unlock()
+			return
+		}
+	}
+	a.sess.compactionMu.Unlock()
+	a.InvalidateProjection()
+}
+
 // LoadProjectionSidecar loads the context sidecar into the agent. Corrupt or
 // incompatible state is dropped so the next request rebuilds from canonical.
 // Sidecars whose PromptCacheKey does not match the current agent lineage are
