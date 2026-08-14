@@ -98,17 +98,18 @@ func (m ContextManager) prepareOnce(ctx context.Context, policy ContextPreparePo
 		prepared.InputTokens = est
 	}
 	inputHash := a.contextMaintenanceInputHash(visible)
-	if blocked, reason := a.contextMaintenanceBlocked(inputHash); blocked && policy.Trigger != CompactionTriggerManual {
-		if policy.Trigger == CompactionTriggerOverflow || est >= hard {
-			return PreparedContext{}, fmt.Errorf("%w: %s", ErrCompactionRequired, reason)
-		}
+	// Receipts back off sub-critical retries only: at a physical recovery point
+	// (overflow, or a view at/above the hard ceiling) the fold must still run —
+	// degradeFoldSummary guarantees mustFree progress.
+	if blocked, _ := a.contextMaintenanceBlocked(inputHash); blocked && policy.Trigger != CompactionTriggerManual &&
+		policy.Trigger != CompactionTriggerOverflow && est < hard {
 		return prepared, nil
 	}
 	if est < fold {
 		a.sess.compaction.consecutive = 0
 		a.sess.compaction.stuck = false
 	}
-	if a.sess.compaction.stuck && policy.Trigger == CompactionTriggerPressure {
+	if a.sess.compaction.stuck && policy.Trigger == CompactionTriggerPressure && est < hard {
 		return prepared, nil
 	}
 	// One user trigger. Overflow is a one-shot physical recovery path only.
@@ -165,6 +166,12 @@ func (m ContextManager) foldContext(ctx context.Context, prepared PreparedContex
 	}
 
 	result := m.currentPrepared()
+	if result.InputTokens < fold {
+		// A fold that landed under the trigger proves compaction reduces again;
+		// a stale stuck latch must not suppress the next pressure round.
+		a.sess.compaction.stuck = false
+		a.sess.compaction.consecutive = 0
+	}
 	if policy.Trigger == CompactionTriggerManual {
 		return result, nil
 	}

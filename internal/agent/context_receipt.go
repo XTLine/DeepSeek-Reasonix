@@ -38,9 +38,12 @@ func (a *Agent) contextMaintenanceBlocked(inputHash string) (bool, string) {
 	if r.Status != "blocked" && r.Status != "failed" {
 		return false, ""
 	}
-	// Generation-scoped: once this generation fails, automatic maintenance
-	// does not pay for another summary until a successful install, manual
-	// compress, or lineage change advances the generation.
+	// Generation-scoped: a failed view does not get a second summary until a
+	// successful install, manual compress, or lineage change advances the
+	// generation. A different input hash is new work and gets its own attempt.
+	if r.BlockedInputHash != "" && inputHash != "" && r.BlockedInputHash != inputHash {
+		return false, ""
+	}
 	return true, firstNonEmpty(a.sess.compactionState.BlockedReason, r.Reason)
 }
 
@@ -85,9 +88,13 @@ func (a *Agent) recordContextMaintenanceOutcome(inputHash, trigger, action, stat
 	a.sess.compactionMu.Lock()
 	state := a.sess.compactionState
 	previous := state
+	// Suppress only repeated failures of the same view; a failure on a new
+	// view must refresh the stored hash or later retries of that view are
+	// never backed off.
 	if state.LastReceipt != nil &&
 		(state.LastReceipt.Status == "blocked" || state.LastReceipt.Status == "failed") &&
-		state.LastReceipt.Action == action {
+		state.LastReceipt.Action == action &&
+		state.LastReceipt.BlockedInputHash == inputHash {
 		a.sess.compactionMu.Unlock()
 		return
 	}
