@@ -25404,6 +25404,43 @@ body > .mermaid-diagram--fullscreen {
   font-variant-numeric: tabular-nums;
 }
 
+.context-panel__budget {
+  margin-top: 12px;
+}
+
+.context-panel__budget-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.context-panel__budget-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.context-panel__budget-grid span {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.context-panel__budget-grid strong {
+  font-size: 13px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.context-panel__budget-source,
+.context-panel__budget-note,
+.context-panel__budget-recovery {
+  margin: 8px 0 0;
+  color: var(--fg-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .context-panel__usage-progress {
   display: grid;
   gap: 0;

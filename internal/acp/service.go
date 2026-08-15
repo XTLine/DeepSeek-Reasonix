@@ -252,6 +252,7 @@ func (s *service) bindClientIO(p *SessionParams, sessionID string) {
 type acpController interface {
 	control.Lifecycle
 	control.TurnControl
+	RunFinalReadinessRecoveryWithAdmission(ctx context.Context, input string, onAdmitted func()) error
 	TrySteer(text string) bool
 	control.Approvals
 	control.Capabilities
@@ -1155,32 +1156,44 @@ func (s *service) sessionPrompt(ctx context.Context, raw json.RawMessage) (any, 
 	if !ok {
 		return nil, &RPCError{Code: ErrInvalidRequest, Message: "session/prompt: session already has an active prompt"}
 	}
-	if sess.status == nil {
-		sess.status = newStatusTelemetry()
-	}
-	sess.status.beginTurn()
-	s.publishStatus(sess, "phase")
-	sess.sink.setTurnContext(runCtx)
-	if sess.takeGoalDraftMode() {
-		sess.currentCtrl().SetGoal(text)
-		sess.saveMetaIfPresent()
-	}
 	defer func() {
 		sess.sink.clearTurnContext()
 		s.finishTurn(ctx, sess)
 		cancel()
 	}()
+	statusStarted := false
+	beginTurn := func() {
+		if sess.status == nil {
+			sess.status = newStatusTelemetry()
+		}
+		sess.status.beginTurn()
+		s.publishStatus(sess, "phase")
+		sess.sink.setTurnContext(runCtx)
+		if sess.takeGoalDraftMode() {
+			sess.currentCtrl().SetGoal(text)
+			sess.saveMetaIfPresent()
+		}
+		statusStarted = true
+	}
 	var runErr error
 	if recovery {
-		runErr = sess.ctrl.RunFinalReadinessRecovery(runCtx, text)
+		runErr = sess.ctrl.RunFinalReadinessRecoveryWithAdmission(runCtx, text, beginTurn)
 	} else {
+		beginTurn()
 		runErr = sess.ctrl.RunTurn(runCtx, text)
 	}
+	if errors.Is(runErr, control.ErrNoFinalReadinessRecovery) && !statusStarted {
+		return nil, &RPCError{
+			Code:    ErrInvalidRequest,
+			Message: "session/prompt: no pending final-readiness check to continue",
+		}
+	}
 	runErr = drainACPInbox(runCtx, sess.ctrl, runErr)
+	cancelled := runCtx.Err() != nil
 
 	statusEvent := sess.status.finishTurn(
 		runErr,
-		runCtx.Err() != nil,
+		cancelled,
 		sess.currentCtrl().GoalStatus(),
 		finalAssistantSummary(sess.currentCtrl()),
 	)
@@ -1189,19 +1202,39 @@ func (s *service) sessionPrompt(ctx context.Context, raw json.RawMessage) (any, 
 	// the transcript and the same sequence/usage/outcome snapshot.
 	sess.persistAfterTurn(text)
 
-	stop := StopEndTurn
-	if runErr != nil {
-		if runCtx.Err() != nil {
-			stop = StopCancelled
-		} else {
-			stop = StopError
-		}
+	stop, warning, promptErr := promptStopReason(runErr, cancelled, p.SessionID)
+	if promptErr != nil {
+		return nil, promptErr
+	}
+	if warning != "" {
+		// The TUI keeps completed work for deliberate run boundaries; mirror
+		// that for ACP and tell clients how the successful turn ended.
+		sess.sink.Emit(event.Event{
+			Kind:  event.Notice,
+			Level: event.LevelWarn,
+			Text:  warning,
+		})
 	}
 	res := SessionPromptResult{StopReason: stop}
 	if sess.transcript != "" {
 		res.TranscriptPath = &sess.transcript
 	}
 	return res, nil
+}
+
+// finalReadinessNotice is the warning text ACP clients receive when a completed
+// turn's final-readiness gate stays unsatisfied; the TUI shows the same gaps in
+// its recovery card.
+func finalReadinessNotice(e *agent.FinalReadinessError) string {
+	const maxNoticeBytes = 2_048
+	const fallback = "final-answer readiness gate not satisfied"
+	if e == nil {
+		return fallback
+	}
+	if reason := strings.TrimSpace(e.Reason); reason != "" {
+		return clipStatusCredentialText(fallback+": "+reason, maxNoticeBytes)
+	}
+	return clipStatusError(e, maxNoticeBytes)
 }
 
 // sessionSteer durably persists guidance then attempts mid-turn admission.

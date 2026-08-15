@@ -449,6 +449,7 @@ var ChineseTraditional = Messages{
 	WriteEnvErr:               "寫入 .env 失敗：",
 
 	ProviderErrBadRequest:          "請求格式錯誤 (HTTP 400)：請求體被拒絕，通常是程式缺陷。若持續出現請回報。",
+	ProviderErrContextOverflowFmt:  "請求超出共用上下文視窗：prompt %d + 輸出 %d = %d tokens，視窗只有 %d。請壓縮、用更小的輸出上限重試、分叉或回溯後再發送。",
 	ProviderErrAuth:                "認證失敗 (HTTP 401)：未讀到 API key（缺失或未設定）。請在 .env 中設定金鑰，或執行 `reasonix setup`。",
 	ProviderErrInsufficientBalance: "餘額不足 (HTTP 402)：帳戶餘額不足，請前往儲值後重試。",
 	ProviderErrUnprocessable:       "參數錯誤 (HTTP 422)：某個請求參數被拒絕，通常是程式缺陷。若持續出現請回報。",

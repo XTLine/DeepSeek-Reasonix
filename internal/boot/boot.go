@@ -169,6 +169,10 @@ type Options struct {
 	SessionRecoveryMeta func(control.SessionRecoveryRequest) agent.BranchMeta
 	OnSessionRecovered  func(control.SessionRecoveryInfo) error
 	OnSessionTransition func(control.SessionTransitionInfo) error
+	// OnSessionTitleChanged lets a host project the canonical BranchMeta title
+	// into compatibility indexes and refresh notifications after the current
+	// conversation renames itself through set_session_title.
+	OnSessionTitleChanged sessiontool.TitleChangedFunc
 	// SubagentParentLive reports whether this process currently owns or is
 	// building the parent session. Desktop uses it to avoid probing a live tab's
 	// lease during stale-subagent cleanup. Nil preserves lease-only cleanup.
@@ -1646,6 +1650,7 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 		MaxSubagentDepth:             maxSubagentDepth,
 		MissingReasoningWarnStateDir: config.MissingReasoningWarnStateDir(),
 	}, sink)
+	reg.Add(sessiontool.NewSetSessionTitleTool(sessionDir, executor.SessionPath, opts.OnSessionTitleChanged))
 
 	var runner agent.Runner = executor
 	label := entry.Model

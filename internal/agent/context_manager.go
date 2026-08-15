@@ -22,9 +22,6 @@ type compactionProgress struct {
 	// lastTurn stops the post-turn observer and the pre-send preflight from
 	// paying for two summaries during one active tool loop.
 	lastTurn atomic.Int64
-	// recoveryTurn lets one must-free fold follow an earlier pressure fold, but
-	// prevents a too-small window from repeatedly rewriting the same prefix.
-	recoveryTurn atomic.Int64
 }
 
 // ContextManager is the sole owner of provider-visible context maintenance.

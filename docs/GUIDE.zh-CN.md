@@ -64,11 +64,11 @@ reasoning_language = "auto"      # 可见思考过程语言：auto|zh|en
 # max_subagent_concurrency = 6        # 会话级子代理总并发（task/fleet/skills）
 # max_parallel_writers = 3            # 互不重叠 write_paths 时的并行写入上限
 # compact_ratio 是唯一自动维护阈值（默认 0.85；预设 0.70/0.80/0.85）
-# max_output_tokens = 0            # 推荐：官方 DeepSeek 省略字段（服务端 384K）
-# max_output_tokens = 32768        # 可选控费上限
+# max_output_tokens = 0            # 自动：官方 DeepSeek 空间充足时省略字段（服务端 384K），临界时裁剪
+# max_output_tokens = 32768        # 可选控费上限，仍可按物理剩余继续下调
 # max_output_tokens = 65536        # 可选控费上限
-# max_output_tokens = 131072       # 仅在反复 finish_reason=length 时再考虑
-# max_output_tokens 不参与 compact_ratio；只在发送阶段裁剪本轮最长输出
+# max_output_tokens = -1           # 明确省略 wire 字段；已知自动预算放不下时压缩
+# max_output_tokens 不参与 compact_ratio；0 是 Provider 自动值，不再表示“跳过本地检查”
 
 [[providers]]
 name        = "deepseek-flash"

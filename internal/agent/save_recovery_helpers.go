@@ -40,7 +40,7 @@ func (s *Session) writeRecoveryBranchAtPath(
 			return RecoveryBranchInfo{}, false, digestErr
 		}
 		if bytes.Equal(existingDigest[:], digest[:]) {
-			if _, err := copyValidContextProjection(opts.OriginalPath, path, msgs, version); err != nil {
+			if _, err := copyValidContextProjection(opts.OriginalPath, path, msgs); err != nil {
 				slog.Warn("session: recovery branch did not inherit context projection", "path", path, "err", err)
 			}
 			meta, err := s.saveRecoveryBranchMeta(path, opts, preview, turns, digestText, recoveryDepth)
@@ -73,7 +73,7 @@ func (s *Session) writeRecoveryBranchAtPath(
 	if err := writeSessionMessages(path, msgs); err != nil {
 		return RecoveryBranchInfo{}, false, err
 	}
-	if _, err := copyValidContextProjection(opts.OriginalPath, path, msgs, version); err != nil {
+	if _, err := copyValidContextProjection(opts.OriginalPath, path, msgs); err != nil {
 		slog.Warn("session: recovery branch did not inherit context projection", "path", path, "err", err)
 	}
 	meta, err := s.saveRecoveryBranchMeta(path, opts, preview, turns, digestText, recoveryDepth)
@@ -94,11 +94,10 @@ func (s *Session) CopyValidContextProjection(originalPath, targetPath string) (b
 	if s == nil {
 		return false, nil
 	}
-	msgs, version := s.snapshotMessagesVersion()
-	return copyValidContextProjection(originalPath, targetPath, msgs, version)
+	return copyValidContextProjection(originalPath, targetPath, s.Snapshot())
 }
 
-func copyValidContextProjection(originalPath, targetPath string, msgs []provider.Message, version uint64) (bool, error) {
+func copyValidContextProjection(originalPath, targetPath string, msgs []provider.Message) (bool, error) {
 	if _, ok, err := LoadCompactionState(targetPath); err != nil {
 		return false, err
 	} else if ok {

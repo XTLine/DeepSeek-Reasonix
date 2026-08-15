@@ -371,6 +371,7 @@ func (s *Session) CloneWithMessages(msgs []provider.Message) *Session {
 		persisted:               s.persisted,
 		normalizedDirty:         s.normalizedDirty,
 		eventLogDamaged:         s.eventLogDamaged,
+		rawMessages:             append([]provider.Message(nil), s.rawMessages...),
 		pendingContentReasons:   append([]string(nil), s.pendingContentReasons...),
 	}
 }
@@ -400,8 +401,26 @@ func (s *Session) CloneWithMessagesIfCompatible(msgs []provider.Message) (*Sessi
 		persisted:               s.persisted,
 		normalizedDirty:         s.normalizedDirty,
 		eventLogDamaged:         s.eventLogDamaged,
+		rawMessages:             append([]provider.Message(nil), s.rawMessages...),
 		pendingContentReasons:   append([]string(nil), s.pendingContentReasons...),
 	}, true
+}
+
+// projectionValidationMessages returns the current canonical transcript and,
+// when LoadSession repaired it, the exact pre-repair disk view. Resume wrappers
+// preserve both so projection sidecars can be migrated without weakening the
+// covered-prefix check.
+func (s *Session) projectionValidationMessages() (current, preRepair []provider.Message) {
+	if s == nil {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	current = append([]provider.Message(nil), s.Messages...)
+	if s.normalizedDirty && len(s.rawMessages) > 0 {
+		preRepair = append([]provider.Message(nil), s.rawMessages...)
+	}
+	return current, preRepair
 }
 
 // snapshotWithVersion returns the messages together with the version and

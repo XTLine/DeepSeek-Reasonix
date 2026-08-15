@@ -2356,7 +2356,7 @@ command = "reasonix-missing-mockmcp"
 		"explore", "research", "review", "security_review",
 		"lsp_definition", "lsp_references", "lsp_hover", "lsp_diagnostics",
 		"code_index", "glob", "grep", "ls", "move_file", "multi_edit",
-		"docs", "history", "list_sessions", "read_session", "memory", "remember", "forget", "slash_command",
+		"docs", "history", "list_sessions", "read_session", "set_session_title", "memory", "remember", "forget", "slash_command",
 	} {
 		if requestHasTool(req, forbidden) {
 			t.Fatalf("light first request should hide %q; tools=%v", forbidden, toolSchemaNames(req.Tools))

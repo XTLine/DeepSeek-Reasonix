@@ -83,6 +83,7 @@ var subagentAlwaysHiddenTools = []string{
 	"parallel_tasks",
 	"fleet",
 	"read_subagent_result",
+	"set_session_title",
 	"install_skill",
 	"install_source",
 }

@@ -1,17 +1,25 @@
 package agent
 
-func (a *Agent) sameTurnCompactionBlocked(activeTurn int64, trigger string, mustFree bool) bool {
+// sameTurnCompactionBlocked keeps ordinary pressure maintenance to one summary
+// per active turn. A physical overflow may compact again only after the prior
+// checkpoint made real progress and new provider-visible input has accumulated.
+func (a *Agent) sameTurnCompactionBlocked(activeTurn int64, trigger string, mustFree bool, state CompactionState, inputHash string) bool {
 	if activeTurn == 0 || trigger == CompactionTriggerManual {
 		return false
 	}
 	if a.sess.compaction.lastTurn.Load() != activeTurn {
 		return false
 	}
-	return !mustFree || a.sess.compaction.recoveryTurn.Load() == activeTurn
-}
-
-func (a *Agent) noteMustFreeCompaction(activeTurn int64, trigger string, mustFree bool) {
-	if activeTurn != 0 && trigger != CompactionTriggerManual && mustFree {
-		a.sess.compaction.recoveryTurn.Store(activeTurn)
+	if !mustFree {
+		return true
 	}
+	r := state.LastReceipt
+	return r == nil ||
+		r.Status != "applied" ||
+		r.Action != "summary" ||
+		r.ProjectionVersion != state.Projection.ProjectionVersion ||
+		r.SavedTokens <= 0 ||
+		r.OutputHash == "" ||
+		inputHash == "" ||
+		inputHash == r.OutputHash
 }

@@ -39,7 +39,7 @@ func (a *App) catalogRuntimeSnapshots() []catalogRuntimeSnapshot {
 		snapshots = append(snapshots, catalogRuntimeSnapshot{
 			scope: tab.Scope, workspaceRoot: tab.WorkspaceRoot, topicID: tab.TopicID,
 			sessionPath: tab.SessionPath, activity: tab.ActivityStatus, topicTitle: tab.TopicTitle,
-			ctrl: tab.Ctrl, open: open,
+			topicTitleSource: tab.topicTitleSource, ctrl: tab.Ctrl, open: open,
 		})
 	}
 	for _, tab := range a.tabs {
@@ -89,7 +89,7 @@ func (a *App) projectTreeRuntimeSnapshot(revision uint64) ProjectTreeRuntimeSnap
 	topics := make([]ProjectRuntimeTopic, 0, len(keys))
 	for _, key := range keys {
 		group := groups[key]
-		nodes, _ := runtimeProjectTopicNodes(group.scope, group.workspaceRoot, group.snapshots)
+		nodes, _ := a.runtimeProjectTopicNodes(group.scope, group.workspaceRoot, group.snapshots)
 		if len(nodes) > 0 {
 			topics = append(topics, ProjectRuntimeTopic{Scope: group.scope, WorkspaceRoot: group.workspaceRoot, Node: nodes[0]})
 		}

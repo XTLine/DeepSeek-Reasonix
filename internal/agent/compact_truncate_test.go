@@ -62,9 +62,9 @@ func TestTailOnlyRewindKeepsCompactedView(t *testing.T) {
 	// Rewind past the final exchange — a tail-only truncation.
 	boundary := len(canonical) - 2
 	sess.Rewrite(canonical[:boundary], "rewind_truncate")
-	truncated, version := a.sess.conversation.snapshotMessagesVersion()
+	truncated, _ := a.sess.conversation.snapshotMessagesVersion()
 
-	if !projectionContentValid(saved, truncated, version) {
+	if !projectionContentValid(saved, truncated) {
 		t.Fatal("tail-only truncation must keep the projection valid")
 	}
 	view := provider.ModelMessages(modelVisibleFromProjection(saved.Projection, truncated))

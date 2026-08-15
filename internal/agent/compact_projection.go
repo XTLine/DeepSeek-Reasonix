@@ -75,7 +75,7 @@ func (a *Agent) snapshotExplicitCompression() explicitCompressionSnapshot {
 	state := a.sess.compactionState
 	a.sess.compactionMu.Unlock()
 	visible := canonical
-	if projectionValid(state, canonical, version, cacheKey) {
+	if projectionValid(state, canonical, cacheKey) {
 		if projected := modelVisibleFromProjection(state.Projection, canonical); len(projected) > 0 {
 			visible = projected
 		}
@@ -385,9 +385,6 @@ func (a *Agent) compactToProjection(ctx context.Context, trigger, instructions s
 	a.sess.compactionRunMu.Lock()
 	defer a.sess.compactionRunMu.Unlock()
 	activeTurn := a.activeTurnCreatedAt.Load()
-	if a.sameTurnCompactionBlocked(activeTurn, trigger, mustFree) {
-		return CompactionNoop, nil
-	}
 	canonical, transcriptVersion := a.sess.conversation.snapshotMessagesVersion()
 	a.sess.compactionMu.Lock()
 	stateSnapshot := a.sess.compactionState
@@ -396,6 +393,9 @@ func (a *Agent) compactToProjection(ctx context.Context, trigger, instructions s
 	a.sess.compactionMu.Unlock()
 	msgs, onProjection := a.visibleInputForFold(stateSnapshot, canonical, transcriptVersion)
 	viewInputHash := providerVisibleFingerprint(provider.ModelMessages(msgs))
+	if a.sameTurnCompactionBlocked(activeTurn, trigger, mustFree, stateSnapshot, viewInputHash) {
+		return CompactionNoop, nil
+	}
 	if trigger != CompactionTriggerManual && stateSnapshot.LastReceipt != nil && stateSnapshot.LastReceipt.Status == "applied" && stateSnapshot.LastReceipt.Action == "summary" && stateSnapshot.LastReceipt.InputHash == viewInputHash {
 		return CompactionNoop, nil
 	}
@@ -493,7 +493,6 @@ func (a *Agent) compactToProjection(ctx context.Context, trigger, instructions s
 		a.emitCompactionAborted(trigger)
 		return CompactionNoop, err
 	}
-	a.noteMustFreeCompaction(activeTurn, trigger, mustFree)
 	a.svc.sink.Emit(event.Event{Kind: event.CompactionDone, Compaction: event.Compaction{
 		Trigger: trigger, Messages: len(fold), Summary: summary,
 	}})
@@ -506,7 +505,7 @@ func (a *Agent) compactToProjection(ctx context.Context, trigger, instructions s
 // canonical. The second return reports whether the projection was used, so
 // fold boundaries can be translated back to canonical indices.
 func (a *Agent) visibleInputForFold(state CompactionState, canonical []provider.Message, transcriptVersion uint64) ([]provider.Message, bool) {
-	if projectionValid(state, canonical, transcriptVersion, a.currentPromptCacheKey()) {
+	if projectionValid(state, canonical, a.currentPromptCacheKey()) {
 		if projected := modelVisibleFromProjection(state.Projection, canonical); len(projected) > 0 {
 			return projected, true
 		}

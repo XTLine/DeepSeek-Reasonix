@@ -243,9 +243,7 @@ func TestDefaultReasoningGuardAllowsFormer128KiBStream(t *testing.T) {
 	reasoning := strings.Repeat("abcd", 128*1024/4+1)
 	prov := testutil.NewMock("m", testutil.Turn{Reasoning: reasoning, Text: "svg done"})
 	a := New(prov, tool.NewRegistry(), NewSession(""), Options{}, event.Discard)
-	if err := a.Run(context.Background(), "draw the compound bow"); errors.Is(err, errReasoningByteLimitExceeded) {
-		t.Fatalf("default guard aborted a %d-byte reasoning stream", len(reasoning))
-	} else if err != nil {
+	if err := a.Run(context.Background(), "draw the compound bow"); err != nil {
 		t.Fatal(err)
 	}
 }

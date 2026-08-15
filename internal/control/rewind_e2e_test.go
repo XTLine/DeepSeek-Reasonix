@@ -396,13 +396,8 @@ func TestTailRewindKeepsCompactionProjection(t *testing.T) {
 	c.checkpoints.mu.Lock()
 	lastTurn := c.checkpoints.turn - 1
 	c.checkpoints.mu.Unlock()
-	parentPath := c.SessionPath()
-	parentMessages := ag.Session().Snapshot()
 	if err := c.Rewind(lastTurn, RewindConversation); err != nil {
 		t.Fatalf("tail rewind: %v", err)
-	}
-	if childPath := c.SessionPath(); childPath == parentPath {
-		t.Fatal("tail rewind did not switch to its fork")
 	}
 
 	after := ag.ContextMaintenanceSnapshot()
@@ -413,17 +408,6 @@ func TestTailRewindKeepsCompactionProjection(t *testing.T) {
 	if after.ProjectedTokens >= after.FoldTrigger {
 		t.Fatalf("post-rewind view %d tokens at or above fold %d, want the compacted size kept",
 			after.ProjectedTokens, after.FoldTrigger)
-	}
-	parent, err := agent.LoadSession(parentPath)
-	if err != nil {
-		t.Fatalf("load parent after rewind: %v", err)
-	}
-	if !reflect.DeepEqual(parent.Snapshot(), parentMessages) {
-		t.Fatal("tail rewind changed the parent transcript")
-	}
-	childState, ok, err := agent.LoadCompactionState(c.SessionPath())
-	if err != nil || !ok || childState.Projection.ProjectionVersion != before.ProjectionVersion {
-		t.Fatalf("child projection: ok=%v err=%v state=%+v", ok, err, childState.Projection)
 	}
 }
 

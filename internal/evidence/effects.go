@@ -27,6 +27,8 @@ func ClassifyToolCall(toolName string, args json.RawMessage, readOnly bool) Tool
 	switch name {
 	case "ask", "todo_write", "complete_step", "bash_output", "wait":
 		return ToolEffects{Known: true}
+	case "set_session_title":
+		return ToolEffects{StateMutation: true, Known: true, Reason: "host session metadata write"}
 	default:
 		return ToolEffects{StateMutation: true, WorkspaceMutation: true, ContentMutation: true, Known: true, Reason: "workspace content write by a writer-capable tool"}
 	}

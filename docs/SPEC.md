@@ -273,14 +273,22 @@ when the sole automatic threshold is crossed.
   `reasonix config compact-ratio [--local] [VALUE]`. Project config overrides the
   user-global value used by desktop and new CLI sessions. UI always shows the
   **effective** ratio.
-- `max_output_tokens` is an independent **per-turn** completion ceiling.
-  Recommended: `0` — official DeepSeek omits the field so the server uses the
-  documented **384K** output cap; thinking depth is `effort` only (default high).
-  A positive value is an explicit cost cap. Negative omits optional wire limits
-  when the protocol allows; official DeepSeek Anthropic still sends 384K because
-  `max_tokens` is required (`budget_tokens` is ignored). Clipped only at send
-  time against remaining window and **never** changes `triggerTokens` or
-  maintenance timing. Billing follows actual completion tokens, not the ceiling.
+- `max_output_tokens` is an independent **per-turn** completion ceiling and
+  never changes `triggerTokens` / `compact_ratio`.
+  - `0` is the provider auto value. Local admission uses the provider
+    capability (official DeepSeek 384K, OpenCode Go model table, or a learned
+    completion budget). It is **not** “skip the local output check”.
+  - Official DeepSeek Chat/Responses still omit the field when the remaining
+    shared window can host the 384K auto budget, and inject a clipped value
+    only when the window is tight. Official DeepSeek Anthropic always sends
+    384K or the clipped remainder because `max_tokens` is required.
+  - Official OpenCode Go presets send `min(model max, physical remaining)` on
+    the generic `max_tokens` / `max_output_tokens` field. Third-party
+    compatible APIs do not assume a shared window until a trusted context 400.
+  - A positive value is an explicit cost cap and may still be clipped down to
+    the physical remainder. A negative value force-omits optional wire limits;
+    if the known auto budget no longer fits, Reasonix compacts instead of
+    overriding that choice.
 - Giant tool results are bounded **once**, on first entry to the model:
   `Content` is the stable ≤32KB visible form; `RawContent` holds the full original
   only when they differ. Maintenance never rewrites old tool bodies.
@@ -1042,10 +1050,10 @@ default        = "deepseek-v4-flash"   # optional; defaults to models[0]
 api_key_env    = "DEEPSEEK_API_KEY"
 web_search     = true
 context_window = 1000000   # tokens; harness compacts older history near this limit (0 disables)
-# max_output_tokens = 0              # recommended: official DeepSeek omits the field (server 384K)
-# max_output_tokens = 32768          # optional cost cap
+# max_output_tokens = 0              # auto: provider capability; official DeepSeek omits until the window is tight
+# max_output_tokens = 32768          # optional cost cap; still clipped to physical remaining
 # max_output_tokens = 65536          # optional cost cap
-# max_output_tokens = 131072         # optional cost cap
+# max_output_tokens = -1             # force-omit optional wire limits; compact if the auto budget no longer fits
 # max_output_tokens never changes compact_ratio
 # model_overrides = { "deepseek-v4-flash" = { context_window = 1000000, max_output_tokens = 32768 } }
 

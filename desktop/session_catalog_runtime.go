@@ -22,14 +22,15 @@ func (a *App) catalogReadContext() (context.Context, context.CancelFunc) {
 }
 
 type catalogRuntimeSnapshot struct {
-	scope         string
-	workspaceRoot string
-	topicID       string
-	sessionPath   string
-	activity      string
-	topicTitle    string
-	ctrl          control.SessionAPI
-	open          bool
+	scope            string
+	workspaceRoot    string
+	topicID          string
+	sessionPath      string
+	activity         string
+	topicTitle       string
+	topicTitleSource string
+	ctrl             control.SessionAPI
+	open             bool
 }
 
 type catalogRuntimeOverlay struct {
@@ -184,10 +185,10 @@ func (a *App) runtimeOnlyProjectTopicsWithSessions(scope, workspaceRoot string) 
 		}
 		snapshots = append(snapshots, snapshot)
 	}
-	return runtimeProjectTopicNodes(scope, workspaceRoot, snapshots)
+	return a.runtimeProjectTopicNodes(scope, workspaceRoot, snapshots)
 }
 
-func runtimeProjectTopicNodes(scope, workspaceRoot string, snapshots []catalogRuntimeSnapshot) ([]ProjectNode, map[string][]string) {
+func (a *App) runtimeProjectTopicNodes(scope, workspaceRoot string, snapshots []catalogRuntimeSnapshot) ([]ProjectNode, map[string][]string) {
 	byTopic := map[string][]catalogRuntimeSnapshot{}
 	sessionsByTopic := map[string][]string{}
 	for _, snapshot := range snapshots {
@@ -218,7 +219,7 @@ func runtimeProjectTopicNodes(scope, workspaceRoot string, snapshots []catalogRu
 			label = sessions[0].topicTitle
 		}
 		node := ProjectNode{
-			Key: kind + "_" + topicID, Kind: kind, Label: label,
+			Key: kind + "_" + topicID, Kind: kind, Label: a.localizedTopicTitle(label, sessions[0].topicTitleSource),
 			Root: workspaceRoot, TopicID: topicID, TurnsState: string(sessioncatalog.TurnsUnknown),
 			Health: string(sessioncatalog.HealthOK), Children: []ProjectNode{},
 		}
@@ -242,7 +243,7 @@ func runtimeProjectTopicNodes(scope, workspaceRoot string, snapshots []catalogRu
 			}
 			node.Children = append(node.Children, ProjectNode{
 				Key: projectSessionNodeKey(scope, path), Kind: sessionKind, Label: sessionLabel,
-				Root: workspaceRoot, TopicID: topicID, SessionPath: path,
+				Root: workspaceRoot, TopicID: topicID, SessionPath: path, Preview: sessionPreviewForPath(path),
 				Open: session.open, Running: running, Status: status,
 				TurnsState: string(sessioncatalog.TurnsUnknown), Health: string(sessioncatalog.HealthOK),
 				Children: []ProjectNode{},
@@ -323,8 +324,9 @@ func (a *App) projectNodeFromCatalogTopic(topic sessioncatalog.TopicRecord, topi
 	}
 	overlay := topicOverlays[topicSummaryKey(topic.Scope, topic.WorkspaceRoot, topic.TopicID)]
 	node := ProjectNode{
-		Key: kind + "_" + topic.TopicID, Kind: kind, Label: a.localizedTopicTitle(topic.Title, ""),
+		Key: kind + "_" + topic.TopicID, Kind: kind, Label: a.localizedTopicTitle(topic.Title, topic.TitleSource),
 		Root: topic.WorkspaceRoot, TopicID: topic.TopicID, Turns: topic.Turns,
+		Preview:    topicSessionPreview(topic.Sessions, topic.RepresentativePath),
 		TurnsState: string(topic.TurnsState), Health: string(topic.Health),
 		CreatedAt: topic.CreatedAt, LastActivityAt: topic.LastActivityAt,
 		Pinned: topic.Pinned, Open: overlay.open, Running: overlay.running, Status: overlay.status,

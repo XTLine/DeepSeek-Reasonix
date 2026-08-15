@@ -170,12 +170,26 @@ Hosts should keep the `session/prompt` request open until Reasonix returns its
 stop reason, while continuing to process requests and notifications in both
 directions.
 
+Reasonix emits only ACP v1 stop reasons. A completed turn that still needs a
+final-readiness check sends a `[warning]` message chunk and returns `end_turn`;
+its vendor status remains `readiness_paused` so the host can offer recovery.
+An explicit model-round limit (`max_steps`) sends a `[warning]`, returns
+`max_turn_requests`, and records a paused vendor outcome. A host task-time,
+token, or cost budget also sends a `[warning]` and records a paused outcome,
+but returns `end_turn` because ACP v1 has no task-budget-specific stop reason.
+Client cancellation returns `cancelled`, even when the interrupted runner exits
+without an error. Other provider, tool, or runtime failures return a JSON-RPC
+`-32603 InternalError` whose message contains a bounded, credential-redacted
+cause; they do not return a successful prompt result with a non-standard
+`stopReason`.
+
 When the status phase is `readiness_paused`, resume that exact check with a
 `session/prompt` request whose optional `action` is
 `"final_readiness_recovery"`. Sending `/continue-checks` as the sole text block
 is the compatibility form. Both forms consume a one-shot, persisted host
 checkpoint; ordinary prompt text never inherits it, and a stale action after a
-newer user turn is rejected.
+newer user turn is rejected as JSON-RPC `-32600 InvalidRequest` without
+publishing or persisting a synthetic status turn.
 
 ## Mid-turn steering extension
 
