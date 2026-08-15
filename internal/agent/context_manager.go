@@ -11,9 +11,8 @@ import (
 )
 
 // compactionProgress is how compaction is faring in this session: whether a
-// fold stopped reducing, how many ran back to back, and the turn the last one
-// committed under. All three are cleared together whenever the lineage resets,
-// which is why they travel as one value rather than three fields.
+// fold stopped reducing, how many ran back to back, and which retries already
+// ran in the active turn. The fields are cleared together on lineage resets.
 type compactionProgress struct {
 	stuck       bool // a fold landed above the trigger, so pressure retries are pointless
 	consecutive int  // back-to-back folds since one last helped
@@ -23,6 +22,9 @@ type compactionProgress struct {
 	// lastTurn stops the post-turn observer and the pre-send preflight from
 	// paying for two summaries during one active tool loop.
 	lastTurn atomic.Int64
+	// recoveryTurn lets one must-free fold follow an earlier pressure fold, but
+	// prevents a too-small window from repeatedly rewriting the same prefix.
+	recoveryTurn atomic.Int64
 }
 
 // ContextManager is the sole owner of provider-visible context maintenance.

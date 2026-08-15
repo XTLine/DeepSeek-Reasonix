@@ -73,6 +73,7 @@ func (r *sessionRuntime) reset(s *Session) {
 	r.compaction.consecutive = 0
 	r.compaction.failedTurn.Store(0)
 	r.compaction.lastTurn.Store(0)
+	r.compaction.recoveryTurn.Store(0)
 }
 
 // session returns the bound conversation under the lock that guards the

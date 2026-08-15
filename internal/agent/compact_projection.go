@@ -385,7 +385,7 @@ func (a *Agent) compactToProjection(ctx context.Context, trigger, instructions s
 	a.sess.compactionRunMu.Lock()
 	defer a.sess.compactionRunMu.Unlock()
 	activeTurn := a.activeTurnCreatedAt.Load()
-	if activeTurn != 0 && a.sess.compaction.lastTurn.Load() == activeTurn && trigger != CompactionTriggerManual {
+	if a.sameTurnCompactionBlocked(activeTurn, trigger, mustFree) {
 		return CompactionNoop, nil
 	}
 	canonical, transcriptVersion := a.sess.conversation.snapshotMessagesVersion()
@@ -493,6 +493,7 @@ func (a *Agent) compactToProjection(ctx context.Context, trigger, instructions s
 		a.emitCompactionAborted(trigger)
 		return CompactionNoop, err
 	}
+	a.noteMustFreeCompaction(activeTurn, trigger, mustFree)
 	a.svc.sink.Emit(event.Event{Kind: event.CompactionDone, Compaction: event.Compaction{
 		Trigger: trigger, Messages: len(fold), Summary: summary,
 	}})
