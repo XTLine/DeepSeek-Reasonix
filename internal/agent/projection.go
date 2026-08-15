@@ -54,8 +54,8 @@ type ContextProjection struct {
 	Messages          []provider.Message `json:"messages"`
 	TranscriptVersion uint64             `json:"transcript_version"`
 	ProjectionVersion uint64             `json:"projection_version"`
-	// CoveredCount is len(canonical) when the projection was built. Model-visible
-	// context is projection.Messages + canonical[CoveredCount:].
+	// CoveredCount is the canonical prefix represented by the frozen projection
+	// body. Model-visible context is projection.Messages + canonical[CoveredCount:].
 	CoveredCount int `json:"covered_count"`
 	// CoveredPrefixHash fingerprints provider-visible canonical[:CoveredCount]
 	// so append-only growth can be distinguished from prefix edits/rewrites.

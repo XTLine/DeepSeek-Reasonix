@@ -38,13 +38,17 @@ func (a *Agent) contextMaintenanceBlocked(inputHash string) (bool, string) {
 	if r.Status != "blocked" && r.Status != "failed" {
 		return false, ""
 	}
-	// Generation-scoped: a failed view does not get a second summary until a
-	// successful install, manual compress, or lineage change advances the
-	// generation. A different input hash is new work and gets its own attempt.
+	reason := firstNonEmpty(a.sess.compactionState.BlockedReason, r.Reason)
+	// A failed view stays blocked for this generation. Changed input may retry
+	// on a later turn, but not once per tool result in the same active turn.
 	if r.BlockedInputHash != "" && inputHash != "" && r.BlockedInputHash != inputHash {
+		turn := a.activeTurnCreatedAt.Load()
+		if turn != 0 && a.sess.compaction.failedTurn.Load() == turn {
+			return true, reason
+		}
 		return false, ""
 	}
-	return true, firstNonEmpty(a.sess.compactionState.BlockedReason, r.Reason)
+	return true, reason
 }
 
 func (a *Agent) emitContextMaintenance(r *ContextMaintenanceReceipt) {
@@ -125,6 +129,7 @@ func (a *Agent) recordContextMaintenanceOutcome(inputHash, trigger, action, stat
 		a.sess.compactionMu.Unlock()
 		return
 	}
+	a.sess.compaction.failedTurn.Store(a.activeTurnCreatedAt.Load())
 	a.sess.compactionMu.Unlock()
 	a.emitContextMaintenance(state.LastReceipt)
 }

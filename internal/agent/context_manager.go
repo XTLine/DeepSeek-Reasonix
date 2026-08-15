@@ -17,6 +17,9 @@ import (
 type compactionProgress struct {
 	stuck       bool // a fold landed above the trigger, so pressure retries are pointless
 	consecutive int  // back-to-back folds since one last helped
+	// failedTurn backs off changed-view retries within one active tool loop.
+	// A later user turn may retry, while hard-ceiling recovery bypasses it.
+	failedTurn atomic.Int64
 	// lastTurn stops the post-turn observer and the pre-send preflight from
 	// paying for two summaries during one active tool loop.
 	lastTurn atomic.Int64
@@ -108,6 +111,7 @@ func (m ContextManager) prepareOnce(ctx context.Context, policy ContextPreparePo
 	if est < fold {
 		a.sess.compaction.consecutive = 0
 		a.sess.compaction.stuck = false
+		a.sess.compaction.failedTurn.Store(0)
 	}
 	if a.sess.compaction.stuck && policy.Trigger == CompactionTriggerPressure && est < hard {
 		return prepared, nil
@@ -171,6 +175,7 @@ func (m ContextManager) foldContext(ctx context.Context, prepared PreparedContex
 		// a stale stuck latch must not suppress the next pressure round.
 		a.sess.compaction.stuck = false
 		a.sess.compaction.consecutive = 0
+		a.sess.compaction.failedTurn.Store(0)
 	}
 	if policy.Trigger == CompactionTriggerManual {
 		return result, nil

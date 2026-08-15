@@ -182,6 +182,7 @@ func TestPressureBelowHardCeilingKeepsTheFailure(t *testing.T) {
 func TestFailedSummaryReceiptStillRecoversAtHardCeiling(t *testing.T) {
 	sess := foldableSessionOverForce(6)
 	a := agentOverForce(t, &fakeProvider{streamErr: errors.New("provider down")}, sess)
+	a.activeTurnCreatedAt.Store(42)
 	if est, hard := a.estimatedPromptTokens(sess.Messages), a.hardInputCeiling(); est >= hard {
 		t.Fatalf("fixture estimates %d tokens against a %d ceiling; it is not below it", est, hard)
 	}

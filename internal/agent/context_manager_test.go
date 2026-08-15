@@ -142,6 +142,42 @@ func TestFailedSummaryReceiptTracksLatestViewHash(t *testing.T) {
 	}
 }
 
+func TestFailedSummaryReceiptBacksOffChangedViewsWithinActiveTurn(t *testing.T) {
+	const window = 10_000
+	sess := &Session{Messages: []provider.Message{
+		{Role: provider.RoleSystem, Content: "system"},
+		{Role: provider.RoleUser, Content: "task"},
+		{Role: provider.RoleAssistant, Content: strings.Repeat("old work ", 500)},
+		{Role: provider.RoleUser, Content: "current"},
+		{Role: provider.RoleAssistant, Content: "tail"},
+	}}
+	prov := &failingSummaryProvider{}
+	a := New(prov, tool.NewRegistry(), sess, Options{
+		ContextWindow: window, CompactRatio: 0.85, RecentKeep: 2,
+	}, event.Discard)
+	policy := ContextPreparePolicy{Trigger: CompactionTriggerPressure, ObservedInputTokens: 8600}
+	a.activeTurnCreatedAt.Store(11)
+
+	if _, err := a.contextManager().Prepare(context.Background(), policy); err != nil {
+		t.Fatal(err)
+	}
+	sess.Add(provider.Message{Role: provider.RoleTool, Content: strings.Repeat("new output ", 100)})
+	if _, err := a.contextManager().Prepare(context.Background(), policy); err != nil {
+		t.Fatal(err)
+	}
+	if prov.calls != 1 {
+		t.Fatalf("same-turn changed view made %d summary calls, want 1", prov.calls)
+	}
+
+	a.activeTurnCreatedAt.Store(12)
+	if _, err := a.contextManager().Prepare(context.Background(), policy); err != nil {
+		t.Fatal(err)
+	}
+	if prov.calls != 2 {
+		t.Fatalf("later turn made %d summary calls, want one fresh retry", prov.calls)
+	}
+}
+
 // TestPrepareThresholdSkipsExtensionInterceptors locks the overflow-only
 // contract: automatic compact_ratio uses the pre-interceptor request shape
 // (messages + tools + role projection). context.prepare / provider.request

@@ -254,17 +254,49 @@ func TestRewindConversationSucceedsWithLiveBoundary(t *testing.T) {
 		t.Fatalf("Rewind with a live boundary: %v", err)
 	}
 	if got := len(ag.Session().Messages); got != boundary {
-		t.Fatalf("session truncated to %d messages, want boundary %d", got, boundary)
+		t.Fatalf("switched session = %d messages, want boundary %d", got, boundary)
 	}
 	ok := false
 	for _, e := range *events {
-		if e.Kind == event.Notice && strings.Contains(e.Text, "rewound conversation") {
+		if e.Kind == event.Notice && strings.Contains(e.Text, "forked conversation") {
 			ok = true
 		}
 	}
 	if !ok {
-		t.Fatal("expected a conversation-rewind success notice")
+		t.Fatal("expected a conversation-fork success notice")
 	}
+}
+
+func TestCompatibilityRewindTransfersLeaseBeforeForkSwitch(t *testing.T) {
+	c, ag, _ := runTwoTurns(t)
+	originalPath := c.SessionPath()
+	keeper := NewSessionLeaseKeeper()
+	defer keeper.Release()
+	if err := keeper.Rebind(originalPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := keeper.BindControllerAuthority(c); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Rewind(1, RewindConversation); err != nil {
+		t.Fatalf("Rewind: %v", err)
+	}
+	targetPath := c.SessionPath()
+	if targetPath == originalPath {
+		t.Fatal("conversation rewind did not switch to its fork")
+	}
+	if got := keeper.HeldPath(); got != agent.CanonicalSessionPath(targetPath) {
+		t.Fatalf("keeper path = %q, want %q", got, agent.CanonicalSessionPath(targetPath))
+	}
+	if auth := ag.Session().WriteAuthority(); auth == nil || !auth.Covers(targetPath) {
+		t.Fatal("fork was published without target write authority")
+	}
+	old, err := agent.TryAcquireSessionLease(originalPath)
+	if err != nil {
+		t.Fatalf("parent lease remained held after switch: %v", err)
+	}
+	old.Release()
 }
 
 func TestPositionalCompressionPreservesCheckpointLineage(t *testing.T) {
@@ -364,8 +396,13 @@ func TestTailRewindKeepsCompactionProjection(t *testing.T) {
 	c.checkpoints.mu.Lock()
 	lastTurn := c.checkpoints.turn - 1
 	c.checkpoints.mu.Unlock()
+	parentPath := c.SessionPath()
+	parentMessages := ag.Session().Snapshot()
 	if err := c.Rewind(lastTurn, RewindConversation); err != nil {
 		t.Fatalf("tail rewind: %v", err)
+	}
+	if childPath := c.SessionPath(); childPath == parentPath {
+		t.Fatal("tail rewind did not switch to its fork")
 	}
 
 	after := ag.ContextMaintenanceSnapshot()
@@ -376,6 +413,17 @@ func TestTailRewindKeepsCompactionProjection(t *testing.T) {
 	if after.ProjectedTokens >= after.FoldTrigger {
 		t.Fatalf("post-rewind view %d tokens at or above fold %d, want the compacted size kept",
 			after.ProjectedTokens, after.FoldTrigger)
+	}
+	parent, err := agent.LoadSession(parentPath)
+	if err != nil {
+		t.Fatalf("load parent after rewind: %v", err)
+	}
+	if !reflect.DeepEqual(parent.Snapshot(), parentMessages) {
+		t.Fatal("tail rewind changed the parent transcript")
+	}
+	childState, ok, err := agent.LoadCompactionState(c.SessionPath())
+	if err != nil || !ok || childState.Projection.ProjectionVersion != before.ProjectionVersion {
+		t.Fatalf("child projection: ok=%v err=%v state=%+v", ok, err, childState.Projection)
 	}
 }
 
