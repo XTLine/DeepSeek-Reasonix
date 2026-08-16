@@ -10,6 +10,7 @@ import { isEditableTarget } from "./keyboardShortcuts";
 import { isNativeVerticalScrollbarPointer, measureTranscriptVirtuosoItem } from "./transcriptNativeScrollbar";
 import {
   INITIAL_TRANSCRIPT_SCROLL_STATE,
+  isTranscriptContentShrink,
   isTranscriptSelectionMode,
   reduceTranscriptScroll,
   type TranscriptScrollCommand,
@@ -74,6 +75,7 @@ export function useTranscriptVirtuosoScroll({
   const followFrameRef = useRef<number | null>(null);
   const tailSettleFrameRef = useRef<number | null>(null);
   const resizeSettleFrameRef = useRef<number | null>(null);
+  const lastFollowExtentRef = useRef<number | null>(null);
   const [nativeScrollbarDragging, setNativeScrollbarDragging] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
@@ -159,6 +161,7 @@ export function useTranscriptVirtuosoScroll({
       || event.type === "PROGRAMMATIC_BEGIN"
       || event.type === "JUMP_TO_INDEX"
       || event.type === "SCROLL_TO_OFFSET"
+      || event.type === "CONTENT_SHRANK"
     ) {
       if (tailSettleFrameRef.current !== null) cancelAnimationFrame(tailSettleFrameRef.current);
       tailSettleFrameRef.current = null;
@@ -240,6 +243,16 @@ export function useTranscriptVirtuosoScroll({
     if (followFrameRef.current !== null) return;
     followFrameRef.current = requestAnimationFrame(() => {
       followFrameRef.current = null;
+      const element = scrollRef.current;
+      if (element) {
+        const scrollHeight = element.scrollHeight;
+        const previous = lastFollowExtentRef.current;
+        lastFollowExtentRef.current = scrollHeight;
+        if (previous != null && isTranscriptContentShrink(scrollHeight - previous)) {
+          dispatch({ type: "CONTENT_SHRANK" });
+          return;
+        }
+      }
       dispatch({ type: "LAYOUT_HEIGHT_CHANGED" });
     });
   }, [dispatch]);
@@ -264,7 +277,10 @@ export function useTranscriptVirtuosoScroll({
     });
   }, [dispatch]);
 
-  const reset = useCallback(() => dispatch({ type: "RESET" }), [dispatch]);
+  const reset = useCallback(() => {
+    lastFollowExtentRef.current = null;
+    dispatch({ type: "RESET" });
+  }, [dispatch]);
 
   const writeOffset = useCallback((owner: TranscriptScrollOwner, top: number, behavior: ScrollBehavior = "auto") => {
     if (isTranscriptSelectionMode(modeRef.current) && owner !== "selection-edge-scroll") return false;

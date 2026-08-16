@@ -24,6 +24,7 @@ export type TranscriptScrollEvent =
   | { type: "USER_SCROLL_INTENT" }
   | { type: "AT_BOTTOM_CHANGED"; atBottom: boolean; scrollable: boolean }
   | { type: "TAIL_CONTENT_CHANGED" }
+  | { type: "CONTENT_SHRANK" }
   | { type: "LAYOUT_HEIGHT_CHANGED" }
   | { type: "VIEWPORT_RESIZED" }
   | { type: "USER_RESIZE_BEGIN" }
@@ -53,6 +54,14 @@ export const INITIAL_TRANSCRIPT_SCROLL_STATE: TranscriptScrollState = {
   scrollable: false,
   settleMode: "tail-follow",
 };
+
+// Fold collapse drops at least one process row (~28px). Smaller deltas are
+// Virtuoso measurement jitter and must keep following the tail.
+export const TRANSCRIPT_CONTENT_SHRINK_THRESHOLD_PX = 24;
+
+export function isTranscriptContentShrink(delta: number): boolean {
+  return delta <= -TRANSCRIPT_CONTENT_SHRINK_THRESHOLD_PX;
+}
 
 function transition(state: TranscriptScrollState, commands: readonly TranscriptScrollCommand[] = []): TranscriptScrollTransition {
   return { state, commands };
@@ -91,6 +100,10 @@ export function reduceTranscriptScroll(
     case "LAYOUT_HEIGHT_CHANGED":
     case "VIEWPORT_RESIZED":
       return transition(state, state.mode === "tail-follow" ? [{ type: "AUTOSCROLL_TO_BOTTOM" }] : []);
+    case "CONTENT_SHRANK":
+      // Auto-fold collapse shortens the transcript. Keep tail ownership but
+      // do not chase the new bottom — that is what makes the viewport jump.
+      return transition(state);
     case "USER_RESIZE_BEGIN":
       return transition({ ...state, mode: "user-resize", settleMode: "manual" });
     case "USER_RESIZE_END":
