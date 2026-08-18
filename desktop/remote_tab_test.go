@@ -32,6 +32,13 @@ type fakeServe struct {
 	calls       []string // "METHOD /path body" per command request
 	failNext    string   // non-empty ⇒ next command endpoint replies 409 with this text
 	failHistory bool     // /history replies 500 when set
+	eventsConns int      // /events connections opened
+}
+
+func (fs *fakeServe) eventsCount() int {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	return fs.eventsConns
 }
 
 func (fs *fakeServe) recorded() []string {
@@ -89,6 +96,9 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		writeTestJSON(w, fs.sessions)
 	})
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
+		fs.mu.Lock()
+		fs.eventsConns++
+		fs.mu.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -549,5 +559,78 @@ func TestRemoteTabCommandSurfacesServeErrorBody(t *testing.T) {
 	err := a.SubmitRemoteTab(meta.ID, "hello")
 	if err == nil || !strings.Contains(err.Error(), "close the remote tab first") {
 		t.Fatalf("err = %v, want the serve error body surfaced", err)
+	}
+}
+
+// TestCloseRemoteTabIsIdempotent: closing removes the registry entry, stops
+// the pump, and a second close is a no-op.
+func TestCloseRemoteTabIsIdempotent(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+
+	if err := a.CloseRemoteTab(meta.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.CloseRemoteTab(meta.ID); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+	a.remoteTabMu.Lock()
+	_, present := a.remoteTabs[meta.ID]
+	a.remoteTabMu.Unlock()
+	if present {
+		t.Fatal("closed tab still in the registry")
+	}
+	if err := a.SubmitRemoteTab(meta.ID, "hi"); err == nil {
+		t.Fatal("commands on a closed tab must fail")
+	}
+}
+
+// TestRemoteTabFollowsHostReconnect pins the SSH-driven lifecycle: a
+// transient drop suspends the pump and flags reconnecting, the regained
+// connection re-attaches a fresh pump to the still-running serve, and a
+// terminal failure parks the tab in error.
+func TestRemoteTabFollowsHostReconnect(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+	firstConns := fs.eventsCount()
+
+	a.remoteTabsHostStatus("box", "reconnecting", "")
+	waitForTabState(t, a, meta.ID, "reconnecting")
+	if err := a.SubmitRemoteTab(meta.ID, "hi"); err == nil {
+		t.Fatal("commands during reconnecting must fail")
+	}
+
+	a.remoteTabsHostStatus("box", "connected", "")
+	waitForTabState(t, a, meta.ID, "ready")
+	if fs.eventsCount() <= firstConns {
+		t.Fatalf("re-attach did not open a new event stream: %d then %d", firstConns, fs.eventsCount())
+	}
+	if err := a.SubmitRemoteTab(meta.ID, "back online"); err != nil {
+		t.Fatalf("submit after reconnect: %v", err)
+	}
+
+	a.remoteTabsHostStatus("box", "stopped", "ssh: auth failed")
+	waitForTabState(t, a, meta.ID, "error")
+	a.remoteTabMu.Lock()
+	tabErr := a.remoteTabs[meta.ID].err
+	a.remoteTabMu.Unlock()
+	if !strings.Contains(tabErr, "ssh: auth failed") {
+		t.Fatalf("tab error = %q, want the host failure text", tabErr)
 	}
 }

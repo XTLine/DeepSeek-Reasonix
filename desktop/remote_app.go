@@ -227,6 +227,9 @@ func (a *App) emitRemoteEvent(name string, payload any) {
 // remoteEventSink implementation on *App.
 func (a *App) onStatus(s RemoteConnectionStatusView) {
 	a.emitRemoteEvent("remote:status", s)
+	// Open remote tabs follow the SSH lifecycle: suspend on transient
+	// drops, re-attach on reconnect, park in error on terminal failure.
+	a.remoteTabsHostStatus(s.HostID, s.State, s.Error)
 	// A terminal SSH failure (auth, host key, exhausted retries) kills the
 	// tunnel: close the host's web window so the user is not left staring at a
 	// dead Serve page. The frontend already shows the failure reason through

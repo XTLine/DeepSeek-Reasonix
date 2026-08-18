@@ -161,13 +161,16 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64) {
 		}
 		a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:event", tabID), json.RawMessage(frame))
 	}
-	// The stream died on its own. Only the current generation reports it;
-	// a reconnect will supersede this pump silently.
+	// The stream died without an explicit stop: only the current generation
+	// reacts. Treat it as a transient serve/tunnel drop, flag reconnecting,
+	// and try one re-attach now; the host status hook retries again on the
+	// next connected transition.
 	a.remoteTabMu.Lock()
 	stillCurrent := a.remoteTabs[tabID] != nil && a.remoteTabs[tabID].gen == gen
 	a.remoteTabMu.Unlock()
 	if stillCurrent && ctx.Err() == nil {
-		a.emitRemoteTabState(tabID, "error", "remote event stream closed")
+		a.emitRemoteTabState(tabID, "reconnecting", "")
+		a.goSafe("remoteTabReattach", func() { a.reattachRemoteTab(tabID) })
 	}
 }
 
@@ -255,18 +258,19 @@ func commandContext(a *App) (context.Context, context.CancelFunc) {
 }
 
 // remoteTabCommandClient resolves a tabID to its live serve client. A tab
-// that has not finished bootstrap (no client yet) or has already closed is
-// an error, not a silent no-op.
+// that has not finished bootstrap, is reconnecting, or has failed is an
+// error, not a silent no-op.
 func (a *App) remoteTabCommandClient(tabID string) (*http.Client, string, error) {
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
 	var client *http.Client
 	var base string
-	if tab != nil {
+	usable := tab != nil && tab.client != nil && tab.state != "reconnecting" && tab.state != "error"
+	if usable {
 		client, base = tab.client, tab.base
 	}
 	a.remoteTabMu.Unlock()
-	if client == nil || base == "" {
+	if !usable {
 		return nil, "", fmt.Errorf("remote tab %q is not connected", tabID)
 	}
 	return client, base, nil
@@ -566,4 +570,129 @@ func (a *App) RemoteTabBranches(tabID string) (json.RawMessage, error) {
 // RemoteTabSkills returns the remote host's discoverable skills.
 func (a *App) RemoteTabSkills(tabID string) (json.RawMessage, error) {
 	return a.remoteTabGet(tabID, "/skills")
+}
+
+// CloseRemoteTab tears down one remote tab: the SSE pump stops and the
+// registry entry goes away. The remote serve and the SSH connection stay
+// untouched — other tabs on the same host keep running.
+func (a *App) CloseRemoteTab(tabID string) error {
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	delete(a.remoteTabs, tabID)
+	var cancel context.CancelFunc
+	if tab != nil {
+		cancel = tab.cancel
+	}
+	a.remoteTabMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return nil
+}
+
+// remoteTabsHostStatus reacts to SSH transitions for every open tab on the
+// host: losing the tunnel suspends the pumps, a regained connection
+// re-attaches each tab to the still-running remote serve, and a terminal
+// failure parks the tabs in error.
+func (a *App) remoteTabsHostStatus(hostID, state, errText string) {
+	switch state {
+	case "connecting", "reconnecting":
+		a.suspendRemoteTabPumps(hostID, "reconnecting", "")
+	case "connected":
+		a.resumeRemoteTabs(hostID)
+	case "stopped":
+		a.suspendRemoteTabPumps(hostID, "error", errText)
+	}
+}
+
+func (a *App) suspendRemoteTabPumps(hostID, state, errText string) {
+	a.remoteTabMu.Lock()
+	for _, tab := range a.remoteTabs {
+		if tab.ref.HostID != hostID {
+			continue
+		}
+		tab.gen++
+		if tab.cancel != nil {
+			tab.cancel()
+			tab.cancel = nil
+		}
+		tab.state = state
+		tab.err = errText
+	}
+	a.remoteTabMu.Unlock()
+}
+
+// resumeRemoteTabs re-attaches every suspended tab of a reconnected host.
+// The remote serve kept running through the SSH drop, so re-attachment only
+// rebuilds the tunnel client and the event pump; the serve still holds the
+// active session, so no session re-entry is needed.
+func (a *App) resumeRemoteTabs(hostID string) {
+	a.remoteTabMu.Lock()
+	tabIDs := make([]string, 0, 2)
+	for id, tab := range a.remoteTabs {
+		if tab.ref.HostID == hostID && tab.state == "reconnecting" {
+			tabIDs = append(tabIDs, id)
+		}
+	}
+	a.remoteTabMu.Unlock()
+	for _, tabID := range tabIDs {
+		a.goSafe("remoteTabReattach", func() { a.reattachRemoteTab(tabID) })
+	}
+}
+
+// reattachRemoteTab rebuilds one tab's serve client and pump after the
+// host connection came back. Any failure leaves the tab in reconnecting —
+// the next connected transition retries.
+func (a *App) reattachRemoteTab(tabID string) {
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil || tab.state != "reconnecting" {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	hostID, workspace := tab.ref.HostID, tab.ref.Workspace
+	a.remoteTabMu.Unlock()
+
+	rt, err := a.remoteRT()
+	if err != nil {
+		return
+	}
+	ctx := a.bootContext()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	view, token, err := rt.EnsureServer(ctx, hostID, workspace)
+	if err != nil || view.State != "ready" || view.LocalURL == "" {
+		return
+	}
+	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	jar, jarErr := cookiejar.New(nil)
+	if jarErr != nil {
+		return
+	}
+	client := &http.Client{Jar: jar}
+	if err := serveHandshake(callCtx, client, view.LocalURL, token); err != nil {
+		return
+	}
+
+	a.remoteTabMu.Lock()
+	if cur := a.remoteTabs[tabID]; cur != tab || tab.state != "reconnecting" {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	tab.gen++
+	if tab.cancel != nil {
+		tab.cancel()
+	}
+	tab.client = client
+	tab.base = view.LocalURL
+	tab.token = token
+	gen := tab.gen
+	pumpCtx, cancelPump := context.WithCancel(ctx)
+	tab.cancel = cancelPump
+	a.remoteTabMu.Unlock()
+
+	a.goSafe("remoteTabPump", func() { a.remoteTabPump(pumpCtx, tabID, gen) })
+	a.emitRemoteTabState(tabID, "ready", "")
 }
