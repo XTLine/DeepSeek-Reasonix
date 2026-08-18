@@ -429,6 +429,8 @@ export interface TabMeta {
   workspacePath?: string;
   gitBranch?: string;
   isolatedWorktree?: boolean;
+  /** Present ⇒ remote tab (RemoteTabBridge); absent ⇒ local tab. */
+  remote?: RemoteTabRefView;
   topicId: string;
   topicTitle: string;
   sessionPath?: string;
@@ -1516,6 +1518,49 @@ export type RemoteServerState =
   | "error"
   | "stopped"
   | "reuse";
+
+// ── Remote project tabs (RemoteTabBridge) ──
+export interface RemoteTabRefView {
+  hostId: string;
+  workspace: string;
+}
+
+export interface RemoteProjectView {
+  hostId: string;
+  workspace: string;
+  title?: string;
+  color?: string;
+}
+
+export interface RemoteSessionView {
+  name: string;
+  title: string;
+  turns: number;
+  current?: boolean;
+}
+
+export type RemoteTabStateValue = "connecting" | "ready" | "reconnecting" | "serve_down" | "error";
+
+export interface RemoteTabState {
+  state: RemoteTabStateValue;
+  error?: string;
+}
+
+export interface RemoteTabOpenOptions {
+  newSession?: boolean;
+  sessionName?: string;
+}
+
+// First-cut shape; finalize against what the surface actually consumes in Task 5.5
+// (spec open item: avoid over-fetching).
+export interface RemoteTabSnapshot {
+  history: unknown[];
+  context?: unknown;
+  todos?: unknown[];
+  checkpoints?: unknown[];
+  models?: string[];
+  status?: unknown;
+}
 
 export interface RemoteHostView {
   id: string;

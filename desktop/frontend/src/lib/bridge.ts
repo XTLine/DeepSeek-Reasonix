@@ -29,6 +29,11 @@ import type {
   RemoteServerView,
   RemoteForwardsEvent,
   RemoteLegacyWorkbenchData,
+  RemoteProjectView,
+  RemoteSessionView,
+  RemoteTabOpenOptions,
+  RemoteTabSnapshot,
+  RemoteTabState,
   BalanceInfo,
   UsageStatsRange,
   UsageStatsRequest,
@@ -656,6 +661,24 @@ export interface AppBindings extends SessionCatalogBindings, HistoryCatalogBindi
   RemoteLastWorkspace(hostId: string): Promise<string>;
   ScanRemoteLegacyWorkbenchData(): Promise<RemoteLegacyWorkbenchData>;
   CleanRemoteLegacyWorkbenchData(target: "mirrors" | "trust"): Promise<void>;
+
+  // ── Remote project tabs (RemoteTabBridge) ──
+  AddRemoteProject(hostId: string, workspace: string): Promise<RemoteProjectView>;
+  RemoveRemoteProject(hostId: string, workspace: string): Promise<void>;
+  ListRemoteProjects(): Promise<RemoteProjectView[]>;
+  OpenRemoteProjectTab(hostId: string, workspace: string, opts: RemoteTabOpenOptions): Promise<TabMeta>;
+  RemoteProjectSessions(hostId: string, workspace: string): Promise<RemoteSessionView[]>;
+  DeleteRemoteProjectSession(hostId: string, workspace: string, name: string): Promise<void>;
+  CloseRemoteTab(tabId: string): Promise<void>;
+  SubmitRemoteTab(tabId: string, text: string): Promise<void>;
+  CancelRemoteTab(tabId: string): Promise<void>;
+  ApproveRemoteTab(tabId: string, callId: string, decision: string): Promise<void>;
+  AnswerRemoteTab(tabId: string, callId: string, answer: string): Promise<void>;
+  SetRemoteTabModel(tabId: string, ref: string): Promise<void>;
+  RewindRemoteTab(tabId: string, checkpointId: string): Promise<void>;
+  SetRemoteTabToolApprovalMode(tabId: string, mode: string): Promise<void>;
+  SetRemoteTabGoal(tabId: string, goal: string): Promise<void>;
+  RemoteTabSnapshot(tabId: string): Promise<RemoteTabSnapshot>;
 }
 
 // Compile-time drift check. Exclude<A, B> extracts keys in A that are missing
@@ -1002,6 +1025,39 @@ export function onRemoteServer(cb: (s: RemoteServerView) => void): () => void {
     return window.runtime.EventsOn("remote:server", (payload?: unknown) => cb((payload ?? {}) as RemoteServerView));
   }
   return registerMockRemoteListener("server", cb as (v: unknown) => void);
+}
+
+export function onRemoteTabEvent(tabId: string, cb: (frame: unknown) => void): () => void {
+  if (realApp() && typeof window !== "undefined" && window.runtime) {
+    return window.runtime.EventsOn(`remote-tab:${tabId}:event`, (payload?: unknown) => cb(payload));
+  }
+  return registerMockRemoteTabListener(tabId, "event", cb as (v: unknown) => void);
+}
+
+export function onRemoteTabState(tabId: string, cb: (s: RemoteTabState) => void): () => void {
+  if (realApp() && typeof window !== "undefined" && window.runtime) {
+    return window.runtime.EventsOn(`remote-tab:${tabId}:state`, (payload?: unknown) => cb((payload ?? {}) as RemoteTabState));
+  }
+  return registerMockRemoteTabListener(tabId, "state", cb as (v: unknown) => void);
+}
+
+// Mock fan-out for remote-tab events, keyed `${tabId}:${channel}` (browser-dev / tsx tests).
+type MockRemoteTabChannel = "event" | "state";
+const mockRemoteTabListeners = new Map<string, Set<(v: unknown) => void>>();
+
+function registerMockRemoteTabListener(tabId: string, channel: MockRemoteTabChannel, cb: (v: unknown) => void): () => void {
+  const key = `${tabId}:${channel}`;
+  const set = mockRemoteTabListeners.get(key) ?? new Set();
+  set.add(cb);
+  mockRemoteTabListeners.set(key, set);
+  return () => {
+    set.delete(cb);
+    if (set.size === 0) mockRemoteTabListeners.delete(key);
+  };
+}
+
+export function __emitMockRemoteTab(tabId: string, channel: MockRemoteTabChannel, payload: unknown): void {
+  for (const cb of mockRemoteTabListeners.get(`${tabId}:${channel}`) ?? []) cb(payload);
 }
 
 
@@ -5500,11 +5556,42 @@ function makeMockApp(): AppBindings {
       __emitMockRemote("status", { hostId, state: mockRemoteConn[hostId] });
     },
     async ListRemoteDir(_hostId, path) {
-      const base = path.replace(/\/$/, "");
-      return [
-        { name: "src", path: `${base}/src`, isDir: true, size: 0, mtimeUnix: 1_700_000_000, symlink: false },
-        { name: "README.md", path: `${base}/README.md`, isDir: false, size: 1024, mtimeUnix: 1_700_000_500, symlink: false },
-      ];
+      const raw = path.replace(/\/+$/, "") || "~";
+      const base = raw === "/home/dev" ? "~" : raw.replace(/^\/home\/dev(?=\/|$)/, "~");
+      const children: Record<string, Array<{ name: string; isDir: boolean; size: number }>> = {
+        "~": [
+          { name: "src", isDir: true, size: 0 },
+          { name: "docs", isDir: true, size: 0 },
+          { name: "README.md", isDir: false, size: 1024 },
+        ],
+        "~/src": [
+          { name: "app", isDir: true, size: 0 },
+          { name: "lib", isDir: true, size: 0 },
+          { name: "main.go", isDir: false, size: 2048 },
+        ],
+        "~/src/app": [
+          { name: "handlers", isDir: true, size: 0 },
+          { name: "app.go", isDir: false, size: 860 },
+        ],
+        "~/src/app/handlers": [
+          { name: "remote.go", isDir: false, size: 640 },
+        ],
+        "~/src/lib": [
+          { name: "util.go", isDir: false, size: 320 },
+        ],
+        "~/docs": [
+          { name: "guide.md", isDir: false, size: 480 },
+        ],
+      };
+      const rows = children[base] ?? [];
+      return rows.map((entry, index) => ({
+        name: entry.name,
+        path: `${base}/${entry.name}`,
+        isDir: entry.isDir,
+        size: entry.size,
+        mtimeUnix: 1_700_000_000 + index,
+        symlink: false,
+      }));
     },
     async ReadRemoteFile(_hostId, path) {
       return { path, body: `# Mock remote file\n${path}\n`, size: 40, mtimeUnix: 1_700_000_500, truncated: false, binary: false };
@@ -5551,6 +5638,53 @@ function makeMockApp(): AppBindings {
       return "";
     },
     async SubmitExtensionForm() {},
+    // ── Remote project tabs mock ──
+    async AddRemoteProject(hostId: string, workspace: string) {
+      const dedupe = mockRemoteProjects.find((p) => p.hostId === hostId && p.workspace === workspace);
+      if (dedupe) return dedupe;
+      const view = { hostId, workspace, title: `${hostId}:${workspace}` };
+      mockRemoteProjects = [...mockRemoteProjects, view];
+      return view;
+    },
+    async RemoveRemoteProject(hostId: string, workspace: string) {
+      mockRemoteProjects = mockRemoteProjects.filter((p) => !(p.hostId === hostId && p.workspace === workspace));
+    },
+    async ListRemoteProjects() {
+      return mockRemoteProjects.slice();
+    },
+    async OpenRemoteProjectTab(hostId: string, workspace: string) {
+      const tabId = `remote-mock-${hostId}-${workspace}`.replace(/[^a-z0-9-]/gi, "_");
+      __emitMockRemoteTab(tabId, "state", { state: "ready" });
+      return {
+        id: tabId,
+        scope: "project",
+        workspaceRoot: workspace,
+        workspaceName: workspace.split("/").filter(Boolean).pop() ?? workspace,
+        topicId: "",
+        topicTitle: `${hostId}:${workspace}`,
+        label: `${hostId}:${workspace}`,
+        ready: true,
+        running: false,
+        mode: "normal",
+        remote: { hostId, workspace },
+      } as TabMeta;
+    },
+    async RemoteProjectSessions() {
+      return [];
+    },
+    async DeleteRemoteProjectSession() {},
+    async CloseRemoteTab() {},
+    async SubmitRemoteTab() {},
+    async CancelRemoteTab() {},
+    async ApproveRemoteTab() {},
+    async AnswerRemoteTab() {},
+    async SetRemoteTabModel() {},
+    async RewindRemoteTab() {},
+    async SetRemoteTabToolApprovalMode() {},
+    async SetRemoteTabGoal() {},
+    async RemoteTabSnapshot() {
+      return { history: [] };
+    },
     async CleanRemoteLegacyWorkbenchData() {},
   };
 }
@@ -5576,5 +5710,6 @@ function mockRemoteHostView(id: string, input: RemoteHostInput, previous?: Remot
 let mockRemoteHosts: RemoteHostView[] = [
   { id: "demo", label: "demo", host: "192.168.1.10", port: 22, user: "dev", identityFile: "", proxyJump: "", defaultWorkspace: "~/app", serveInstall: "auto", useSSHConfig: false },
 ];
+let mockRemoteProjects: RemoteProjectView[] = [];
 const mockRemoteConn: Record<string, RemoteConnectionStatus["state"]> = {};
 const mockRemoteForwards: Record<string, RemoteForwardView[]> = {};
