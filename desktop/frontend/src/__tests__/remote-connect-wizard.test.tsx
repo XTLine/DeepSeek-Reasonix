@@ -81,7 +81,9 @@ const dirs: Record<string, Array<{ name: string; path: string; isDir: boolean }>
   "/home/dev/projects/web": [],
 };
 
-let connectingLogLines = 0;
+// Connection attempt counter: the first attempt fails (the wizard stays on
+// the connecting step so its log panel stays observable); the retry succeeds.
+let connectAttempts = 0;
 window.go = { main: { App: {
   async RemoteHosts() {
     tape.push("RemoteHosts");
@@ -112,13 +114,18 @@ window.go = { main: { App: {
   },
   async ConnectRemoteHost(hostId: string) {
     tape.push(`ConnectRemoteHost:${hostId}`);
-    // Hold the connecting step mounted so React commits the log panel, then
-    // emit the status the real kernel would (unblocks waitForRemoteConnection).
+    // Hold 60ms so the connecting step mounts, then emit the kernel status
+    // per attempt: first stopped+error → waitForRemoteConnection rejects
+    // immediately and the wizard stays on the connecting step; second
+    // connected → the retry proceeds to the workspace step.
     const { promise, resolve } = Promise.withResolvers<void>();
     setTimeout(resolve, 60);
     await promise;
-    for (let i = 0; i < 12; i++) await Promise.resolve();
-    connectingLogLines = document.querySelectorAll(".remote-wizard__log-line").length;
+    connectAttempts += 1;
+    if (connectAttempts === 1) {
+      useRemoteStore.getState().applyStatus({ hostId, state: "stopped", error: "ssh: handshake failed" });
+      return undefined;
+    }
     useRemoteStore.getState().applyStatus({ hostId, state: "connected" });
     return undefined;
   },
@@ -221,15 +228,30 @@ ok(Boolean(keyInput), "saved key auth switches the form to key mode with the ide
     await Promise.resolve();
   });
 }
-// ── Next: updates the saved host (no duplicate), connects, lands on step ③ ──
+// ── Next: first connect fails; the wizard stays on the connecting step ──
 await act(async () => {
   buttonByText("Next")?.click();
   await delay(120);
   await flush();
 });
-ok(connectingLogLines >= 1, "connecting step streams the deployment log");
 ok(tape.includes("UpdateRemoteHost:gpu-box:192.168.1.10"), "next on a picked host updates it instead of adding a duplicate");
 ok(!tape.some((entry) => entry.startsWith("AddRemoteHost:")), "no AddRemoteHost for a saved host");
+// The failure path keeps the connecting step on screen (act has ended and
+// the DOM is committed), so counting log lines here is reliable: at least
+// two — connecting + failed.
+{
+  const logCount = document.querySelectorAll(".remote-wizard__log-line").length;
+  ok(logCount >= 2, "connecting step streams the deployment log");
+  const connectError = document.querySelector(".remote-wizard__connecting .remote-wizard__error");
+  ok(Boolean(connectError?.textContent?.includes("ssh: handshake failed")), "failed connect surfaces the kernel error");
+  ok(Boolean(buttonByText("Retry")), "retry action is offered after a failed connect");
+}
+// ── Retry: the second connect succeeds and lands on step ③ ──
+await act(async () => {
+  buttonByText("Retry")?.click();
+  await delay(120);
+  await flush();
+});
 ok(railItems()[0]?.className.includes("--done") === true, "step 1 turns done (green check) after advancing");
 ok(railItems()[2]?.className.includes("--current") === true, "step 3 is current after connecting");
 ok(document.querySelector<HTMLInputElement>(".remote-wizard__path-input")?.value === "/home/dev", "workspace picker starts at RemoteLastWorkspace path");

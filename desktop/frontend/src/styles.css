@@ -38125,7 +38125,7 @@ body > .mermaid-diagram--fullscreen {
   top: 100%;
   left: 0;
   right: 0;
-  z-index: 2;
+  z-index: var(--z-local-raised);
   display: flex;
   flex-direction: column;
   max-height: 180px;
