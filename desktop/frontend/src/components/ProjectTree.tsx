@@ -5,14 +5,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties, DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
-import { Archive, ArrowDown, Pencil, Plus, Folder, FolderPlus, Search, BriefcaseBusiness, Copy, FolderOpen, XCircle, Check, ListCollapse, ListRestart, MessageSquare, Clock, Pin, MoreHorizontal, Minimize2, Maximize2, GitBranch, Sparkles, Server } from "lucide-react";
+import { Archive, ArrowDown, Pencil, Plus, Folder, FolderPlus, Search, BriefcaseBusiness, Copy, FolderOpen, XCircle, Check, ListCollapse, ListRestart, MessageSquare, Clock, Pin, MoreHorizontal, Minimize2, Maximize2, GitBranch, Sparkles, Server, Cloud } from "lucide-react";
 import { asArray } from "../lib/array";
 import { useToast } from "../lib/toast";
 import { app } from "../lib/bridge";
 import { onProjectTreeChangedV2 } from "../lib/sessionCatalogBridge";
 import { isRuntimeSessionNode, isTopicNode, loadWorkbenchOrganizeMode, loadWorkbenchSortMode, mergeProjectTopicPage, projectTreeDedupedExactTime, projectTreeEventAffectsFolder, projectTreeFolderDisclosure, projectTreeReadActivityKey, projectTreeRevisionIsFresh, projectTreeShellChildren, projectTreeShellSignature, projectTreeShouldApplyShellSnapshot, projectTreeShouldRenderTopicActions, projectTreeShouldSuppressOpenForRename, projectTreeTopicArchiveBlocked, projectTreeTopicHasUnreadActivity, projectTreeTopicHoverCardModel, projectTreeTopicMenuOffersPin, projectTreeTopicMetaLine, projectTreeTopicOpenRequest, projectTreeTopicPageIsFresh, projectTreeWithoutTopic, topicActivityAt, topicActivityDateLabel, topicActivityLabel, topicIsActive, topicStatus, topicStatusLabel, topicUnknownTimeLabel, WORKBENCH_ORGANIZE_KEY, WORKBENCH_SORT_KEY, type ProjectTreePendingTopicOpen, type ProjectTreeReadActivity, type ProjectTreeTopicHoverCard, type ProjectTreeVariant, type WorkbenchOrganizeMode, type WorkbenchSortMode } from "../lib/projectTreeTopic";
 export * from "../lib/projectTreeTopic";
-import type { ProjectNode, SessionCatalogStatus } from "../lib/types";
+import type { ProjectNode, RemoteTabRefView, SessionCatalogStatus } from "../lib/types";
 import { topicActivityTime } from "../lib/session";
 import { useT, type Translator } from "../lib/i18n";
 import { PROJECT_COLOR_OPTIONS, projectColorValue } from "../lib/projectColors";
@@ -578,6 +578,23 @@ export function ProjectTree({
     }
   }, [applyRuntimeProjection]);
   refreshRef.current = refresh;
+  // Clicking an empty remote group row re-enters that remote project: ensure
+  // the connection + Serve + tab exist. The Set only guards in-flight double
+  // clicks; repeat opens after settle are deduped by the backend reuse path.
+  const openingRemoteRef = useRef(new Set<string>());
+  const openRemoteProject = useCallback(async (ref: RemoteTabRefView) => {
+    const dedupeKey = `${ref.hostId}\u0000${ref.workspace}`;
+    if (openingRemoteRef.current.has(dedupeKey)) return;
+    openingRemoteRef.current.add(dedupeKey);
+    try {
+      await app.OpenRemoteProjectTab(ref.hostId, ref.workspace, { newSession: true });
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e), "error");
+    } finally {
+      openingRemoteRef.current.delete(dedupeKey);
+    }
+  }, [showToast]);
+
   const { addingProject, handleAddProject, openBlankProjectFlow, blankProjectFlow, openRemoteConnectFlow, remoteConnectFlow } = useProjectCreation({
     onAddProject,
     onRefresh: refresh,
@@ -1744,6 +1761,10 @@ export function ProjectTree({
             className="project-tree__folder-main"
             style={{ paddingLeft: 8 + depth * 16 }}
             onClick={() => {
+              if (node.remote && !folderDisclosure.canExpand) {
+                void openRemoteProject(node.remote);
+                return;
+              }
               if (folderDisclosure.canExpand) toggleExpand(key, node);
             }}
             onKeyDown={(event) => {
@@ -1754,7 +1775,13 @@ export function ProjectTree({
             aria-expanded={folderDisclosure.ariaExpanded}
           >
             <span className={folderDisclosure.iconStackClassName}>
-              {folderDisclosure.isOpen ? <FolderOpen size={14} className="project-tree__folder-icon" /> : <Folder size={14} className="project-tree__folder-icon" />}
+              {node.remote ? (
+                <Cloud size={14} className="project-tree__folder-icon" />
+              ) : folderDisclosure.isOpen ? (
+                <FolderOpen size={14} className="project-tree__folder-icon" />
+              ) : (
+                <Folder size={14} className="project-tree__folder-icon" />
+              )}
             </span>
             <span className="project-tree__folder-color" aria-hidden="true" />
             <span className={`project-tree__folder-label${!hasChildren ? " project-tree__folder-label--empty" : ""}`}>

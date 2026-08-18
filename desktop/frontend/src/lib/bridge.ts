@@ -1946,7 +1946,20 @@ function makeMockApp(): AppBindings {
   };
   const cloneProjectTree = () => {
     if (mockProjectTree.length === 0) ensureMockGlobalFolder();
-    return JSON.parse(JSON.stringify(mockProjectTreeForDisplay())) as ProjectNode[];
+    const tree = JSON.parse(JSON.stringify(mockProjectTreeForDisplay())) as ProjectNode[];
+    // Mirror the Go snapshot: pinned remote projects surface as ordinary
+    // project groups whose remote ref drives the cloud icon.
+    for (const project of mockRemoteProjects) {
+      if (tree.some((node) => node.key === `project_remote_${project.hostId}_${project.workspace}`)) continue;
+      tree.push({
+        key: `project_remote_${project.hostId}_${project.workspace}`,
+        kind: "project",
+        label: project.workspace.split("/").filter(Boolean).pop() || project.workspace,
+        root: project.workspace,
+        remote: { hostId: project.hostId, workspace: project.workspace },
+      });
+    }
+    return tree;
   };
   const projectChildren = (node: ProjectNode): ProjectNode[] => Array.isArray(node.children) ? node.children : [];
   const findMockTopic = (topicId: string): ProjectNode | null => {

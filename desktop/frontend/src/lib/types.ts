@@ -515,6 +515,8 @@ export interface ProjectNode {
   recoveryUnresolvedCount?: number;
   recoveryCleanupEligibleCount?: number;
   isolatedWorktree?: boolean;
+  /** Present ⇒ remote project group; drives the cloud badge on the folder row. */
+  remote?: RemoteTabRefView;
   children?: ProjectNode[];
 }
 
