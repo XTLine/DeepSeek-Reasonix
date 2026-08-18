@@ -226,3 +226,64 @@ func TestRemotePathHelpers(t *testing.T) {
 		t.Fatalf("RemoteKnownHostsPath = %q", got)
 	}
 }
+
+// TestUpsertRemoteProjectRoundTripsThroughSave pins that projects written via
+// the CRUD helpers survive a full user-scope re-render (SaveTo renders the
+// whole file by hand — a missing [[remote.projects]] renderer would silently
+// drop every saved project on the next unrelated settings save).
+func TestUpsertRemoteProjectRoundTripsThroughSave(t *testing.T) {
+	isolateUserConfigHome(t)
+	home := t.TempDir()
+	t.Setenv("REASONIX_HOME", home)
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("default_model = \"deepseek\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := LoadForEdit(path)
+	if cfg == nil {
+		t.Fatal("LoadForEdit returned nil")
+	}
+	if err := cfg.UpsertRemoteHost(RemoteHostEntry{Name: "box", Host: "198.51.100.4"}); err != nil {
+		t.Fatalf("UpsertRemoteHost: %v", err)
+	}
+	if err := cfg.UpsertRemoteProject(RemoteProjectEntry{HostID: "box", Workspace: "~/app"}); err != nil {
+		t.Fatalf("UpsertRemoteProject: %v", err)
+	}
+	if err := cfg.UpsertRemoteProject(RemoteProjectEntry{HostID: "ghost", Workspace: "~/app"}); err == nil {
+		t.Fatal("UpsertRemoteProject accepted an unknown host")
+	}
+	if err := cfg.UpsertRemoteProject(RemoteProjectEntry{HostID: "box"}); err == nil {
+		t.Fatal("UpsertRemoteProject accepted an empty workspace")
+	}
+	if err := cfg.SaveTo(path); err != nil {
+		t.Fatalf("SaveTo: %v", err)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"[[remote.projects]]", `host_id = "box"`, `workspace = "~/app"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("saved config missing %q:\n%s", want, raw)
+		}
+	}
+
+	reloaded := LoadForEdit(path)
+	if _, ok := reloaded.RemoteProject("box", "~/app"); !ok {
+		t.Fatal("project lost after save/reload")
+	}
+	// Replace in place, then idempotent remove.
+	if err := reloaded.UpsertRemoteProject(RemoteProjectEntry{HostID: "box", Workspace: "~/app", Title: "App"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Remote.Projects) != 1 {
+		t.Fatalf("upsert did not replace in place: %+v", reloaded.Remote.Projects)
+	}
+	if !reloaded.RemoveRemoteProject("box", "~/app") {
+		t.Fatal("RemoveRemoteProject reported missing")
+	}
+	if reloaded.RemoveRemoteProject("box", "~/app") {
+		t.Fatal("second remove reported present")
+	}
+}

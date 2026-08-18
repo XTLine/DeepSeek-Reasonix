@@ -705,7 +705,7 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 	// [remote] is user/global only like [secrets]: LoadForRoot discards project
 	// values so a cloned repo can never inject SSH hosts. Rendered here so
 	// saved hosts survive full-file config rewrites.
-	if scope != RenderScopeProject && (c.Remote.ImportSSHConfig || len(c.Remote.Hosts) > 0) {
+	if scope != RenderScopeProject && (c.Remote.ImportSSHConfig || len(c.Remote.Hosts) > 0 || len(c.Remote.Projects) > 0) {
 		b.WriteString("[remote]   # SSH remote hosts; user/global only, ./reasonix.toml cannot override\n")
 		if c.Remote.ImportSSHConfig {
 			b.WriteString("import_ssh_config = true   # surface ~/.ssh/config aliases in `reasonix remote import`\n")
@@ -746,6 +746,14 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 				fmt.Fprintf(&b, "type = %q   # local (-L) | remote (-R)\n", f.Type)
 				fmt.Fprintf(&b, "bind = %q\n", f.Bind)
 				fmt.Fprintf(&b, "target = %q\n", f.Target)
+			}
+		}
+		for _, p := range c.Remote.Projects {
+			b.WriteString("\n[[remote.projects]]\n")
+			fmt.Fprintf(&b, "host_id = %q   # referenced [[remote.hosts]] name\n", p.HostID)
+			fmt.Fprintf(&b, "workspace = %q\n", p.Workspace)
+			if p.Title != "" {
+				fmt.Fprintf(&b, "title = %q\n", p.Title)
 			}
 		}
 		b.WriteString("\n")

@@ -14,8 +14,9 @@ import (
 // hosts, jump chains, or forwards.
 type RemoteConfig struct {
 	// ImportSSHConfig surfaces ~/.ssh/config aliases in `reasonix remote import`.
-	ImportSSHConfig bool              `toml:"import_ssh_config"`
-	Hosts           []RemoteHostEntry `toml:"hosts"`
+	ImportSSHConfig bool                 `toml:"import_ssh_config"`
+	Hosts           []RemoteHostEntry    `toml:"hosts"`
+	Projects        []RemoteProjectEntry `toml:"projects"`
 }
 
 // RemoteHostEntry describes one SSH target. Secrets follow the provider
@@ -44,6 +45,14 @@ type RemoteForwardEntry struct {
 	Target string `toml:"target"` // host:port on the other side
 }
 
+// RemoteProjectEntry pins one remote workspace so it shows in the project
+// entry list. It references a host by name; the host entry must exist.
+type RemoteProjectEntry struct {
+	HostID    string `toml:"host_id"`
+	Workspace string `toml:"workspace"`
+	Title     string `toml:"title,omitempty"`
+}
+
 // RemoteServeInstallModes are the accepted serve_install values.
 var RemoteServeInstallModes = []string{"auto", "npm", "upload", "never"}
 
@@ -60,6 +69,10 @@ func (r RemoteConfig) Clone() RemoteConfig {
 			h.Forwards = append([]RemoteForwardEntry(nil), h.Forwards...)
 			out.Hosts[i] = h
 		}
+	}
+	if r.Projects != nil {
+		out.Projects = make([]RemoteProjectEntry, len(r.Projects))
+		copy(out.Projects, r.Projects)
 	}
 	return out
 }
@@ -176,6 +189,51 @@ func (c *Config) RemoveRemoteHost(name string) bool {
 	for i := range c.Remote.Hosts {
 		if c.Remote.Hosts[i].Name == name {
 			c.Remote.Hosts = append(c.Remote.Hosts[:i], c.Remote.Hosts[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// RemoteProject looks up a pinned remote workspace by host and path
+func (c *Config) RemoteProject(hostID, workspace string) (RemoteProjectEntry, bool) {
+	for _, p := range c.Remote.Projects {
+		if p.HostID == hostID && p.Workspace == workspace {
+			return p, true
+		}
+	}
+	return RemoteProjectEntry{}, false
+}
+
+// UpsertRemoteProject adds e, or replaces the entry with the same
+// host + workspace (preserving position). Mirrors Upsert RemoteHost.
+func (c *Config) UpsertRemoteProject(e RemoteProjectEntry) error {
+	e.HostID = strings.TrimSpace(e.HostID)
+	e.Workspace = strings.TrimSpace(e.Workspace)
+	if e.HostID == "" {
+		return fmt.Errorf("remote project: host is required")
+	}
+	if e.Workspace == "" {
+		return fmt.Errorf("remote project %q: workspace is required", e.HostID)
+	}
+	if _, ok := c.RemoteHost(e.HostID); !ok {
+		return fmt.Errorf("remote project: unknown remote host %q", e.HostID)
+	}
+	for i := range c.Remote.Projects {
+		if c.Remote.Projects[i].HostID == e.HostID && c.Remote.Projects[i].Workspace == e.Workspace {
+			c.Remote.Projects[i] = e
+			return nil
+		}
+	}
+	c.Remote.Projects = append(c.Remote.Projects, e)
+	return nil
+}
+
+// RemoveRemoteProject deletes the pinned workspace, reporting whether it was present
+func (c *Config) RemoveRemoteProject(hostID, workspace string) bool {
+	for i := range c.Remote.Projects {
+		if c.Remote.Projects[i].HostID == hostID && c.Remote.Projects[i].Workspace == workspace {
+			c.Remote.Projects = append(c.Remote.Projects[:i], c.Remote.Projects[i+1:]...)
 			return true
 		}
 	}
