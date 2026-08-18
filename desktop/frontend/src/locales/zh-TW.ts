@@ -120,8 +120,6 @@ export const zhTW: Record<DictKey, string> = {
   "remoteWizard.toggleHidden": "顯示隱藏目錄",
   "remoteWizard.toggleHiddenOn": "收起隱藏目錄",
   "remoteWizard.emptyDir": "空目錄",
-  "remoteWizard.folderName": "新資料夾名稱",
-  "remoteWizard.createFolder": "新建資料夾",
   "remoteWizard.finish": "連線並開啟",
   "remoteWizard.logConnecting": "正在連線 {target}…",
   "remoteWizard.logDetecting": "正在偵測遠端環境…",

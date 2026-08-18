@@ -131,8 +131,6 @@ export const en = {
   "remoteWizard.toggleHidden": "Show hidden",
   "remoteWizard.toggleHiddenOn": "Hide hidden",
   "remoteWizard.emptyDir": "Empty directory",
-  "remoteWizard.folderName": "New folder name",
-  "remoteWizard.createFolder": "Create folder",
   "remoteWizard.finish": "Connect and open",
   "remoteWizard.logConnecting": "Connecting to {target}…",
   "remoteWizard.logDetecting": "Detecting remote environment…",

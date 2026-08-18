@@ -50,8 +50,9 @@ function parentOf(path: string): string {
  *      port, user, auth = password | key file, CLI download method)
  *   2. connecting (ConnectRemoteHost + waitForRemoteConnection; TOFU and
  *      secret prompts surface through the global dialogs)
- *   3. remote workspace picker (SFTP browse + free-text path + mkdir);
- *      finish registers the remote project and opens a remote tab.
+ *   3. remote workspace picker (SFTP browse + free-text path); finish
+ *      registers the remote project (rolled back if the tab open fails)
+ *      and opens a remote tab.
  */
 export function RemoteConnectWizard({
   onRefresh,
@@ -158,11 +159,14 @@ export function RemoteConnectWizard({
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logLines]);
 
-  const connect = async (id: string, startPath: string) => {
+  // targetHost comes from the caller: the render closure's `host` still
+  // reflects the pre-save hostId on the first connect, which logged the raw
+  // host id instead of user@host.
+  const connect = async (id: string, startPath: string, targetHost: RemoteHostView | null) => {
     setConnectErr("");
     setLogLines([]);
     setStep("connecting");
-    const target = host ? `${host.user ? `${host.user}@` : ""}${host.host}${host.port && host.port !== 22 ? `:${host.port}` : ""}` : id;
+    const target = targetHost ? `${targetHost.user ? `${targetHost.user}@` : ""}${targetHost.host}${targetHost.port && targetHost.port !== 22 ? `:${targetHost.port}` : ""}` : id;
     pushLog("info", t("remoteWizard.logConnecting", { target }));
     try {
       await app.ConnectRemoteHost(id);
@@ -215,7 +219,7 @@ export function RemoteConnectWizard({
         (await app.RemoteLastWorkspace(saved.id).catch(() => "")) ||
         "~";
       setStartPath(nextStartPath);
-      await connect(saved.id, nextStartPath);
+      await connect(saved.id, nextStartPath, saved);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setStep("config");
@@ -232,12 +236,28 @@ export function RemoteConnectWizard({
     setBusy(true);
     setError("");
     try {
-      await app.AddRemoteProject(hostId, target);
-      await app.OpenRemoteProjectTab(hostId, target, { newSession: true });
+      try {
+        await app.AddRemoteProject(hostId, target);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        return;
+      }
+      try {
+        await app.OpenRemoteProjectTab(hostId, target, { newSession: true });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        // All-or-nothing: a failed open rolls the just-registered project
+        // back so no half-applied pin survives. If the rollback itself
+        // fails, the pin is on disk — refresh so the tree stays honest.
+        try {
+          await app.RemoveRemoteProject(hostId, target);
+        } catch {
+          await onRefresh().catch(() => {});
+        }
+        return;
+      }
       await onRefresh();
       onClose();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -467,7 +487,7 @@ export function RemoteConnectWizard({
                       <button type="button" className="btn btn--small" onClick={() => setStep("config")}>
                         {t("remoteWizard.backToEdit")}
                       </button>
-                      <button type="button" className="btn btn--small btn--primary" onClick={() => void connect(hostId, startPath)}>
+                      <button type="button" className="btn btn--small btn--primary" onClick={() => void connect(hostId, startPath, host)}>
                         {t("remoteWizard.retry")}
                       </button>
                     </div>

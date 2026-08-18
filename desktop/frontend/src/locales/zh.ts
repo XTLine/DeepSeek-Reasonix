@@ -132,8 +132,6 @@ export const zh: Record<DictKey, string> = {
   "remoteWizard.toggleHidden": "显示隐藏目录",
   "remoteWizard.toggleHiddenOn": "收起隐藏目录",
   "remoteWizard.emptyDir": "空目录",
-  "remoteWizard.folderName": "新文件夹名称",
-  "remoteWizard.createFolder": "新建文件夹",
   "remoteWizard.finish": "连接并打开",
   "remoteWizard.logConnecting": "正在连接 {target}…",
   "remoteWizard.logDetecting": "正在检测远端环境…",
