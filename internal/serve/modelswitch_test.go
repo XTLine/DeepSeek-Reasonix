@@ -1,9 +1,13 @@
 package serve
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
+	"reasonix/internal/config"
 	"reasonix/internal/control"
 )
 
@@ -34,4 +38,30 @@ func TestControllerAccessorIsRaceSafe(t *testing.T) {
 		})
 	}
 	wg.Wait()
+}
+
+// TestModelAndEffortRoutesValidateInput pins the HTTP routes for model and
+// effort switching: registered (not 404) and rejecting invalid bodies
+// before any controller work. Switch semantics are covered by the
+// switchModel / switch_recovery tests.
+func TestModelAndEffortRoutesValidateInput(t *testing.T) {
+	s := &Server{ctrl: &control.Controller{}, auth: newAuthGate(config.ServeConfig{AuthMode: "none"})}
+	srv := httptest.NewServer(s.handler())
+	defer srv.Close()
+
+	for _, tc := range []struct{ path, body string }{
+		{"/model", `{"ref":""}`},
+		{"/model", `not-json`},
+		{"/effort", `{"level":""}`},
+		{"/effort", `not-json`},
+	} {
+		resp, err := http.Post(srv.URL+tc.path, "application/json", strings.NewReader(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("POST %s %s = %d, want 400", tc.path, tc.body, resp.StatusCode)
+		}
+	}
 }

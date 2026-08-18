@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -16,7 +17,8 @@ import (
 )
 
 // fakeServe is a minimal Serve stand-in for bridge tests: token handshake,
-// session enter, and an SSE feed that emits two frames then holds.
+// session enter, an SSE feed that emits two frames then holds, and recorded
+// command endpoints for the proxy bindings.
 type fakeServe struct {
 	t      *testing.T
 	token  string
@@ -27,6 +29,23 @@ type fakeServe struct {
 	resumePath  string
 	cookieOnNew bool
 	sessions    []serveSessionEntry
+	calls       []string // "METHOD /path body" per command request
+	failNext    string   // non-empty ⇒ next command endpoint replies 409 with this text
+	failHistory bool     // /history replies 500 when set
+}
+
+func (fs *fakeServe) recorded() []string {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	out := make([]string, len(fs.calls))
+	copy(out, fs.calls)
+	return out
+}
+
+func (fs *fakeServe) record(method, path, body string) {
+	fs.mu.Lock()
+	fs.calls = append(fs.calls, method+" "+path+" "+body)
+	fs.mu.Unlock()
 }
 
 func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fakeServe {
@@ -65,7 +84,8 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		fs.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("GET /sessions", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /sessions", func(w http.ResponseWriter, r *http.Request) {
+		fs.record(r.Method, "/sessions", "")
 		writeTestJSON(w, fs.sessions)
 	})
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
@@ -80,6 +100,48 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		flusher.Flush()
 		<-r.Context().Done()
 	})
+	command := func(path string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			data, _ := io.ReadAll(io.LimitReader(r.Body, 4<<10))
+			fs.record(r.Method, path, string(data))
+			fs.mu.Lock()
+			fail := fs.failNext
+			fs.failNext = ""
+			fs.mu.Unlock()
+			if fail != "" {
+				http.Error(w, fail, http.StatusConflict)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}
+	for _, path := range []string{"/submit", "/cancel", "/approve", "/answer", "/rewind", "/goal", "/tool-approval-mode", "/delete-session", "/model", "/effort", "/plan", "/compact", "/fork", "/summarize", "/forget"} {
+		mux.HandleFunc("POST "+path, command(path))
+	}
+	snapshot := func(path, payload string) {
+		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
+			fs.record(r.Method, path, "")
+			if path == "/history" {
+				fs.mu.Lock()
+				fail := fs.failHistory
+				fs.mu.Unlock()
+				if fail {
+					http.Error(w, "gone", http.StatusInternalServerError)
+					return
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(payload))
+		})
+	}
+	snapshot("/history", `[{"role":"user","content":"hi"}]`)
+	snapshot("/context", `{"used":10}`)
+	snapshot("/todos", `[]`)
+	snapshot("/checkpoints", `[{"turn":1}]`)
+	snapshot("/models", `["m1"]`)
+	snapshot("/status", `{"state":"ready"}`)
+	snapshot("/branches", `{"branches":[]}`)
+	snapshot("/skills", `[]`)
 	fs.server = httptest.NewServer(mux)
 	t.Cleanup(fs.server.Close)
 	return fs
@@ -297,5 +359,195 @@ func TestEnterRemoteSessionUnknownName(t *testing.T) {
 	err = enterRemoteSession(ctx, client, fs.server.URL, RemoteTabOpenOptions{SessionName: "missing"})
 	if err == nil || !strings.Contains(err.Error(), `"missing" not found`) {
 		t.Fatalf("err = %v, want unknown session error", err)
+	}
+}
+
+// openReadyRemoteTab opens a tab against the fake serve and waits for ready.
+func openReadyRemoteTab(t *testing.T, a *App, opts RemoteTabOpenOptions) TabMeta {
+	t.Helper()
+	meta, err := a.OpenRemoteProjectTab("box", "~/app", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForTabState(t, a, meta.ID, "ready")
+	return meta
+}
+
+// TestRemoteTabCommandsForwardedToServe pins that every command binding
+// reaches the right serve endpoint with the mapped body.
+func TestRemoteTabCommandsForwardedToServe(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+
+	steps := []struct {
+		name string
+		call func() error
+		want string
+	}{
+		{"submit", func() error { return a.SubmitRemoteTab(meta.ID, "hello") }, `POST /submit {"input":"hello"}`},
+		{"cancel", func() error { return a.CancelRemoteTab(meta.ID) }, "POST /cancel {}"},
+		{"approve", func() error { return a.ApproveRemoteTab(meta.ID, "call-1", "allow") }, `POST /approve {"allow":true,"id":"call-1"}`},
+		{"approve-deny", func() error { return a.ApproveRemoteTab(meta.ID, "call-2", "deny") }, `POST /approve {"allow":false,"id":"call-2"}`},
+		{"answer", func() error { return a.AnswerRemoteTab(meta.ID, "ask-1", "yes") }, `POST /answer {"answers":[{"QuestionID":"ask-1","Selected":["yes"]}],"id":"ask-1"}`},
+		{"rewind", func() error { return a.RewindRemoteTab(meta.ID, "3") }, `POST /rewind {"scope":"both","turn":3}`},
+		{"approval-mode", func() error { return a.SetRemoteTabToolApprovalMode(meta.ID, "auto") }, `POST /tool-approval-mode {"mode":"auto"}`},
+		{"goal", func() error { return a.SetRemoteTabGoal(meta.ID, "ship it") }, `POST /goal {"goal":"ship it"}`},
+		{"model", func() error { return a.SetRemoteTabModel(meta.ID, "deepseek/chat") }, `POST /model {"ref":"deepseek/chat"}`},
+		{"effort", func() error { return a.SetRemoteTabEffort(meta.ID, "high") }, `POST /effort {"level":"high"}`},
+		{"plan-on", func() error { return a.SetRemoteTabPlanMode(meta.ID, true) }, `POST /plan {"on":true}`},
+		{"compact", func() error { return a.CompactRemoteTab(meta.ID) }, "POST /compact {}"},
+		{"fork", func() error { return a.ForkRemoteTab(meta.ID, 2, "try-auth") }, `POST /fork {"name":"try-auth","turn":2}`},
+		{"summarize", func() error { return a.SummarizeRemoteTab(meta.ID, 4, "upto") }, `POST /summarize {"mode":"upto","turn":4}`},
+		{"forget", func() error { return a.ForgetRemoteTab(meta.ID, "api-key") }, `POST /forget {"name":"api-key"}`},
+	}
+	for _, step := range steps {
+		if err := step.call(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+	}
+	calls := fs.recorded()
+	for _, step := range steps {
+		found := false
+		for _, c := range calls {
+			if c == step.want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("%s: serve saw %v, want %q", step.name, calls, step.want)
+		}
+	}
+	if _, err := a.RemoteTabBranches(meta.ID); err != nil {
+		t.Fatalf("branches: %v", err)
+	}
+	if _, err := a.RemoteTabSkills(meta.ID); err != nil {
+		t.Fatalf("skills: %v", err)
+	}
+	foundBranches, foundSkills := false, false
+	for _, c := range fs.recorded() {
+		if c == "GET /branches " {
+			foundBranches = true
+		}
+		if c == "GET /skills " {
+			foundSkills = true
+		}
+	}
+	if !foundBranches || !foundSkills {
+		t.Fatalf("branches/skills reads missing: %v", fs.recorded())
+	}
+}
+
+// TestRemoteTabCommandRejectsUnknownOrUnreadyTab: an unknown tabID and a
+// tab that has not finished bootstrap are errors, never silent no-ops.
+func TestRemoteTabCommandRejectsUnknownOrUnreadyTab(t *testing.T) {
+	a := &App{}
+	if err := a.SubmitRemoteTab("missing", "hi"); err == nil || !strings.Contains(err.Error(), "not connected") {
+		t.Fatalf("unknown tab err = %v, want not connected", err)
+	}
+	a.remoteTabMu.Lock()
+	a.remoteTabs = map[string]*remoteTab{"booting": {id: "booting", state: "connecting"}}
+	a.remoteTabMu.Unlock()
+	if err := a.SubmitRemoteTab("booting", "hi"); err == nil || !strings.Contains(err.Error(), "not connected") {
+		t.Fatalf("unready tab err = %v, want not connected", err)
+	}
+}
+
+// TestRemoteTabSnapshotMergesServeMembers: all six GETs merge in parallel;
+// only /history is required — its failure errors, optional members degrade.
+func TestRemoteTabSnapshotMergesServeMembers(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+
+	snap, err := a.RemoteTabSnapshot(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range map[string]json.RawMessage{
+		"history": snap.History, "context": snap.Context, "todos": snap.Todos,
+		"checkpoints": snap.Checkpoints, "models": snap.Models, "status": snap.Status,
+	} {
+		if len(raw) == 0 {
+			t.Fatalf("snapshot member %s is empty", name)
+		}
+	}
+
+	fs.mu.Lock()
+	fs.failHistory = true
+	fs.mu.Unlock()
+	if _, err := a.RemoteTabSnapshot(meta.ID); err == nil {
+		t.Fatal("snapshot with failing /history must error")
+	}
+}
+
+// TestRemoteProjectSessionsWithoutOpenTab pins the one-shot path: listing
+// sessions for a workspace with no live tab ensures the serve, handshakes,
+// and maps entries to the frontend view.
+func TestRemoteProjectSessionsWithoutOpenTab(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "s1", Path: "/x.jsonl", Title: "First", Turns: 2},
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+
+	sessions, err := a.RemoteProjectSessions("box", "~/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Name != "s1" || sessions[0].Title != "First" || sessions[0].Turns != 2 {
+		t.Fatalf("sessions = %+v, want the mapped s1 entry", sessions)
+	}
+	found := false
+	for _, c := range fs.recorded() {
+		if c == "GET /sessions " {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("GET /sessions not reached: %v", fs.recorded())
+	}
+}
+
+// TestRemoteTabCommandSurfacesServeErrorBody: the serve's error text (the
+// session-in-use close hint) rides through to the caller.
+func TestRemoteTabCommandSurfacesServeErrorBody(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+
+	fs.mu.Lock()
+	fs.failNext = "session in use; close the remote tab first"
+	fs.mu.Unlock()
+	err := a.SubmitRemoteTab(meta.ID, "hello")
+	if err == nil || !strings.Contains(err.Error(), "close the remote tab first") {
+		t.Fatalf("err = %v, want the serve error body surfaced", err)
 	}
 }

@@ -679,6 +679,14 @@ export interface AppBindings extends SessionCatalogBindings, HistoryCatalogBindi
   SetRemoteTabToolApprovalMode(tabId: string, mode: string): Promise<void>;
   SetRemoteTabGoal(tabId: string, goal: string): Promise<void>;
   RemoteTabSnapshot(tabId: string): Promise<RemoteTabSnapshot>;
+  SetRemoteTabEffort(tabId: string, level: string): Promise<void>;
+  SetRemoteTabPlanMode(tabId: string, on: boolean): Promise<void>;
+  CompactRemoteTab(tabId: string): Promise<void>;
+  ForkRemoteTab(tabId: string, turn: number, name: string): Promise<void>;
+  SummarizeRemoteTab(tabId: string, turn: number, mode: string): Promise<void>;
+  ForgetRemoteTab(tabId: string, name: string): Promise<void>;
+  RemoteTabBranches(tabId: string): Promise<unknown>;
+  RemoteTabSkills(tabId: string): Promise<unknown>;
 }
 
 // Compile-time drift check. Exclude<A, B> extracts keys in A that are missing
@@ -5697,6 +5705,18 @@ function makeMockApp(): AppBindings {
     async SetRemoteTabGoal() {},
     async RemoteTabSnapshot() {
       return { history: [] };
+    },
+    async SetRemoteTabEffort() {},
+    async SetRemoteTabPlanMode() {},
+    async CompactRemoteTab() {},
+    async ForkRemoteTab() {},
+    async SummarizeRemoteTab() {},
+    async ForgetRemoteTab() {},
+    async RemoteTabBranches() {
+      return [];
+    },
+    async RemoteTabSkills() {
+      return [];
     },
     async CleanRemoteLegacyWorkbenchData() {},
   };

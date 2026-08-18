@@ -500,6 +500,8 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /fork", s.fork)
 	mux.HandleFunc("POST /summarize", s.summarize)
 	mux.HandleFunc("POST /tool-approval-mode", s.toolApprovalMode)
+	mux.HandleFunc("POST /model", s.switchModelHTTP)
+	mux.HandleFunc("POST /effort", s.switchEffortHTTP)
 	mux.HandleFunc("POST /auto-approve-tools", s.autoApproveTools)
 	mux.HandleFunc("POST /bypass", s.bypass)
 	mux.HandleFunc("POST /goal", s.goal)
@@ -1051,6 +1053,40 @@ func (s *Server) autoApproveTools(w http.ResponseWriter, r *http.Request) {
 	}
 	s.ctl().SetAutoApproveTools(body.On)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// switchModelHTTP switches the active model over HTTP. The desktop remote
+// tab and the web shell model picker share this route; the switch itself is
+// the same switchModel the provider-setup save path drives.
+func (s *Server) switchModelHTTP(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Ref string `json:"ref"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Ref) == "" {
+		http.Error(w, "invalid model ref", http.StatusBadRequest)
+		return
+	}
+	if err := s.switchModel(r.Context(), req.Ref); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"model": req.Ref})
+}
+
+// switchEffortHTTP adjusts the active provider's reasoning-effort level.
+func (s *Server) switchEffortHTTP(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Level string `json:"level"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Level) == "" {
+		http.Error(w, "invalid effort level", http.StatusBadRequest)
+		return
+	}
+	if err := s.switchEffort(r.Context(), req.Level); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"effort": req.Level})
 }
 
 // toolApprovalMode selects ask, auto, or yolo approval behavior for interactive
