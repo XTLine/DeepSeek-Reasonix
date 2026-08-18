@@ -1553,8 +1553,8 @@ export interface RemoteTabOpenOptions {
   sessionName?: string;
 }
 
-// First-cut shape; finalize against what the surface actually consumes in Task 5.5
-// (spec open item: avoid over-fetching).
+// First-cut shape; finalize against what the remote tab surface actually
+// consumes (avoid over-fetching).
 export interface RemoteTabSnapshot {
   history: unknown[];
   context?: unknown;

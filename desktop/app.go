@@ -320,10 +320,14 @@ type App struct {
 	remoteWindowLifecycles remoteWindowLifecycleRegistry
 	// Remote project tabs: in-app tabs bound to a remote workspace. Tracks
 	// open tabs and their connection state; project registration itself
-	// persists in the user config ([remote].projects). Task 5.5 will add
-	// persistence/restore and the submit/snapshot surface.
-	remoteTabMu        sync.Mutex
-	remoteTabs         map[string]*remoteTab
+	// persists in the user config ([remote].projects). Persistence and
+	// restore for these tabs are not implemented yet.
+	remoteTabMu sync.Mutex
+	remoteTabs  map[string]*remoteTab
+	// remoteEventHook, when set, observes every emitRemoteEvent call.
+	// Tests use it to assert event names and payloads; production never
+	// sets it.
+	remoteEventHook    func(name string, payload any)
 	remoteWindowOpener func(remoteWindowLaunch) error // test-only injection
 	// remoteWindowTicket/remoteWindowHostKey are set from argv before Wails
 	// starts in a child process. They gate the blank-shell middleware and the

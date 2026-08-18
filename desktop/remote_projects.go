@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -24,8 +25,8 @@ type RemoteProjectView struct {
 	Color     string `json:"color,omitempty"`
 }
 
-// RemoteTabOpenOptions mirrors the frontend opts bag. Session plumbing lands
-// with the remote tab surface (Task 5.5); the flags are recorded on the tab.
+// RemoteTabOpenOptions mirrors the frontend opts bag: NewSession lands the
+// tab in a fresh serve session; SessionName resumes a listed one.
 type RemoteTabOpenOptions struct {
 	NewSession  bool   `json:"newSession,omitempty"`
 	SessionName string `json:"sessionName,omitempty"`
@@ -40,11 +41,22 @@ type RemoteTabStateView struct {
 
 // remoteTab is one open remote project tab.
 type remoteTab struct {
-	id         string
-	ref        RemoteTabRef
-	state      string
-	err        string
-	newSession bool
+	id          string
+	ref         RemoteTabRef
+	state       string
+	err         string
+	newSession  bool
+	sessionName string
+
+	// Bridge fields, mutated under App.remoteTabMu. client keeps the serve
+	// session cookie in its jar across reconnects; token is retained for a
+	// re-handshake when that cookie expires; gen lets a superseded SSE pump
+	// self-exit once a reconnect starts a newer one.
+	client *http.Client
+	base   string
+	token  string
+	gen    uint64
+	cancel context.CancelFunc
 }
 
 // ── Registry CRUD (user config, same lock discipline as remote hosts) ──
@@ -159,13 +171,13 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 
 	ref := RemoteTabRef{HostID: hostID, Workspace: workspace}
 	tabID := newTabID()
-	tab := &remoteTab{id: tabID, ref: ref, state: "connecting", newSession: opts.NewSession}
+	tab := &remoteTab{id: tabID, ref: ref, state: "connecting", newSession: opts.NewSession, sessionName: opts.SessionName}
 	a.remoteTabMu.Lock()
 	if a.remoteTabs == nil {
 		a.remoteTabs = map[string]*remoteTab{}
 	}
 	// Drop a terminal-error tab for the same ref so repeated retries cannot
-	// grow the registry (CloseRemoteTab arrives with the 5.5 surface).
+	// grow the registry (no CloseRemoteTab binding exists yet).
 	for id, existing := range a.remoteTabs {
 		if existing.ref.HostID == hostID && existing.ref.Workspace == workspace && existing.state == "error" {
 			delete(a.remoteTabs, id)
@@ -219,7 +231,7 @@ func (a *App) bootstrapRemoteTab(tabID, hostID, workspace string) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	view, _, err := rt.EnsureServer(ctx, hostID, workspace)
+	view, token, err := rt.EnsureServer(ctx, hostID, workspace)
 	if err != nil {
 		a.emitRemoteTabState(tabID, "error", err.Error())
 		return
@@ -233,6 +245,19 @@ func (a *App) bootstrapRemoteTab(tabID, hostID, workspace string) {
 			msg = "remote serve did not report a local URL"
 		}
 		a.emitRemoteTabState(tabID, "serve_down", msg)
+		return
+	}
+	a.remoteTabMu.Lock()
+	openTab := a.remoteTabs[tabID]
+	a.remoteTabMu.Unlock()
+	if openTab == nil {
+		return // closed while the bootstrap was in flight
+	}
+	// ctx outlives the call: the pump derives from it, while the handshake
+	// and session entry inside run under a bounded sub-context.
+	opts := RemoteTabOpenOptions{NewSession: openTab.newSession, SessionName: openTab.sessionName}
+	if err := a.attachRemoteTabServe(ctx, tabID, view.LocalURL, token, opts); err != nil {
+		a.emitRemoteTabState(tabID, "error", err.Error())
 		return
 	}
 	a.saveLastRemoteWorkspace(hostID, workspace)
