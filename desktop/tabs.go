@@ -2154,6 +2154,7 @@ type TabMeta struct {
 	WorkspacePath     string             `json:"workspacePath,omitempty"`
 	GitBranch         string             `json:"gitBranch,omitempty"`
 	IsolatedWorktree  bool               `json:"isolatedWorktree,omitempty"`
+	Remote            *RemoteTabRef      `json:"remote,omitempty"`
 	TopicID           string             `json:"topicId"`
 	TopicTitle        string             `json:"topicTitle"`
 	SessionPath       string             `json:"sessionPath,omitempty"`
@@ -6473,6 +6474,7 @@ type ProjectNode struct {
 	RecoveryUnresolvedCount      int           `json:"recoveryUnresolvedCount,omitempty"`
 	RecoveryCleanupEligibleCount int           `json:"recoveryCleanupEligibleCount,omitempty"`
 	IsolatedWorktree             bool          `json:"isolatedWorktree,omitempty"`
+	Remote                       *RemoteTabRef `json:"remote,omitempty"`
 	RuntimeOnly                  bool          `json:"runtimeOnly,omitempty"`
 	Children                     []ProjectNode `json:"children,omitempty"`
 }
