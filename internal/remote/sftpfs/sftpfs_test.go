@@ -203,3 +203,32 @@ func TestSFTPWriteAtomicAndMkdirRenameRemove(t *testing.T) {
 		t.Fatal("dir not removed")
 	}
 }
+
+// TestSFTPListResolvesTilde: the SFTP protocol does not expand "~", so List
+// must resolve it server-side — the wizard's fresh-host start path is exactly
+// "~", and ReadDir("~") fails with "file does not exist" without this. The
+// sshtest server roots the SFTP session at the temp dir, so "~" resolves to
+// the root and the listing matches an explicit root listing.
+func TestSFTPListResolvesTilde(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "marker.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fsys := dialFS(t, root)
+
+	entries, err := fsys.List(context.Background(), "~")
+	if err != nil {
+		t.Fatalf("List(~): %v", err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name)
+	}
+	if len(names) == 0 || names[0] != "marker.txt" {
+		t.Fatalf("List(~) entries = %v, want the root listing", names)
+	}
+	// Entry paths must be absolute (resolved), not "~"-prefixed.
+	if entries[0].Path == filepath.Join("~", "marker.txt") {
+		t.Fatalf("entry path kept the ~ prefix: %q", entries[0].Path)
+	}
+}

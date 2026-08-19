@@ -386,7 +386,10 @@ func remoteServeCLI(args []string, version string) int {
 		return 1
 	}
 	defer cleanup()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// The budget must cover a same-platform binary UPLOAD: the CLI binary is
+	// ~55MB and real-world links to a fresh host can sit under 1MB/s, so a
+	// tight deadline fails exactly the install mode that offline hosts need.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	if err := client.Start(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
@@ -610,7 +613,9 @@ func withRemoteFS(name string, fn func(ctx context.Context, client *remote.Clien
 		return 1
 	}
 	defer cleanup()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// Generous budget: fs put uploads arbitrary user files over the same
+	// link (see the serve-action comment above).
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	if err := client.Start(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
