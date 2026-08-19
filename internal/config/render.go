@@ -738,6 +738,9 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 			if h.ServeInstall != "" {
 				fmt.Fprintf(&b, "serve_install = %q   # auto|npm|upload|never\n", h.ServeInstall)
 			}
+			if h.CredentialMode != "" {
+				fmt.Fprintf(&b, "credential_mode = %q   # remote (key on the host) | local-proxy (desktop holds the key; calls tunnel back)\n", h.CredentialMode)
+			}
 			if h.UseSSHConfig {
 				b.WriteString("use_ssh_config = true   # layer ~/.ssh/config values under unset fields\n")
 			}

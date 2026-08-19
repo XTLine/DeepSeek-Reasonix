@@ -57,6 +57,12 @@ type Options struct {
 	MinVersion     string                                                        // minimum acceptable remote version
 	Progress       func(step, detail string)                                     // optional progress callback
 	Clock          func() time.Time                                              // nil => time.Now
+	// CredentialProxy, when set, routes the serve's model calls back to the
+	// desktop over the SSH reverse tunnel: a provider entry pointing at the
+	// tunnel is installed into the remote config and the virtual token is
+	// injected into the serve environment. The real key never leaves the
+	// desktop.
+	CredentialProxy *CredentialProxyOptions
 }
 
 func (o Options) progress(step, detail string) {
@@ -119,6 +125,16 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 		return Result{}, err
 	}
 
+	// 3b. Local-proxy credential mode: install the tunnel-backed provider
+	// entry before the serve can launch against it (outside the lock — the
+	// write is idempotent).
+	if opts.CredentialProxy != nil {
+		opts.progress("credential_proxy", "")
+		if err := ensureCredentialProvider(ctx, fs, home, opts.CredentialProxy); err != nil {
+			return Result{}, err
+		}
+	}
+
 	// 4. Serialize only the short launch/publish section across every client.
 	// Another caller may have completed while this one was locating/installing,
 	// so re-check state after acquiring the remote lock.
@@ -145,7 +161,7 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("bootstrap: write token: %w", err)
 	}
 	opts.progress("launch", "")
-	launchRes, err := conn.Exec(ctx, LaunchCommand(bin, workspace, paths))
+	launchRes, err := conn.Exec(ctx, LaunchCommand(bin, workspace, paths, opts.CredentialProxy))
 	if err != nil {
 		cleanupFailedLaunch(conn, fs, paths, 0)
 		return Result{}, fmt.Errorf("bootstrap: launch: %w", err)

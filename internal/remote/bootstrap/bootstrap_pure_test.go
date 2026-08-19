@@ -84,7 +84,7 @@ func TestLaunchCommandQuotesHostilePaths(t *testing.T) {
 		LogFile:   "/home/dev/.reasonix/remote/serve-x.log",
 	}
 	hostile := "/tmp/'; rm -rf ~; echo '"
-	cmd := LaunchCommand("/usr/bin/reasonix", hostile, paths)
+	cmd := LaunchCommand("/usr/bin/reasonix", hostile, paths, nil)
 
 	// The hostile workspace must appear only inside a quoted operand, escaped.
 	if strings.Contains(cmd, "; rm -rf ~; echo") && !strings.Contains(cmd, `'\''; rm -rf ~; echo '\''`) {
@@ -140,7 +140,7 @@ func TestStopAndServeAliveCommands(t *testing.T) {
 func TestLaunchCommandDetachAndLogHardening(t *testing.T) {
 	cmd := LaunchCommand("/usr/bin/reasonix", "/ws", StatePaths{
 		Dir: "/d", TokenFile: "/d/t", PortFile: "/d/p", PidFile: "/d/i", LogFile: "/d/l",
-	})
+	}, nil)
 	// setsid must be optional (macOS lacks it) and the log created 0600 so the
 	// serve token line (already suppressed under --port-file) can't leak.
 	for _, want := range []string{"command -v setsid", "$SX nohup", "chmod 600", "umask 077", "--port-file"} {

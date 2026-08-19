@@ -24,18 +24,19 @@ type RemoteConfig struct {
 // values live in Reasonix's global .env, never in TOML. identity_file is a
 // path — private key material itself is never stored by Reasonix.
 type RemoteHostEntry struct {
-	Name          string               `toml:"name"`
-	Host          string               `toml:"host"`
-	Port          int                  `toml:"port"` // 0 => 22 (or ssh_config value)
-	User          string               `toml:"user"`
-	IdentityFile  string               `toml:"identity_file"`
-	PassphraseEnv string               `toml:"passphrase_env"`
-	PasswordEnv   string               `toml:"password_env"`
-	ProxyJump     string               `toml:"proxy_jump"`     // OpenSSH ProxyJump syntax, comma-separated chain
-	Workspace     string               `toml:"workspace"`      // default remote workspace dir
-	ServeInstall  string               `toml:"serve_install"`  // remote CLI: auto|npm|upload|never
-	UseSSHConfig  bool                 `toml:"use_ssh_config"` // layer ~/.ssh/config values under unset fields
-	Forwards      []RemoteForwardEntry `toml:"forwards"`
+	Name           string               `toml:"name"`
+	Host           string               `toml:"host"`
+	Port           int                  `toml:"port"` // 0 => 22 (or ssh_config value)
+	User           string               `toml:"user"`
+	IdentityFile   string               `toml:"identity_file"`
+	PassphraseEnv  string               `toml:"passphrase_env"`
+	PasswordEnv    string               `toml:"password_env"`
+	ProxyJump      string               `toml:"proxy_jump"`      // OpenSSH ProxyJump syntax, comma-separated chain
+	Workspace      string               `toml:"workspace"`       // default remote workspace dir
+	ServeInstall   string               `toml:"serve_install"`   // remote CLI: auto|npm|upload|never
+	CredentialMode string               `toml:"credential_mode"` // model-call credentials: ""|remote (on the host) | local-proxy (desktop holds the key, calls tunnel back)
+	UseSSHConfig   bool                 `toml:"use_ssh_config"`  // layer ~/.ssh/config values under unset fields
+	Forwards       []RemoteForwardEntry `toml:"forwards"`
 }
 
 // RemoteForwardEntry is a persisted port-forward rule applied on connect.
@@ -86,6 +87,13 @@ func (e RemoteHostEntry) ServeInstallMode() string {
 	return m
 }
 
+// CredentialProxyEnabled reports whether the host routes model-call
+// credentials through the desktop's reverse-tunnel proxy instead of keeping
+// provider keys on the remote host.
+func (e RemoteHostEntry) CredentialProxyEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(e.CredentialMode), "local-proxy")
+}
+
 // PortOrDefault returns the configured port, defaulting to 22.
 func (e RemoteHostEntry) PortOrDefault() int {
 	if e.Port > 0 {
@@ -103,6 +111,11 @@ func validateRemoteHost(e RemoteHostEntry) error {
 	}
 	if strings.TrimSpace(e.Host) == "" {
 		return fmt.Errorf("remote host %q: host is required", e.Name)
+	}
+	switch strings.ToLower(strings.TrimSpace(e.CredentialMode)) {
+	case "", "remote", "local-proxy":
+	default:
+		return fmt.Errorf("remote host %q: credential_mode must be remote or local-proxy", e.Name)
 	}
 	if e.Port < 0 || e.Port > 65535 {
 		return fmt.Errorf("remote host %q: port %d out of range", e.Name, e.Port)

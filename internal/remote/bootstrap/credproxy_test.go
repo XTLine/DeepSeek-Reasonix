@@ -1,0 +1,128 @@
+package bootstrap
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"reasonix/internal/remote"
+)
+
+func credProxyOpts(baseURL string) *CredentialProxyOptions {
+	return &CredentialProxyOptions{
+		BaseURL:  baseURL,
+		Token:    "virtual-token-123",
+		Provider: "reasonix-desktop-proxy",
+		Model:    "deepseek-v4-flash",
+	}
+}
+
+// TestEnsureCredentialProviderAppendsAndIsIdempotent: a fresh remote gains the
+// provider block; a second run with the same options leaves the file
+// byte-identical; a base_url change rewrites just that line.
+func TestEnsureCredentialProviderAppendsAndIsIdempotent(t *testing.T) {
+	skipOnWindows(t)
+	root := t.TempDir()
+	conn := newFakeConn(t, root, func(string) (remote.ExecResult, error) { return ok("") })
+	fs, err := conn.SFTP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	if err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+	first, rerr := os.ReadFile(filepath.Join(root, ".reasonix", "config.toml"))
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	for _, want := range []string{
+		`[[providers]]`,
+		`name = "reasonix-desktop-proxy"`,
+		`base_url = "http://127.0.0.1:18999"`,
+		`api_key_env = "REASONIX_PROXY_TOKEN"`,
+		`model = "deepseek-v4-flash"`,
+	} {
+		if !strings.Contains(string(first), want) {
+			t.Fatalf("config missing %q:\n%s", want, first)
+		}
+	}
+
+	// Idempotent: same options ⇒ no rewrite.
+	if err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
+		t.Fatalf("second install: %v", err)
+	}
+	second, _ := os.ReadFile(filepath.Join(root, ".reasonix", "config.toml"))
+	if string(first) != string(second) {
+		t.Fatalf("idempotent run rewrote the config:\n%s\n---\n%s", first, second)
+	}
+
+	// A base_url change (tunnel port moved) rewrites only that assignment.
+	if err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:19000")); err != nil {
+		t.Fatalf("port change: %v", err)
+	}
+	third, _ := os.ReadFile(filepath.Join(root, ".reasonix", "config.toml"))
+	if !strings.Contains(string(third), `base_url = "http://127.0.0.1:19000"`) {
+		t.Fatalf("port change not applied:\n%s", third)
+	}
+	if strings.Count(string(third), "[[providers]]") != 1 {
+		t.Fatalf("port change duplicated the block:\n%s", third)
+	}
+}
+
+// TestEnsureCredentialProviderPreservesUserConfig: an existing user config
+// keeps its content; the block appends at the end.
+func TestEnsureCredentialProviderPreservesUserConfig(t *testing.T) {
+	skipOnWindows(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".reasonix"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	existing := "default_model = \"deepseek/deepseek-v4-flash\"\n\n[[providers]]\nname = \"mine\"\nkind = \"openai\"\nbase_url = \"https://api.deepseek.com\"\napi_key_env = \"MY_KEY\"\n"
+	if err := os.WriteFile(filepath.Join(root, ".reasonix", "config.toml"), []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conn := newFakeConn(t, root, func(string) (remote.ExecResult, error) { return ok("") })
+	fs, err := conn.SFTP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureCredentialProvider(context.Background(), fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(filepath.Join(root, ".reasonix", "config.toml"))
+	if !strings.HasPrefix(string(got), existing) {
+		t.Fatalf("user config prefix disturbed:\n%s", got)
+	}
+	if strings.Count(string(got), "[[providers]]") != 2 {
+		t.Fatalf("expected two provider blocks:\n%s", got)
+	}
+	if idx := providerBlockIndex(string(got), "mine"); idx < 0 {
+		t.Fatalf("user provider block lost:\n%s", got)
+	}
+}
+
+// TestLaunchCommandCredentialInjection: the virtual token rides the
+// environment (quoted) and the serve selects the tunnel-backed provider.
+func TestLaunchCommandCredentialInjection(t *testing.T) {
+	paths := StatePaths{Dir: "/d", TokenFile: "/d/t", PortFile: "/d/p", PidFile: "/d/i", LogFile: "/d/l"}
+	cmd := LaunchCommand("/usr/bin/reasonix", "/ws", paths, &CredentialProxyOptions{
+		BaseURL: "http://127.0.0.1:18999", Token: "to'ken $x", Provider: "reasonix-desktop-proxy", Model: "m",
+	})
+	for _, want := range []string{
+		`REASONIX_PROXY_TOKEN='to'\''ken $x'`,
+		`--model 'reasonix-desktop-proxy'`,
+		`nohup '/usr/bin/reasonix' serve`,
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("LaunchCommand missing %q:\n%s", want, cmd)
+		}
+	}
+	// Token must not appear unquoted anywhere else (never bare in argv).
+	if strings.Contains(cmd, " to'ken") && !strings.Contains(cmd, "REASONIX_PROXY_TOKEN=") {
+		t.Errorf("token leaked outside the env assignment:\n%s", cmd)
+	}
+}

@@ -37,21 +37,33 @@ func shellQuote(s string) string {
 // cannot read serve output; serve is launched with `--port-file`, which
 // suppresses its token share line, so the token never reaches the log.
 // It echoes the shell's $! so the caller can record the pid immediately.
-func LaunchCommand(bin, workspace string, p StatePaths) string {
+//
+// Credential-proxy mode (cred != nil): the virtual token rides the serve's
+// environment (root-readable /proc only — never argv, never a file) and the
+// provider flag selects the tunnel-backed provider entry.
+func LaunchCommand(bin, workspace string, p StatePaths, cred *CredentialProxyOptions) string {
+	envPrefix := ""
+	modelFlag := ""
+	if cred != nil {
+		envPrefix = TokenEnvName + "=" + shellQuote(cred.Token) + " "
+		modelFlag = " --model " + shellQuote(cred.Provider)
+	}
 	return fmt.Sprintf(
 		"mkdir -p %s && cd %s && rm -f %s %s && umask 077 && : >>%s && chmod 600 %s && "+
 			"SX=; command -v setsid >/dev/null 2>&1 && SX=setsid; "+
-			"$SX nohup %s serve --addr 127.0.0.1:0 --auth token --token-file %s --port-file %s --pid-file %s </dev/null >>%s 2>&1 & echo $!",
+			"%s$SX nohup %s serve --addr 127.0.0.1:0 --auth token --token-file %s --port-file %s --pid-file %s%s </dev/null >>%s 2>&1 & echo $!",
 		shellQuote(p.Dir),
 		shellQuote(workspace),
 		shellQuote(p.PortFile),
 		shellQuote(p.PidFile),
 		shellQuote(p.LogFile),
 		shellQuote(p.LogFile),
+		envPrefix,
 		shellQuote(bin),
 		shellQuote(p.TokenFile),
 		shellQuote(p.PortFile),
 		shellQuote(p.PidFile),
+		modelFlag,
 		shellQuote(p.LogFile),
 	)
 }
