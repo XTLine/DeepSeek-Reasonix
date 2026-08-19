@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,9 @@ type remotePrefs struct {
 	SessionTitles map[string]string `json:"sessionTitles,omitempty"`
 	// PinnedSessions lists pinned remote sessions by the same key, ordered.
 	PinnedSessions []string `json:"pinnedSessions,omitempty"`
+	// CredentialProxySecret is the random root of the per-host virtual tokens
+	// used by local-proxy credential mode. Rotating it revokes every token.
+	CredentialProxySecret string `json:"credentialProxySecret,omitempty"`
 }
 
 func remotePrefsPath() string {
@@ -117,16 +121,16 @@ func setRemoteSessionTitleOverride(hostID, workspace, name, title string) {
 	saveRemotePrefs(p)
 }
 
-func saveRemotePrefs(p remotePrefs) {
+func saveRemotePrefs(p remotePrefs) error {
 	path := remotePrefsPath()
 	if path == "" {
-		return
+		return fmt.Errorf("remote prefs: no user dir")
 	}
 	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
-		return
+		return fmt.Errorf("remote prefs: encode: %w", err)
 	}
-	_ = fileutil.AtomicWriteFile(path, data, 0o600)
+	return fileutil.AtomicWriteFile(path, data, 0o600)
 }
 
 func (a *App) saveLastRemoteWorkspace(hostID, workspace string) {

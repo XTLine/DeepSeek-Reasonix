@@ -44,8 +44,8 @@ const [{ createRoot }, { RemoteConnectWizard }, { LocaleProvider }, { useRemoteS
 // Bridge call tape: every remote method appends "<name>:<detail>".
 const tape: string[] = [];
 const savedHosts: RemoteHostView[] = [
-  { id: "gpu-box", label: "gpu-box", host: "192.168.1.10", port: 22, user: "dev", identityFile: "~/.ssh/id_ed25519", proxyJump: "", defaultWorkspace: "", serveInstall: "auto", useSSHConfig: false },
-  { id: "pw-box", label: "pw-box", host: "10.0.0.8", port: 22, user: "ops", identityFile: "", proxyJump: "", defaultWorkspace: "", serveInstall: "auto", useSSHConfig: false, passwordSet: true },
+  { id: "gpu-box", label: "gpu-box", host: "192.168.1.10", port: 22, user: "dev", identityFile: "~/.ssh/id_ed25519", proxyJump: "", defaultWorkspace: "", serveInstall: "auto", credentialMode: "remote", useSSHConfig: false },
+  { id: "pw-box", label: "pw-box", host: "10.0.0.8", port: 22, user: "ops", identityFile: "", proxyJump: "", defaultWorkspace: "", serveInstall: "auto", credentialMode: "remote", useSSHConfig: false, passwordSet: true },
 ];
 let hostCount = 0;
 
@@ -93,7 +93,7 @@ window.go = { main: { App: {
   async AddRemoteHost(input: RemoteHostView & { label?: string; host?: string }) {
     tape.push(`AddRemoteHost:${input.label}:${input.host}`);
     hostCount += 1;
-    const view = { id: `new-${hostCount}`, label: String(input.label), host: String(input.host), port: 22, user: "", identityFile: "", proxyJump: "", defaultWorkspace: "", serveInstall: "npm", useSSHConfig: false } as RemoteHostView;
+    const view = { id: `new-${hostCount}`, label: String(input.label), host: String(input.host), port: 22, user: "", identityFile: "", proxyJump: "", defaultWorkspace: "", serveInstall: "npm", credentialMode: "remote", useSSHConfig: false } as RemoteHostView;
     savedHosts.push(view);
     return view;
   },

@@ -26,7 +26,7 @@ function reset() {
 }
 
 useRemoteStore.getState().setHosts([
-  { id: "box", label: "box", host: "box.test", port: 22, user: "dev", identityFile: "", proxyJump: "", defaultWorkspace: "/srv/app", serveInstall: "auto", useSSHConfig: false },
+  { id: "box", label: "box", host: "box.test", port: 22, user: "dev", identityFile: "", proxyJump: "", defaultWorkspace: "/srv/app", serveInstall: "auto", credentialMode: "remote", useSSHConfig: false },
 ]);
 eq(useRemoteStore.getState().hosts[0]?.defaultWorkspace, "/srv/app", "configured hosts hydrate persistent UI state");
 

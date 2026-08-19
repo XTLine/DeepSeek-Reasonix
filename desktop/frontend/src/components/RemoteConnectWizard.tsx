@@ -19,6 +19,7 @@ const blankInput: RemoteHostInput = {
   proxyJump: "",
   defaultWorkspace: "",
   serveInstall: "npm",
+  credentialMode: "remote",
   useSSHConfig: false,
 };
 
@@ -127,6 +128,7 @@ export function RemoteConnectWizard({
       proxyJump: saved.proxyJump,
       defaultWorkspace: saved.defaultWorkspace,
       serveInstall: saved.serveInstall,
+      credentialMode: saved.credentialMode || "remote",
       useSSHConfig: saved.useSSHConfig,
     });
     setAuthMode(saved.identityFile ? "key" : "password");

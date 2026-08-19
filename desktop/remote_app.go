@@ -33,6 +33,7 @@ type RemoteHostView struct {
 	ProxyJump        string `json:"proxyJump"`
 	DefaultWorkspace string `json:"defaultWorkspace"`
 	ServeInstall     string `json:"serveInstall"`
+	CredentialMode   string `json:"credentialMode"`
 	UseSSHConfig     bool   `json:"useSSHConfig"`
 	PasswordSet      bool   `json:"passwordSet,omitempty"`
 	KeyPassphraseSet bool   `json:"keyPassphraseSet,omitempty"`
@@ -47,6 +48,7 @@ type RemoteHostInput struct {
 	ProxyJump                string `json:"proxyJump"`
 	DefaultWorkspace         string `json:"defaultWorkspace"`
 	ServeInstall             string `json:"serveInstall"`
+	CredentialMode           string `json:"credentialMode"`
 	UseSSHConfig             bool   `json:"useSSHConfig"`
 	Password                 string `json:"password,omitempty"`
 	KeyPassphrase            string `json:"keyPassphrase,omitempty"`
@@ -211,6 +213,7 @@ func (a *App) stopRemoteRuntime() {
 	if rt != nil {
 		_ = rt.Close()
 	}
+	a.closeCredentialProxy()
 }
 
 // emitRemoteEvent bridges a kernel callback to the frontend through the async
@@ -1378,15 +1381,34 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 	if !m.publishServerIfCurrent(hostID, mh, starting, "") {
 		return RemoteServerView{}, "", fmt.Errorf("host %q connection was replaced", hostID)
 	}
+	// Local-proxy credential mode: start the desktop key holder, open the
+	// reverse tunnel, and hand the bootstrap the virtual token + provider
+	// entry to install on the remote. The real key never leaves this machine.
+	var credOpts *bootstrap.CredentialProxyOptions
+	if entry.CredentialProxyEnabled() {
+		token, model, cerr := m.credentialProxySetup(c, hostID)
+		if cerr != nil {
+			view := RemoteServerView{HostID: hostID, Workspace: workspace, State: "error", Error: cerr.Error()}
+			m.publishFailedServeStart(hostID, mh, previousServer, previousToken, view)
+			return view, "", cerr
+		}
+		credOpts = &bootstrap.CredentialProxyOptions{
+			BaseURL:  fmt.Sprintf("http://127.0.0.1:%d", credentialProxyRemotePort),
+			Token:    token,
+			Provider: credentialProxyProviderName,
+			Model:    model,
+		}
+	}
 	res, err := m.ensureServe(opCtx, c, bootstrap.Options{
-		Workspace:      workspace,
-		Install:        entry.ServeInstallMode(),
-		LocalBinary:    m.localBinary(),
-		LocalGOOS:      runtime.GOOS,
-		LocalGOARCH:    runtime.GOARCH,
-		ProductVersion: version,
-		FetchBinary:    m.fetchRemoteBinary,
-		MinVersion:     bootstrap.MinServeVersion,
+		Workspace:       workspace,
+		Install:         entry.ServeInstallMode(),
+		LocalBinary:     m.localBinary(),
+		LocalGOOS:       runtime.GOOS,
+		LocalGOARCH:     runtime.GOARCH,
+		ProductVersion:  version,
+		FetchBinary:     m.fetchRemoteBinary,
+		MinVersion:      bootstrap.MinServeVersion,
+		CredentialProxy: credOpts,
 		Progress: func(step, detail string) {
 			view := RemoteServerView{HostID: hostID, Workspace: workspace, State: step, Message: detail}
 			m.publishServerIfCurrent(hostID, mh, view, "")
@@ -1502,6 +1524,44 @@ func (m *desktopRemoteManager) ServerLogs(ctx context.Context, hostID, workspace
 		return "", fmt.Errorf("host %q connection was replaced", hostID)
 	}
 	return sb.String(), nil
+}
+
+// credentialProxySetup prepares local-proxy credential mode for one host:
+// starts the desktop key holder, registers the host's virtual token against
+// the desktop's default provider, and opens the reverse tunnel the remote
+// serve will call through. Returns the virtual token and the model name the
+// remote provider entry should carry.
+func (m *desktopRemoteManager) credentialProxySetup(c desktopSSHClient, hostID string) (string, string, error) {
+	app, ok := m.sink.(*App)
+	if !ok || app == nil {
+		return "", "", fmt.Errorf("credential proxy: app unavailable")
+	}
+	token, model, port, err := app.registerCredentialProxyRoute(hostID)
+	if err != nil {
+		return "", "", err
+	}
+	if err := ensureCredentialProxyForward(c, hostID, port); err != nil {
+		return "", "", fmt.Errorf("credential proxy: reverse tunnel: %w", err)
+	}
+	return token, model, nil
+}
+
+// ensureCredentialProxyForward opens (idempotently) the reverse tunnel: the
+// REMOTE loopback port forwards back through SSH to the desktop proxy.
+func ensureCredentialProxyForward(c desktopSSHClient, hostID string, desktopPort int) error {
+	name := "cred-proxy:" + hostID
+	for _, f := range c.Forwards().List() {
+		if f.Spec.Name == name {
+			return nil
+		}
+	}
+	_, err := c.Forwards().Add(forward.Spec{
+		Name:       name,
+		Direction:  forward.Remote,
+		BindAddr:   fmt.Sprintf("127.0.0.1:%d", credentialProxyRemotePort),
+		TargetAddr: fmt.Sprintf("127.0.0.1:%d", desktopPort),
+	})
+	return err
 }
 
 // CheckPlatform rejects unsupported remote operating systems right after
@@ -1665,6 +1725,7 @@ func preserveRemoteHostHiddenFields(entry *config.RemoteHostEntry, existing conf
 func preserveRemoteHostImportSettings(entry *config.RemoteHostEntry, existing config.RemoteHostEntry) {
 	entry.Workspace = existing.Workspace
 	entry.ServeInstall = existing.ServeInstall
+	entry.CredentialMode = existing.CredentialMode
 }
 
 // applyRemoteCredentialInput maps plaintext received from the one-shot Wails
@@ -1699,7 +1760,7 @@ func hostEntryToView(h config.RemoteHostEntry) RemoteHostView {
 	return RemoteHostView{
 		ID: h.Name, Label: h.Name, Host: h.Host, Port: h.Port, User: h.User,
 		IdentityFile: h.IdentityFile, ProxyJump: h.ProxyJump,
-		DefaultWorkspace: h.Workspace, ServeInstall: h.ServeInstallMode(), UseSSHConfig: h.UseSSHConfig,
+		DefaultWorkspace: h.Workspace, ServeInstall: h.ServeInstallMode(), CredentialMode: credentialModeView(h), UseSSHConfig: h.UseSSHConfig,
 		PasswordSet:      config.ResolveCredential(h.PasswordEnv).Set,
 		KeyPassphraseSet: config.ResolveCredential(h.PassphraseEnv).Set,
 	}
@@ -1710,7 +1771,7 @@ func inputToHostEntry(in RemoteHostInput) config.RemoteHostEntry {
 	return config.RemoteHostEntry{
 		Name: name, Host: in.Host, Port: in.Port, User: in.User,
 		IdentityFile: in.IdentityFile, ProxyJump: in.ProxyJump,
-		Workspace: in.DefaultWorkspace, ServeInstall: in.ServeInstall, UseSSHConfig: in.UseSSHConfig,
+		Workspace: in.DefaultWorkspace, ServeInstall: in.ServeInstall, CredentialMode: normalizeCredentialMode(in.CredentialMode), UseSSHConfig: in.UseSSHConfig,
 	}
 }
 

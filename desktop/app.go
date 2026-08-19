@@ -331,6 +331,10 @@ type App struct {
 	// remoteActiveTabID holds the strip highlight while a remote tab is the
 	// visible surface; a local activation clears it. Guarded by remoteTabMu.
 	remoteActiveTabID string
+	// Local-proxy credential mode: the desktop-side key holder for remote
+	// serves whose model calls tunnel back here. Lazily started, app-wide.
+	credProxyMu sync.Mutex
+	credProxy   *credentialProxy
 	// remoteEventHook, when set, observes every emitRemoteEvent call.
 	// Tests use it to assert event names and payloads; production never
 	// sets it.
