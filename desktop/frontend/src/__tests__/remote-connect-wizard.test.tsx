@@ -84,6 +84,9 @@ const dirs: Record<string, Array<{ name: string; path: string; isDir: boolean }>
 // Connection attempt counter: the first attempt fails (the wizard stays on
 // the connecting step so its log panel stays observable); the retry succeeds.
 let connectAttempts = 0;
+// Platform-gate attempt counter: the first check models a Windows SSH host
+// (uname reports MINGW64); later checks pass.
+let platformAttempts = 0;
 window.go = { main: { App: {
   async RemoteHosts() {
     tape.push("RemoteHosts");
@@ -116,8 +119,8 @@ window.go = { main: { App: {
     tape.push(`ConnectRemoteHost:${hostId}`);
     // Hold 60ms so the connecting step mounts, then emit the kernel status
     // per attempt: first stopped+error → waitForRemoteConnection rejects
-    // immediately and the wizard stays on the connecting step; second
-    // connected → the retry proceeds to the workspace step.
+    // immediately and the wizard stays on the connecting step; later
+    // attempts connected → the flow proceeds to the platform check.
     const { promise, resolve } = Promise.withResolvers<void>();
     setTimeout(resolve, 60);
     await promise;
@@ -127,6 +130,16 @@ window.go = { main: { App: {
       return undefined;
     }
     useRemoteStore.getState().applyStatus({ hostId, state: "connected" });
+    return undefined;
+  },
+  // Platform gate: the first check models a Windows SSH host (uname reports
+  // MINGW64), later checks pass.
+  async CheckRemotePlatform(hostId: string) {
+    tape.push(`CheckRemotePlatform:${hostId}`);
+    platformAttempts += 1;
+    if (platformAttempts === 1) {
+      throw new Error('remote host platform check failed: unsupported remote OS "MINGW64_NT-10.0-19045" (V1 supports Linux and macOS)');
+    }
     return undefined;
   },
   async AddRemoteProject(hostId: string, workspace: string) {
@@ -246,7 +259,21 @@ ok(!tape.some((entry) => entry.startsWith("AddRemoteHost:")), "no AddRemoteHost 
   ok(Boolean(connectError?.textContent?.includes("ssh: handshake failed")), "failed connect surfaces the kernel error");
   ok(Boolean(buttonByText("Retry")), "retry action is offered after a failed connect");
 }
-// ── Retry: the second connect succeeds and lands on step ③ ──
+// ── Retry #1: SSH connects, but the platform check rejects the host ──
+await act(async () => {
+  buttonByText("Retry")?.click();
+  await delay(120);
+  await flush();
+});
+ok(tape.includes("CheckRemotePlatform:gpu-box"), "a connected host runs the platform check before the workspace step");
+ok(railItems()[1]?.className.includes("--current") === true, "an unsupported OS keeps the wizard on the connecting step");
+{
+  const platformError = document.querySelector(".remote-wizard__connecting .remote-wizard__error");
+  ok(Boolean(platformError?.textContent?.includes("unsupported remote OS")), "the platform failure surfaces the kernel error");
+  ok(!tape.some((entry) => entry.startsWith("ListRemoteDir")), "directory browsing never starts for an unsupported host");
+  ok(Boolean(buttonByText("Retry")), "retry stays available after a platform rejection");
+}
+// ── Retry #2: the platform check passes and lands on step ③ ──
 await act(async () => {
   buttonByText("Retry")?.click();
   await delay(120);

@@ -176,6 +176,7 @@ type remoteKernel interface {
 	StopServer(hostID string) error
 	ServerStatus(hostID string) RemoteServerView
 	ServerLogs(ctx context.Context, hostID string, tailLines int) (string, error)
+	CheckPlatform(ctx context.Context, hostID string) error
 
 	Close() error
 }
@@ -351,6 +352,17 @@ func (a *App) ConnectRemoteHost(id string) error {
 		return err
 	}
 	return nil
+}
+
+// CheckRemotePlatform verifies the connected host runs a supported OS
+// (Linux/macOS). The connect wizard calls it at the connecting step, before
+// directory browsing, so unsupported hosts fail early with one message.
+func (a *App) CheckRemotePlatform(hostID string) error {
+	rt, err := a.remoteRT()
+	if err != nil {
+		return err
+	}
+	return rt.CheckPlatform(a.bootContext(), hostID)
 }
 
 func applyRemoteConnectionError(view *RemoteConnectionStatusView, err error) {
@@ -1460,6 +1472,26 @@ func (m *desktopRemoteManager) ServerLogs(ctx context.Context, hostID string, ta
 		return "", fmt.Errorf("host %q connection was replaced", hostID)
 	}
 	return sb.String(), nil
+}
+
+// CheckPlatform rejects unsupported remote operating systems right after
+// connect, applying the same ParseUname gate EnsureServe uses, so the wizard
+// fails early instead of deep in serve bootstrap.
+func (m *desktopRemoteManager) CheckPlatform(ctx context.Context, hostID string) error {
+	mh := m.managed(hostID)
+	if mh == nil || mh.client == nil {
+		return fmt.Errorf("host %q is not connected", hostID)
+	}
+	opCtx, cancel := managedOperationContext(ctx, mh)
+	defer cancel()
+	res, err := mh.client.Exec(opCtx, "uname -sm")
+	if err != nil || strings.TrimSpace(string(res.Stdout)) == "" {
+		return fmt.Errorf("remote host platform check failed: cannot detect OS (supported: Linux, macOS)")
+	}
+	if _, _, perr := bootstrap.ParseUname(string(res.Stdout)); perr != nil {
+		return fmt.Errorf("remote host platform check failed: %w", perr)
+	}
+	return nil
 }
 
 func (m *desktopRemoteManager) Close() error {

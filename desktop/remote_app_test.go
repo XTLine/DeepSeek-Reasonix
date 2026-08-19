@@ -21,6 +21,8 @@ type fakeRemoteKernel struct {
 	ensureView      RemoteServerView
 	ensureToken     string
 	ensureErr       error
+	platformErr     error
+	platformChecks  []string
 	resolveCalls    []bool
 	secretCalls     []remoteSecretAnswer
 	secretPromptIDs []string
@@ -109,6 +111,11 @@ func (f *fakeRemoteKernel) ServerStatus(string) RemoteServerView { return f.ensu
 func (f *fakeRemoteKernel) ServerLogs(context.Context, string, int) (string, error) {
 	return "log line", nil
 }
+
+func (f *fakeRemoteKernel) CheckPlatform(_ context.Context, hostID string) error {
+	f.platformChecks = append(f.platformChecks, hostID)
+	return f.platformErr
+}
 func (f *fakeRemoteKernel) Close() error { f.closed = true; return nil }
 
 func appWithFakeKernel(fake *fakeRemoteKernel) *App {
@@ -146,6 +153,23 @@ func TestConfirmRemoteHostKeyDelegates(t *testing.T) {
 	}
 	if len(fake.resolveCalls) != 1 || fake.resolveCalls[0] != true {
 		t.Fatalf("resolve calls = %+v", fake.resolveCalls)
+	}
+}
+
+func TestCheckRemotePlatformDelegatesAndPropagatesError(t *testing.T) {
+	fake := &fakeRemoteKernel{platformErr: errors.New("unsupported remote OS")}
+	a := appWithFakeKernel(fake)
+	if err := a.CheckRemotePlatform("box"); err == nil || !strings.Contains(err.Error(), "unsupported remote OS") {
+		t.Fatalf("err = %v, want unsupported remote OS", err)
+	}
+	if len(fake.platformChecks) != 1 || fake.platformChecks[0] != "box" {
+		t.Fatalf("platform checks = %+v", fake.platformChecks)
+	}
+
+	ok := &fakeRemoteKernel{}
+	a2 := appWithFakeKernel(ok)
+	if err := a2.CheckRemotePlatform("box"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

@@ -521,3 +521,65 @@ func TestEnsureServerFirstStartFailurePublishesError(t *testing.T) {
 		t.Fatalf("server state after first-start failure = %+v, want error /srv/b", status)
 	}
 }
+
+// platformProbeClient scripts the uname probe CheckPlatform runs.
+type platformProbeClient struct {
+	*lifecycleSSHClient
+	unameOut string
+	execErr  error
+}
+
+func (c *platformProbeClient) Exec(context.Context, string) (remote.ExecResult, error) {
+	return remote.ExecResult{Stdout: []byte(c.unameOut)}, c.execErr
+}
+
+// TestCheckPlatformGatesUnsupportedOS applies the same ParseUname gate as
+// EnsureServe at connect time: Linux/macOS pass, anything else fails with one
+// clear message.
+func TestCheckPlatformGatesUnsupportedOS(t *testing.T) {
+	cases := []struct {
+		name    string
+		stdout  string
+		execErr error
+		wantErr string
+	}{
+		{name: "linux passes", stdout: "Linux x86_64\n"},
+		{name: "darwin passes", stdout: "Darwin arm64\n"},
+		{name: "mingw rejected", stdout: "MINGW64_NT-10.0-19045 x86_64\n", wantErr: "unsupported remote OS"},
+		{name: "no uname rejected", stdout: "", wantErr: "cannot detect OS"},
+		{name: "exec failure rejected", stdout: "Linux x86_64\n", execErr: errors.New("broken pipe"), wantErr: "cannot detect OS"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := newDesktopRemoteManager(nil)
+			hostCtx, hostCancel := context.WithCancel(context.Background())
+			defer hostCancel()
+			cl := &platformProbeClient{
+				lifecycleSSHClient: newLifecycleSSHClient(nil),
+				unameOut:           tc.stdout,
+				execErr:            tc.execErr,
+			}
+			mgr.hosts["box"] = &managedHost{
+				ctx: hostCtx, cancel: hostCancel, client: cl,
+				status: RemoteConnectionStatusView{HostID: "box", State: "connected"},
+			}
+			err := mgr.CheckPlatform(context.Background(), "box")
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestCheckPlatformRequiresConnection(t *testing.T) {
+	mgr := newDesktopRemoteManager(nil)
+	if err := mgr.CheckPlatform(context.Background(), "ghost"); err == nil || !strings.Contains(err.Error(), "not connected") {
+		t.Fatalf("err = %v, want not connected", err)
+	}
+}

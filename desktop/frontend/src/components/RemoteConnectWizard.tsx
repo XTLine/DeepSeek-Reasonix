@@ -173,6 +173,9 @@ export function RemoteConnectWizard({
       pushLog("info", t("remoteWizard.logDetecting"));
       await waitForRemoteConnection(id);
       pushLog("info", t("remoteWizard.logConnected"));
+      // Reject unsupported remote OSes (V1: Linux/macOS) before directory
+      // browsing; the error keeps the wizard on the connecting step.
+      await app.CheckRemotePlatform(id);
       pushLog("info", t("remoteWizard.logPrepare"));
       setStep("workspace");
       void openDir(id, startPath);
