@@ -318,7 +318,7 @@ type remoteWindowChild struct {
 type remoteWindowRegistry struct {
 	mu         sync.Mutex
 	children   map[string][]remoteWindowChild // per host, one live window plus transient handoffs
-	workspaces map[string]string               // hostKey → workspace the window currently shows
+	workspaces map[string]string              // hostKey → workspace the window currently shows
 	nextGen    uint64
 }
 

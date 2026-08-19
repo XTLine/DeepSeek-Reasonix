@@ -634,7 +634,7 @@ type managedHost struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	status         RemoteConnectionStatusView
-	serves         map[string]*serveEntry // per-workspace serve registry, keyed by the workspace string
+	serves         map[string]*serveEntry  // per-workspace serve registry, keyed by the workspace string
 	fpAnswer       chan bool               // TOFU resolution channel; non-nil while pending
 	secretAnswer   chan remoteSecretAnswer // one-shot credential channel; non-nil while pending
 	secretPromptID string                  // opaque ID prevents a stale dialog resolving a later prompt

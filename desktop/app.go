@@ -320,10 +320,14 @@ type App struct {
 	remoteWindowLifecycles remoteWindowLifecycleRegistry
 	// Remote project tabs: in-app tabs bound to a remote workspace. Tracks
 	// open tabs and their connection state; project registration itself
-	// persists in the user config ([remote].projects). Persistence and
-	// restore for these tabs are not implemented yet.
+	// persists in the user config ([remote].projects). Open tabs persist as
+	// disconnected shells in desktop-tabs.json and restore without
+	// connecting; activation bootstraps the reconnect.
 	remoteTabMu sync.Mutex
 	remoteTabs  map[string]*remoteTab
+	// remoteTabOrder keeps the strip order of remote tab ids (guarded by
+	// remoteTabMu); ReorderTabs persists it beside the local tab order.
+	remoteTabOrder []string
 	// remoteActiveTabID holds the strip highlight while a remote tab is the
 	// visible surface; a local activation clears it. Guarded by remoteTabMu.
 	remoteActiveTabID string
@@ -701,6 +705,9 @@ func (a *App) restoreOrBuildTabs() {
 	if cfgErr != nil || singleSurfaceLayoutStyle(startupCfg.DesktopLayoutStyle()) {
 		f = singleSurfaceTabsFile(f)
 	}
+	// Remote tabs restore as disconnected shells (no connect, no serve):
+	// activation or an explicit open bootstraps them later.
+	a.restoreRemoteTabShells(f)
 
 	if len(f.Tabs) > 0 {
 		toBuild := make([]*WorkspaceTab, 0, len(f.Tabs))

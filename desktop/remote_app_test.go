@@ -15,19 +15,19 @@ import (
 
 // fakeRemoteKernel implements remoteKernel for binding-layer tests.
 type fakeRemoteKernel struct {
-	hosts           []RemoteHostView
-	statuses        []RemoteConnectionStatusView
-	writeResult     RemoteWriteResult
-	ensureView      RemoteServerView
-	ensureToken     string
-	ensureErr       error
-	platformErr     error
-	platformChecks  []string
+	hosts             []RemoteHostView
+	statuses          []RemoteConnectionStatusView
+	writeResult       RemoteWriteResult
+	ensureView        RemoteServerView
+	ensureToken       string
+	ensureErr         error
+	platformErr       error
+	platformChecks    []string
 	stoppedWorkspaces []string
-	resolveCalls    []bool
-	secretCalls     []remoteSecretAnswer
-	secretPromptIDs []string
-	closed          bool
+	resolveCalls      []bool
+	secretCalls       []remoteSecretAnswer
+	secretPromptIDs   []string
+	closed            bool
 }
 
 func TestRemoteConnectionErrorDetailsPreserveHostKeyMismatch(t *testing.T) {

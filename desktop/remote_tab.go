@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -592,6 +593,7 @@ func (a *App) RenameRemoteProjectSession(hostID, workspace, name, title string) 
 		a.remoteTabMu.Unlock()
 		if changed {
 			a.emitRemoteEvent("remote-tab:opened", remoteTabMeta(live, live.hostLabel))
+			a.saveTabsFromRemote()
 		}
 		return nil
 	}
@@ -635,6 +637,7 @@ func (a *App) resumeRemoteTabSession(tabID, name string) {
 		tab.sessionReset = false
 		a.remoteTabMu.Unlock()
 		a.emitRemoteEvent("remote-tab:opened", remoteTabMeta(tab, tab.hostLabel))
+		a.saveTabsFromRemote()
 		a.emitRemoteTabState(tabID, "ready", "")
 		return
 	}
@@ -786,6 +789,7 @@ func (a *App) refreshRemoteTabTitle(tabID string) {
 		a.remoteTabMu.Unlock()
 		if changed {
 			a.emitRemoteEvent("remote-tab:opened", remoteTabMeta(tab, tab.hostLabel))
+			a.saveTabsFromRemote()
 		}
 		return
 	}
@@ -825,16 +829,69 @@ func (a *App) resetRemoteTabSession(tabID string) {
 	a.emitRemoteTabState(tabID, "ready", "")
 }
 
-// remoteTabMetas returns chrome metas for every open remote tab plus the
-// currently highlighted remote tab id ("" when a local tab is active).
+// remoteTabMetas returns chrome metas for every open remote tab (in strip
+// order) plus the currently highlighted remote tab id ("" when a local tab is
+// active).
 func (a *App) remoteTabMetas() ([]TabMeta, string) {
 	a.remoteTabMu.Lock()
 	defer a.remoteTabMu.Unlock()
-	metas := make([]TabMeta, 0, len(a.remoteTabs))
-	for _, tab := range a.remoteTabs {
-		metas = append(metas, remoteTabMeta(tab, tab.hostLabel))
+	ids := a.orderedRemoteTabIDsLocked()
+	metas := make([]TabMeta, 0, len(ids))
+	for _, id := range ids {
+		if tab := a.remoteTabs[id]; tab != nil {
+			metas = append(metas, remoteTabMeta(tab, tab.hostLabel))
+		}
 	}
 	return metas, a.remoteActiveTabID
+}
+
+// orderedRemoteTabIDsLocked returns the remote strip order with self-repair:
+// registry keys missing from the order append in sorted order (mirrors
+// orderedTabIDsLocked for the local side). Caller holds remoteTabMu.
+func (a *App) orderedRemoteTabIDsLocked() []string {
+	seen := make(map[string]bool, len(a.remoteTabOrder))
+	out := make([]string, 0, len(a.remoteTabs))
+	for _, id := range a.remoteTabOrder {
+		if a.remoteTabs[id] != nil && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	var missing []string
+	for id := range a.remoteTabs {
+		if !seen[id] {
+			missing = append(missing, id)
+		}
+	}
+	sort.Strings(missing)
+	return append(out, missing...)
+}
+
+// remoteTabsFileEntries snapshots the persisted remote tab section (entries
+// plus strip order plus the active remote id). Called from the tab-file write
+// path — lock order tabsSaveMu → remoteTabMu.
+func (a *App) remoteTabsFileEntries() ([]desktopRemoteTabEntry, []string, string) {
+	a.remoteTabMu.Lock()
+	defer a.remoteTabMu.Unlock()
+	ids := a.orderedRemoteTabIDsLocked()
+	entries := make([]desktopRemoteTabEntry, 0, len(ids))
+	for _, id := range ids {
+		tab := a.remoteTabs[id]
+		if tab == nil {
+			continue
+		}
+		entries = append(entries, desktopRemoteTabEntry{
+			ID:         tab.id,
+			HostID:     tab.ref.HostID,
+			Workspace:  tab.ref.Workspace,
+			TopicTitle: tab.topicTitle,
+		})
+	}
+	order := append([]string(nil), ids...)
+	if len(order) == 0 {
+		order = nil
+	}
+	return entries, order, a.remoteActiveTabID
 }
 
 // CloseRemoteTab tears down one remote tab: the SSE pump stops and the
@@ -844,6 +901,10 @@ func (a *App) CloseRemoteTab(tabID string) error {
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
 	delete(a.remoteTabs, tabID)
+	a.remoteTabOrder = removeRemoteTabOrderID(a.remoteTabOrder, tabID)
+	if a.remoteActiveTabID == tabID {
+		a.remoteActiveTabID = ""
+	}
 	var cancel context.CancelFunc
 	if tab != nil {
 		cancel = tab.cancel
@@ -852,6 +913,7 @@ func (a *App) CloseRemoteTab(tabID string) error {
 	if cancel != nil {
 		cancel()
 	}
+	a.saveTabsFromRemote()
 	return nil
 }
 
@@ -873,7 +935,9 @@ func (a *App) remoteTabsHostStatus(hostID, state, errText string) {
 func (a *App) suspendRemoteTabPumps(hostID, state, errText string) {
 	a.remoteTabMu.Lock()
 	for _, tab := range a.remoteTabs {
-		if tab.ref.HostID != hostID {
+		if tab.ref.HostID != hostID || tab.state == "disconnected" {
+			// A restored shell was never connected this run: host status
+			// transitions must not flip it into a runtime state.
 			continue
 		}
 		tab.gen++

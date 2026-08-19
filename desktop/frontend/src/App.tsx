@@ -1617,7 +1617,10 @@ export default function App() {
   // Remote tabs share the local composer: the same Composer component stays
   // mounted, with its send/cancel/running props fed by the remote session.
   const remoteSurfaceActive = Boolean(activeTab?.remote);
-  const remoteSession = useRemoteSession(remoteSurfaceActive && activeTab ? activeTab.id : undefined);
+  const remoteSession = useRemoteSession(
+    remoteSurfaceActive && activeTab ? activeTab.id : undefined,
+    activeTab?.remoteState,
+  );
   const activePlanRevisionInsertRequest =
     planRevisionInsertRequest &&
     planRevisionInsertRequest.tabId === activeTabId &&

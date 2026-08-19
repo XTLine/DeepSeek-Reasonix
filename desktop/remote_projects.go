@@ -165,7 +165,8 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 
 	// Reuse a live tab for the same remote workspace: repeated clicks on the
 	// tree group (or wizard finish followed by a group click) must not stack
-	// tabs. A terminal-error tab is replaced by a fresh one below.
+	// tabs. A terminal-error tab is replaced by a fresh one below. A restored
+	// disconnected shell is revived in place: same id, reconnect bootstrap.
 	a.remoteTabMu.Lock()
 	var reuse *remoteTab
 	for _, existing := range a.remoteTabs {
@@ -174,9 +175,16 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 			break
 		}
 	}
+	revive := reuse != nil && reuse.state == "disconnected"
+	if revive {
+		reuse.state = "connecting"
+	}
 	a.remoteTabMu.Unlock()
 	if reuse != nil {
-		if name := strings.TrimSpace(opts.SessionName); name != "" {
+		if revive {
+			a.emitRemoteTabState(reuse.id, "connecting", "")
+			a.goSafe("remoteTabServe", func() { a.bootstrapRemoteTab(reuse.id, hostID, workspace) })
+		} else if name := strings.TrimSpace(opts.SessionName); name != "" {
 			a.resumeRemoteTabSession(reuse.id, name)
 		} else {
 			a.remoteTabMu.Lock()
@@ -201,13 +209,15 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 		a.remoteTabs = map[string]*remoteTab{}
 	}
 	// Drop a terminal-error tab for the same ref so repeated retries cannot
-	// grow the registry (no CloseRemoteTab binding exists yet).
+	// grow the registry.
 	for id, existing := range a.remoteTabs {
 		if existing.ref.HostID == hostID && existing.ref.Workspace == workspace && existing.state == "error" {
 			delete(a.remoteTabs, id)
+			a.remoteTabOrder = removeRemoteTabOrderID(a.remoteTabOrder, id)
 		}
 	}
 	a.remoteTabs[tabID] = tab
+	a.remoteTabOrder = append(a.remoteTabOrder, tabID)
 	a.remoteTabMu.Unlock()
 	a.emitRemoteTabState(tabID, "connecting", "")
 
@@ -215,7 +225,73 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 
 	meta := remoteTabMeta(tab, host.Name)
 	a.activateRemoteTab(tabID, meta)
+	// Persist after activation so the file records the highlighted remote id.
+	a.saveTabsFromRemote()
 	return meta, nil
+}
+
+// restoreRemoteTabShells rebuilds disconnected registry entries from the
+// persisted tab file so remote tabs survive a restart. Shells never connect
+// on their own: activating one (SetActiveTab) or opening its project
+// bootstraps the reconnect, which lands in a fresh blank session.
+func (a *App) restoreRemoteTabShells(f desktopTabsFile) {
+	if len(f.RemoteTabs) == 0 {
+		return
+	}
+	// Local ids are snapshotted under a.mu BEFORE taking remoteTabMu — the
+	// save path locks in the a.mu → tabsSaveMu → remoteTabMu order, so this
+	// function must never hold remoteTabMu while wanting a.mu.
+	a.mu.RLock()
+	localIDs := make(map[string]bool, len(a.tabs))
+	for id := range a.tabs {
+		localIDs[id] = true
+	}
+	a.mu.RUnlock()
+
+	cfg, cfgErr := config.Load()
+	a.remoteTabMu.Lock()
+	if a.remoteTabs == nil {
+		a.remoteTabs = map[string]*remoteTab{}
+	}
+	for _, entry := range f.RemoteTabs {
+		id := strings.TrimSpace(entry.ID)
+		hostID := strings.TrimSpace(entry.HostID)
+		ws := strings.TrimSpace(entry.Workspace)
+		if id == "" || hostID == "" || ws == "" || localIDs[id] || a.remoteTabs[id] != nil {
+			continue
+		}
+		hostLabel := hostID
+		if cfgErr == nil {
+			if host, ok := cfg.RemoteHost(hostID); ok && strings.TrimSpace(host.Name) != "" {
+				hostLabel = host.Name
+			}
+		}
+		title := strings.TrimSpace(entry.TopicTitle)
+		if title == "" {
+			title = remoteWorkspaceName(ws)
+		}
+		a.remoteTabs[id] = &remoteTab{
+			id: id, ref: RemoteTabRef{HostID: hostID, Workspace: ws},
+			state: "disconnected", newSession: true,
+			hostLabel: hostLabel, topicTitle: title,
+		}
+		a.remoteTabOrder = append(a.remoteTabOrder, id)
+	}
+	if f.ActiveTab != "" && a.remoteTabs[f.ActiveTab] != nil {
+		a.remoteActiveTabID = f.ActiveTab
+	}
+	a.remoteTabMu.Unlock()
+}
+
+// removeRemoteTabOrderID drops one id from the remote strip order.
+func removeRemoteTabOrderID(order []string, id string) []string {
+	out := order[:0]
+	for _, existing := range order {
+		if existing != id {
+			out = append(out, existing)
+		}
+	}
+	return out
 }
 
 // activateRemoteTab highlights the tab in the strip and tells the frontend
@@ -228,7 +304,8 @@ func (a *App) activateRemoteTab(tabID string, meta TabMeta) {
 }
 
 // remoteTabMeta builds the frontend-facing shape of one remote tab; the
-// create and reuse paths share it so both return identical metas.
+// create and reuse paths share it so both return identical metas. RemoteState
+// seeds the surface before any state event arrives this run (restored shells).
 func remoteTabMeta(tab *remoteTab, hostLabel string) TabMeta {
 	return TabMeta{
 		ID:            tab.id,
@@ -241,6 +318,7 @@ func remoteTabMeta(tab *remoteTab, hostLabel string) TabMeta {
 		Active:        true,
 		Cwd:           tab.ref.Workspace,
 		Remote:        &tab.ref,
+		RemoteState:   tab.state,
 	}
 }
 

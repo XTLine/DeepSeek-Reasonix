@@ -431,6 +431,9 @@ export interface TabMeta {
   isolatedWorktree?: boolean;
   /** Present ⇒ remote tab (RemoteTabBridge); absent ⇒ local tab. */
   remote?: RemoteTabRefView;
+  /** Remote tab connection state from the meta — seeds the surface before
+   *  any state event arrives this run (restored disconnected shells). */
+  remoteState?: RemoteTabStateValue;
   topicId: string;
   topicTitle: string;
   sessionPath?: string;
@@ -1547,7 +1550,7 @@ export interface RemoteSessionView {
   pinned?: boolean;
 }
 
-export type RemoteTabStateValue = "connecting" | "ready" | "reconnecting" | "serve_down" | "error";
+export type RemoteTabStateValue = "connecting" | "ready" | "reconnecting" | "serve_down" | "error" | "disconnected";
 
 export interface RemoteTabState {
   state: RemoteTabStateValue;

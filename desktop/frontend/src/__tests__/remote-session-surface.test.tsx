@@ -57,6 +57,10 @@ window.go = { main: { App: {
   async AnswerRemoteTab(tabId: string, callId: string, answer: string) {
     tape.push(`answer:${tabId}:${callId}:${answer}`);
   },
+  async OpenRemoteProjectTab(hostId: string, workspace: string, opts?: { newSession?: boolean }) {
+    tape.push(`open:${hostId}:${workspace}:${opts?.newSession ? "new" : ""}`);
+    return { ...remoteTab, remote: { hostId, workspace } };
+  },
 } as Partial<AppBindings> as AppBindings } };
 
 const [{ createRoot }, { RemoteSessionSurface }, { LocaleProvider }, { useRemoteSession }, { __emitMockRemoteTab }] = await Promise.all([
@@ -171,6 +175,24 @@ await act(async () => {
   const warning = document.querySelector(".remote-surface--warning");
   ok(Boolean(warning), "serve_down renders the warning state");
   ok(warning?.textContent?.includes("tunnel closed") === true, "serve error detail renders");
+}
+
+// ── Restored shell: the disconnected state renders a reconnect affordance
+// whose click reopens the project (fresh blank session) ──
+await act(async () => {
+  __emitMockRemoteTab("tab-remote-1", "state", { state: "disconnected" });
+  await flush();
+});
+{
+  const shell = document.querySelector(".remote-surface--disconnected");
+  ok(Boolean(shell), "disconnected renders the restored-shell state");
+  const reconnect = [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes("Reconnect"));
+  ok(Boolean(reconnect), "the disconnected surface offers a reconnect button");
+  await act(async () => {
+    reconnect?.click();
+    await flush();
+  });
+  ok(tape.includes("open:gpu-box:~/app:new"), "reconnect reopens the project with a fresh session");
 }
 
 await act(async () => root.unmount());

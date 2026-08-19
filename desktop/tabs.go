@@ -2147,14 +2147,18 @@ type wireEventTab struct {
 
 // TabMeta is the frontend-facing shape of one tab.
 type TabMeta struct {
-	ID                string             `json:"id"`
-	Scope             string             `json:"scope"`
-	WorkspaceRoot     string             `json:"workspaceRoot"`
-	WorkspaceName     string             `json:"workspaceName"`
-	WorkspacePath     string             `json:"workspacePath,omitempty"`
-	GitBranch         string             `json:"gitBranch,omitempty"`
-	IsolatedWorktree  bool               `json:"isolatedWorktree,omitempty"`
-	Remote            *RemoteTabRef      `json:"remote,omitempty"`
+	ID               string        `json:"id"`
+	Scope            string        `json:"scope"`
+	WorkspaceRoot    string        `json:"workspaceRoot"`
+	WorkspaceName    string        `json:"workspaceName"`
+	WorkspacePath    string        `json:"workspacePath,omitempty"`
+	GitBranch        string        `json:"gitBranch,omitempty"`
+	IsolatedWorktree bool          `json:"isolatedWorktree,omitempty"`
+	Remote           *RemoteTabRef `json:"remote,omitempty"`
+	// RemoteState carries the remote tab's connection state in metas so a
+	// restored disconnected shell renders its state before any state event
+	// has been emitted this run (remote tabs only).
+	RemoteState       string             `json:"remoteState,omitempty"`
 	TopicID           string             `json:"topicId"`
 	TopicTitle        string             `json:"topicTitle"`
 	SessionPath       string             `json:"sessionPath,omitempty"`
@@ -3077,12 +3081,23 @@ func (a *App) indexedBlankTopicIDLocked(scope, workspaceRoot string) string {
 }
 
 // SetActiveTab switches the frontend's active tab. A no-op when tabID is
-// already active or unknown.
+// already active or unknown. Activating a restored disconnected remote shell
+// also kicks its reconnect bootstrap — the shell lands in a fresh blank
+// session; the tree's session rows switch conversations.
 func (a *App) SetActiveTab(tabID string) error {
 	a.remoteTabMu.Lock()
-	if _, isRemote := a.remoteTabs[tabID]; isRemote {
+	if tab, isRemote := a.remoteTabs[tabID]; isRemote {
 		a.remoteActiveTabID = tabID
+		revive := tab.state == "disconnected"
+		if revive {
+			tab.state = "connecting"
+		}
+		hostID, workspace := tab.ref.HostID, tab.ref.Workspace
 		a.remoteTabMu.Unlock()
+		if revive {
+			a.emitRemoteTabState(tabID, "connecting", "")
+			a.goSafe("remoteTabServe", func() { a.bootstrapRemoteTab(tabID, hostID, workspace) })
+		}
 		return nil
 	}
 	a.remoteActiveTabID = ""
@@ -3139,28 +3154,64 @@ func (a *App) SetActiveTab(tabID string) error {
 	return nil
 }
 
-// ReorderTabs persists the frontend's manual tab order. The submitted order must
-// contain every currently open tab exactly once.
+// ReorderTabs persists the frontend's manual tab order. The submitted order is
+// the full strip — local and remote ids interleaved — so it is partitioned:
+// the local subsequence must cover a.tabs exactly once and rewrites tabOrder;
+// the remote subsequence must cover the remote registry exactly once and
+// rewrites the persisted remote order.
 func (a *App) ReorderTabs(tabIDs []string) error {
+	a.remoteTabMu.Lock()
+	remoteCount := len(a.remoteTabs)
+	a.remoteTabMu.Unlock()
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if len(tabIDs) != len(a.tabs) {
+	if len(tabIDs) != len(a.tabs)+remoteCount {
+		a.mu.Unlock()
 		return fmt.Errorf("tab order length mismatch")
 	}
 	seen := make(map[string]bool, len(tabIDs))
-	next := make([]string, 0, len(tabIDs))
+	next := make([]string, 0, len(a.tabs))
+	nextRemote := make([]string, 0, remoteCount)
 	for _, id := range tabIDs {
-		if _, ok := a.tabs[id]; !ok {
-			return fmt.Errorf("tab %q not found", id)
-		}
 		if seen[id] {
+			a.mu.Unlock()
 			return fmt.Errorf("duplicate tab %q", id)
 		}
 		seen[id] = true
-		next = append(next, id)
+		if _, ok := a.tabs[id]; ok {
+			next = append(next, id)
+		} else {
+			nextRemote = append(nextRemote, id)
+		}
 	}
+	if len(next) != len(a.tabs) {
+		a.mu.Unlock()
+		return fmt.Errorf("tab order is missing local tabs")
+	}
+	// Validate the remote subsequence BEFORE mutating anything: a rejected
+	// order leaves both sides untouched. Brief a.mu → remoteTabMu nesting
+	// matches the save path's lock order.
+	a.remoteTabMu.Lock()
+	remoteOK := len(nextRemote) == len(a.remoteTabs)
+	if remoteOK {
+		for _, id := range nextRemote {
+			if a.remoteTabs[id] == nil {
+				remoteOK = false
+				break
+			}
+		}
+	}
+	if !remoteOK {
+		a.remoteTabMu.Unlock()
+		a.mu.Unlock()
+		return fmt.Errorf("tab order is missing remote tabs")
+	}
+	a.remoteTabOrder = append([]string(nil), nextRemote...)
+	a.remoteTabMu.Unlock()
 	a.tabOrder = next
-	a.saveTabsLocked()
+	dir, entries, activeID, version := a.saveTabsCollectLocked()
+	a.mu.Unlock()
+
+	a.saveTabsWrite(dir, entries, activeID, version)
 	return nil
 }
 
@@ -4907,9 +4958,24 @@ type desktopTabEntry struct {
 	ToolApprovalMode string  `json:"toolApprovalMode,omitempty"`
 }
 
+// desktopRemoteTabEntry persists one open remote tab as a disconnected shell:
+// no session is recorded — clicking the restored shell reconnects and lands
+// in a fresh blank session, and the tree's session rows switch conversations.
+type desktopRemoteTabEntry struct {
+	ID         string `json:"id"`
+	HostID     string `json:"hostId"`
+	Workspace  string `json:"workspace"`
+	TopicTitle string `json:"topicTitle,omitempty"`
+}
+
 type desktopTabsFile struct {
 	Tabs      []desktopTabEntry `json:"tabs"`
 	ActiveTab string            `json:"activeTab"`
+	// RemoteTabs persist alongside local tabs so both survive a restart. No
+	// remote tabs in use ⇒ the keys stay absent and the file is byte-identical
+	// to the pre-remote format.
+	RemoteTabs     []desktopRemoteTabEntry `json:"remoteTabs,omitempty"`
+	RemoteTabOrder []string                `json:"remoteTabOrder,omitempty"`
 }
 
 func singleSurfaceLayoutStyle(style string) bool {
@@ -4922,19 +4988,45 @@ func singleSurfaceLayoutStyle(style string) bool {
 }
 
 func singleSurfaceTabsFile(f desktopTabsFile) desktopTabsFile {
-	if len(f.Tabs) <= 1 {
+	if len(f.Tabs) <= 1 && len(f.RemoteTabs) <= 1 {
 		return f
 	}
-	chosen := f.Tabs[0]
-	if active := strings.TrimSpace(f.ActiveTab); active != "" {
-		for _, entry := range f.Tabs {
-			if entry.ID == active {
-				chosen = entry
-				break
+	active := strings.TrimSpace(f.ActiveTab)
+	var out desktopTabsFile
+	if len(f.Tabs) > 0 {
+		chosen := f.Tabs[0]
+		if active != "" {
+			for _, entry := range f.Tabs {
+				if entry.ID == active {
+					chosen = entry
+					break
+				}
 			}
 		}
+		out = desktopTabsFile{Tabs: []desktopTabEntry{chosen}, ActiveTab: chosen.ID}
+	} else {
+		out = desktopTabsFile{ActiveTab: active}
 	}
-	return desktopTabsFile{Tabs: []desktopTabEntry{chosen}, ActiveTab: chosen.ID}
+	// Remote shells collapse the same way: at most one survives, the active
+	// one when the last visible surface was remote (ActiveTab then stays the
+	// remote id — restore routes it to the remote registry).
+	if len(f.RemoteTabs) > 0 {
+		remoteChosen := f.RemoteTabs[0]
+		if active != "" {
+			for _, entry := range f.RemoteTabs {
+				if entry.ID == active {
+					remoteChosen = entry
+					break
+				}
+			}
+		}
+		out.RemoteTabs = []desktopRemoteTabEntry{remoteChosen}
+		out.RemoteTabOrder = []string{remoteChosen.ID}
+		if active == remoteChosen.ID {
+			out.ActiveTab = remoteChosen.ID
+		}
+	}
+	return out
 }
 
 func desktopConfigDir() string {
@@ -4978,7 +5070,9 @@ func (a *App) saveTabsCollectLocked() (string, []desktopTabEntry, string, uint64
 
 // saveTabsWrite writes the tab-snapshot to disk. It does not require a.mu, but
 // writes must be serialized because every save uses the same destination and
-// fixed .tmp path.
+// fixed .tmp path. Remote tab entries join the snapshot here (under
+// remoteTabMu — lock order a.mu → tabsSaveMu → remoteTabMu, so no remote-tab
+// critical section may call back into the save path while held).
 func (a *App) saveTabsWrite(dir string, entries []desktopTabEntry, activeID string, version uint64) {
 	a.tabsSaveMu.Lock()
 	defer a.tabsSaveMu.Unlock()
@@ -4989,7 +5083,11 @@ func (a *App) saveTabsWrite(dir string, entries []desktopTabEntry, activeID stri
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
-	f := desktopTabsFile{Tabs: entries, ActiveTab: activeID}
+	remoteEntries, remoteOrder, remoteActive := a.remoteTabsFileEntries()
+	if remoteActive != "" {
+		activeID = remoteActive
+	}
+	f := desktopTabsFile{Tabs: entries, ActiveTab: activeID, RemoteTabs: remoteEntries, RemoteTabOrder: remoteOrder}
 	b, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return
@@ -5003,6 +5101,16 @@ func (a *App) saveTabsWrite(dir string, entries []desktopTabEntry, activeID stri
 		return
 	}
 	a.tabsLastWrittenVersion = version
+}
+
+// saveTabsFromRemote persists the tab file after a remote-tab-only change
+// (open, close, title refresh). It must be called WITHOUT remoteTabMu held:
+// the collect phase takes a.mu and the write phase re-acquires remoteTabMu.
+func (a *App) saveTabsFromRemote() {
+	a.mu.Lock()
+	dir, entries, activeID, version := a.saveTabsCollectLocked()
+	a.mu.Unlock()
+	a.saveTabsWrite(dir, entries, activeID, version)
 }
 
 func (a *App) orderedTabIDsLocked() []string {

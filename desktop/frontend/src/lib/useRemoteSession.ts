@@ -24,8 +24,8 @@ export interface RemoteSessionApi {
   answer: (callId: string, value: string) => Promise<void>;
 }
 
-export function useRemoteSession(tabId: string | undefined): RemoteSessionApi {
-  const [state, setState] = useState<RemoteTabStateValue>("connecting");
+export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabStateValue): RemoteSessionApi {
+  const [state, setState] = useState<RemoteTabStateValue>(initial ?? "connecting");
   const [error, setError] = useState("");
   const [transcript, setTranscript] = useState<State>(initialState);
   const [modelLabel, setModelLabel] = useState("");
@@ -34,12 +34,19 @@ export function useRemoteSession(tabId: string | undefined): RemoteSessionApi {
 
   useEffect(() => {
     if (!tabId) return;
-    setState("connecting");
+    // A restored disconnected shell seeds its state from the meta; live state
+    // then flows through remote-tab:{id}:state events once a connect begins.
+    const start = initial ?? "connecting";
+    setState(start);
     setError("")
     setTranscript(initialState)
     hydratedRef.current = false;
     setHydrated(false);
     let cancelled = false;
+    // Never start the snapshot retry loop on a shell with no connection: the
+    // ready transition triggers the first hydration instead. (initial is
+    // deliberately not a dependency — only the mount-time snapshot matters.)
+    const skipHydrate = start === "disconnected";
 
     // Hydrate from the snapshot; retry through the connecting window so a
     // late backend never leaves the surface empty. A forced run re-syncs
@@ -70,7 +77,7 @@ export function useRemoteSession(tabId: string | undefined): RemoteSessionApi {
         }
       }
     };
-    void hydrateLoop();
+    if (!skipHydrate) void hydrateLoop();
 
     const offState = onRemoteTabState(tabId, (s) => {
       if (cancelled) return;
