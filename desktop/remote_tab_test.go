@@ -193,6 +193,14 @@ func (l *eventLog) add(name string, payload any) {
 	l.mu.Unlock()
 }
 
+func (l *eventLog) recorded() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]string, len(l.events))
+	copy(out, l.events)
+	return out
+}
+
 func (l *eventLog) count(prefix string) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -685,5 +693,95 @@ func TestListTabsIncludesRemoteEntries(t *testing.T) {
 	a.remoteTabMu.Unlock()
 	if present {
 		t.Fatal("CloseTabWithPolicy left the remote tab registered")
+	}
+}
+
+// TestRemoteTabTitleAdoptsServeSession pins the title pipeline: the serve's
+// LLM-generated title for the current session replaces the workspace-name
+// default and reaches the chrome through the tab-opened channel.
+func TestRemoteTabTitleAdoptsServeSession(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "s1", Path: "/x.jsonl", Title: "Fix the login bug", Turns: 1, Current: true},
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+	log.mu.Lock()
+	log.events = nil
+	log.mu.Unlock()
+
+	a.refreshRemoteTabTitle(meta.ID)
+
+	a.remoteTabMu.Lock()
+	title := a.remoteTabs[meta.ID].topicTitle
+	a.remoteTabMu.Unlock()
+	if title != "Fix the login bug" {
+		t.Fatalf("topicTitle = %q, want the serve title", title)
+	}
+	found := false
+	for _, e := range log.recorded() {
+		if strings.HasPrefix(e, "remote-tab:opened ") && strings.Contains(e, meta.ID) && strings.Contains(e, "Fix the login bug") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("title refresh not pushed to the chrome: %v", log.recorded())
+	}
+	for _, tab := range a.ListTabs() {
+		if tab.ID == meta.ID && tab.TopicTitle != "Fix the login bug" {
+			t.Fatalf("ListTabs title = %q", tab.TopicTitle)
+		}
+	}
+}
+
+// TestRemoteTabNewSessionResetsServeSession: a NewSession open on an
+// existing tab POSTs /new (the old session stays in the history list) and
+// re-emits ready so the frontend re-syncs its snapshot.
+func TestRemoteTabNewSessionResetsServeSession(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+	readyBefore := log.count("remote-tab:" + meta.ID + ":state {\"state\":\"ready\"")
+
+	a.remoteTabMu.Lock()
+	a.remoteTabs[meta.ID].topicTitle = "stale title"
+	a.remoteTabMu.Unlock()
+	if _, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{NewSession: true}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if log.count("remote-tab:"+meta.ID+":state {\"state\":\"ready\"") > readyBefore {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reset did not re-emit the ready state")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	newCount, _, _ := fs.snapshot()
+	if newCount < 2 {
+		t.Fatalf("POST /new called %d times, want bootstrap + reset", newCount)
+	}
+	a.remoteTabMu.Lock()
+	title := a.remoteTabs[meta.ID].topicTitle
+	a.remoteTabMu.Unlock()
+	if title != "app" {
+		t.Fatalf("topicTitle after reset = %q, want the workspace name", title)
 	}
 }

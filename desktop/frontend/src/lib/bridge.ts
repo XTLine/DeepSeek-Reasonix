@@ -5694,8 +5694,17 @@ function makeMockApp(): AppBindings {
     async ListRemoteProjects() {
       return mockRemoteProjects.slice();
     },
-    async OpenRemoteProjectTab(hostId: string, workspace: string) {
+    async OpenRemoteProjectTab(hostId: string, workspace: string, opts?: { newSession?: boolean; sessionName?: string }) {
       const tabId = `remote-mock-${hostId}-${workspace}`.replace(/[^a-z0-9-]/gi, "_");
+      const existing = mockRemoteTabs.find((item) => item.id === tabId);
+      if (existing && opts?.newSession) {
+        // A new-session open on a live tab starts a fresh serve session:
+        // the old one stays in the history list, the tab re-syncs empty.
+        existing.topicTitle = existing.workspaceName;
+        __emitMockRemoteTab(tabId, "state", { state: "ready" });
+        __emitMockRemote("remote-tab-opened", { ...existing });
+        return { ...existing };
+      }
       __emitMockRemoteTab(tabId, "state", { state: "ready" });
       const meta = {
         id: tabId,
@@ -5716,7 +5725,9 @@ function makeMockApp(): AppBindings {
       return meta;
     },
     async RemoteProjectSessions() {
-      return [];
+      return [
+        { name: "intro", title: "远程会话演示 / Remote demo session", turns: 2, current: true },
+      ];
     },
     async DeleteRemoteProjectSession() {},
     async CloseRemoteTab() {},
@@ -5726,6 +5737,15 @@ function makeMockApp(): AppBindings {
       setTimeout(() => __emitMockRemoteTab(tabId, "event", { kind: "reasoning", reasoning: "mock thinking" }), 350);
       setTimeout(() => __emitMockRemoteTab(tabId, "event", { kind: "text", text: `Echo: ${text}` }), 650);
       setTimeout(() => __emitMockRemoteTab(tabId, "event", { kind: "turn_done" }), 950);
+      // The serve generates a session title from the finished turn; mirror
+      // that so the strip title updates like the real backend does.
+      setTimeout(() => {
+        const title = `关于 ${text.trim().slice(0, 16)}`;
+        const updated = mockRemoteTabs.find((item) => item.id === tabId);
+        if (!updated) return;
+        updated.topicTitle = title;
+        __emitMockRemote("remote-tab-opened", { ...updated });
+      }, 1400);
     },
     async CancelRemoteTab() {},
     async ApproveRemoteTab() {},
@@ -5774,9 +5794,28 @@ function mockRemoteHostView(id: string, input: RemoteHostInput, previous?: Remot
 let mockRemoteHosts: RemoteHostView[] = [
   { id: "demo", label: "demo", host: "192.168.1.10", port: 22, user: "dev", identityFile: "", proxyJump: "", defaultWorkspace: "~/app", serveInstall: "auto", useSSHConfig: false },
 ];
-let mockRemoteProjects: RemoteProjectView[] = [];
+let mockRemoteProjects: RemoteProjectView[] = [
+  // Demo preseed: a cloud project is present without walking the wizard.
+  { hostId: "demo", workspace: "~/app" },
+];
 // Open remote tabs in the browser dev mock; mirrors the Go registry merge
 // in ListTabs (a highlighted remote tab deactivates the local entries).
-let mockRemoteTabs: TabMeta[] = [];
-const mockRemoteConn: Record<string, RemoteConnectionStatus["state"]> = {};
+let mockRemoteTabs: TabMeta[] = [
+  {
+    id: "remote-demo-tab",
+    scope: "project",
+    workspaceRoot: "~/app",
+    workspaceName: "app",
+    topicId: "",
+    topicTitle: "app",
+    label: "demo",
+    ready: true,
+    running: false,
+    mode: "normal",
+    active: false,
+    cwd: "~/app",
+    remote: { hostId: "demo", workspace: "~/app" },
+  },
+];
+const mockRemoteConn: Record<string, RemoteConnectionStatus["state"]> = { demo: "connected" };
 const mockRemoteForwards: Record<string, RemoteForwardView[]> = {};

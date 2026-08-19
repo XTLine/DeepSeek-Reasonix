@@ -2447,7 +2447,9 @@ export default function App() {
     const off = onRemoteTabOpened((meta) => {
       if (!meta?.id || !meta.remote) return;
       seedActiveTabMeta(meta);
-      void switchTab(meta.id, meta);
+      // Title refreshes ride the same channel; only an inactive tab needs
+      // the switch — re-switching the active one would churn the surface.
+      if (activeTabIdRef.current !== meta.id) void switchTab(meta.id, meta);
     });
     return off;
   }, [seedActiveTabMeta, switchTab]);

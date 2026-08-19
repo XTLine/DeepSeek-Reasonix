@@ -48,6 +48,10 @@ type remoteTab struct {
 	newSession  bool
 	sessionName string
 	hostLabel   string
+	// topicTitle starts as the workspace name; the serve's LLM-generated
+	// session title replaces it after a turn completes.
+	topicTitle           string
+	titleRefreshInFlight bool
 
 	// Bridge fields, mutated under App.remoteTabMu. client keeps the serve
 	// session cookie in its jar across reconnects; token is retained for a
@@ -167,6 +171,9 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 	}
 	a.remoteTabMu.Unlock()
 	if reuse != nil {
+		if opts.NewSession {
+			a.resetRemoteTabSession(reuse.id)
+		}
 		meta := remoteTabMeta(reuse, host.Name)
 		a.activateRemoteTab(reuse.id, meta)
 		return meta, nil
@@ -174,7 +181,7 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 
 	ref := RemoteTabRef{HostID: hostID, Workspace: workspace}
 	tabID := newTabID()
-	tab := &remoteTab{id: tabID, ref: ref, state: "connecting", newSession: opts.NewSession, sessionName: opts.SessionName, hostLabel: host.Name}
+	tab := &remoteTab{id: tabID, ref: ref, state: "connecting", newSession: opts.NewSession, sessionName: opts.SessionName, hostLabel: host.Name, topicTitle: remoteWorkspaceName(workspace)}
 	a.remoteTabMu.Lock()
 	if a.remoteTabs == nil {
 		a.remoteTabs = map[string]*remoteTab{}
@@ -214,7 +221,7 @@ func remoteTabMeta(tab *remoteTab, hostLabel string) TabMeta {
 		Scope:         "project",
 		WorkspaceRoot: tab.ref.Workspace,
 		WorkspaceName: remoteWorkspaceName(tab.ref.Workspace),
-		TopicTitle:    remoteWorkspaceName(tab.ref.Workspace),
+		TopicTitle:    tab.topicTitle,
 		Label:         hostLabel,
 		Mode:          "normal",
 		Active:        true,

@@ -116,6 +116,15 @@ await act(async () => {
 });
 ok(document.body.textContent?.includes("streaming answer") === true, "serve text frames render through the local transcript pipeline");
 ok(document.body.textContent?.includes("thinking hard") === true, "reasoning renders through the local pipeline");
+{
+  const snapshotsBefore = tape.filter((entry) => entry.startsWith("snapshot:")).length;
+  await act(async () => {
+    __emitMockRemoteTab("tab-remote-1", "state", { state: "ready" });
+    await flush();
+  });
+  ok(tape.filter((entry) => entry.startsWith("snapshot:")).length > snapshotsBefore, "a ready transition re-syncs the snapshot (session reset / reconnect path)");
+}
+ok(!document.body.textContent?.includes("streaming answer"), "the re-synced snapshot replaces the old session content")
 
 await act(async () => {
   __emitMockRemoteTab("tab-remote-1", "event", { kind: "turn_done" });

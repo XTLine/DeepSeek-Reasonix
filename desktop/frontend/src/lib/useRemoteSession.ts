@@ -39,8 +39,17 @@ export function useRemoteSession(tabId: string | undefined): RemoteSessionApi {
     let cancelled = false;
 
     // Hydrate from the snapshot; retry through the connecting window so a
-    // late backend never leaves the surface empty.
-    const hydrate = async () => {
+    // late backend never leaves the surface empty. A forced run re-syncs
+    // after a session reset or a reconnect: the snapshot reflects whatever
+    // session the serve now holds.
+    const hydrate = (force = false) => {
+      if (force) {
+        hydratedRef.current = false;
+        setHydrated(false);
+      }
+      return hydrateLoop();
+    };
+    const hydrateLoop = async () => {
       for (let attempt = 0; attempt < 60 && !cancelled && !hydratedRef.current; attempt++) {
         try {
           const snap = await app.RemoteTabSnapshot(tabId);
@@ -56,13 +65,13 @@ export function useRemoteSession(tabId: string | undefined): RemoteSessionApi {
         }
       }
     };
-    void hydrate();
+    void hydrateLoop();
 
     const offState = onRemoteTabState(tabId, (s) => {
       if (cancelled) return;
       setState(s.state);
       setError(s.error ?? "");
-      if (s.state === "ready" && !hydratedRef.current) void hydrate();
+      if (s.state === "ready") void hydrate(true);
     });
     const offEvent = onRemoteTabEvent(tabId, (raw) => {
       if (cancelled) return;

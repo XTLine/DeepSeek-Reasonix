@@ -78,5 +78,19 @@ ok(
   "the shared Composer cancels the remote turn on remote tabs",
 );
 
+const bridgeSource = readFileSync(resolve(here, "../lib/bridge.ts"), "utf8");
+ok(
+  /mockRemoteProjects: RemoteProjectView\[\] = \[\s*\/\/ Demo preseed[\s\S]*?hostId: "demo"/.test(bridgeSource),
+  "the mock preseeds a demo remote project",
+);
+ok(
+  /const mockRemoteConn: Record<string, RemoteConnectionStatus\["state"\]> = \{ demo: "connected" \}/.test(bridgeSource),
+  "the mock reports the demo host connected at startup",
+);
+ok(
+  /id: "remote-demo-tab"/.test(bridgeSource),
+  "the mock preseeds an open demo remote tab",
+);
+
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

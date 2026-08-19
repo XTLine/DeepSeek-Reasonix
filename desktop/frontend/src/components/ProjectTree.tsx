@@ -605,6 +605,14 @@ export function ProjectTree({
 
   // Remote groups list their serve sessions while the host is connected.
   const remoteStatuses = useRemoteStore((s) => s.statuses);
+  const remoteStatusesSeededRef = useRef(false);
+  useEffect(() => {
+    if (remoteStatusesSeededRef.current) return;
+    remoteStatusesSeededRef.current = true;
+    void app.RemoteConnectionStatuses()
+      .then((list) => useRemoteStore.getState().hydrateStatuses(asArray(list)))
+      .catch(() => {});
+  }, []);
   const [remoteSessions, setRemoteSessions] = useState<Record<string, RemoteSessionView[]>>({});
   const remoteGroupKeys = useMemo(() => {
     const keys: string[] = [];

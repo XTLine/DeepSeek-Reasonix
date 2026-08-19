@@ -160,6 +160,17 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64) {
 			continue
 		}
 		a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:event", tabID), json.RawMessage(frame))
+		var probe struct {
+			Kind string `json:"kind"`
+		}
+		if json.Unmarshal([]byte(frame), &probe) == nil && probe.Kind == "turn_done" {
+			// The serve generates the session title from the finished
+			// conversation; pick it up shortly after the turn settles.
+			a.goSafe("remoteTabTitle", func() {
+				time.Sleep(1500 * time.Millisecond)
+				a.refreshRemoteTabTitle(tabID)
+			})
+		}
 	}
 	// The stream died without an explicit stop: only the current generation
 	// reacts. Treat it as a transient serve/tunnel drop, flag reconnecting,
@@ -570,6 +581,86 @@ func (a *App) RemoteTabBranches(tabID string) (json.RawMessage, error) {
 // RemoteTabSkills returns the remote host's discoverable skills.
 func (a *App) RemoteTabSkills(tabID string) (json.RawMessage, error) {
 	return a.remoteTabGet(tabID, "/skills")
+}
+
+// refreshRemoteTabTitle adopts the serve's LLM-generated title for the
+// current session. The previous title survives in the session history; a
+// changed title is pushed to the frontend through the tab-opened channel,
+// which the chrome merges into the existing strip entry.
+func (a *App) refreshRemoteTabTitle(tabID string) {
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil || tab.titleRefreshInFlight || tab.client == nil {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	tab.titleRefreshInFlight = true
+	client, base := tab.client, tab.base
+	a.remoteTabMu.Unlock()
+	defer func() {
+		a.remoteTabMu.Lock()
+		if tab := a.remoteTabs[tabID]; tab != nil {
+			tab.titleRefreshInFlight = false
+		}
+		a.remoteTabMu.Unlock()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	entries, err := serveSessions(ctx, client, base)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.Current {
+			continue
+		}
+		title := strings.TrimSpace(entry.Title)
+		if title == "" {
+			return
+		}
+		a.remoteTabMu.Lock()
+		changed := tab.topicTitle != title
+		if changed {
+			tab.topicTitle = title
+		}
+		a.remoteTabMu.Unlock()
+		if changed {
+			a.emitRemoteEvent("remote-tab:opened", remoteTabMeta(tab, tab.hostLabel))
+		}
+		return
+	}
+}
+
+// resetRemoteTabSession starts a fresh serve session in an existing tab:
+// the previous session stays in the remote history list, the tab switches
+// to the new (empty) one, and the ready state tells the frontend to
+// re-sync its snapshot.
+func (a *App) resetRemoteTabSession(tabID string) {
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	if tab.client == nil {
+		// Bootstrap still in flight: enter a fresh session when it lands.
+		tab.newSession = true
+		tab.sessionName = ""
+		a.remoteTabMu.Unlock()
+		return
+	}
+	client, base := tab.client, tab.base
+	tab.topicTitle = remoteWorkspaceName(tab.ref.Workspace)
+	a.remoteTabMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := servePost(ctx, client, base+"/new", nil); err != nil {
+		a.emitRemoteTabState(tabID, "error", err.Error())
+		return
+	}
+	a.emitRemoteTabState(tabID, "ready", "")
 }
 
 // remoteTabMetas returns chrome metas for every open remote tab plus the
