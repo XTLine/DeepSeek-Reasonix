@@ -517,6 +517,9 @@ export interface ProjectNode {
   isolatedWorktree?: boolean;
   /** Present ⇒ remote project group; drives the cloud badge on the folder row. */
   remote?: RemoteTabRefView;
+  /** Present ⇒ a remote serve session synthesized as a topic row; actions
+   *  route to the remote bindings instead of the local topic machinery. */
+  remoteSession?: { hostId: string; workspace: string; name: string };
   children?: ProjectNode[];
 }
 
@@ -1539,6 +1542,9 @@ export interface RemoteSessionView {
   title: string;
   turns: number;
   current?: boolean;
+  /** Unix ms, same unit as ProjectNode.lastActivityAt. */
+  lastActivityAt?: number;
+  pinned?: boolean;
 }
 
 export type RemoteTabStateValue = "connecting" | "ready" | "reconnecting" | "serve_down" | "error";

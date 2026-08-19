@@ -4,7 +4,8 @@ import { JSDOM } from "jsdom";
 import React from "react";
 import { act } from "react";
 
-import type { AppBindings, TabMeta } from "../lib/bridge";
+import type { AppBindings } from "../lib/bridge";
+import type { TabMeta } from "../lib/types";
 import type { RemoteSessionApi } from "../lib/useRemoteSession";
 
 let passed = 0;
@@ -42,7 +43,7 @@ const tape: string[] = [];
 window.go = { main: { App: {
   async RemoteTabSnapshot(tabId: string) {
     tape.push(`snapshot:${tabId}`);
-    return { history: [] };
+    return { history: [], status: { label: "DeepSeek · Mock" } };
   },
   async SubmitRemoteTab(tabId: string, text: string) {
     tape.push(`submit:${tabId}:${text}`);

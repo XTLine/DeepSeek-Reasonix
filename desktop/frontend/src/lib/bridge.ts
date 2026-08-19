@@ -668,6 +668,9 @@ export interface AppBindings extends SessionCatalogBindings, HistoryCatalogBindi
   ListRemoteProjects(): Promise<RemoteProjectView[]>;
   OpenRemoteProjectTab(hostId: string, workspace: string, opts: RemoteTabOpenOptions): Promise<TabMeta>;
   RemoteProjectSessions(hostId: string, workspace: string): Promise<RemoteSessionView[]>;
+  SetRemoteSessionPinned(hostId: string, workspace: string, name: string, pinned: boolean): Promise<void>;
+  SetRemoteProjectTitle(hostId: string, workspace: string, title: string): Promise<void>;
+  RenameRemoteProjectSession(hostId: string, workspace: string, name: string, title: string): Promise<void>;
   DeleteRemoteProjectSession(hostId: string, workspace: string, name: string): Promise<void>;
   CloseRemoteTab(tabId: string): Promise<void>;
   SubmitRemoteTab(tabId: string, text: string): Promise<void>;
@@ -2076,6 +2079,11 @@ function makeMockApp(): AppBindings {
     });
     return out;
   };
+  // Seed the demo remote session with a real conversation history so the
+  // surface hydrates like a local topic does.
+  mockRemoteSessionList["demo\u0000~/app"] = [
+    { name: "intro", title: "远程会话演示 / Remote demo session", turns: 18, current: true, lastActivityAt: Date.now() - 45 * 60 * 1000, history: mockLongTranscriptHistory() },
+  ];
   // Benchmark fixtures (?mock=bench) live in a lazily imported module: the
   // generators build ~1MiB of mock content and must stay out of the eager
   // bundle (initial-chunk gzip budget). See bridgeBenchFixtures.ts.
@@ -3321,7 +3329,8 @@ function makeMockApp(): AppBindings {
           return [];
         },
         async HistoryForTab(tabID?: string) {
-          const tab = mockTabs.find((item) => item.id === tabID) ?? mockTabs.find((item) => item.active);
+          const tab = mockTabs.find((item) => item.id === tabID);
+          if (!tab) return [];
           if (tab?.topicId) {
             queueMockTopicRuntime(tab);
             if (benchFixturesPromise) {
@@ -4271,6 +4280,11 @@ function makeMockApp(): AppBindings {
           return mockModelCatalog.map((model) => ({ ...model, current: model.ref === current }));
         },
         async ModelsForTab(tabID) {
+          const remoteTab = mockRemoteTabs.find((item) => item.id === tabID);
+          if (remoteTab) {
+            const remoteCurrent = mockModelRef(remoteTab.label ?? "");
+            return mockModelCatalog.map((model) => ({ ...model, current: model.ref === remoteCurrent }));
+          }
           const tab = mockTabs.find((item) => item.id === tabID) ?? mockTabs.find((item) => item.active) ?? mockTabs[0];
           const current = mockTabModelRef(tab);
           return mockModelCatalog.map((model) => ({ ...model, current: model.ref === current }));
@@ -5263,6 +5277,7 @@ function makeMockApp(): AppBindings {
     async SetActiveTab(tabID: string) {
       if (mockRemoteTabs.some((item) => item.id === tabID)) {
         mockRemoteTabs = mockRemoteTabs.map((item) => ({ ...item, active: item.id === tabID }));
+        mockTabs = mockTabs.map((item) => ({ ...item, active: false }));
         return;
       }
       mockRemoteTabs = mockRemoteTabs.map((item) => ({ ...item, active: false }));
@@ -5697,10 +5712,49 @@ function makeMockApp(): AppBindings {
     async OpenRemoteProjectTab(hostId: string, workspace: string, opts?: { newSession?: boolean; sessionName?: string }) {
       const tabId = `remote-mock-${hostId}-${workspace}`.replace(/[^a-z0-9-]/gi, "_");
       const existing = mockRemoteTabs.find((item) => item.id === tabId);
+      if (existing && (opts?.sessionName || opts?.newSession)) {
+        // Session changes serialize with the running turn on the serve
+        // (bindMu + Resume): the in-flight stream stops here too.
+        remoteMockCancelled = true;
+      }
+      if (existing && opts?.sessionName) {
+        // Resuming a listed session: it becomes the serve's current session
+        // and any pending blank entry is superseded.
+        const groupKey = `${hostId}\u0000${workspace}`;
+        const rows = mockRemoteSessionList[groupKey] ?? [];
+        mockRemoteSessionList[groupKey] = rows.filter((entry) => entry.name !== "");
+        for (const row of mockRemoteSessionList[groupKey]) row.current = row.name === opts.sessionName;
+        const row = rows.find((entry) => entry.name === opts.sessionName);
+        existing.topicTitle = row?.title || existing.workspaceName;
+        __emitMockRemoteTab(tabId, "state", { state: "ready" });
+        __emitMockRemote("remote-tab-opened", { ...existing });
+        return { ...existing };
+      }
       if (existing && opts?.newSession) {
-        // A new-session open on a live tab starts a fresh serve session:
-        // the old one stays in the history list, the tab re-syncs empty.
-        existing.topicTitle = existing.workspaceName;
+        const groupKey = `${hostId}\u0000${workspace}`;
+        const rows = mockRemoteSessionList[groupKey] ?? [];
+        const blank = rows.find((row) => row.current && row.name === "");
+        if (blank) {
+          // The pending blank is still contentless — reuse it like the
+          // backend's sessionReset guard; no second POST /new.
+          existing.topicTitle = "新的会话";
+          __emitMockRemoteTab(tabId, "state", { state: "ready" });
+          __emitMockRemote("remote-tab-opened", { ...existing });
+          return { ...existing };
+        }
+        // Start a fresh serve session: the old one stays in the history
+        // list (no longer current) and the blank row comes from the
+        // listing, exactly like the Go merge.
+        existing.topicTitle = "新的会话";
+        for (const row of rows) row.current = false;
+        rows.unshift({ name: "", title: "新的会话", turns: 0, current: true, lastActivityAt: Date.now() });
+        mockRemoteSessionList[groupKey] = rows;
+        __emitMockRemoteTab(tabId, "state", { state: "ready" });
+        __emitMockRemote("remote-tab-opened", { ...existing });
+        return { ...existing };
+      }
+      if (existing) {
+        // Focus-only open: activate the existing tab, no session change.
         __emitMockRemoteTab(tabId, "state", { state: "ready" });
         __emitMockRemote("remote-tab-opened", { ...existing });
         return { ...existing };
@@ -5712,8 +5766,8 @@ function makeMockApp(): AppBindings {
         workspaceRoot: workspace,
         workspaceName: workspace.split("/").filter(Boolean).pop() ?? workspace,
         topicId: "",
-        topicTitle: `${hostId}:${workspace}`,
-        label: `${hostId}:${workspace}`,
+        topicTitle: workspace.split("/").filter(Boolean).pop() ?? workspace,
+        label: "deepseek-v4-flash",
         ready: true,
         running: false,
         mode: "normal",
@@ -5724,19 +5778,103 @@ function makeMockApp(): AppBindings {
       __emitMockRemote("remote-tab-opened", meta);
       return meta;
     },
-    async RemoteProjectSessions() {
-      return [
-        { name: "intro", title: "远程会话演示 / Remote demo session", turns: 2, current: true },
-      ];
+    async RemoteProjectSessions(hostId: string, workspace: string) {
+      const groupKey = `${hostId}\u0000${workspace}`;
+      const rows = mockRemoteSessionList[groupKey] ?? [];
+      return rows.map((entry) => {
+        const override = mockRemoteSessionTitles[`${hostId}\u0000${workspace}\u0000${entry.name}`];
+        return { ...entry, title: override ?? entry.title };
+      });
     },
-    async DeleteRemoteProjectSession() {},
+    async SetRemoteSessionPinned(hostId: string, workspace: string, name: string, pinned: boolean) {
+      const rows = mockRemoteSessionList[`${hostId}\u0000${workspace}`] ?? [];
+      const row = rows.find((entry) => entry.name === name);
+      if (row) row.pinned = pinned;
+    },
+    async SetRemoteProjectTitle(hostId: string, workspace: string, title: string) {
+      const project = mockRemoteProjects.find((entry) => entry.hostId === hostId && entry.workspace === workspace);
+      if (project) project.title = title.trim() || undefined;
+    },
+    async RenameRemoteProjectSession(hostId: string, workspace: string, name: string, title: string) {
+      const key = `${hostId}\u0000${workspace}\u0000${name}`;
+      if (title.trim() === "") delete mockRemoteSessionTitles[key];
+      else mockRemoteSessionTitles[key] = title.trim();
+      const row = (mockRemoteSessionList[`${hostId}\u0000${workspace}`] ?? []).find((entry) => entry.name === name);
+      if (row) row.title = title.trim();
+      const tab = mockRemoteTabs.find((item) => item.remote?.hostId === hostId && item.remote?.workspace === workspace);
+      if (tab && row?.current) {
+        tab.topicTitle = title.trim() || tab.workspaceName;
+        __emitMockRemote("remote-tab-opened", { ...tab });
+      }
+    },
+    async DeleteRemoteProjectSession(hostId: string, workspace: string, name: string) {
+      const groupKey = `${hostId}\u0000${workspace}`;
+      mockRemoteSessionList[groupKey] = (mockRemoteSessionList[groupKey] ?? []).filter((entry) => entry.name !== name);
+    },
     async CloseRemoteTab() {},
     async SubmitRemoteTab(tabId: string, text: string) {
-      // Canned turn so the browser demo streams like a real session.
-      setTimeout(() => __emitMockRemoteTab(tabId, "event", { kind: "turn_started" }), 100);
-      setTimeout(() => __emitMockRemoteTab(tabId, "event", { kind: "reasoning", reasoning: "mock thinking" }), 350);
-      setTimeout(() => __emitMockRemoteTab(tabId, "event", { kind: "text", text: `Echo: ${text}` }), 650);
-      setTimeout(() => __emitMockRemoteTab(tabId, "event", { kind: "turn_done" }), 950);
+      // Same canned script as the local Submit fallback: the remote surface
+      // runs the same reducer, so reasoning folding, tool cards, and the
+      // usage line render identically. The serve's /submit answers 202 and
+      // streams afterwards — resolve immediately, run the script in the
+      // background so the composer draft clears like a local send.
+      remoteMockCancelled = false;
+      const script = async () => {
+      const send = (frame: Record<string, unknown>) => __emitMockRemoteTab(tabId, "event", frame);
+      send({ kind: "turn_started" });
+      await delay(700);
+      if (remoteMockCancelled) return;
+      const reasoningChunks = [
+        "我先判断这是浏览器预览环境，所以不会调用真实 kernel。\n",
+        "接着模拟 provider 的 reasoning delta：先展示思考过程，再切到正式回复。\n",
+        "完成后前端应该把过程区折叠成“已工作 N 秒”。\n",
+      ];
+      for (const chunk of reasoningChunks) {
+        if (remoteMockCancelled) return;
+        send({ kind: "reasoning", reasoning: chunk });
+        await delay(520);
+      }
+      if (remoteMockCancelled) return;
+      await delay(260);
+      const reply =
+        `You said: **${text}**\n\n` +
+        "This is the browser dev mock — the real reply comes from the serve " +
+        "inside the Wails shell. Here's a fenced block to exercise the editor seam:\n\n" +
+        "```go\nfunc main() {\n    println(\"hello from the mock\")\n}\n```\n";
+      for (const ch of reply) {
+        if (remoteMockCancelled) break;
+        send({ kind: "text", text: ch });
+        await delay(6);
+      }
+      send({ kind: "message", text: reply });
+      send({
+        kind: "tool_dispatch",
+        tool: {
+          id: "t1",
+          name: "edit_file",
+          args: '{"path":"main.go","old_string":"println(\\\"hi\\\")","new_string":"println(\\\"hello\\\")"}',
+          readOnly: false,
+        },
+      });
+      await delay(350);
+      if (remoteMockCancelled) return;
+      send({
+        kind: "tool_result",
+        tool: { id: "t1", name: "edit_file", output: "edited main.go", readOnly: false, durationMs: 350 },
+      });
+      send({
+        kind: "usage",
+        usage: {
+          promptTokens: 1280,
+          completionTokens: 64,
+          totalTokens: 1344,
+          cacheHitTokens: 1024,
+          cacheMissTokens: 256,
+          sessionCacheHitTokens: 1024,
+          sessionCacheMissTokens: 256,
+        },
+      });
+      send({ kind: "turn_done" });
       // The serve generates a session title from the finished turn; mirror
       // that so the strip title updates like the real backend does.
       setTimeout(() => {
@@ -5744,18 +5882,52 @@ function makeMockApp(): AppBindings {
         const updated = mockRemoteTabs.find((item) => item.id === tabId);
         if (!updated) return;
         updated.topicTitle = title;
+        const groupKey = `${updated.remote?.hostId ?? ""}\u0000${updated.remote?.workspace ?? ""}`;
+        let rows = mockRemoteSessionList[groupKey];
+        if (!rows) rows = mockRemoteSessionList[groupKey] = [];
+        let row = rows.find((entry) => entry.current);
+        if (!row) {
+          // The blank session earns its listing entry with the first turn,
+          // like the serve writing the session file.
+          for (const entry of rows) entry.current = false;
+          row = { name: `s-${rows.length + 1}`, title: "", turns: 0, current: true, lastActivityAt: Date.now() };
+          rows.push(row);
+        } else if (row.name === "") {
+          // Replace the desktop-view blank with its named serve entry.
+          row.name = `s-${rows.length + 1}`;
+        }
+        row.turns += 1;
+        row.lastActivityAt = Date.now();
+        row.title = title;
+        row.history = [...(row.history ?? []), { role: "user", content: text }, { role: "assistant", content: reply }];
         __emitMockRemote("remote-tab-opened", { ...updated });
-      }, 1400);
+      }, 450);
+      };
+      void script();
     },
-    async CancelRemoteTab() {},
+    async CancelRemoteTab(tabId: string) {
+      remoteMockCancelled = true;
+      __emitMockRemoteTab(tabId, "event", { kind: "turn_done" });
+    },
     async ApproveRemoteTab() {},
     async AnswerRemoteTab() {},
-    async SetRemoteTabModel() {},
+    async SetRemoteTabModel(tabId: string, ref: string) {
+      const tab = mockRemoteTabs.find((item) => item.id === tabId);
+      if (!tab) return;
+      tab.label = mockModelLabel(ref);
+      __emitMockRemote("remote-tab-opened", { ...tab });
+    },
     async RewindRemoteTab() {},
     async SetRemoteTabToolApprovalMode() {},
     async SetRemoteTabGoal() {},
-    async RemoteTabSnapshot() {
-      return { history: [] };
+    async RemoteTabSnapshot(tabId: string) {
+      const tab = mockRemoteTabs.find((item) => item.id === tabId);
+      const groupKey = `${tab?.remote?.hostId ?? ""}\u0000${tab?.remote?.workspace ?? ""}`;
+      const current = (mockRemoteSessionList[groupKey] ?? []).find((row) => row.current);
+      return {
+        history: current?.history ? JSON.parse(JSON.stringify(current.history)) : [],
+        status: { label: tab ? mockModelLabel(tab.label ?? "") : "" },
+      };
     },
     async SetRemoteTabEffort() {},
     async SetRemoteTabPlanMode() {},
@@ -5800,15 +5972,27 @@ let mockRemoteProjects: RemoteProjectView[] = [
 ];
 // Open remote tabs in the browser dev mock; mirrors the Go registry merge
 // in ListTabs (a highlighted remote tab deactivates the local entries).
+// Desktop-owned display titles for remote sessions (mock of the prefs store).
+const mockRemoteSessionTitles: Record<string, string> = {};
+// Cancellation flag for the remote canned turn, mirroring the local mock's
+// `cancelled` cooperation with Cancel().
+let remoteMockCancelled = false;
+// The preseed tab id must match OpenRemoteProjectTab's computed id so the
+// ensure-reuse finds it instead of creating a duplicate strip entry.
+const remoteDemoTabId = `remote-mock-demo-~/app`.replace(/[^a-z0-9-]/gi, "_");
+// Live mock of the serve's session list per remote group: seeded with the
+// demo row (carrying a real conversation history), grown by new-session
+// opens, retitled by renames and turns.
+const mockRemoteSessionList: Record<string, Array<{ name: string; title: string; turns: number; current: boolean; lastActivityAt: number; pinned?: boolean; history?: HistoryMessage[] }>> = {};
 let mockRemoteTabs: TabMeta[] = [
   {
-    id: "remote-demo-tab",
+    id: remoteDemoTabId,
     scope: "project",
     workspaceRoot: "~/app",
     workspaceName: "app",
     topicId: "",
     topicTitle: "app",
-    label: "demo",
+    label: "deepseek-v4-flash",
     ready: true,
     running: false,
     mode: "normal",

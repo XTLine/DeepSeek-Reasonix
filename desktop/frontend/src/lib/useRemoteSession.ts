@@ -16,6 +16,8 @@ export interface RemoteSessionApi {
   transcript: State;
   hydrated: boolean;
   running: boolean;
+  /** The serve's label for the active model, for the composer capsule. */
+  modelLabel: string;
   submit: (text: string) => Promise<void>;
   cancelTurn: () => Promise<void>;
   approve: (callId: string, decision: string) => Promise<void>;
@@ -26,6 +28,7 @@ export function useRemoteSession(tabId: string | undefined): RemoteSessionApi {
   const [state, setState] = useState<RemoteTabStateValue>("connecting");
   const [error, setError] = useState("");
   const [transcript, setTranscript] = useState<State>(initialState);
+  const [modelLabel, setModelLabel] = useState("");
   const hydratedRef = useRef(false);
   const [hydrated, setHydrated] = useState(false);
 
@@ -57,6 +60,8 @@ export function useRemoteSession(tabId: string | undefined): RemoteSessionApi {
           const messages = Array.isArray(snap.history) ? (snap.history as HistoryMessage[]) : [];
           hydratedRef.current = true;
           setHydrated(true);
+          const statusLabel = (snap.status as { label?: unknown } | undefined)?.label;
+          setModelLabel(typeof statusLabel === "string" ? statusLabel : "");
           setTranscript((s) => reducer(s, { type: "history", messages }));
           return;
         } catch {
@@ -111,5 +116,5 @@ export function useRemoteSession(tabId: string | undefined): RemoteSessionApi {
     await app.AnswerRemoteTab(tabId, callId, value);
   }, [tabId]);
 
-  return { state, error, transcript, hydrated, running: transcript.running, submit, cancelTurn, approve, answer };
+  return { state, error, transcript, hydrated, running: transcript.running, modelLabel, submit, cancelTurn, approve, answer };
 }

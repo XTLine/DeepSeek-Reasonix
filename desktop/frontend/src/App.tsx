@@ -1812,7 +1812,7 @@ export default function App() {
     },
     [tabMetas],
   );
-  const topicbarEditing = Boolean(activeTab?.topicId && activeTab.topicId === renamingTopicId);
+  const topicbarEditing = Boolean(activeTab && (activeTab.remote ? activeTab.id : activeTab.topicId) === renamingTopicId && (activeTab.remote || activeTab.topicId));
   const visibleTabId = activeTabId;
   const visibleTabs = useMemo(() => {
     const byId = new Map(tabMetas.map((tab) => [tab.id, tab]));
@@ -1853,7 +1853,8 @@ export default function App() {
   }, [tabMetas]);
 
   useEffect(() => {
-    if (!renamingTopicId || activeTab?.topicId === renamingTopicId) return;
+    const activeRenameId = activeTab?.remote ? activeTab.id : activeTab?.topicId;
+    if (!renamingTopicId || activeRenameId === renamingTopicId) return;
     topicRenameSkipCommitRef.current = false;
     topicRenameCommitHandledRef.current = false;
     setRenamingTopicId(null);
@@ -4096,12 +4097,12 @@ export default function App() {
   }, [refreshProjectsAndTabs, showToast]);
 
   const startActiveTopicRename = useCallback(() => {
-    if (!activeTab?.topicId) return;
+    if (!activeTab?.remote && !activeTab?.topicId) return;
     topicRenameSkipCommitRef.current = false;
     topicRenameCommitHandledRef.current = false;
-    setRenamingTopicId(activeTab.topicId);
+    setRenamingTopicId(activeTab.remote ? activeTab.id : activeTab.topicId);
     setTopicTitleDraft(activeTab.topicTitle || "");
-  }, [activeTab?.topicId, activeTab?.topicTitle]);
+  }, [activeTab?.id, activeTab?.remote, activeTab?.topicId, activeTab?.topicTitle]);
 
   const cancelActiveTopicRename = useCallback(() => {
     topicRenameSkipCommitRef.current = true;
@@ -4124,12 +4125,23 @@ export default function App() {
     if (!topicId) return;
     const nextTitle = topicTitleDraft.trim();
     if (!nextTitle) return;
+    if (activeTab?.remote && topicId === activeTab.id) {
+      try {
+        const sessions = await app.RemoteProjectSessions(activeTab.remote.hostId, activeTab.remote.workspace).catch(() => []);
+        const current = sessions.find((session) => session.current);
+        if (!current) return;
+        await app.RenameRemoteProjectSession(activeTab.remote.hostId, activeTab.remote.workspace, current.name, nextTitle);
+      } catch {
+        /* a listing failure just leaves the previous title in place */
+      }
+      return;
+    }
     try {
       await renameTopic(topicId, nextTitle);
     } catch {
       /* keep the app usable if a stale topic cannot be renamed */
     }
-  }, [renameTopic, renamingTopicId, topicTitleDraft]);
+  }, [activeTab, renameTopic, renamingTopicId, topicTitleDraft]);
 
   const sidebarExpandBlocked = false;
   const sidebarToggleTitle = sidebarCollapsed
@@ -4159,7 +4171,7 @@ export default function App() {
   const topicbarSubtitleTitle = sidebarImDetailConnection
     ? [topicbarWorkspaceLabel, topicbarImSourceLabel, sidebarImScopeLabel(sidebarImDetailConnection, t)].filter(Boolean).join(" · ")
     : [topicbarWorkspacePath || topicbarWorkspaceLabel, topicbarImSourceLabel].filter(Boolean).join(" · ");
-  const topicbarCanRename = !sidebarImDetailConnection && Boolean(activeTab?.topicId);
+  const topicbarCanRename = !sidebarImDetailConnection && (Boolean(activeTab?.topicId) || Boolean(activeTab?.remote));
   const topicbarTitleEditSize = Math.min(56, Math.max(4, topicTitleDraft.length || topicbarTitle.length || 1));
   const sidebarWorkbench = desktopLayoutStyle === "workbench";
   // The Wails drag runtime ignores anything with detail !== 1, so a double click
@@ -5007,7 +5019,7 @@ export default function App() {
               goalStatus={state.meta?.goalStatus}
               goalRuntime={state.meta?.goalRuntime}
               cwd={state.meta?.cwd}
-              modelLabel={remoteSurfaceActive ? activeTab?.label ?? t("status.connecting") : state.meta?.label ?? t("status.connecting")}
+              modelLabel={remoteSurfaceActive ? remoteSession.modelLabel || activeTab?.label || t("status.connecting") : state.meta?.label ?? t("status.connecting")}
               imageInputEnabled={state.meta?.imageInputEnabled !== false}
               tabId={activeTabId}
               effort={state.effort}
