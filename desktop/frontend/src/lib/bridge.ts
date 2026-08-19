@@ -656,9 +656,9 @@ export interface AppBindings extends SessionCatalogBindings, HistoryCatalogBindi
   RemoveRemoteForward(hostId: string, forwardId: string): Promise<void>;
   OpenRemoteWorkspace(hostId: string, workspace: string): Promise<void>;
   CheckRemotePlatform(hostId: string): Promise<void>;
-  StopRemoteServer(hostId: string): Promise<void>;
-  RemoteServerStatus(hostId: string): Promise<RemoteServerView>;
-  RemoteServerLogs(hostId: string, tailLines: number): Promise<string>;
+  StopRemoteServer(hostId: string, workspace: string): Promise<void>;
+  RemoteServerStatus(hostId: string, workspace: string): Promise<RemoteServerView>;
+  RemoteServerLogs(hostId: string, workspace: string, tailLines: number): Promise<string>;
   RemoteLastWorkspace(hostId: string): Promise<string>;
   ScanRemoteLegacyWorkbenchData(): Promise<RemoteLegacyWorkbenchData>;
   CleanRemoteLegacyWorkbenchData(target: "mirrors" | "trust"): Promise<void>;
@@ -5675,11 +5675,11 @@ function makeMockApp(): AppBindings {
     },
     async OpenRemoteWorkspace() {},
     async CheckRemotePlatform() {},
-    async StopRemoteServer(hostId) {
-      __emitMockRemote("server", { hostId, workspace: "", state: "stopped" });
+    async StopRemoteServer(hostId, workspace) {
+      __emitMockRemote("server", { hostId, workspace, state: "stopped" });
     },
-    async RemoteServerStatus(hostId) {
-      return { hostId, workspace: "~/app", state: "stopped" };
+    async RemoteServerStatus(hostId, workspace) {
+      return { hostId, workspace, state: "stopped" };
     },
     async RemoteServerLogs() {
       return "mock serve log line 1\nmock serve log line 2\n";

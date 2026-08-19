@@ -18,6 +18,7 @@ import (
 	"reasonix/internal/remote"
 	"reasonix/internal/remote/bootstrap"
 	"reasonix/internal/remote/forward"
+	"reasonix/internal/store"
 )
 
 // ── View structs mirrored in frontend/src/lib/types.ts ──
@@ -173,9 +174,9 @@ type remoteKernel interface {
 	RemoveForward(hostID, forwardID string) error
 
 	EnsureServer(ctx context.Context, hostID, workspace string) (RemoteServerView, string, error)
-	StopServer(hostID string) error
-	ServerStatus(hostID string) RemoteServerView
-	ServerLogs(ctx context.Context, hostID string, tailLines int) (string, error)
+	StopServer(hostID, workspace string) error
+	ServerStatus(hostID, workspace string) RemoteServerView
+	ServerLogs(ctx context.Context, hostID, workspace string, tailLines int) (string, error)
 	CheckPlatform(ctx context.Context, hostID string) error
 
 	Close() error
@@ -269,18 +270,27 @@ func (a *App) refreshRemoteWindowAfterReconnect(hostID string) {
 			if err != nil {
 				return nil
 			}
-			status := rt.ServerStatus(hostID)
-			if status.State != "ready" || strings.TrimSpace(status.Workspace) == "" {
+			ws := a.remoteWindowWorkspace(hostID)
+			if strings.TrimSpace(ws) == "" {
+				// Window opened before workspace tracking: fall back to the
+				// host's last workspace.
+				ws = a.RemoteLastWorkspace(hostID)
+			}
+			if strings.TrimSpace(ws) == "" {
 				return nil
 			}
-			view, token, err := rt.EnsureServer(a.bootContext(), hostID, status.Workspace)
+			status := rt.ServerStatus(hostID, ws)
+			if status.State != "ready" {
+				return nil
+			}
+			view, token, err := rt.EnsureServer(a.bootContext(), hostID, ws)
 			if err != nil || view.State != "ready" || view.LocalURL == "" || !current() {
 				return nil
 			}
 			if !a.hasRemoteWindow(hostID) {
 				return nil
 			}
-			_ = a.openRemoteWindowForHost(hostID, serveURLWithToken(view.LocalURL, token))
+			_ = a.openRemoteWindowForHost(hostID, ws, serveURLWithToken(view.LocalURL, token))
 			return nil
 		})
 	})
@@ -548,7 +558,7 @@ func (a *App) OpenRemoteWorkspace(hostID, workspace string) error {
 		}
 		url := serveURLWithToken(view.LocalURL, token)
 		a.saveLastRemoteWorkspace(hostID, workspace)
-		return a.openRemoteWindowForHost(hostID, url)
+		return a.openRemoteWindowForHost(hostID, workspace, url)
 	})
 }
 
@@ -562,37 +572,40 @@ func serveURLWithToken(localURL, token string) string {
 	return localURL
 }
 
-func (a *App) StopRemoteServer(hostID string) error {
+func (a *App) StopRemoteServer(hostID, workspace string) error {
 	op := a.beginRemoteWindowHostOperation(hostID)
 	return op.run(func(func() bool) error {
 		rt, err := a.remoteRT()
 		if err != nil {
 			return err
 		}
-		if err := rt.StopServer(hostID); err != nil {
+		if err := rt.StopServer(hostID, workspace); err != nil {
 			return err
 		}
-		// Stopping the service also tears down the loopback tunnel, so close the
-		// host's web window.
-		a.closeRemoteWindowForHost(hostID)
+		// Stopping the service also tears down that workspace's loopback
+		// tunnel, so close the host's web window only when it is showing this
+		// workspace.
+		if a.remoteWindowWorkspace(hostID) == workspace {
+			a.closeRemoteWindowForHost(hostID)
+		}
 		return nil
 	})
 }
 
-func (a *App) RemoteServerStatus(hostID string) (RemoteServerView, error) {
+func (a *App) RemoteServerStatus(hostID, workspace string) (RemoteServerView, error) {
 	rt, err := a.remoteRT()
 	if err != nil {
 		return RemoteServerView{}, err
 	}
-	return rt.ServerStatus(hostID), nil
+	return rt.ServerStatus(hostID, workspace), nil
 }
 
-func (a *App) RemoteServerLogs(hostID string, tailLines int) (string, error) {
+func (a *App) RemoteServerLogs(hostID, workspace string, tailLines int) (string, error) {
 	rt, err := a.remoteRT()
 	if err != nil {
 		return "", err
 	}
-	return rt.ServerLogs(a.bootContext(), hostID, tailLines)
+	return rt.ServerLogs(a.bootContext(), hostID, workspace, tailLines)
 }
 
 // editUserConfig runs mutate against the user-global config under the edit lock
@@ -621,13 +634,19 @@ type managedHost struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	status         RemoteConnectionStatusView
-	server         RemoteServerView
-	token          string
+	serves         map[string]*serveEntry // per-workspace serve registry, keyed by the workspace string
 	fpAnswer       chan bool               // TOFU resolution channel; non-nil while pending
 	secretAnswer   chan remoteSecretAnswer // one-shot credential channel; non-nil while pending
 	secretPromptID string                  // opaque ID prevents a stale dialog resolving a later prompt
 	verifiedPeer   *RemoteFingerprintView  // authenticated target key; retained after pending UI clears
 	serveMu        sync.Mutex              // serializes EnsureServer/StopServer for this host
+}
+
+// serveEntry is one workspace's serve registration: the published view (with
+// its loopback tunnel URL) and the auth token for that serve.
+type serveEntry struct {
+	view  RemoteServerView
+	token string
 }
 
 type remoteSecretAnswer struct {
@@ -802,6 +821,7 @@ func (m *desktopRemoteManager) Connect(hostID string) error {
 	mh := &managedHost{
 		ctx: hostCtx, cancel: cancel,
 		status: RemoteConnectionStatusView{HostID: hostID, State: "connecting"},
+		serves: map[string]*serveEntry{},
 	}
 	secretPrompt := m.secretPrompt(hostID, mh)
 	auth := desktopAuthForHost(host, secretPrompt)
@@ -1318,7 +1338,12 @@ func (m *desktopRemoteManager) emitForwardsFor(hostID string, generation *manage
 	}
 }
 
-const serveForwardName = "serve"
+// serveForwardName derives the per-workspace local tunnel name from the same
+// collision-proof slug the remote state files use (store.RemoteWorkspaceSlug),
+// so one host holds one independent forward per workspace.
+func serveForwardName(workspace string) string {
+	return "serve-" + store.RemoteWorkspaceSlug(workspace)
+}
 
 func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspace string) (RemoteServerView, string, error) {
 	mh := m.managed(hostID)
@@ -1334,8 +1359,11 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 		m.mu.Unlock()
 		return RemoteServerView{}, "", fmt.Errorf("host %q connection was replaced", hostID)
 	}
-	previousServer := mh.server
-	previousToken := mh.token
+	var previousServer RemoteServerView
+	previousToken := ""
+	if e := mh.serves[workspace]; e != nil {
+		previousServer, previousToken = e.view, e.token
+	}
 	m.mu.Unlock()
 	c := mh.client
 	opCtx, cancel := managedOperationContext(ctx, mh)
@@ -1373,7 +1401,7 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 		return RemoteServerView{}, "", fmt.Errorf("host %q connection was replaced", hostID)
 	}
 	if res.Reused && previousServer.State == "ready" && previousServer.Workspace == workspace &&
-		hasUsableServeForward(c.Forwards().List(), res.State.Addr, previousServer.LocalURL) {
+		hasUsableServeForward(c.Forwards().List(), serveForwardName(workspace), res.State.Addr, previousServer.LocalURL) {
 		if !m.publishServerIfCurrent(hostID, mh, previousServer, res.Token) {
 			return RemoteServerView{}, "", fmt.Errorf("host %q connection was replaced", hostID)
 		}
@@ -1382,7 +1410,7 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 	// Start the replacement before retiring the old tunnel. If binding fails,
 	// the previous ready server stays usable instead of leaving a dead gap.
 	bound, ferr := c.Forwards().Replace(forward.Spec{
-		Name: serveForwardName, Direction: forward.Local, BindAddr: "127.0.0.1:0", TargetAddr: res.State.Addr,
+		Name: serveForwardName(workspace), Direction: forward.Local, BindAddr: "127.0.0.1:0", TargetAddr: res.State.Addr,
 	})
 	if ferr != nil {
 		if !res.Reused {
@@ -1397,13 +1425,13 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 	localURL := fmt.Sprintf("http://%s/", bound)
 	view := RemoteServerView{HostID: hostID, Workspace: workspace, State: "ready", LocalURL: localURL}
 	if !m.publishServerIfCurrent(hostID, mh, view, res.Token) {
-		_ = c.Forwards().Remove(serveForwardName)
+		_ = c.Forwards().Remove(serveForwardName(workspace))
 		return RemoteServerView{}, "", fmt.Errorf("host %q connection was replaced", hostID)
 	}
 	return view, res.Token, nil
 }
 
-func (m *desktopRemoteManager) StopServer(hostID string) error {
+func (m *desktopRemoteManager) StopServer(hostID, workspace string) error {
 	mh := m.managed(hostID)
 	if mh == nil || mh.client == nil {
 		return fmt.Errorf("host %q is not connected", hostID)
@@ -1415,19 +1443,19 @@ func (m *desktopRemoteManager) StopServer(hostID string) error {
 	}
 	c := mh.client
 	m.mu.Lock()
-	ws := mh.server.Workspace
+	_, tracked := mh.serves[workspace]
 	m.mu.Unlock()
-	if strings.TrimSpace(ws) == "" {
-		return fmt.Errorf("host %q has no managed server workspace", hostID)
+	if !tracked {
+		return fmt.Errorf("host %q has no managed server for workspace %q", hostID, workspace)
 	}
 	opCtx, cancel := managedOperationContext(context.Background(), mh)
 	defer cancel()
-	if err := m.stopServe(opCtx, c, ws); err != nil {
+	if err := m.stopServe(opCtx, c, workspace); err != nil {
 		return err
 	}
 	// Tear down the local serve tunnel so a stale forward can't linger.
-	_ = c.Forwards().Remove(serveForwardName)
-	view := RemoteServerView{HostID: hostID, Workspace: ws, State: "stopped"}
+	_ = c.Forwards().Remove(serveForwardName(workspace))
+	view := RemoteServerView{HostID: hostID, Workspace: workspace, State: "stopped"}
 	m.publishServerIfCurrent(hostID, mh, view, "")
 	return nil
 }
@@ -1439,33 +1467,35 @@ func (m *desktopRemoteManager) managed(hostID string) *managedHost {
 	return m.hosts[hostID]
 }
 
-func (m *desktopRemoteManager) ServerStatus(hostID string) RemoteServerView {
+func (m *desktopRemoteManager) ServerStatus(hostID, workspace string) RemoteServerView {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if mh := m.hosts[hostID]; mh != nil {
-		return mh.server
+		if e := mh.serves[workspace]; e != nil {
+			return e.view
+		}
 	}
-	return RemoteServerView{HostID: hostID, State: "stopped"}
+	return RemoteServerView{HostID: hostID, Workspace: workspace, State: "stopped"}
 }
 
-func (m *desktopRemoteManager) ServerLogs(ctx context.Context, hostID string, tailLines int) (string, error) {
+func (m *desktopRemoteManager) ServerLogs(ctx context.Context, hostID, workspace string, tailLines int) (string, error) {
 	m.mu.Lock()
 	mh := m.hosts[hostID]
-	ws := ""
+	tracked := false
 	if mh != nil {
-		ws = mh.server.Workspace
+		_, tracked = mh.serves[workspace]
 	}
 	m.mu.Unlock()
 	if mh == nil || mh.client == nil {
 		return "", fmt.Errorf("host %q is not connected", hostID)
 	}
-	if strings.TrimSpace(ws) == "" {
-		return "", fmt.Errorf("host %q has no managed server workspace", hostID)
+	if !tracked {
+		return "", fmt.Errorf("host %q has no managed server for workspace %q", hostID, workspace)
 	}
 	opCtx, cancel := managedOperationContext(ctx, mh)
 	defer cancel()
 	var sb strings.Builder
-	if err := m.serveLogs(opCtx, mh.client, ws, tailLines, &sb); err != nil {
+	if err := m.serveLogs(opCtx, mh.client, workspace, tailLines, &sb); err != nil {
 		return "", err
 	}
 	if !m.isCurrent(hostID, mh) {
@@ -1565,17 +1595,19 @@ func (m *desktopRemoteManager) publishServerIfCurrent(hostID string, generation 
 	if m.hosts[hostID] != generation {
 		return false
 	}
-	generation.server = view
-	generation.token = token
+	if generation.serves == nil {
+		generation.serves = map[string]*serveEntry{}
+	}
+	generation.serves[view.Workspace] = &serveEntry{view: view, token: token}
 	if m.sink != nil {
 		m.sink.onServer(view)
 	}
 	return true
 }
 
-func hasUsableServeForward(entries []forward.Entry, targetAddr, localURL string) bool {
+func hasUsableServeForward(entries []forward.Entry, name, targetAddr, localURL string) bool {
 	for _, entry := range entries {
-		if entry.Spec.Name == serveForwardName && entry.Up && entry.Spec.TargetAddr == targetAddr && entry.BoundAddr != "" {
+		if entry.Spec.Name == name && entry.Up && entry.Spec.TargetAddr == targetAddr && entry.BoundAddr != "" {
 			return localURL == fmt.Sprintf("http://%s/", entry.BoundAddr)
 		}
 	}

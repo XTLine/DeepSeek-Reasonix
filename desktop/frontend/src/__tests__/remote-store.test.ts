@@ -180,5 +180,19 @@ eq(useRemoteStore.getState().statuses.timeout?.state, "connecting", "connection 
   eq(received, null, "unsubscribe stops delivery");
 })();
 
+// setServer keys per-workspace entries under the host; one workspace's events
+// never overwrite another's.
+(function testPerWorkspaceServers() {
+  const set = useRemoteStore.getState().setServer;
+  set({ hostId: "box", workspace: "/srv/app", state: "ready" });
+  set({ hostId: "box", workspace: "/srv/web", state: "starting" });
+  const servers = useRemoteStore.getState().servers;
+  eq(servers.box?.["/srv/app"]?.state, "ready", "first workspace keeps its entry");
+  eq(servers.box?.["/srv/web"]?.state, "starting", "second workspace gets its own entry");
+  set({ hostId: "box", workspace: "/srv/web", state: "ready" });
+  eq(useRemoteStore.getState().servers.box?.["/srv/app"]?.state, "ready", "updating one workspace leaves the other untouched");
+  eq(useRemoteStore.getState().servers.box?.["/srv/web"]?.state, "ready", "updated workspace reflects the new state");
+})();
+
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);
