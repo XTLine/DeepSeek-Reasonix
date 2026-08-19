@@ -1,7 +1,7 @@
 // Run: tsx src/__tests__/remote-connect-wizard.test.tsx
 
-import { JSDOM } from "jsdom";
 import React from "react";
+import { JSDOM } from "jsdom";
 import { act } from "react";
 
 import type { AppBindings } from "../lib/bridge";
@@ -67,9 +67,7 @@ async function flush(ticks = 20) {
 // Real-time wait: the ConnectRemoteHost mock holds the connecting step for a
 // 20ms macrotask so the log panel renders; microtask flushes cannot cover it.
 function delay(ms: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, ms);
-  return promise;
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 const dirs: Record<string, Array<{ name: string; path: string; isDir: boolean }>> = {
@@ -121,9 +119,7 @@ window.go = { main: { App: {
     // per attempt: first stopped+error → waitForRemoteConnection rejects
     // immediately and the wizard stays on the connecting step; later
     // attempts connected → the flow proceeds to the platform check.
-    const { promise, resolve } = Promise.withResolvers<void>();
-    setTimeout(resolve, 60);
-    await promise;
+    await new Promise<void>((resolve) => setTimeout(resolve, 60));
     connectAttempts += 1;
     if (connectAttempts === 1) {
       useRemoteStore.getState().applyStatus({ hostId, state: "stopped", error: "ssh: handshake failed" });

@@ -4,8 +4,10 @@
 // "Open Remote Web" entry, Serve progress states, the workspace home-directory
 // fallback, and the fixed remote-provider hint.
 
-import { JSDOM } from "jsdom";
 import React from "react";
+import { JSDOM } from "jsdom";
+
+import type { AppBindings } from "../lib/bridge";
 
 let passed = 0;
 let failed = 0;
@@ -70,7 +72,7 @@ window.go = { main: { App: {
   async StopRemoteServer(hostId: string, workspace: string) {
     stopCalls.push({ hostId, workspace });
   },
-} } };
+} as Partial<AppBindings> as AppBindings } };
 
 const host = { id: "box", label: "box", host: "box.test", port: 22, user: "dev", identityFile: "", proxyJump: "", defaultWorkspace: "/srv/app", serveInstall: "auto", useSSHConfig: false };
 useRemoteStore.getState().setHosts([host]);

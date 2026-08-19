@@ -1,7 +1,7 @@
 // Run: tsx src/__tests__/remote-session-surface.test.tsx
 
-import { JSDOM } from "jsdom";
 import React from "react";
+import { JSDOM } from "jsdom";
 import { act } from "react";
 
 import type { AppBindings } from "../lib/bridge";
@@ -195,7 +195,7 @@ await act(async () => {
   await probe?.submit("run tests");
   await flush();
 });
-ok(probe?.transcript.items.some((item) => item.kind === "user" && item.text === "run tests"), "submit adds the optimistic user bubble through the shared reducer");
+ok(Boolean(probe?.transcript.items.some((item) => item.kind === "user" && item.text === "run tests")), "submit adds the optimistic user bubble through the shared reducer");
 await act(async () => {
   await probe?.cancelTurn();
   await probe?.approve("call-1", "allow");
