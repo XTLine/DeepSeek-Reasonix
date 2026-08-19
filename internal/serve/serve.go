@@ -1502,11 +1502,12 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type sessionEntry struct {
-		Name    string `json:"name"`
-		Path    string `json:"path"`
-		Title   string `json:"title,omitempty"`
-		Turns   int    `json:"turns,omitempty"`
-		Current bool   `json:"current,omitempty"`
+		Name       string `json:"name"`
+		Path       string `json:"path"`
+		Title      string `json:"title,omitempty"`
+		Turns      int    `json:"turns,omitempty"`
+		Current    bool   `json:"current,omitempty"`
+		MtimeMilli int64  `json:"mtimeMilli"`
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -1524,7 +1525,7 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		name := strings.TrimSuffix(e.Name(), ".jsonl")
-		entry := sessionEntry{Name: name, Path: path, Current: filepath.Clean(path) == current}
+		entry := sessionEntry{Name: name, Path: path, Current: filepath.Clean(path) == current, MtimeMilli: agent.SessionContentModTime(path).UnixMilli()}
 		// Event-log aware: reading the .jsonl checkpoint directly would freeze
 		// turn counts and titles at the last checkpoint write.
 		if first, turns := agent.SessionPreview(path); turns > 0 {

@@ -75,6 +75,10 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		fs.newCalled++
 		_, cookieErr := r.Cookie("reasonix_token")
 		fs.cookieOnNew = cookieErr == nil
+		// The serve abandons the current session on /new: no file, not listed.
+		for i := range fs.sessions {
+			fs.sessions[i].Current = false
+		}
 		fs.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -88,6 +92,9 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		}
 		fs.mu.Lock()
 		fs.resumePath = body.Path
+		for i := range fs.sessions {
+			fs.sessions[i].Current = fs.sessions[i].Path == body.Path
+		}
 		fs.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -712,7 +719,8 @@ func TestRemoteTabTitleAdoptsServeSession(t *testing.T) {
 	log := &eventLog{}
 	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
 	cleanupRemoteTabPumps(t, a)
-	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+	// Resume the seeded session so it stays current; /new would abandon it.
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionName: "s1"})
 	log.mu.Lock()
 	log.events = nil
 	log.mu.Unlock()
@@ -745,7 +753,9 @@ func TestRemoteTabTitleAdoptsServeSession(t *testing.T) {
 // existing tab POSTs /new (the old session stays in the history list) and
 // re-emits ready so the frontend re-syncs its snapshot.
 func TestRemoteTabNewSessionResetsServeSession(t *testing.T) {
-	fs := newFakeServe(t, "s3cret", nil)
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "s1", Path: "/remote/sessions/s1.jsonl", Title: "Serve title", Turns: 1, Current: true},
+	})
 	kernel := &fakeRemoteKernel{
 		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
 		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
@@ -756,32 +766,171 @@ func TestRemoteTabNewSessionResetsServeSession(t *testing.T) {
 	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
 	cleanupRemoteTabPumps(t, a)
 	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
-	readyBefore := log.count("remote-tab:" + meta.ID + ":state {\"state\":\"ready\"")
 
-	a.remoteTabMu.Lock()
-	a.remoteTabs[meta.ID].topicTitle = "stale title"
-	a.remoteTabMu.Unlock()
+	// The bootstrap already entered a fresh session; the listing carries the
+	// desktop-view blank (the serve abandoned s1 and lists no current row).
+	sessions, err := a.RemoteProjectSessions("box", "~/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) == 0 || sessions[0].Name != "" || !sessions[0].Current || sessions[0].Title != "新的会话" {
+		t.Fatalf("sessions = %+v, want the synthetic blank leading the listing", sessions)
+	}
+
+	// A further new-session open reuses the blank: no extra POST /new — the
+	// same contract as the local reusable-blank tab.
+	newBefore, _, _ := fs.snapshot()
 	if _, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{NewSession: true}); err != nil {
+		t.Fatal(err)
+	}
+	if newAfter, _, _ := fs.snapshot(); newAfter != newBefore {
+		t.Fatalf("POST /new called %d times after reuse, want %d", newAfter, newBefore)
+	}
+
+	// Resuming a listed session clears the blank and restores it as current.
+	if _, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{SessionName: "s1"}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		if log.count("remote-tab:"+meta.ID+":state {\"state\":\"ready\"") > readyBefore {
+		sessions, err = a.RemoteProjectSessions("box", "~/app")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sessions) > 0 && sessions[0].Name == "s1" && sessions[0].Current {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("reset did not re-emit the ready state")
+			t.Fatalf("resume did not restore s1 as current: %+v", sessions)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	newCount, _, _ := fs.snapshot()
-	if newCount < 2 {
-		t.Fatalf("POST /new called %d times, want bootstrap + reset", newCount)
+	a.remoteTabMu.Lock()
+	reset := a.remoteTabs[meta.ID].sessionReset
+	title := a.remoteTabs[meta.ID].topicTitle
+	a.remoteTabMu.Unlock()
+	if reset {
+		t.Fatal("sessionReset must clear after a resume")
+	}
+	if title != "Serve title" {
+		t.Fatalf("topicTitle after resume = %q, want the serve title", title)
+	}
+}
+
+// TestRenameRemoteProjectSession pins the desktop-owned title chain: the
+// override wins in the session listing, and a live tab holding that session
+// adopts the new title immediately; clearing falls back to the serve title.
+func TestRenameRemoteProjectSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("REASONIX_HOME", home)
+	t.Setenv("HOME", home)
+	if err := editUserConfig(func(c *config.Config) error {
+		return c.UpsertRemoteHost(config.RemoteHostEntry{Name: "box", Host: "127.0.0.1", Port: 22, User: "dev"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "s1", Path: "/x.jsonl", Title: "Serve title", Turns: 1, Current: true, MtimeMilli: 1700000000000},
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionName: "s1"})
+
+	sessions, err := a.RemoteProjectSessions("box", "~/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].LastActivityAt != 1700000000000 || sessions[0].Title != "Serve title" {
+		t.Fatalf("sessions = %+v, want serve title + mtime passthrough", sessions)
+	}
+
+	if err := a.RenameRemoteProjectSession("box", "~/app", "s1", "我的新标题"); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err = a.RemoteProjectSessions("box", "~/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Title != "我的新标题" {
+		t.Fatalf("override title = %q", sessions[0].Title)
 	}
 	a.remoteTabMu.Lock()
 	title := a.remoteTabs[meta.ID].topicTitle
 	a.remoteTabMu.Unlock()
-	if title != "app" {
-		t.Fatalf("topicTitle after reset = %q, want the workspace name", title)
+	if title != "我的新标题" {
+		t.Fatalf("live tab title = %q, want the override", title)
+	}
+
+	if err := a.RenameRemoteProjectSession("box", "~/app", "s1", ""); err != nil {
+		t.Fatal(err)
+	}
+	sessions, _ = a.RemoteProjectSessions("box", "~/app")
+	if sessions[0].Title != "Serve title" {
+		t.Fatalf("cleared override title = %q, want the serve title", sessions[0].Title)
+	}
+}
+
+// TestRemoteSessionPinnedOrderingAndProjectTitle pins the desktop-owned
+// row pin (pinned-first listing) and the registry-backed project rename.
+func TestRemoteSessionPinnedOrderingAndProjectTitle(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("REASONIX_HOME", home)
+	t.Setenv("HOME", home)
+	if err := editUserConfig(func(c *config.Config) error {
+		return c.UpsertRemoteHost(config.RemoteHostEntry{Name: "box", Host: "127.0.0.1", Port: 22, User: "dev"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "a", Path: "/a.jsonl", Title: "First", Current: false, MtimeMilli: 1},
+		{Name: "b", Path: "/b.jsonl", Title: "Second", Current: true, MtimeMilli: 2},
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+
+	if err := a.SetRemoteSessionPinned("box", "~/app", "a", true); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := a.RemoteProjectSessions("box", "~/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 || sessions[0].Name != "a" || !sessions[0].Pinned || sessions[1].Pinned {
+		t.Fatalf("sessions = %+v, want pinned a first", sessions)
+	}
+
+	meta, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{NewSession: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = meta
+	if err := a.SetRemoteProjectTitle("box", "~/app", "云端演示"); err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range a.ListTabs() {
+		_ = node
+	}
+	found := false
+	for _, node := range a.GetProjectTreeSnapshot().Projects {
+		if node.Remote != nil && node.Remote.HostID == "box" {
+			found = true
+			if node.Label != "云端演示" {
+				t.Fatalf("group label = %q, want the renamed title", node.Label)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("remote group missing from the snapshot")
 	}
 }

@@ -52,6 +52,11 @@ type remoteTab struct {
 	// session title replaces it after a turn completes.
 	topicTitle           string
 	titleRefreshInFlight bool
+	// sessionReset marks that the tab currently holds a fresh, contentless
+	// session (POST /new landed, serve has not listed it yet): a further
+	// NewSession open reuses this blank instead of resetting again — the
+	// same contract as the local reusable-blank tab.
+	sessionReset bool
 
 	// Bridge fields, mutated under App.remoteTabMu. client keeps the serve
 	// session cookie in its jar across reconnects; token is retained for a
@@ -171,8 +176,17 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 	}
 	a.remoteTabMu.Unlock()
 	if reuse != nil {
-		if opts.NewSession {
-			a.resetRemoteTabSession(reuse.id)
+		if name := strings.TrimSpace(opts.SessionName); name != "" {
+			a.resumeRemoteTabSession(reuse.id, name)
+		} else {
+			a.remoteTabMu.Lock()
+			blank := reuse.sessionReset
+			a.remoteTabMu.Unlock()
+			// Reuse the pending blank like EnsureBlankTab does locally; only
+			// reset again once the current session earned content.
+			if opts.NewSession && !blank {
+				a.resetRemoteTabSession(reuse.id)
+			}
 		}
 		meta := remoteTabMeta(reuse, host.Name)
 		a.activateRemoteTab(reuse.id, meta)
@@ -282,6 +296,14 @@ func (a *App) bootstrapRemoteTab(tabID, hostID, workspace string) {
 		a.emitRemoteTabState(tabID, "error", err.Error())
 		return
 	}
+	a.remoteTabMu.Lock()
+	openTab.sessionReset = openTab.newSession
+	if openTab.newSession {
+		// A bootstrapped fresh session carries the localized default title,
+		// same as the live-tab reset path.
+		openTab.topicTitle = a.localizedDefaultTopicTitle()
+	}
+	a.remoteTabMu.Unlock()
 	a.saveLastRemoteWorkspace(hostID, workspace)
 	a.emitRemoteTabState(tabID, "ready", "")
 }

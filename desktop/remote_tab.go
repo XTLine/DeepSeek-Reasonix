@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"reasonix/internal/config"
 )
 
 // The remote-tab bridge talks to the workspace Serve over the loopback
@@ -42,11 +44,12 @@ func serveHandshake(ctx context.Context, client *http.Client, base, token string
 
 // serveSessionEntry mirrors one GET /sessions row from the Serve.
 type serveSessionEntry struct {
-	Name    string `json:"name"`
-	Path    string `json:"path"`
-	Title   string `json:"title"`
-	Turns   int    `json:"turns"`
-	Current bool   `json:"current"`
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	Title      string `json:"title"`
+	Turns      int    `json:"turns"`
+	Current    bool   `json:"current"`
+	MtimeMilli int64  `json:"mtimeMilli"`
 }
 
 // enterRemoteSession lands the tab inside a Serve session: POST /new for a
@@ -437,10 +440,12 @@ func (a *App) RemoteTabSnapshot(tabID string) (RemoteTabSnapshot, error) {
 
 // RemoteSessionView mirrors one serve /sessions entry on the frontend side.
 type RemoteSessionView struct {
-	Name    string `json:"name"`
-	Title   string `json:"title,omitempty"`
-	Turns   int    `json:"turns,omitempty"`
-	Current bool   `json:"current,omitempty"`
+	Name           string `json:"name"`
+	Title          string `json:"title,omitempty"`
+	Turns          int    `json:"turns,omitempty"`
+	Current        bool   `json:"current,omitempty"`
+	LastActivityAt int64  `json:"lastActivityAt,omitempty"`
+	Pinned         bool   `json:"pinned,omitempty"`
 }
 
 // serveClientForRef resolves an HTTP client for a host+workspace: a live
@@ -497,10 +502,163 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 		return nil, err
 	}
 	out := make([]RemoteSessionView, 0, len(entries))
+	pinned := make([]RemoteSessionView, 0, len(entries))
+	hasCurrent := false
 	for _, e := range entries {
-		out = append(out, RemoteSessionView{Name: e.Name, Title: e.Title, Turns: e.Turns, Current: e.Current})
+		title := strings.TrimSpace(e.Title)
+		if override := remoteSessionTitleOverride(hostID, workspace, e.Name); override != "" {
+			title = override
+		}
+		view := RemoteSessionView{
+			Name:           e.Name,
+			Title:          title,
+			Turns:          e.Turns,
+			Current:        e.Current,
+			LastActivityAt: e.MtimeMilli,
+			Pinned:         remoteSessionPinned(hostID, workspace, e.Name),
+		}
+		hasCurrent = hasCurrent || e.Current
+		if view.Pinned {
+			pinned = append(pinned, view)
+		} else {
+			out = append(out, view)
+		}
 	}
-	return out, nil
+	// Desktop-view blank: the tab holds a fresh session the serve has not
+	// written to disk yet — surface it like a freshly created local topic so
+	// the tree renders one authoritative listing.
+	if !hasCurrent {
+		a.remoteTabMu.Lock()
+		var blank *remoteTab
+		for _, tab := range a.remoteTabs {
+			if tab.ref.HostID == hostID && tab.ref.Workspace == workspace && tab.sessionReset {
+				blank = tab
+				break
+			}
+		}
+		var synth *RemoteSessionView
+		if blank != nil {
+			synth = &RemoteSessionView{Name: "", Title: blank.topicTitle, Current: true, LastActivityAt: time.Now().UnixMilli()}
+		}
+		a.remoteTabMu.Unlock()
+		if synth != nil {
+			return append([]RemoteSessionView{*synth}, append(pinned, out...)...), nil
+		}
+	}
+	return append(pinned, out...), nil
+}
+
+// RenameRemoteProjectSession sets a desktop-owned display title for a
+// remote session (empty clears it, falling back to the serve title). A live
+// tab whose serve currently holds that session adopts the title
+// immediately.
+func (a *App) RenameRemoteProjectSession(hostID, workspace, name, title string) error {
+	setRemoteSessionTitleOverride(hostID, workspace, name, title)
+
+	a.remoteTabMu.Lock()
+	var live *remoteTab
+	for _, tab := range a.remoteTabs {
+		if tab.ref.HostID == hostID && tab.ref.Workspace == workspace && tab.client != nil {
+			live = tab
+			break
+		}
+	}
+	a.remoteTabMu.Unlock()
+	if live == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	entries, err := serveSessions(ctx, live.client, live.base)
+	if err != nil {
+		return nil // the override is persisted; the tab syncs on its next listing
+	}
+	for _, entry := range entries {
+		if !entry.Current || entry.Name != name {
+			continue
+		}
+		next := strings.TrimSpace(title)
+		if next == "" {
+			next = strings.TrimSpace(entry.Title)
+		}
+		if next == "" {
+			next = remoteWorkspaceName(workspace)
+		}
+		a.remoteTabMu.Lock()
+		changed := live.topicTitle != next
+		if changed {
+			live.topicTitle = next
+		}
+		a.remoteTabMu.Unlock()
+		if changed {
+			a.emitRemoteEvent("remote-tab:opened", remoteTabMeta(live, live.hostLabel))
+		}
+		return nil
+	}
+	return nil
+}
+
+// resumeRemoteTabSession switches a live tab to a listed session: POST
+// /resume, adopt its title, clear the blank mark, and re-emit ready so the
+// surface re-syncs its snapshot.
+func (a *App) resumeRemoteTabSession(tabID, name string) {
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil || tab.client == nil {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	client, base := tab.client, tab.base
+	a.remoteTabMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	entries, err := serveSessions(ctx, client, base)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.Name != name {
+			continue
+		}
+		body, _ := json.Marshal(map[string]string{"path": entry.Path})
+		if err := servePost(ctx, client, base+"/resume", body); err != nil {
+			a.emitRemoteTabState(tabID, "error", err.Error())
+			return
+		}
+		title := strings.TrimSpace(entry.Title)
+		if title == "" {
+			title = name
+		}
+		a.remoteTabMu.Lock()
+		tab.topicTitle = title
+		tab.sessionReset = false
+		a.remoteTabMu.Unlock()
+		a.emitRemoteEvent("remote-tab:opened", remoteTabMeta(tab, tab.hostLabel))
+		a.emitRemoteTabState(tabID, "ready", "")
+		return
+	}
+	a.emitRemoteTabState(tabID, "error", fmt.Sprintf("remote session %q not found", name))
+}
+
+// SetRemoteSessionPinned pins a remote session listing row (desktop-owned,
+// same model as local topic pins).
+func (a *App) SetRemoteSessionPinned(hostID, workspace, name string, pinned bool) error {
+	setRemoteSessionPinned(hostID, workspace, name, pinned)
+	return nil
+}
+
+// SetRemoteProjectTitle renames a pinned remote project's display title in
+// the registry; the tree group label prefers it over the workspace name.
+func (a *App) SetRemoteProjectTitle(hostID, workspace, title string) error {
+	return editUserConfig(func(c *config.Config) error {
+		entry, ok := c.RemoteProject(hostID, workspace)
+		if !ok {
+			return fmt.Errorf("remote project %s:%s is not pinned", hostID, workspace)
+		}
+		entry.Title = strings.TrimSpace(title)
+		return c.UpsertRemoteProject(entry)
+	})
 }
 
 func (a *App) DeleteRemoteProjectSession(hostID, workspace, name string) error {
@@ -624,6 +782,7 @@ func (a *App) refreshRemoteTabTitle(tabID string) {
 		if changed {
 			tab.topicTitle = title
 		}
+		tab.sessionReset = false
 		a.remoteTabMu.Unlock()
 		if changed {
 			a.emitRemoteEvent("remote-tab:opened", remoteTabMeta(tab, tab.hostLabel))
@@ -651,7 +810,10 @@ func (a *App) resetRemoteTabSession(tabID string) {
 		return
 	}
 	client, base := tab.client, tab.base
-	tab.topicTitle = remoteWorkspaceName(tab.ref.Workspace)
+	// Same default title a fresh local session gets, so the strip and the
+	// tree both read "新的会话" until the conversation earns a real title.
+	tab.topicTitle = a.localizedDefaultTopicTitle()
+	tab.sessionReset = true
 	a.remoteTabMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
