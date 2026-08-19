@@ -32,17 +32,17 @@ globalThis.HTMLElement = dom.window.HTMLElement;
 globalThis.Event = dom.window.Event;
 globalThis.KeyboardEvent = dom.window.KeyboardEvent;
 Object.defineProperty(dom.window.HTMLElement.prototype, "attachEvent", { configurable: true, value: () => {} });
+// Transcript's virtualization calls the global rAF; jsdom only exposes it on
+// the (visual) window.
+globalThis.requestAnimationFrame = dom.window.requestAnimationFrame?.bind(dom.window) ?? ((cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 16) as unknown as number);
+globalThis.cancelAnimationFrame = dom.window.cancelAnimationFrame?.bind(dom.window) ?? ((handle: number) => clearTimeout(handle));
 Object.defineProperty(dom.window.HTMLElement.prototype, "detachEvent", { configurable: true, value: () => {} });
 
 const tape: string[] = [];
-const history = [
-  { role: "user", content: "hello remote" },
-  { role: "assistant", content: [{ type: "text", text: "part one" }, { type: "text", text: "part two" }] },
-];
 window.go = { main: { App: {
   async RemoteTabSnapshot(tabId: string) {
     tape.push(`snapshot:${tabId}`);
-    return { history: JSON.parse(JSON.stringify(history)) };
+    return { history: [] };
   },
   async SubmitRemoteTab(tabId: string, text: string) {
     tape.push(`submit:${tabId}:${text}`);
@@ -86,28 +86,72 @@ async function flush(ticks = 20) {
   for (let i = 0; i < ticks; i++) await Promise.resolve();
 }
 
-// ── Surface: hydrates history, then live frames and state transitions ──
+// The surface takes its session from the hook — the same wiring the app
+// shell uses (the shared Transcript renders the content, the composer lives
+// in the shell).
+function RemoteSurfaceHarness({ tab }: { tab: TabMeta }) {
+  const session = useRemoteSession(tab.id);
+  return <RemoteSessionSurface tab={tab} session={session} />;
+}
+
+// ── Surface: shared Transcript renders reducer-driven items ──
 const root = createRoot(document.getElementById("root")!);
 await act(async () => {
   root.render(
     <LocaleProvider>
-      <RemoteSessionSurface tab={remoteTab} />
+      <RemoteSurfaceHarness tab={remoteTab} />
     </LocaleProvider>,
   );
 });
 await act(async () => flush());
 
-ok(document.querySelectorAll(".remote-surface__row").length === 2, "history rows render after snapshot hydration");
-const rows = [...document.querySelectorAll(".remote-surface__row")];
-ok(rows[0]?.textContent?.includes("hello remote") === true, "string content renders");
-ok(rows[1]?.textContent?.includes("part one") === true && rows[1]?.textContent?.includes("part two") === true, "part-array content joins");
+ok(document.querySelector(".remote-surface__log") === null, "no bespoke log rows — the shared Transcript owns rendering");
+ok(!document.querySelector(".remote-surface__composer"), "the surface renders no composer of its own");
 
 await act(async () => {
-  __emitMockRemoteTab("tab-remote-1", "event", { kind: "assistant" });
-  __emitMockRemoteTab("tab-remote-1", "event", { kind: "assistant" });
+  __emitMockRemoteTab("tab-remote-1", "event", { kind: "turn_started" });
+  __emitMockRemoteTab("tab-remote-1", "event", { kind: "reasoning", reasoning: "thinking hard" });
+  __emitMockRemoteTab("tab-remote-1", "event", { kind: "text", text: "streaming answer" });
   await flush();
 });
-ok(document.querySelector(".remote-surface__live")?.textContent?.includes("2") === true, "live frame count renders");
+ok(document.body.textContent?.includes("streaming answer") === true, "serve text frames render through the local transcript pipeline");
+ok(document.body.textContent?.includes("thinking hard") === true, "reasoning renders through the local pipeline");
+
+await act(async () => {
+  __emitMockRemoteTab("tab-remote-1", "event", { kind: "turn_done" });
+  await flush();
+});
+
+await act(async () => {
+  __emitMockRemoteTab("tab-remote-1", "event", { kind: "approval_request", approval: { id: "call-9", tool: "bash", subject: "rm -rf /tmp/junk" } });
+  await flush();
+});
+{
+  const dialog = document.querySelector(".remote-surface__approval");
+  ok(Boolean(dialog), "approval card renders");
+  ok(dialog?.textContent?.includes("rm -rf /tmp/junk") === true, "approval subject renders");
+  await act(async () => {
+    [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === "Allow")?.click();
+    await flush();
+  });
+  ok(tape.includes("approve:tab-remote-1:call-9:allow"), "allow click forwards ApproveRemoteTab");
+  ok(!document.querySelector(".remote-surface__approval"), "approval card clears after deciding");
+}
+
+await act(async () => {
+  __emitMockRemoteTab("tab-remote-1", "event", { kind: "ask_request", ask: { id: "ask-7", questions: [{ id: "q1", prompt: "Deploy now?", options: [{ label: "yes" }, { label: "no" }] }] } });
+  await flush();
+});
+{
+  const dialog = document.querySelector(".remote-surface__ask");
+  ok(Boolean(dialog), "ask card renders");
+  ok(dialog?.textContent?.includes("Deploy now?") === true, "ask prompt renders");
+  await act(async () => {
+    [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === "yes")?.click();
+    await flush();
+  });
+  ok(tape.includes("answer:tab-remote-1:ask-7:yes"), "option click forwards AnswerRemoteTab");
+}
 
 await act(async () => {
   __emitMockRemoteTab("tab-remote-1", "state", { state: "serve_down", error: "tunnel closed" });
@@ -119,22 +163,17 @@ await act(async () => {
   ok(warning?.textContent?.includes("tunnel closed") === true, "serve error detail renders");
 }
 
-await act(async () => {
-  __emitMockRemoteTab("tab-remote-1", "state", { state: "ready" });
-  await flush();
-});
-
 await act(async () => root.unmount());
 
-// ── Hook: commands forward with the tab id ──
+// ── Hook: optimistic user bubble + command forwarding ──
 let probe: RemoteSessionApi | undefined;
 function HookProbe() {
   probe = useRemoteSession("tab-remote-2");
   return null;
 }
-const secondRoot = createRoot(document.createElement("div"));
+const probeRoot = createRoot(document.createElement("div"));
 await act(async () => {
-  secondRoot.render(
+  probeRoot.render(
     <LocaleProvider>
       <HookProbe />
     </LocaleProvider>,
@@ -144,6 +183,10 @@ await act(async () => flush());
 ok(probe?.state === "connecting" || probe?.state === "ready", "hook exposes the tab state");
 await act(async () => {
   await probe?.submit("run tests");
+  await flush();
+});
+ok(probe?.transcript.items.some((item) => item.kind === "user" && item.text === "run tests"), "submit adds the optimistic user bubble through the shared reducer");
+await act(async () => {
   await probe?.cancelTurn();
   await probe?.approve("call-1", "allow");
   await probe?.answer("ask-1", "yes");
@@ -158,7 +201,7 @@ for (const want of [
   ok(tape.includes(want), `command forwarded: ${want}`);
 }
 
-await act(async () => secondRoot.unmount());
+await act(async () => probeRoot.unmount());
 dom.window.close();
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

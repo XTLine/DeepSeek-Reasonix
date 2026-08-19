@@ -37,6 +37,7 @@ import { useWailsResizeFix } from "./lib/useWailsResizeFix";
 import { asArray } from "./lib/array";
 import { createBoundedRefreshCoordinator, sameTabMetaLists, shouldRefreshTabMetaForEvent, TAB_META_MAX_IN_FLIGHT } from "./lib/tabMetaRefresh";
 import { clearLegacyLangPref, normalizeLangPref, readLegacyLangPref, t, useI18n, useT, type Translator } from "./lib/i18n";
+import { useRemoteSession } from "./lib/useRemoteSession";
 import { localizedNoticeText, useController, type Item, type LiveStream } from "./lib/useController";
 import { app, onEvent, onProjectTreeChanged, onReady, onRemoteForwards, onRemoteServer, onRemoteStatus, onRemoteTabOpened, onRuntimeRebuilt, onSessionRecovered, openExternal } from "./lib/bridge";
 import { useConfigLoadWarnings } from "./lib/useConfigLoadWarnings";
@@ -1613,6 +1614,10 @@ export default function App() {
     () => tabMetas.find((tab) => tab.id === activeTabId) ?? tabMetas.find((tab) => tab.active),
     [activeTabId, tabMetas],
   );
+  // Remote tabs share the local composer: the same Composer component stays
+  // mounted, with its send/cancel/running props fed by the remote session.
+  const remoteSurfaceActive = Boolean(activeTab?.remote);
+  const remoteSession = useRemoteSession(remoteSurfaceActive && activeTab ? activeTab.id : undefined);
   const activePlanRevisionInsertRequest =
     planRevisionInsertRequest &&
     planRevisionInsertRequest.tabId === activeTabId &&
@@ -2180,6 +2185,26 @@ export default function App() {
   // custom commands, bare /model and the other read-only management verbs
   // (/skill, /hooks, /mcp) — goes straight to Submit, which the controller
   // resolves (a turn, or a listing Notice).
+  const remoteSend = useCallback(
+    async (displayText: string, submitText = displayText) => {
+      const text = (submitText || displayText).trim();
+      if (!text) return;
+      try {
+        await remoteSession.submit(text);
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : String(e), "error");
+      }
+    },
+    [remoteSession, showToast],
+  );
+  // Matches Composer's onCancel shape (the inbox cancel contract); the
+  // remote turn cancel is fire-and-forget with a toast on failure.
+  const remoteCancel = useCallback((_queuedItemIDs?: string[]) => {
+    void remoteSession.cancelTurn().catch((e) => {
+      showToast(e instanceof Error ? e.message : String(e), "error");
+    });
+    return undefined;
+  }, [remoteSession, showToast]);
   const handleSend = useCallback(
     async (displayText: string, submitText = displayText, requestedTabId = activeTabId, structured?: StructuredInvocationSubmit) => {
       const sourceTabId = requestedTabId || activeTabId;
@@ -4754,7 +4779,7 @@ export default function App() {
               <NoticePreviewPanel />
             ) : activeTab?.remote ? (
               <Suspense fallback={null}>
-                <RemoteSessionSurface tab={activeTab} />
+                <RemoteSessionSurface tab={activeTab} session={remoteSession} />
               </Suspense>
             ) : (
               <>
@@ -4972,7 +4997,7 @@ export default function App() {
               <h2 className="welcome-creation__headline">{t("welcome.creation.title")}</h2>
             )}
             <Composer
-              running={state.running || rewindCommitting}
+              running={remoteSurfaceActive ? remoteSession.running : state.running || rewindCommitting}
               collaborationMode={collaborationMode}
               toolApprovalMode={toolApprovalMode}
               turnPhase={state.turnPhase}
@@ -4980,14 +5005,14 @@ export default function App() {
               goalStatus={state.meta?.goalStatus}
               goalRuntime={state.meta?.goalRuntime}
               cwd={state.meta?.cwd}
-              modelLabel={state.meta?.label ?? t("status.connecting")}
+              modelLabel={remoteSurfaceActive ? activeTab?.label ?? t("status.connecting") : state.meta?.label ?? t("status.connecting")}
               imageInputEnabled={state.meta?.imageInputEnabled !== false}
               tabId={activeTabId}
               effort={state.effort}
-              onSend={handleSend}
+              onSend={remoteSurfaceActive ? remoteSend : handleSend}
               onInvocationMetadataChange={handleInvocationMetadataChange}
               onSteer={handleSteer}
-              onCancel={cancel}
+              onCancel={remoteSurfaceActive ? remoteCancel : cancel}
               onCycleMode={cycleMode}
               onSetMode={applyMode}
               onSetCollaborationMode={setCollaborationModeFromUi}

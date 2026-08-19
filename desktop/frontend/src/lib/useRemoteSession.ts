@@ -1,36 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { app, onRemoteTabEvent, onRemoteTabState } from "../lib/bridge";
-import type { RemoteTabStateValue } from "../lib/types";
+import { app, onRemoteTabEvent, onRemoteTabState } from "./bridge";
+import { initialState, reducer, type State } from "./useController";
+import type { HistoryMessage, RemoteTabStateValue, WireEvent } from "./types";
 
-export type RemoteHistoryRow = { role: string; text: string };
-
-type HistoryMessage = { role?: unknown; content?: unknown };
-
-// historyRow flattens one serve /history message into a display row. The
-// serve wire form follows the provider message shape: content is either a
-// plain string or an array of typed parts.
-function historyRow(message: HistoryMessage): RemoteHistoryRow {
-  const role = typeof message.role === "string" ? message.role : "";
-  let text = "";
-  const content = message.content;
-  if (typeof content === "string") {
-    text = content;
-  } else if (Array.isArray(content)) {
-    text = content
-      .map((part) => (part && typeof part === "object" && "text" in part && typeof (part as { text?: unknown }).text === "string" ? (part as { text: string }).text : ""))
-      .filter(Boolean)
-      .join("\n");
-  }
-  return { role, text };
-}
+// The remote session reuses the local transcript pipeline end to end: serve
+// frames share the agent event wire form, so they run through the same
+// reducer that drives local tabs, and /history hydrates through the same
+// history action. The surface and composer therefore consume exactly the
+// shapes the local UI consumes.
 
 // RemoteSessionApi is the surface-facing contract of useRemoteSession.
 export interface RemoteSessionApi {
   state: RemoteTabStateValue;
   error: string;
-  history: RemoteHistoryRow[];
-  frames: unknown[];
+  transcript: State;
   hydrated: boolean;
+  running: boolean;
   submit: (text: string) => Promise<void>;
   cancelTurn: () => Promise<void>;
   approve: (callId: string, decision: string) => Promise<void>;
@@ -40,17 +25,17 @@ export interface RemoteSessionApi {
 export function useRemoteSession(tabId: string | undefined): RemoteSessionApi {
   const [state, setState] = useState<RemoteTabStateValue>("connecting");
   const [error, setError] = useState("");
-  const [history, setHistory] = useState<RemoteHistoryRow[]>([]);
-  const [frames, setFrames] = useState<unknown[]>([]);
+  const [transcript, setTranscript] = useState<State>(initialState);
   const hydratedRef = useRef(false);
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     if (!tabId) return;
     setState("connecting");
-    setError("");
-    setHistory([]);
-    setFrames([]);
+    setError("")
+    setTranscript(initialState)
     hydratedRef.current = false;
+    setHydrated(false);
     let cancelled = false;
 
     // Hydrate from the snapshot; retry through the connecting window so a
@@ -60,9 +45,10 @@ export function useRemoteSession(tabId: string | undefined): RemoteSessionApi {
         try {
           const snap = await app.RemoteTabSnapshot(tabId);
           if (cancelled) return;
-          const rows = Array.isArray(snap.history) ? (snap.history as HistoryMessage[]).map(historyRow) : [];
+          const messages = Array.isArray(snap.history) ? (snap.history as HistoryMessage[]) : [];
           hydratedRef.current = true;
-          setHistory(rows);
+          setHydrated(true);
+          setTranscript((s) => reducer(s, { type: "history", messages }));
           return;
         } catch {
           // Executor form: the src tsconfig lib predates Promise.withResolvers.
@@ -78,9 +64,9 @@ export function useRemoteSession(tabId: string | undefined): RemoteSessionApi {
       setError(s.error ?? "");
       if (s.state === "ready" && !hydratedRef.current) void hydrate();
     });
-    const offEvent = onRemoteTabEvent(tabId, (frame) => {
+    const offEvent = onRemoteTabEvent(tabId, (raw) => {
       if (cancelled) return;
-      setFrames((current) => [...current, frame]);
+      setTranscript((s) => reducer(s, { type: "event", e: (raw ?? {}) as WireEvent }));
     });
     return () => {
       cancelled = true;
@@ -91,7 +77,12 @@ export function useRemoteSession(tabId: string | undefined): RemoteSessionApi {
 
   const submit = useCallback(async (text: string) => {
     if (!tabId) return;
-    await app.SubmitRemoteTab(tabId, text);
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    // Optimistic user bubble, exactly like the local send path. seq rides
+    // the reducer's counter; the submission id only needs uniqueness.
+    setTranscript((s) => reducer(s, { type: "user", text: trimmed, seq: s.seq, submissionId: `remote-${Date.now()}` }));
+    await app.SubmitRemoteTab(tabId, trimmed);
   }, [tabId]);
 
   const cancelTurn = useCallback(async () => {
@@ -101,13 +92,15 @@ export function useRemoteSession(tabId: string | undefined): RemoteSessionApi {
 
   const approve = useCallback(async (callId: string, decision: string) => {
     if (!tabId) return;
+    setTranscript((s) => ({ ...s, approval: undefined }));
     await app.ApproveRemoteTab(tabId, callId, decision);
   }, [tabId]);
 
   const answer = useCallback(async (callId: string, value: string) => {
     if (!tabId) return;
+    setTranscript((s) => ({ ...s, ask: undefined }));
     await app.AnswerRemoteTab(tabId, callId, value);
   }, [tabId]);
 
-  return { state, error, history, frames, hydrated: hydratedRef.current, submit, cancelTurn, approve, answer };
+  return { state, error, transcript, hydrated, running: transcript.running, submit, cancelTurn, approve, answer };
 }

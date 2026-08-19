@@ -329,7 +329,7 @@ export const STEER_NOTICE_PREFIX = "↪ ";
 export function isSteerNoticeText(text: string): boolean {
   return text.startsWith(STEER_NOTICE_PREFIX);
 }
-interface State {
+export interface State {
   items: Item[];
   running: boolean;
   turnActive: boolean;

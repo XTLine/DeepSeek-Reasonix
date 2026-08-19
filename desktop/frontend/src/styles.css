@@ -38482,48 +38482,86 @@ body > .mermaid-diagram--fullscreen {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
-.remote-surface__log {
+.remote-surface__approval,
+.remote-surface__ask {
   display: flex;
   flex-direction: column;
   gap: 8px;
   max-width: 760px;
   width: 100%;
-  margin: 0 auto;
-}
-.remote-surface__row {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
+  margin: 8px auto 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--warn, var(--fg)) 45%, var(--border));
+  border-radius: 10px;
   background: var(--bg-elev);
 }
-.remote-surface__row--user {
-  border-color: color-mix(in srgb, var(--accent, var(--fg)) 35%, var(--border));
-}
-.remote-surface__role {
-  font-size: var(--text-xs);
-  color: var(--fg-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.remote-surface__text {
-  font-size: var(--text-sm);
-  color: var(--fg);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.remote-surface__empty {
-  color: var(--fg-faint);
-  text-align: center;
-  padding: 24px 0;
-}
-.remote-surface__live {
-  display: inline-flex;
+.remote-surface__approval-head {
+  display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--fg-faint);
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+.remote-surface__approval-body {
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--bg);
+  font-family: var(--font-mono, monospace);
   font-size: var(--text-xs);
-  padding: 4px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.remote-surface__approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.remote-surface__ask-question {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.remote-surface__ask-prompt {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.remote-surface__ask-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.remote-surface__composer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ── Remote project group extras (badge + session rows) ───────────────── */
+.project-tree__remote-badge {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--fg-faint);
+  vertical-align: middle;
+}
+.project-tree__remote-badge--connected,
+.project-tree__remote-badge--degraded {
+  background: var(--ok);
+}
+.project-tree__remote-badge--connecting,
+.project-tree__remote-badge--reconnecting,
+.project-tree__remote-badge--pending_hostkey {
+  background: var(--warn, var(--fg));
+}
+.project-tree__remote-badge--stopped,
+.project-tree__remote-badge--disconnected {
+  background: var(--fg-faint);
+}
+.project-tree__remote-badge--error {
+  background: var(--danger, var(--fg));
 }

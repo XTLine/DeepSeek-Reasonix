@@ -3553,6 +3553,10 @@ function makeMockApp(): AppBindings {
           throw new Error("workspace writer is unavailable in browser preview");
         },
         async CloseTabWithPolicy(tabID) {
+          if (mockRemoteTabs.some((item) => item.id === tabID)) {
+            mockRemoteTabs = mockRemoteTabs.filter((item) => item.id !== tabID);
+            return;
+          }
           return this.CloseTab(tabID);
         },
         async ToolResultForTab() {
@@ -5088,7 +5092,9 @@ function makeMockApp(): AppBindings {
     async RecordUIPerf() {},
     // Tab management mocks.
     async ListTabs() {
-      return mockTabs.map((tab) => ({ ...tab }));
+      const remoteActive = mockRemoteTabs.some((tab) => tab.active);
+      const locals = mockTabs.map((tab) => ({ ...tab, active: remoteActive ? false : tab.active }));
+      return [...locals, ...mockRemoteTabs.map((tab) => ({ ...tab }))];
     },
     async OpenProjectTab(workspaceRoot: string, _topicID: string) {
       const existing = mockTabs.find((tab) => tab.scope === "project" && tab.workspaceRoot === workspaceRoot && tab.topicId === _topicID);
@@ -5254,9 +5260,14 @@ function makeMockApp(): AppBindings {
       pruneMockTabsTo(tab.id);
       return { ...mockTabs[0] };
     },
-    async SetActiveTab(_tabID: string) {
-      setMockActiveTab(_tabID);
-      const tab = mockTabs.find((item) => item.id === _tabID);
+    async SetActiveTab(tabID: string) {
+      if (mockRemoteTabs.some((item) => item.id === tabID)) {
+        mockRemoteTabs = mockRemoteTabs.map((item) => ({ ...item, active: item.id === tabID }));
+        return;
+      }
+      mockRemoteTabs = mockRemoteTabs.map((item) => ({ ...item, active: false }));
+      setMockActiveTab(tabID);
+      const tab = mockTabs.find((item) => item.id === tabID);
       if (tab) queueMockTopicRuntime(tab);
     },
     async ReorderTabs(_tabIDs: string[]) {
@@ -5699,6 +5710,8 @@ function makeMockApp(): AppBindings {
         mode: "normal",
         remote: { hostId, workspace },
       } as TabMeta;
+      meta.active = true;
+      mockRemoteTabs = [...mockRemoteTabs.filter((item) => item.id !== tabId).map((item) => ({ ...item, active: false })), meta];
       __emitMockRemote("remote-tab-opened", meta);
       return meta;
     },
@@ -5707,7 +5720,13 @@ function makeMockApp(): AppBindings {
     },
     async DeleteRemoteProjectSession() {},
     async CloseRemoteTab() {},
-    async SubmitRemoteTab() {},
+    async SubmitRemoteTab(tabId: string, text: string) {
+      // Canned turn so the browser demo streams like a real session.
+      setTimeout(() => __emitMockRemoteTab(tabId, "event", { kind: "turn_started" }), 100);
+      setTimeout(() => __emitMockRemoteTab(tabId, "event", { kind: "reasoning", reasoning: "mock thinking" }), 350);
+      setTimeout(() => __emitMockRemoteTab(tabId, "event", { kind: "text", text: `Echo: ${text}` }), 650);
+      setTimeout(() => __emitMockRemoteTab(tabId, "event", { kind: "turn_done" }), 950);
+    },
     async CancelRemoteTab() {},
     async ApproveRemoteTab() {},
     async AnswerRemoteTab() {},
@@ -5756,5 +5775,8 @@ let mockRemoteHosts: RemoteHostView[] = [
   { id: "demo", label: "demo", host: "192.168.1.10", port: 22, user: "dev", identityFile: "", proxyJump: "", defaultWorkspace: "~/app", serveInstall: "auto", useSSHConfig: false },
 ];
 let mockRemoteProjects: RemoteProjectView[] = [];
+// Open remote tabs in the browser dev mock; mirrors the Go registry merge
+// in ListTabs (a highlighted remote tab deactivates the local entries).
+let mockRemoteTabs: TabMeta[] = [];
 const mockRemoteConn: Record<string, RemoteConnectionStatus["state"]> = {};
 const mockRemoteForwards: Record<string, RemoteForwardView[]> = {};
