@@ -38,7 +38,7 @@ import { asArray } from "./lib/array";
 import { createBoundedRefreshCoordinator, sameTabMetaLists, shouldRefreshTabMetaForEvent, TAB_META_MAX_IN_FLIGHT } from "./lib/tabMetaRefresh";
 import { clearLegacyLangPref, normalizeLangPref, readLegacyLangPref, t, useI18n, useT, type Translator } from "./lib/i18n";
 import { localizedNoticeText, useController, type Item, type LiveStream } from "./lib/useController";
-import { app, onEvent, onProjectTreeChanged, onReady, onRemoteForwards, onRemoteServer, onRemoteStatus, onRuntimeRebuilt, onSessionRecovered, openExternal } from "./lib/bridge";
+import { app, onEvent, onProjectTreeChanged, onReady, onRemoteForwards, onRemoteServer, onRemoteStatus, onRemoteTabOpened, onRuntimeRebuilt, onSessionRecovered, openExternal } from "./lib/bridge";
 import { useConfigLoadWarnings } from "./lib/useConfigLoadWarnings";
 import { generativeMusic, isGenerativeMusicEnabled } from "./lib/generative-music";
 import { clearAttentionChimeKeys, playAttentionChime, playSuccessChime, shouldPlayAttentionChimeForEvent } from "./lib/sound";
@@ -53,6 +53,7 @@ import { RuntimeDecisionCard } from "./components/RuntimeDecisionCard";
 import { decisionSurfaceMockFromInput, type DecisionSurfaceKind as MockDecisionSurfaceKind } from "./lib/decisionSurfaceMock";
 const UndoRewindBanner = lazy(() => import("./components/UndoRewindBanner").then((module) => ({ default: module.UndoRewindBanner })));
 const ProjectTree = lazy(() => import("./components/ProjectTree").then((module) => ({ default: module.ProjectTree })));
+const RemoteSessionSurface = lazy(() => import("./components/RemoteSessionSurface").then((module) => ({ default: module.RemoteSessionSurface })));
 /** Footer decision surface kinds. Runtime blockers are explicit recovery choices. */
 type DecisionSurfaceKind = MockDecisionSurfaceKind | "extension_form";
 import { StatusBar } from "./components/StatusBar";
@@ -2414,6 +2415,18 @@ export default function App() {
     setTabOrderIds((current) => current.includes(tab.id) ? current : [...current, tab.id]);
   }, []);
 
+  // Remote tabs arrive as backend events: adopt the meta into the strip and
+  // switch to it. The same event fires for re-focus clicks on the tree
+  // group, so an already-open tab just becomes active.
+  useEffect(() => {
+    const off = onRemoteTabOpened((meta) => {
+      if (!meta?.id || !meta.remote) return;
+      seedActiveTabMeta(meta);
+      void switchTab(meta.id, meta);
+    });
+    return off;
+  }, [seedActiveTabMeta, switchTab]);
+
   useEffect(() => {
     const unsub = onEvent((e) => {
       if (shouldRefreshTabMetaForEvent(e.kind)) {
@@ -4739,6 +4752,10 @@ export default function App() {
               />
             ) : noticePreviewMockEnabled() ? (
               <NoticePreviewPanel />
+            ) : activeTab?.remote ? (
+              <Suspense fallback={null}>
+                <RemoteSessionSurface tab={activeTab} />
+              </Suspense>
             ) : (
               <>
                 <Transcript

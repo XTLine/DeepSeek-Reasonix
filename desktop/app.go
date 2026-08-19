@@ -324,6 +324,9 @@ type App struct {
 	// restore for these tabs are not implemented yet.
 	remoteTabMu sync.Mutex
 	remoteTabs  map[string]*remoteTab
+	// remoteActiveTabID holds the strip highlight while a remote tab is the
+	// visible surface; a local activation clears it. Guarded by remoteTabMu.
+	remoteActiveTabID string
 	// remoteEventHook, when set, observes every emitRemoteEvent call.
 	// Tests use it to assert event names and payloads; production never
 	// sets it.

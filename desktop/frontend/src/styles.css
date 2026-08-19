@@ -38444,3 +38444,86 @@ body > .mermaid-diagram--fullscreen {
   color: var(--fg-dim);
   overflow-wrap: anywhere;
 }
+
+/* ── Remote session surface (remote tab content area) ─────────────────── */
+.remote-surface {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 16px;
+  overflow-y: auto;
+}
+.remote-surface--waiting,
+.remote-surface--warning,
+.remote-surface--error {
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--fg-dim);
+  font-size: var(--text-md);
+}
+.remote-surface--warning {
+  color: var(--warn, var(--fg));
+}
+.remote-surface--error {
+  color: var(--danger, var(--fg));
+}
+.remote-surface__detail {
+  color: var(--fg-faint);
+  font-size: var(--text-sm);
+  max-width: 60%;
+  overflow-wrap: anywhere;
+}
+.remote-surface__spinner {
+  animation: remote-surface-spin 1s linear infinite;
+}
+@keyframes remote-surface-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.remote-surface__log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
+}
+.remote-surface__row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.remote-surface__row--user {
+  border-color: color-mix(in srgb, var(--accent, var(--fg)) 35%, var(--border));
+}
+.remote-surface__role {
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.remote-surface__text {
+  font-size: var(--text-sm);
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.remote-surface__empty {
+  color: var(--fg-faint);
+  text-align: center;
+  padding: 24px 0;
+}
+.remote-surface__live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-faint);
+  font-size: var(--text-xs);
+  padding: 4px 0;
+}

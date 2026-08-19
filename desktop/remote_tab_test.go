@@ -634,3 +634,56 @@ func TestRemoteTabFollowsHostReconnect(t *testing.T) {
 		t.Fatalf("tab error = %q, want the host failure text", tabErr)
 	}
 }
+
+// TestListTabsIncludesRemoteEntries pins the strip integration: open remote
+// tabs appear in ListTabs, a highlighted remote tab deactivates the local
+// entries, and SetActiveTab routes by registry membership.
+func TestListTabsIncludesRemoteEntries(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+
+	tabs := a.ListTabs()
+	var remote TabMeta
+	found := false
+	for _, tab := range tabs {
+		if tab.ID == meta.ID {
+			remote, found = tab, true
+		}
+	}
+	if !found {
+		t.Fatalf("remote tab missing from ListTabs: %+v", tabs)
+	}
+	if remote.Remote == nil || remote.Remote.HostID != "box" {
+		t.Fatalf("remote meta ref = %+v", remote.Remote)
+	}
+	if !remote.Active {
+		t.Fatal("freshly opened remote tab must carry the strip highlight")
+	}
+
+	if err := a.SetActiveTab(meta.ID); err != nil {
+		t.Fatalf("SetActiveTab(remote): %v", err)
+	}
+	a.remoteTabMu.Lock()
+	active := a.remoteActiveTabID
+	a.remoteTabMu.Unlock()
+	if active != meta.ID {
+		t.Fatalf("remoteActiveTabID = %q, want %q", active, meta.ID)
+	}
+	if err := a.CloseTabWithPolicy(meta.ID, "keep_running"); err != nil {
+		t.Fatalf("CloseTabWithPolicy(remote): %v", err)
+	}
+	a.remoteTabMu.Lock()
+	_, present := a.remoteTabs[meta.ID]
+	a.remoteTabMu.Unlock()
+	if present {
+		t.Fatal("CloseTabWithPolicy left the remote tab registered")
+	}
+}

@@ -295,6 +295,13 @@ const stopAndCloseGrace = 15 * time.Second
 // CloseTabWithPolicy makes the old implicit detach behavior an explicit user
 // choice. stop_and_close never removes the tab until all owned work is idle.
 func (a *App) CloseTabWithPolicy(tabID, policy string) error {
+	a.remoteTabMu.Lock()
+	_, isRemote := a.remoteTabs[tabID]
+	a.remoteTabMu.Unlock()
+	if isRemote {
+		// Remote tabs own no local runtime; closing is a registry teardown.
+		return a.CloseRemoteTab(tabID)
+	}
 	switch strings.TrimSpace(policy) {
 	case "keep_running":
 		return a.closeTab(tabID, true)

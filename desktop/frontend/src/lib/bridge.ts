@@ -1049,6 +1049,15 @@ export function onRemoteTabState(tabId: string, cb: (s: RemoteTabState) => void)
   return registerMockRemoteTabListener(tabId, "state", cb as (v: unknown) => void);
 }
 
+// onRemoteTabOpened fires when the backend opens or re-focuses a remote tab;
+// the payload is the TabMeta the chrome should adopt.
+export function onRemoteTabOpened(cb: (meta: TabMeta) => void): () => void {
+  if (realApp() && typeof window !== "undefined" && window.runtime) {
+    return window.runtime.EventsOn("remote-tab:opened", (payload?: unknown) => cb((payload ?? {}) as TabMeta));
+  }
+  return registerMockRemoteListener("remote-tab-opened", cb as (v: unknown) => void);
+}
+
 // Mock fan-out for remote-tab events, keyed `${tabId}:${channel}` (browser-dev / tsx tests).
 type MockRemoteTabChannel = "event" | "state";
 const mockRemoteTabListeners = new Map<string, Set<(v: unknown) => void>>();
@@ -1072,11 +1081,12 @@ export function __emitMockRemoteTab(tabId: string, channel: MockRemoteTabChannel
 
 // Mock event fan-out so browser-dev and tsx tests can drive remote:* events
 // without a Wails runtime.
-type MockRemoteChannel = "status" | "forwards" | "server";
+type MockRemoteChannel = "status" | "forwards" | "server" | "remote-tab-opened";
 const mockRemoteListeners: Record<MockRemoteChannel, Set<(v: unknown) => void>> = {
   status: new Set(),
   forwards: new Set(),
   server: new Set(),
+  "remote-tab-opened": new Set(),
 };
 function registerMockRemoteListener(ch: MockRemoteChannel, cb: (v: unknown) => void): () => void {
   mockRemoteListeners[ch].add(cb);
@@ -5676,7 +5686,7 @@ function makeMockApp(): AppBindings {
     async OpenRemoteProjectTab(hostId: string, workspace: string) {
       const tabId = `remote-mock-${hostId}-${workspace}`.replace(/[^a-z0-9-]/gi, "_");
       __emitMockRemoteTab(tabId, "state", { state: "ready" });
-      return {
+      const meta = {
         id: tabId,
         scope: "project",
         workspaceRoot: workspace,
@@ -5689,6 +5699,8 @@ function makeMockApp(): AppBindings {
         mode: "normal",
         remote: { hostId, workspace },
       } as TabMeta;
+      __emitMockRemote("remote-tab-opened", meta);
+      return meta;
     },
     async RemoteProjectSessions() {
       return [];

@@ -47,6 +47,7 @@ type remoteTab struct {
 	err         string
 	newSession  bool
 	sessionName string
+	hostLabel   string
 
 	// Bridge fields, mutated under App.remoteTabMu. client keeps the serve
 	// session cookie in its jar across reconnects; token is retained for a
@@ -166,12 +167,14 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 	}
 	a.remoteTabMu.Unlock()
 	if reuse != nil {
-		return remoteTabMeta(reuse, host.Name), nil
+		meta := remoteTabMeta(reuse, host.Name)
+		a.activateRemoteTab(reuse.id, meta)
+		return meta, nil
 	}
 
 	ref := RemoteTabRef{HostID: hostID, Workspace: workspace}
 	tabID := newTabID()
-	tab := &remoteTab{id: tabID, ref: ref, state: "connecting", newSession: opts.NewSession, sessionName: opts.SessionName}
+	tab := &remoteTab{id: tabID, ref: ref, state: "connecting", newSession: opts.NewSession, sessionName: opts.SessionName, hostLabel: host.Name}
 	a.remoteTabMu.Lock()
 	if a.remoteTabs == nil {
 		a.remoteTabs = map[string]*remoteTab{}
@@ -189,7 +192,18 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 
 	a.goSafe("remoteTabServe", func() { a.bootstrapRemoteTab(tabID, hostID, workspace) })
 
-	return remoteTabMeta(tab, host.Name), nil
+	meta := remoteTabMeta(tab, host.Name)
+	a.activateRemoteTab(tabID, meta)
+	return meta, nil
+}
+
+// activateRemoteTab highlights the tab in the strip and tells the frontend
+// chrome to adopt it.
+func (a *App) activateRemoteTab(tabID string, meta TabMeta) {
+	a.remoteTabMu.Lock()
+	a.remoteActiveTabID = tabID
+	a.remoteTabMu.Unlock()
+	a.emitRemoteEvent("remote-tab:opened", meta)
 }
 
 // remoteTabMeta builds the frontend-facing shape of one remote tab; the
@@ -200,6 +214,7 @@ func remoteTabMeta(tab *remoteTab, hostLabel string) TabMeta {
 		Scope:         "project",
 		WorkspaceRoot: tab.ref.Workspace,
 		WorkspaceName: remoteWorkspaceName(tab.ref.Workspace),
+		TopicTitle:    remoteWorkspaceName(tab.ref.Workspace),
 		Label:         hostLabel,
 		Mode:          "normal",
 		Active:        true,

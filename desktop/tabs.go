@@ -2280,7 +2280,7 @@ func (a *App) ListTabs() []TabMeta {
 	}
 	a.mu.RUnlock()
 	if !needsRepair {
-		return enrichTabMetas(out)
+		return a.listTabsWithRemote(out)
 	}
 
 	a.mu.Lock()
@@ -2291,7 +2291,7 @@ func (a *App) ListTabs() []TabMeta {
 		}
 	}
 	a.mu.Unlock()
-	return enrichTabMetas(out)
+	return a.listTabsWithRemote(out)
 }
 
 // syncTabWorkspaceRootSpellings repoints visible and detached project runtimes
@@ -3079,6 +3079,14 @@ func (a *App) indexedBlankTopicIDLocked(scope, workspaceRoot string) string {
 // SetActiveTab switches the frontend's active tab. A no-op when tabID is
 // already active or unknown.
 func (a *App) SetActiveTab(tabID string) error {
+	a.remoteTabMu.Lock()
+	if _, isRemote := a.remoteTabs[tabID]; isRemote {
+		a.remoteActiveTabID = tabID
+		a.remoteTabMu.Unlock()
+		return nil
+	}
+	a.remoteActiveTabID = ""
+	a.remoteTabMu.Unlock()
 	a.mu.RLock()
 	_, ok := a.tabs[tabID]
 	alreadyActive := a.activeTabID == tabID

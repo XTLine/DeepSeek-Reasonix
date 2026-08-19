@@ -572,6 +572,18 @@ func (a *App) RemoteTabSkills(tabID string) (json.RawMessage, error) {
 	return a.remoteTabGet(tabID, "/skills")
 }
 
+// remoteTabMetas returns chrome metas for every open remote tab plus the
+// currently highlighted remote tab id ("" when a local tab is active).
+func (a *App) remoteTabMetas() ([]TabMeta, string) {
+	a.remoteTabMu.Lock()
+	defer a.remoteTabMu.Unlock()
+	metas := make([]TabMeta, 0, len(a.remoteTabs))
+	for _, tab := range a.remoteTabs {
+		metas = append(metas, remoteTabMeta(tab, tab.hostLabel))
+	}
+	return metas, a.remoteActiveTabID
+}
+
 // CloseRemoteTab tears down one remote tab: the SSE pump stops and the
 // registry entry goes away. The remote serve and the SSH connection stay
 // untouched — other tabs on the same host keep running.
@@ -695,4 +707,20 @@ func (a *App) reattachRemoteTab(tabID string) {
 
 	a.goSafe("remoteTabPump", func() { a.remoteTabPump(pumpCtx, tabID, gen) })
 	a.emitRemoteTabState(tabID, "ready", "")
+}
+
+// listTabsWithRemote merges the remote strip entries into a local tab list.
+// A highlighted remote tab deactivates every local entry so the strip shows
+// exactly one active tab.
+func (a *App) listTabsWithRemote(local []TabMeta) []TabMeta {
+	remote, remoteActive := a.remoteTabMetas()
+	if remoteActive != "" {
+		for i := range local {
+			local[i].Active = false
+		}
+	}
+	if len(remote) == 0 {
+		return enrichTabMetas(local)
+	}
+	return append(enrichTabMetas(local), remote...)
 }
