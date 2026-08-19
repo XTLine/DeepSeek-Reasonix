@@ -933,4 +933,7 @@ func TestRemoteWindowDisconnectAndStopCloseWindow(t *testing.T) {
 	if a.hasRemoteWindow("box") {
 		t.Fatal("window survived stop-server")
 	}
+	if got := fake.stoppedWorkspaces; len(got) != 2 || got[0] != "/other" || got[1] != "/srv" {
+		t.Fatalf("StopRemoteServer forwarded %v, want [/other /srv]", got)
+	}
 }
