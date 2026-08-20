@@ -85,13 +85,16 @@ let connectAttempts = 0;
 // Platform-gate attempt counter: the first check models a Windows SSH host
 // (uname reports MINGW64); later checks pass.
 let platformAttempts = 0;
+// Last AddRemoteHost payload, for credential-mode assertions.
+let lastAddInput: RemoteHostInput | undefined;
 window.go = { main: { App: {
   async RemoteHosts() {
     tape.push("RemoteHosts");
     return savedHosts.slice();
   },
   async AddRemoteHost(input: RemoteHostView & { label?: string; host?: string }) {
-    tape.push(`AddRemoteHost:${input.label}:${input.host}`);
+    lastAddInput = input as unknown as RemoteHostInput;
+    tape.push(`AddRemoteHost:${input.label}:${input.host}:${(input as RemoteHostInput).credentialMode ?? ""}`);
     hostCount += 1;
     const view = { id: `new-${hostCount}`, label: String(input.label), host: String(input.host), port: 22, user: "", identityFile: "", proxyJump: "", defaultWorkspace: "", serveInstall: "npm", credentialMode: "remote", useSSHConfig: false } as RemoteHostView;
     savedHosts.push(view);
@@ -176,7 +179,7 @@ const railItems = () => [...document.querySelectorAll(".remote-wizard__rail-item
 ok(railItems().length === 3, "stepper rail lists all three steps");
 ok(railItems()[0]?.className.includes("--current") === true, "step 1 is current on open");
 ok(railItems().every((item) => !item.className.includes("--done")), "no step is done on open");
-ok(document.querySelectorAll(".remote-wizard__seg").length === 2, "auth and download use segmented sliders");
+ok(document.querySelectorAll(".remote-wizard__seg").length === 3, "auth, download, and credential mode use segmented sliders");
 const hostInput = document.querySelector<HTMLInputElement>(".remote-wizard__suggest input");
 ok(Boolean(hostInput), "config step shows the host input");
 
@@ -330,11 +333,24 @@ await act(async () => {
   if (newPasswordInput) setInput(newPasswordInput, "s3cret");
   await Promise.resolve();
 });
+{
+  // Credential mode: a segmented control mirroring the download method;
+  // picking local-proxy must ride the AddRemoteHost payload.
+  const segButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".remote-wizard__field .provider-add-segmented__item"));
+  const localProxy = segButtons.find((b) => b.textContent?.includes("本机") || b.textContent?.includes("this computer"));
+  ok(Boolean(localProxy), "wizard host form offers the credential-mode segmented control");
+  await act(async () => {
+    localProxy?.click();
+    await Promise.resolve();
+  });
+  ok(localProxy?.className.includes("--active") === true, "local-proxy segment highlights when selected");
+}
 await act(async () => {
   buttonByText("Next")?.click();
   await flush();
 });
 ok(tape.some((entry) => entry.startsWith("AddRemoteHost:10.9.8.7:10.9.8.7")), "a new host is added (label defaults to the host)");
+ok(lastAddInput?.credentialMode === "local-proxy", `AddRemoteHost carries the chosen credential mode (got ${lastAddInput?.credentialMode})`);
 
 await act(async () => secondRoot.unmount());
 dom.window.close();
