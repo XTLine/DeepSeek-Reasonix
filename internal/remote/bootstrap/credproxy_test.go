@@ -126,3 +126,75 @@ func TestLaunchCommandCredentialInjection(t *testing.T) {
 		t.Errorf("token leaked outside the env assignment:\n%s", cmd)
 	}
 }
+
+// TestEnsureCredentialProviderMaterializesBuiltinDefault: a remote whose
+// default_model resolves only through the built-in defaults gains an explicit
+// entry for it before ours — appending ours alone would disable the builtins
+// and crash the serve at startup. default_model is never rewritten and the
+// second run is byte-stable.
+func TestEnsureCredentialProviderMaterializesBuiltinDefault(t *testing.T) {
+	skipOnWindows(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".reasonix"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := "config_version = 6\n\ndefault_model = \"deepseek-flash\"   # user's choice stays\n\n[ui]\ntheme = \"dark\"\n"
+	if err := os.WriteFile(filepath.Join(root, ".reasonix", "config.toml"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conn := newFakeConn(t, root, func(string) (remote.ExecResult, error) { return ok("") })
+	fs, err := conn.SFTP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := os.ReadFile(filepath.Join(root, ".reasonix", "config.toml"))
+	got := string(first)
+	for _, want := range []string{
+		`default_model = "deepseek-flash"   # user's choice stays`,
+		`name = "deepseek-flash"`,
+		`api_key_env = "DEEPSEEK_API_KEY"`,
+		`name = "reasonix-desktop-proxy"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("config missing %q:\n%s", want, got)
+		}
+	}
+	if n := strings.Count(got, "[[providers]]"); n != 2 {
+		t.Fatalf("provider blocks = %d, want 2 (materialized + ours):\n%s", n, got)
+	}
+	// The materialized entry must come BEFORE ours so file order reads
+	// user-default then desktop-proxy.
+	if strings.Index(got, `name = "deepseek-flash"`) > strings.Index(got, `name = "reasonix-desktop-proxy"`) {
+		t.Fatalf("materialized entry should precede ours:\n%s", got)
+	}
+
+	// Idempotent.
+	if err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := os.ReadFile(filepath.Join(root, ".reasonix", "config.toml"))
+	if string(first) != string(second) {
+		t.Fatalf("second run rewrote the config:\n%s\n---\n%s", first, second)
+	}
+}
+
+// TestMaterializeDefaultProviderSkipsNonBuiltin: a default_model whose
+// provider is neither in the file nor a builtin stays untouched — the gap is
+// user-owned, not ours to invent.
+func TestMaterializeDefaultProviderSkipsNonBuiltin(t *testing.T) {
+	before := "default_model = \"custom/pro-model\"\n"
+	after := materializeDefaultProvider(before)
+	if before != after {
+		t.Fatalf("non-builtin default was rewritten:\n%s", after)
+	}
+	if got := defaultModelProvider("default_model = \"deepseek/deepseek-v4-flash\"\n"); got != "deepseek" {
+		t.Fatalf("provider extraction = %q, want deepseek", got)
+	}
+	if got := defaultModelProvider("[ui]\ndefault_model = \"deepseek-flash\"\n"); got != "" {
+		t.Fatalf("table-scoped default_model leaked: %q", got)
+	}
+}

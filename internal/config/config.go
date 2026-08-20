@@ -1824,6 +1824,20 @@ const LanguagePolicy = `Reply in the same language the user is using in their mo
 	`whenever they switch. Let this also guide the language you think in. Always keep code, ` +
 	`identifiers, file paths, shell commands, and technical terms in their original form — never translate them.`
 
+// BuiltinProviderEntry returns the built-in default provider entry with the
+// given name (e.g. "deepseek-flash"). Remote bootstrap uses it to materialize
+// a preset-relied provider into an explicit [[providers]] entry before
+// appending its own: defining ANY [[providers]] in a file replaces the
+// built-ins, so a dangling default_model would otherwise crash the serve.
+func BuiltinProviderEntry(name string) (ProviderEntry, bool) {
+	for _, p := range Default().Providers {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return ProviderEntry{}, false
+}
+
 // Default returns the built-in default configuration.
 func Default() *Config {
 	return &Config{

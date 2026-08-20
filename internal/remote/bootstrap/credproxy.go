@@ -8,6 +8,7 @@ import (
 	"path"
 	"strings"
 
+	"reasonix/internal/config"
 	"reasonix/internal/remote/sftpfs"
 )
 
@@ -101,6 +102,12 @@ func ensureCredentialProvider(ctx context.Context, fs *sftpfs.FS, home string, o
 		return fmt.Errorf("bootstrap: read remote config: %w", rerr)
 	}
 	existing := string(data)
+	// Defining ANY [[providers]] in the file replaces the built-in defaults,
+	// so appending ours would leave a preset-relied default_model dangling
+	// and the serve would crash at startup. Materialize the builtin provider
+	// default_model refers to as an explicit entry first; default_model
+	// itself is never rewritten.
+	existing = materializeDefaultProvider(existing)
 	if idx := providerBlockIndex(existing, opts.Provider); idx >= 0 {
 		if providerBlockHasBaseURL(existing[idx:], opts.BaseURL) {
 			return nil
@@ -172,4 +179,93 @@ func replaceProviderBaseURL(text string, idx int, baseURL string) (string, bool)
 		}
 	}
 	return text, false
+}
+
+// materializeDefaultProvider appends an explicit [[providers]] entry for the
+// provider the top-level default_model refers to when that provider currently
+// resolves only through the built-in defaults. Returns the text unchanged
+// when default_model is absent, already defined in the file, or not a
+// builtin. default_model itself is never rewritten — the remote's model
+// choice stays exactly as the user configured it.
+func materializeDefaultProvider(existing string) string {
+	name := defaultModelProvider(existing)
+	if name == "" || providerBlockIndex(existing, name) >= 0 {
+		return existing
+	}
+	entry, ok := config.BuiltinProviderEntry(name)
+	if !ok {
+		return existing
+	}
+	return existing + providerEntryBlock(entry)
+}
+
+// defaultModelProvider extracts the provider part of the top-level
+// default_model assignment: "deepseek-flash" → "deepseek-flash",
+// "deepseek/deepseek-v4-flash" → "deepseek". Empty when absent. Scanning
+// stops at the first table header — default_model is only meaningful at the
+// top of the file.
+func defaultModelProvider(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			return ""
+		}
+		after, ok := strings.CutPrefix(trimmed, "default_model")
+		if !ok || !strings.HasPrefix(strings.TrimSpace(after), "=") {
+			continue
+		}
+		value := firstQuoted(after)
+		if value == "" {
+			return ""
+		}
+		provider, _, _ := strings.Cut(value, "/")
+		return strings.TrimSpace(provider)
+	}
+	return ""
+}
+
+// firstQuoted returns the first double-quoted substring of s, skipping a
+// trailing inline comment.
+func firstQuoted(s string) string {
+	i := strings.Index(s, `"`)
+	if i < 0 {
+		return ""
+	}
+	j := strings.Index(s[i+1:], `"`)
+	if j < 0 {
+		return ""
+	}
+	return s[i+1 : i+1+j]
+}
+
+// providerEntryBlock renders a builtin ProviderEntry as a TOML block with the
+// connection fields the serve needs (name/kind/base_url/model/api_key_env,
+// plus the models list form); secrets stay in api_key_env as everywhere else.
+func providerEntryBlock(p config.ProviderEntry) string {
+	var b strings.Builder
+	b.WriteString("\n[[providers]]\n")
+	b.WriteString("# materialized from the built-in defaults by the desktop credential proxy — safe to delete\n")
+	fmt.Fprintf(&b, "name = %s\n", tomlString(p.Name))
+	fmt.Fprintf(&b, "kind = %s\n", tomlString(p.Kind))
+	fmt.Fprintf(&b, "base_url = %s\n", tomlString(p.BaseURL))
+	if p.Model != "" {
+		fmt.Fprintf(&b, "model = %s\n", tomlString(p.Model))
+	}
+	if len(p.Models) > 0 {
+		quoted := make([]string, len(p.Models))
+		for i, m := range p.Models {
+			quoted[i] = tomlString(m)
+		}
+		fmt.Fprintf(&b, "models = [%s]\n", strings.Join(quoted, ", "))
+		if p.Default != "" {
+			fmt.Fprintf(&b, "default = %s\n", tomlString(p.Default))
+		}
+	}
+	if p.APIKeyEnv != "" {
+		fmt.Fprintf(&b, "api_key_env = %s\n", tomlString(p.APIKeyEnv))
+	}
+	if p.BalanceURL != "" {
+		fmt.Fprintf(&b, "balance_url = %s\n", tomlString(p.BalanceURL))
+	}
+	return b.String()
 }
