@@ -797,6 +797,25 @@ type GlobalCrashEventLike = Pick<Event, "defaultPrevented"> & {
 const RESIZE_OBSERVER_LOOP_MESSAGE_RE =
   /^ResizeObserver loop (?:limit exceeded|completed with undelivered notifications\.?)$/;
 const OPAQUE_SCRIPT_ERROR_MESSAGE = "Script error.";
+const WAILS_RUNTIME_FRAME_RE = /https?:\/\/[^/]+\/wails\/[\w.-]+\.js/;
+
+// The Wails dev runtime's own scripts (ipc.js spinner overlay et al.) can
+// throw internal errors that never touch app code — the app keeps working
+// (verified: the full UI renders behind them). Escalating third-party runtime
+// noise to the fatal report screen would block the app for nothing, so an
+// error whose stack frames live ENTIRELY inside /wails/*.js is ignored.
+function isWailsRuntimeOnlyCrashEvent(e: GlobalCrashEventLike): boolean {
+  const error = e.error;
+  if (!error || typeof error !== "object") return false;
+  const stack = (error as { stack?: unknown }).stack;
+  if (typeof stack !== "string") return false;
+  const frames = stack
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("at ") || line.includes("@http"));
+  if (frames.length === 0) return false;
+  return frames.every((line) => WAILS_RUNTIME_FRAME_RE.test(line));
+}
 
 function globalCrashEventMessages(e: GlobalCrashEventLike): string[] {
   const messages: string[] = [];
@@ -818,6 +837,7 @@ export function shouldReportGlobalCrashEvent(e: GlobalCrashEventLike): boolean {
   if (e.defaultPrevented) return false;
   if (globalCrashEventMessages(e).some((message) => RESIZE_OBSERVER_LOOP_MESSAGE_RE.test(message))) return false;
   if (globalCrashEventMessages(e).some((message) => /Minified React error #520\b/.test(message))) return false;
+  if (isWailsRuntimeOnlyCrashEvent(e)) return false;
   return true;
 }
 
