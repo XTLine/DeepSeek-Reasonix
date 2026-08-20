@@ -102,6 +102,17 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 	}
 	paths := pathsFor(home, workspace)
 
+	// 0. Local-proxy credential mode: install (and heal) the provider config
+	// BEFORE the reuse check, so a live serve's config gets the materialized
+	// default_provider entry too — not only fresh launches. The write is
+	// idempotent and never touches default_model itself.
+	if opts.CredentialProxy != nil {
+		opts.progress("credential_proxy", "")
+		if err := ensureCredentialProvider(ctx, fs, home, opts.CredentialProxy); err != nil {
+			return Result{}, err
+		}
+	}
+
 	// 1. Reuse a live process if the recorded pid is still running.
 	if st, tok, ok := tryReuse(ctx, conn, fs, paths, workspace); ok {
 		opts.progress("reuse", st.Addr)
@@ -123,16 +134,6 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 	bin, version, err := ensureBinary(ctx, conn, fs, opts, home, goos, goarch, paths)
 	if err != nil {
 		return Result{}, err
-	}
-
-	// 3b. Local-proxy credential mode: install the tunnel-backed provider
-	// entry before the serve can launch against it (outside the lock — the
-	// write is idempotent).
-	if opts.CredentialProxy != nil {
-		opts.progress("credential_proxy", "")
-		if err := ensureCredentialProvider(ctx, fs, home, opts.CredentialProxy); err != nil {
-			return Result{}, err
-		}
 	}
 
 	// 4. Serialize only the short launch/publish section across every client.
