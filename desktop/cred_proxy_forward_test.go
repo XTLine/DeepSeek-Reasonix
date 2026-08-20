@@ -38,12 +38,21 @@ func TestCredentialProxyReverseForwardEndToEnd(t *testing.T) {
 	lc := newLifecycleSSHClient(nil)
 	lc.forwards = set
 
-	if err := ensureCredentialProxyForward(lc, "box", targetPort); err != nil {
+	remotePort, err := ensureCredentialProxyForward(lc, "box", targetPort)
+	if err != nil {
 		t.Fatal(err)
 	}
-	// Idempotent: a second ensure neither errors nor adds a second forward.
-	if err := ensureCredentialProxyForward(lc, "box", targetPort); err != nil {
+	if remotePort <= 0 || remotePort > 65535 {
+		t.Fatalf("remote port = %d, want an ephemeral bound port", remotePort)
+	}
+	// Idempotent: a second ensure neither errors nor adds a second forward,
+	// and reports the SAME bound port.
+	again, err := ensureCredentialProxyForward(lc, "box", targetPort)
+	if err != nil {
 		t.Fatalf("second ensure: %v", err)
+	}
+	if again != remotePort {
+		t.Fatalf("second ensure port = %d, want %d", again, remotePort)
 	}
 	if n := len(set.List()); n != 1 {
 		t.Fatalf("forward count = %d, want 1", n)
@@ -52,7 +61,7 @@ func TestCredentialProxyReverseForwardEndToEnd(t *testing.T) {
 	// Dial the REMOTE-side bind address. sshtest runs on localhost, so the
 	// remote loopback port is reachable here; the bytes travel
 	// dial → ssh server → forwarded-tcpip → ssh client → target.
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(fmt.Sprintf("http://127.0.0.1:%d/hello", credentialProxyRemotePort))
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(fmt.Sprintf("http://127.0.0.1:%d/hello", remotePort))
 	if err != nil {
 		t.Fatalf("reverse forward dial: %v", err)
 	}

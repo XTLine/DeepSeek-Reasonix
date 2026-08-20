@@ -21,12 +21,6 @@ import (
 // token for the real provider key. The real key lives only in desktop memory
 // and the local .env — it never crosses the wire.
 
-// credentialProxyRemotePort is the fixed loopback port the reverse tunnel
-// binds on the REMOTE host. One port serves all local-proxy hosts because the
-// virtual token identifies the route; a port collision with a user process
-// surfaces as a serve-start error.
-const credentialProxyRemotePort = 18999
-
 // credentialProxyProviderName is the provider entry the bootstrap installs in
 // the remote config; the serve launches with --model <name>.
 const credentialProxyProviderName = "reasonix-desktop-proxy"

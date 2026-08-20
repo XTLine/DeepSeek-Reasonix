@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1386,14 +1387,14 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 	// entry to install on the remote. The real key never leaves this machine.
 	var credOpts *bootstrap.CredentialProxyOptions
 	if entry.CredentialProxyEnabled() {
-		token, model, cerr := m.credentialProxySetup(c, hostID)
+		token, model, remotePort, cerr := m.credentialProxySetup(c, hostID)
 		if cerr != nil {
 			view := RemoteServerView{HostID: hostID, Workspace: workspace, State: "error", Error: cerr.Error()}
 			m.publishFailedServeStart(hostID, mh, previousServer, previousToken, view)
 			return view, "", cerr
 		}
 		credOpts = &bootstrap.CredentialProxyOptions{
-			BaseURL:  fmt.Sprintf("http://127.0.0.1:%d", credentialProxyRemotePort),
+			BaseURL:  fmt.Sprintf("http://127.0.0.1:%d", remotePort),
 			Token:    token,
 			Provider: credentialProxyProviderName,
 			Model:    model,
@@ -1529,39 +1530,64 @@ func (m *desktopRemoteManager) ServerLogs(ctx context.Context, hostID, workspace
 // credentialProxySetup prepares local-proxy credential mode for one host:
 // starts the desktop key holder, registers the host's virtual token against
 // the desktop's default provider, and opens the reverse tunnel the remote
-// serve will call through. Returns the virtual token and the model name the
-// remote provider entry should carry.
-func (m *desktopRemoteManager) credentialProxySetup(c desktopSSHClient, hostID string) (string, string, error) {
+// serve will call through. Returns the virtual token, the model name the
+// remote provider entry should carry, and the remote loopback port the
+// tunnel actually bound.
+func (m *desktopRemoteManager) credentialProxySetup(c desktopSSHClient, hostID string) (string, string, int, error) {
 	app, ok := m.sink.(*App)
 	if !ok || app == nil {
-		return "", "", fmt.Errorf("credential proxy: app unavailable")
+		return "", "", 0, fmt.Errorf("credential proxy: app unavailable")
 	}
 	token, model, port, err := app.registerCredentialProxyRoute(hostID)
 	if err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
-	if err := ensureCredentialProxyForward(c, hostID, port); err != nil {
-		return "", "", fmt.Errorf("credential proxy: reverse tunnel: %w", err)
+	remotePort, err := ensureCredentialProxyForward(c, hostID, port)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("credential proxy: reverse tunnel: %w", err)
 	}
-	return token, model, nil
+	return token, model, remotePort, nil
 }
 
 // ensureCredentialProxyForward opens (idempotently) the reverse tunnel: the
-// REMOTE loopback port forwards back through SSH to the desktop proxy.
-func ensureCredentialProxyForward(c desktopSSHClient, hostID string, desktopPort int) error {
+// REMOTE binds an ephemeral loopback port (avoids conflicts with stale
+// listeners from half-dead sessions) and forwards back through SSH to the
+// desktop proxy. Returns the actually bound remote port.
+func ensureCredentialProxyForward(c desktopSSHClient, hostID string, desktopPort int) (int, error) {
 	name := "cred-proxy:" + hostID
 	for _, f := range c.Forwards().List() {
-		if f.Spec.Name == name {
-			return nil
+		if f.Spec.Name == name && f.Up {
+			if port, ok := portOfAddr(f.BoundAddr); ok {
+				return port, nil
+			}
 		}
 	}
-	_, err := c.Forwards().Add(forward.Spec{
+	bound, err := c.Forwards().Add(forward.Spec{
 		Name:       name,
 		Direction:  forward.Remote,
-		BindAddr:   fmt.Sprintf("127.0.0.1:%d", credentialProxyRemotePort),
+		BindAddr:   "127.0.0.1:0",
 		TargetAddr: fmt.Sprintf("127.0.0.1:%d", desktopPort),
 	})
-	return err
+	if err != nil {
+		return 0, err
+	}
+	port, ok := portOfAddr(bound)
+	if !ok {
+		return 0, fmt.Errorf("reverse tunnel bound unexpected address %q", bound)
+	}
+	return port, nil
+}
+
+func portOfAddr(addr string) (int, bool) {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0, false
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 {
+		return 0, false
+	}
+	return port, true
 }
 
 // CheckPlatform rejects unsupported remote operating systems right after
