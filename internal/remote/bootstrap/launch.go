@@ -86,13 +86,23 @@ func StopCommand(pid int, p StatePaths) string {
 // ServeAliveCommand prints "1" only when pid is running AND its command line
 // looks like a reasonix serve process. Checking the args (not just `kill -0`)
 // prevents a recycled PID — now owned by an unrelated process — from being
-// mistaken for the serve and later signalled by StopCommand.
-func ServeAliveCommand(pid int, p StatePaths) string {
+// mistaken for the serve and later signalled by StopCommand. Each requireArgs
+// fragment must additionally appear in the args, in order after the token and
+// port files: local-proxy mode requires "--model <proxy provider>" so a serve
+// launched under different settings (e.g. before the host switched credential
+// modes) is not treated as reusable.
+func ServeAliveCommand(pid int, p StatePaths, requireArgs ...string) string {
+	decls := fmt.Sprintf("T=%s; P=%s; ", shellQuote(p.TokenFile), shellQuote(p.PortFile))
+	pattern := "*reasonix*serve*\"$T\"*\"$P\"*"
+	for i, arg := range requireArgs {
+		decls += fmt.Sprintf("R%d=%s; ", i, shellQuote(arg))
+		pattern += fmt.Sprintf("\"$R%d\"*", i)
+	}
 	return fmt.Sprintf(
-		"T=%s; P=%s; kill -0 %d 2>/dev/null || { echo 0; exit 0; }; "+
+		"%skill -0 %d 2>/dev/null || { echo 0; exit 0; }; "+
 			"A=$(ps -p %d -o args= 2>/dev/null || ps -p %d -o command= 2>/dev/null); "+
-			"case \"$A\" in *reasonix*serve*\"$T\"*\"$P\"*) echo 1;; *) echo 0;; esac",
-		shellQuote(p.TokenFile), shellQuote(p.PortFile), pid, pid, pid,
+			"case \"$A\" in %s) echo 1;; *) echo 0;; esac",
+		decls, pid, pid, pid, pattern,
 	)
 }
 

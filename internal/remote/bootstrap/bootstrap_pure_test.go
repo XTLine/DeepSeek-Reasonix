@@ -135,6 +135,15 @@ func TestStopAndServeAliveCommands(t *testing.T) {
 	if strings.Count(stop, "ours") < 3 {
 		t.Fatalf("StopCommand must revalidate ownership during TERM/KILL wait: %s", stop)
 	}
+	withModel := ServeAliveCommand(99, paths, "--model reasonix-desktop-proxy")
+	for _, want := range []string{`R0='--model reasonix-desktop-proxy'`, `"$R0"*`} {
+		if !strings.Contains(withModel, want) {
+			t.Errorf("ServeAliveCommand(requireArgs) missing %q: %s", want, withModel)
+		}
+	}
+	if strings.Contains(alive, "R0=") {
+		t.Errorf("plain ServeAliveCommand must not grow require-arg vars: %s", alive)
+	}
 }
 
 func TestLaunchCommandDetachAndLogHardening(t *testing.T) {

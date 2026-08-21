@@ -31,6 +31,10 @@ type CredentialProxyOptions struct {
 	// Model is the model name the provider entry carries (the desktop's
 	// current default model, resolved by the caller).
 	Model string
+	// Kind is the provider kind the entry carries ("openai" or "anthropic"):
+	// the serve formats its model requests per kind, so it must match the
+	// desktop provider behind the proxy. Empty reads as "openai".
+	Kind string
 }
 
 // TokenEnvName is the environment variable the launch command sets and the
@@ -72,6 +76,15 @@ func tomlString(s string) string {
 	return b.String()
 }
 
+// credentialProxyKind normalizes the options' provider kind.
+func credentialProxyKind(opts *CredentialProxyOptions) string {
+	kind := strings.TrimSpace(opts.Kind)
+	if kind == "" {
+		kind = "openai"
+	}
+	return kind
+}
+
 // credentialProviderBlock renders the provider entry appended to the remote
 // config. base_url rides the reverse tunnel; the token arrives via the
 // REASONIX_PROXY_TOKEN environment variable the launch command sets.
@@ -80,7 +93,7 @@ func credentialProviderBlock(opts *CredentialProxyOptions) string {
 	b.WriteString("\n[[providers]]\n")
 	b.WriteString("# managed by the Reasonix desktop credential proxy — safe to delete\n")
 	b.WriteString("name = " + tomlString(opts.Provider) + "\n")
-	b.WriteString("kind = \"openai\"\n")
+	b.WriteString("kind = " + tomlString(credentialProxyKind(opts)) + "\n")
 	b.WriteString("base_url = " + tomlString(opts.BaseURL) + "\n")
 	b.WriteString("model = " + tomlString(opts.Model) + "\n")
 	b.WriteString("api_key_env = \"" + TokenEnvName + "\"\n")
@@ -89,17 +102,23 @@ func credentialProviderBlock(opts *CredentialProxyOptions) string {
 
 // ensureCredentialProvider installs (idempotently) the desktop-proxy provider
 // entry into the remote user config. A block with the provider name that
-// already points at opts.BaseURL is left untouched; one pointing elsewhere is
-// rewritten in place so a port change propagates.
-func ensureCredentialProvider(ctx context.Context, fs *sftpfs.FS, home string, opts *CredentialProxyOptions) error {
+// already points at opts.BaseURL AND carries the same kind is left untouched;
+// one pointing elsewhere or carrying a stale kind is rewritten in place so
+// port and kind changes propagate.
+// ensureCredentialProvider installs or heals the desktop-proxy provider entry
+// in the remote config. The returned bool reports whether anything was
+// rewritten: the desktop uses it to decide that RUNNING serves (whose
+// in-memory providers were built from the previous config) must reload.
+func ensureCredentialProvider(ctx context.Context, fs *sftpfs.FS, home string, opts *CredentialProxyOptions) (bool, error) {
 	if opts == nil || strings.TrimSpace(opts.BaseURL) == "" || strings.TrimSpace(opts.Token) == "" ||
 		strings.TrimSpace(opts.Provider) == "" || strings.TrimSpace(opts.Model) == "" {
-		return fmt.Errorf("bootstrap: credential proxy options are incomplete")
+		return false, fmt.Errorf("bootstrap: credential proxy options are incomplete")
 	}
+	kind := credentialProxyKind(opts)
 	cfgPath := remoteConfigPath(home)
 	data, _, _, rerr := fs.ReadFile(ctx, cfgPath, 1<<20)
 	if rerr != nil && !isRemoteMissing(rerr) {
-		return fmt.Errorf("bootstrap: read remote config: %w", rerr)
+		return false, fmt.Errorf("bootstrap: read remote config: %w", rerr)
 	}
 	existing := string(data)
 	// Defining ANY [[providers]] in the file replaces the built-in defaults,
@@ -109,21 +128,76 @@ func ensureCredentialProvider(ctx context.Context, fs *sftpfs.FS, home string, o
 	// itself is never rewritten.
 	existing = materializeDefaultProvider(existing)
 	if idx := providerBlockIndex(existing, opts.Provider); idx >= 0 {
-		if providerBlockHasBaseURL(existing[idx:], opts.BaseURL) {
-			return nil
+		if providerBlockHasBaseURL(existing[idx:], opts.BaseURL) && providerBlockHasKind(existing[idx:], kind) {
+			// Config is already current, but the .env token is healed
+			// independently — an unchanged base_url must not skip it.
+			envChanged, err := ensureCredentialToken(ctx, fs, home, opts.Token)
+			if err != nil {
+				return false, err
+			}
+			return envChanged, nil
 		}
-		updated, ok := replaceProviderBaseURL(existing, idx, opts.BaseURL)
-		if !ok {
-			return fmt.Errorf("bootstrap: remote config provider %q needs a manual base_url update", opts.Provider)
+		if !providerBlockHasBaseURL(existing[idx:], opts.BaseURL) {
+			updated, ok := replaceProviderBaseURL(existing, idx, opts.BaseURL)
+			if !ok {
+				return false, fmt.Errorf("bootstrap: remote config provider %q needs a manual base_url update", opts.Provider)
+			}
+			existing = updated
 		}
-		existing = updated
+		if !providerBlockHasKind(existing[idx:], kind) {
+			updated, ok := replaceProviderKind(existing, idx, kind)
+			if !ok {
+				return false, fmt.Errorf("bootstrap: remote config provider %q needs a manual kind update", opts.Provider)
+			}
+			existing = updated
+		}
 	} else {
 		existing += credentialProviderBlock(opts)
 	}
 	if err := fs.MkdirAll(ctx, path.Dir(cfgPath)); err != nil {
-		return err
+		return false, err
 	}
-	return fs.WriteFileAtomic(ctx, cfgPath, []byte(existing), 0o600)
+	if err := fs.WriteFileAtomic(ctx, cfgPath, []byte(existing), 0o600); err != nil {
+		return false, err
+	}
+	// Runtime credential resolution reads only the global .env file — never
+	// the process environment the launch command seeds — so the virtual token
+	// must live there or every provider call sends an empty key (401).
+	if _, err := ensureCredentialToken(ctx, fs, home, opts.Token); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ensureCredentialToken idempotently writes the credential-proxy token into
+// the remote global .env, preserving every other line. Reports whether the
+// value was written or already current.
+func ensureCredentialToken(ctx context.Context, fs *sftpfs.FS, home, token string) (bool, error) {
+	envPath := path.Join(home, ".reasonix", ".env")
+	data, _, _, rerr := fs.ReadFile(ctx, envPath, 1<<20)
+	if rerr != nil && !isRemoteMissing(rerr) {
+		return false, fmt.Errorf("bootstrap: read remote .env: %w", rerr)
+	}
+	lines := strings.Split(string(data), "\n")
+	prefix := TokenEnvName + "="
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), prefix) {
+			if strings.TrimSpace(line) == prefix+token {
+				return false, nil
+			}
+			lines[i] = prefix + token
+			updated := strings.Join(lines, "\n")
+			return true, fs.WriteFileAtomic(ctx, envPath, []byte(updated), 0o600)
+		}
+	}
+	// Append (creating the file when missing). Keep the trailing-newline
+	// convention so later manual edits stay clean.
+	content := string(data)
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	content += prefix + token + "\n"
+	return true, fs.WriteFileAtomic(ctx, envPath, []byte(content), 0o600)
 }
 
 // providerBlockIndex finds the start of the [[providers]] block whose name
@@ -175,6 +249,41 @@ func replaceProviderBaseURL(text string, idx int, baseURL string) (string, bool)
 		if strings.HasPrefix(trimmed, "base_url") && strings.Contains(trimmed, "=") {
 			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
 			lines[i] = indent + "base_url = " + tomlString(baseURL)
+			return text[:idx] + strings.Join(lines, "\n"), true
+		}
+	}
+	return text, false
+}
+
+// providerBlockHasKind reports whether the block starting at idx contains the
+// given kind assignment before its next table header.
+func providerBlockHasKind(block, kind string) bool {
+	want := "kind = " + tomlString(kind)
+	for _, line := range strings.Split(block, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			return false
+		}
+		if trimmed == want {
+			return true
+		}
+	}
+	return false
+}
+
+// replaceProviderKind swaps the kind line inside the block starting at idx,
+// preserving everything else byte-for-byte.
+func replaceProviderKind(text string, idx int, kind string) (string, bool) {
+	rest := text[idx:]
+	lines := strings.Split(rest, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if i > 0 && strings.HasPrefix(trimmed, "[") {
+			break
+		}
+		if strings.HasPrefix(trimmed, "kind") && strings.Contains(trimmed, "=") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[i] = indent + "kind = " + tomlString(kind)
 			return text[:idx] + strings.Join(lines, "\n"), true
 		}
 	}

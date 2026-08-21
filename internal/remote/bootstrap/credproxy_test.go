@@ -32,7 +32,7 @@ func TestEnsureCredentialProviderAppendsAndIsIdempotent(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	if err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
+	if _, err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
 		t.Fatalf("first install: %v", err)
 	}
 	first, rerr := os.ReadFile(filepath.Join(root, ".reasonix", "config.toml"))
@@ -52,7 +52,7 @@ func TestEnsureCredentialProviderAppendsAndIsIdempotent(t *testing.T) {
 	}
 
 	// Idempotent: same options ⇒ no rewrite.
-	if err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
+	if _, err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
 		t.Fatalf("second install: %v", err)
 	}
 	second, _ := os.ReadFile(filepath.Join(root, ".reasonix", "config.toml"))
@@ -61,7 +61,7 @@ func TestEnsureCredentialProviderAppendsAndIsIdempotent(t *testing.T) {
 	}
 
 	// A base_url change (tunnel port moved) rewrites only that assignment.
-	if err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:19000")); err != nil {
+	if _, err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:19000")); err != nil {
 		t.Fatalf("port change: %v", err)
 	}
 	third, _ := os.ReadFile(filepath.Join(root, ".reasonix", "config.toml"))
@@ -90,7 +90,7 @@ func TestEnsureCredentialProviderPreservesUserConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureCredentialProvider(context.Background(), fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
+	if _, err := ensureCredentialProvider(context.Background(), fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(filepath.Join(root, ".reasonix", "config.toml"))
@@ -148,7 +148,7 @@ func TestEnsureCredentialProviderMaterializesBuiltinDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
+	if _, err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
 		t.Fatal(err)
 	}
 	first, _ := os.ReadFile(filepath.Join(root, ".reasonix", "config.toml"))
@@ -173,7 +173,7 @@ func TestEnsureCredentialProviderMaterializesBuiltinDefault(t *testing.T) {
 	}
 
 	// Idempotent.
-	if err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
+	if _, err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
 		t.Fatal(err)
 	}
 	second, _ := os.ReadFile(filepath.Join(root, ".reasonix", "config.toml"))
@@ -196,5 +196,50 @@ func TestMaterializeDefaultProviderSkipsNonBuiltin(t *testing.T) {
 	}
 	if got := defaultModelProvider("[ui]\ndefault_model = \"deepseek-flash\"\n"); got != "" {
 		t.Fatalf("table-scoped default_model leaked: %q", got)
+	}
+}
+
+// TestEnsureCredentialProviderRewritesKindDrift: an existing block whose kind
+// no longer matches the desktop provider behind the proxy (the desktop
+// switched from an openai-kind to an anthropic-kind provider) is rewritten
+// in place; a matching re-run stays byte-identical.
+func TestEnsureCredentialProviderRewritesKindDrift(t *testing.T) {
+	skipOnWindows(t)
+	root := t.TempDir()
+	conn := newFakeConn(t, root, func(string) (remote.ExecResult, error) { return ok("") })
+	fs, err := conn.SFTP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	if _, err := ensureCredentialProvider(ctx, fs, root, credProxyOpts("http://127.0.0.1:18999")); err != nil {
+		t.Fatal(err)
+	}
+	installed, _ := os.ReadFile(filepath.Join(root, ".reasonix", "config.toml"))
+	if !strings.Contains(string(installed), "kind = \"openai\"") {
+		t.Fatalf("default install missing the openai kind:\n%s", installed)
+	}
+
+	switched := credProxyOpts("http://127.0.0.1:18999")
+	switched.Kind = "anthropic"
+	if _, err := ensureCredentialProvider(ctx, fs, root, switched); err != nil {
+		t.Fatal(err)
+	}
+	rewritten, _ := os.ReadFile(filepath.Join(root, ".reasonix", "config.toml"))
+	if !strings.Contains(string(rewritten), "kind = \"anthropic\"") || strings.Contains(string(rewritten), "kind = \"openai\"") {
+		t.Fatalf("kind drift not rewritten:\n%s", rewritten)
+	}
+	if !strings.Contains(string(rewritten), "base_url = \"http://127.0.0.1:18999\"") {
+		t.Fatalf("base_url lost in the kind rewrite:\n%s", rewritten)
+	}
+
+	// Idempotent once the kind matches.
+	if _, err := ensureCredentialProvider(ctx, fs, root, switched); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := os.ReadFile(filepath.Join(root, ".reasonix", "config.toml"))
+	if string(again) != string(rewritten) {
+		t.Fatalf("matching re-run rewrote the config:\n%s\n---\n%s", rewritten, again)
 	}
 }
