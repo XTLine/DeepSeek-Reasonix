@@ -11,6 +11,7 @@
 // "expanded"), and preference switches applying to folds already on screen.
 
 import { isHostRecoveryGuidance } from "./hostRecoverySteer";
+import { estimateTranscriptTextHeight } from "./transcriptRowEstimates";
 import { isBatchedReadOnlyTool, isSteerNoticeText, type ExtensionItem, type Item } from "./useController";
 import { appendTurnActionCopyText } from "./turnActionCopy";
 import { isCreationGroupableTool, toolGroupKind, type ToolGroupKind } from "../components/ToolGroup";
@@ -118,7 +119,9 @@ export function partitionTurnItems(items: readonly Item[], live: TranscriptLiveF
 }
 
 function assistantReasoningOnly(item: AssistantItem): AssistantItem {
-  return { ...item, text: "" };
+  const reasoning = { ...item, text: "" };
+  itemMeasurementVersions.set(reasoning, itemMeasurementVersion(item));
+  return reasoning;
 }
 
 export function turnWorkDurationMs(items: readonly Item[]): number {
@@ -436,6 +439,39 @@ export type TranscriptRow =
   | { kind: "extension"; key: string; item: ExtensionItem }
   | { kind: "turn-actions"; key: string; turn: number; text: string };
 
+const itemMeasurementVersions = new WeakMap<object, number>();
+let nextItemMeasurementVersion = 0;
+
+function itemMeasurementVersion(item: object): number {
+  let version = itemMeasurementVersions.get(item);
+  if (version === undefined) {
+    version = ++nextItemMeasurementVersion;
+    itemMeasurementVersions.set(item, version);
+  }
+  return version;
+}
+
+function measurementVersionForItems(items: readonly object[]): string {
+  let latest = 0;
+  for (const item of items) latest = Math.max(latest, itemMeasurementVersion(item));
+  return `${items.length}:${latest}`;
+}
+
+export function transcriptRowMeasurementVersion(row: TranscriptRow): string {
+  switch (row.kind) {
+    case "older-history":
+    case "turn-actions":
+      return "0:0";
+    case "process-header":
+      return measurementVersionForItems(row.segment.processItems);
+    case "tool-batch":
+    case "tool-group":
+      return measurementVersionForItems(row.items);
+    default:
+      return `1:${itemMeasurementVersion(row.item)}`;
+  }
+}
+
 export const OLDER_HISTORY_ROW_KEY = "older-history";
 
 export function userRowKey(itemId: string): string {
@@ -635,30 +671,6 @@ export function splitTranscriptLiveRows(
 
 // ── Measurement / identity helpers ────────────────────────────────────────────
 
-const TRANSCRIPT_ESTIMATED_LINE_CHARS = 88;
-const TRANSCRIPT_ESTIMATED_LINE_HEIGHT = 20;
-const TRANSCRIPT_MAX_ESTIMATED_TEXT_HEIGHT = 12_000;
-
-function estimateTranscriptTextSize(text: string | undefined, minimum: number): number {
-  if (!text) return minimum;
-  const wrappedLines = Math.ceil(text.length / TRANSCRIPT_ESTIMATED_LINE_CHARS);
-  const cappedLines = Math.ceil(
-    (TRANSCRIPT_MAX_ESTIMATED_TEXT_HEIGHT - 44) / TRANSCRIPT_ESTIMATED_LINE_HEIGHT,
-  );
-  if (wrappedLines >= cappedLines) return TRANSCRIPT_MAX_ESTIMATED_TEXT_HEIGHT;
-  let explicitLines = 1;
-  for (let index = 0; index < text.length; index += 1) {
-    if (text.charCodeAt(index) !== 10) continue;
-    explicitLines += 1;
-    if (explicitLines >= cappedLines) return TRANSCRIPT_MAX_ESTIMATED_TEXT_HEIGHT;
-  }
-  const lines = Math.max(explicitLines, wrappedLines);
-  return Math.min(
-    TRANSCRIPT_MAX_ESTIMATED_TEXT_HEIGHT,
-    Math.max(minimum, 44 + lines * TRANSCRIPT_ESTIMATED_LINE_HEIGHT),
-  );
-}
-
 /** Ballpark row heights; Virtuoso replaces them with real measurements on mount. */
 export function estimateTranscriptRowSize(row: TranscriptRow | undefined): number {
   if (!row) return 48;
@@ -666,11 +678,11 @@ export function estimateTranscriptRowSize(row: TranscriptRow | undefined): numbe
     case "older-history":
       return 44;
     case "user":
-      return estimateTranscriptTextSize(row.item.text, 88);
+      return estimateTranscriptTextHeight(row.item.text, 88);
     case "process-header":
       return 28;
     case "reasoning":
-      return estimateTranscriptTextSize(row.item.reasoning, 96);
+      return estimateTranscriptTextHeight(row.item.reasoning, 96);
     case "tool":
       return 96;
     case "tool-batch":
@@ -684,7 +696,7 @@ export function estimateTranscriptRowSize(row: TranscriptRow | undefined): numbe
     case "compaction":
       return 36;
     case "answer":
-      return estimateTranscriptTextSize(row.item.text, 160);
+      return estimateTranscriptTextHeight(row.item.text, 160);
     case "extension":
       return 160;
     case "turn-actions":

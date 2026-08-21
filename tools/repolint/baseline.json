@@ -10,7 +10,7 @@
     "marker": 0,
     "narrative": 64,
     "struct-state": 115,
-    "test-file-size": 69271
+    "test-file-size": 69387
   },
   "files": {
     "cmd/e2ebench/main.go": {
@@ -24,21 +24,21 @@
       "essay": 19
     },
     "desktop/app.go": {
-      "complexity": 59,
+      "complexity": 58,
       "essay": 64,
-      "file-size": 11310,
-      "function-size": 368,
+      "file-size": 11122,
+      "function-size": 365,
       "struct-state": 15
     },
     "desktop/app_test.go": {
       "essay": 2,
-      "test-file-size": 10263
+      "test-file-size": 10439
     },
     "desktop/bot_bridge.go": {
       "essay": 3
     },
     "desktop/bot_connection_app.go": {
-      "file-size": 182
+      "file-size": 239
     },
     "desktop/bot_runtime_app.go": {
       "essay": 2
@@ -67,10 +67,10 @@
       "essay": 2
     },
     "desktop/frontend/src/App.tsx": {
-      "file-size": 4678
+      "file-size": 4718
     },
     "desktop/frontend/src/__tests__/app-chrome-tabs.test.ts": {
-      "test-file-size": 19
+      "test-file-size": 27
     },
     "desktop/frontend/src/__tests__/capabilities-panel-actions.test.ts": {
       "test-file-size": 307
@@ -91,10 +91,13 @@
       "test-file-size": 352
     },
     "desktop/frontend/src/__tests__/settings-refresh-snapshot.test.tsx": {
-      "test-file-size": 117
+      "test-file-size": 228
     },
     "desktop/frontend/src/__tests__/tab-switch-hydration.test.tsx": {
       "test-file-size": 162
+    },
+    "desktop/frontend/src/__tests__/transcript-recovery-race.test.tsx": {
+      "test-file-size": 129
     },
     "desktop/frontend/src/__tests__/workspace-changes-errors.test.tsx": {
       "test-file-size": 137
@@ -109,7 +112,7 @@
       "file-size": 4020
     },
     "desktop/frontend/src/components/ContextPanel.tsx": {
-      "file-size": 38
+      "file-size": 64
     },
     "desktop/frontend/src/components/HistoryPanel.tsx": {
       "file-size": 65
@@ -127,10 +130,10 @@
       "file-size": 141
     },
     "desktop/frontend/src/components/SettingsPanel.tsx": {
-      "file-size": 6723
+      "file-size": 7239
     },
     "desktop/frontend/src/components/StatusBar.tsx": {
-      "file-size": 36
+      "file-size": 43
     },
     "desktop/frontend/src/components/ThemeGallery.tsx": {
       "file-size": 489
@@ -148,10 +151,10 @@
       "file-size": 1406
     },
     "desktop/frontend/src/custom/features/heartbeat/HeartbeatPanel.tsx": {
-      "file-size": 415
+      "file-size": 180
     },
     "desktop/frontend/src/lib/bridge.ts": {
-      "file-size": 4780
+      "file-size": 4863
     },
     "desktop/frontend/src/lib/crash.ts": {
       "file-size": 225
@@ -160,15 +163,16 @@
       "file-size": 265
     },
     "desktop/frontend/src/lib/types.ts": {
-      "file-size": 1581
+      "file-size": 1611
     },
     "desktop/frontend/src/lib/useController.ts": {
-      "file-size": 3994
+      "file-size": 4035
+    },
+    "desktop/frontend/src/lib/useTranscriptScrollArbiter.ts": {
+      "file-size": 138
     },
     "desktop/heartbeat.go": {
-      "essay": 12,
-      "file-size": 349,
-      "function-size": 23
+      "essay": 7
     },
     "desktop/history_slice.go": {
       "banner": 2,
@@ -228,7 +232,9 @@
       "essay": 1
     },
     "desktop/session_catalog_runtime.go": {
-      "essay": 2
+      "complexity": 1,
+      "essay": 2,
+      "file-size": 2
     },
     "desktop/session_key_test.go": {
       "essay": 3
@@ -250,9 +256,9 @@
       "test-file-size": 733
     },
     "desktop/settings_app.go": {
-      "complexity": 22,
+      "complexity": 29,
       "essay": 6,
-      "file-size": 2745
+      "file-size": 2893
     },
     "desktop/settings_app_test.go": {
       "test-file-size": 1863
@@ -553,7 +559,7 @@
     "internal/agent/task.go": {
       "complexity": 25,
       "essay": 12,
-      "file-size": 1276,
+      "file-size": 1280,
       "function-size": 114
     },
     "internal/agent/task_test.go": {
@@ -632,16 +638,16 @@
       "file-size": 210
     },
     "internal/bot/gateway.go": {
-      "complexity": 59,
-      "essay": 21,
-      "file-size": 2172,
-      "function-size": 274
+      "complexity": 60,
+      "essay": 20,
+      "file-size": 2279,
+      "function-size": 265
     },
     "internal/bot/gateway_lock_test.go": {
       "essay": 1
     },
     "internal/bot/gateway_test.go": {
-      "test-file-size": 1703
+      "test-file-size": 1919
     },
     "internal/bot/project_index.go": {
       "file-size": 31
@@ -651,7 +657,7 @@
     },
     "internal/bot/render.go": {
       "essay": 5,
-      "function-size": 24
+      "function-size": 2
     },
     "internal/bot/turn_dispatch_test.go": {
       "essay": 1
@@ -681,7 +687,7 @@
     },
     "internal/cli/bot.go": {
       "complexity": 18,
-      "function-size": 113
+      "function-size": 102
     },
     "internal/cli/branch.go": {
       "essay": 2
@@ -833,8 +839,8 @@
       "essay": 1
     },
     "internal/config/config.go": {
-      "essay": 25,
-      "file-size": 1520,
+      "essay": 24,
+      "file-size": 1544,
       "narrative": 2
     },
     "internal/config/credentials.go": {
@@ -878,13 +884,13 @@
       "essay": 7
     },
     "internal/config/provider_presets.go": {
-      "file-size": 262
+      "file-size": 604
     },
     "internal/config/render.go": {
-      "complexity": 252,
+      "complexity": 256,
       "essay": 2,
-      "file-size": 1016,
-      "function-size": 967
+      "file-size": 1040,
+      "function-size": 991
     },
     "internal/config/render_test.go": {
       "test-file-size": 759
@@ -1248,7 +1254,7 @@
       "struct-state": 10
     },
     "internal/provider/openai/openai_test.go": {
-      "test-file-size": 1572
+      "test-file-size": 1591
     },
     "internal/provider/openai/realcache_test.go": {
       "essay": 2
@@ -1258,7 +1264,7 @@
       "file-size": 335
     },
     "internal/provider/responses/responses.go": {
-      "complexity": 54,
+      "complexity": 55,
       "essay": 18,
       "file-size": 105,
       "function-size": 181,
@@ -1266,10 +1272,10 @@
     },
     "internal/provider/responses/responses_test.go": {
       "essay": 6,
-      "test-file-size": 377
+      "test-file-size": 440
     },
     "internal/provider/responses/vendor.go": {
-      "essay": 16
+      "essay": 20
     },
     "internal/provider/schema_canonicalize.go": {
       "essay": 4
@@ -1528,6 +1534,12 @@
     },
     "workers/crash-report/src/stats.ts": {
       "file-size": 76
+    },
+    "internal/config/provider_presets_test.go": {
+      "test-file-size": 174
+    },
+    "internal/botruntime/runtime.go": {
+      "file-size": 38
     }
   }
 }

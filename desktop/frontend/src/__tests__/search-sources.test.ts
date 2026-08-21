@@ -32,6 +32,12 @@ eq(
 eq(formatSearchFootnotesMarkdown([{ title: "bad", url: "javascript:alert(1)" }]), "\n- **bad**\n", "unsafe URLs are dropped");
 eq(parseSearchSources("新闻本文\nhttps://example.com/a\nNo URL").length, 2, "output parser keeps title-only hits");
 eq(parseSearchSources("新闻本文\nhttps://example.com/a")[0]?.title, "新闻本文", "output parser keeps the title");
+eq(parseSearchSources("新闻本文\r\nhttps://example.com/a\r\n")[0]?.url, "https://example.com/a", "output parser tolerates CRLF line endings");
+const degraded = parseSearchSources("- **新闻本文**\n  <https://example.com/a>");
+eq(degraded.length, 1, "degraded footnote-markdown dump still resolves to one source");
+eq(degraded[0]?.title, "新闻本文", "degraded dump strips the bullet and bold markers from the title");
+eq(degraded[0]?.url, "https://example.com/a", "degraded dump unwraps the autolink URL");
+eq(parseSearchSources("<https://example.com/a>")[0]?.url, "https://example.com/a", "autolink-only lines parse as URL sources");
 eq(mergeSearchSources([{ title: "A", url: "https://a.example" }], [{ title: "A", url: "https://a.example" }]).length, 1, "duplicate hits collapse");
 
 const history = historyMessagesToItems([{

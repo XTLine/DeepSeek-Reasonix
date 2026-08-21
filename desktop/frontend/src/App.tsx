@@ -1,10 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { flushSync } from "react-dom";
 import { ShellExpandProvider, useShellExpand } from "./lib/shellExpand";
 import {
   Activity,
   Command,
   Copy as RestoreIcon,
-  Download,
   Minus,
   Search,
   Server,
@@ -12,14 +12,10 @@ import {
   SquarePen,
   PanelLeft,
   PanelRight,
-  FileDown,
-  FileImage,
   FileText,
-  FileJson,
   GitBranch,
   MessageSquare,
   Settings as SettingsIcon,
-  Pencil,
   RotateCw,
   Trash2,
   AlarmClock,
@@ -32,6 +28,7 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import { useToast } from "./lib/toast";
+import type { CancelOutcome } from "./lib/inboxCancel";
 import { useGoalActionHandler } from "./lib/goalAction";
 import { useWailsResizeFix } from "./lib/useWailsResizeFix";
 import { asArray } from "./lib/array";
@@ -72,10 +69,9 @@ import { dismissOnboarding, shouldOpenOnboarding } from "./lib/onboarding";
 import { AppChrome } from "./components/AppChrome";
 import { ShortcutsCheatsheet } from "./components/ShortcutsCheatsheet";
 import { WorktreeBadge } from "./components/WorktreeBadge";
-import { HeartbeatPanel } from "./custom/features/heartbeat/HeartbeatPanel";
-import "./custom/features/heartbeat/heartbeat.css";
 import { CopyButton } from "./components/CopyButton";
 import { ExternalOpener, shouldMountExternalOpener } from "./components/ExternalOpener";
+import { TopicbarMoreMenu } from "./components/TopicbarMoreMenu";
 import { startTerminalEventBridge } from "./lib/terminalEvents";
 import { applyTerminalThemePreference } from "./lib/terminalTheme";
 import { formatTerminalOutputForComposer } from "./lib/terminalOutput";
@@ -107,10 +103,13 @@ import {
   type RemoteHostView,
   type SessionMeta,
   type SettingsView,
+  type QualityFloor,
   type TabMeta,
   type ToolApprovalMode,
+  type WireCompletionSummary,
   type WorkspaceConflictView,
 } from "./lib/types";
+import type { WorkspaceVerificationRevealRequest } from "./components/WorkspacePanel";
 import type { InvocationMetadataMap, StructuredInvocationSubmit } from "./lib/invocationDisplay";
 import type { RewindUndoState } from "./lib/rewindTypes";
 import { formatSelectionReference, type SelectedTextInsertRequest } from "./lib/selectedTextContext";
@@ -143,11 +142,7 @@ import {
   CREATION_RIGHT_DOCK_MIN_RENDER_WIDTH,
   CREATION_RIGHT_DOCK_TREE_MIN_WIDTH,
   CREATION_SIDEBAR_MIN_WIDTH,
-  RIGHT_DOCK_MAX_WIDTH,
   RIGHT_DOCK_MIN_RENDER_WIDTH,
-  RIGHT_DOCK_PREVIEW_DEFAULT_WIDTH,
-  RIGHT_DOCK_PREVIEW_MIN_WIDTH,
-  RIGHT_DOCK_TREE_MAX_WIDTH,
   RIGHT_DOCK_TREE_MIN_WIDTH,
   type RightDockMode,
   SIDEBAR_MAX_WIDTH,
@@ -157,7 +152,6 @@ import {
   applyLayoutStyleDefaults,
   clampCreationRightDockTreeWidth,
   clampCreationSidebarWidth,
-  clampRightDockPreviewWidth,
   clampRightDockTreeWidth,
   clampSidebarWidth,
   clampTerminalHeight,
@@ -165,7 +159,6 @@ import {
   defaultCreationSidebarWidth,
   defaultRightDockTreeWidth,
   defaultSidebarWidth,
-  saveRightDockPreviewWidth,
   saveRightDockTreeWidth,
   saveSidebarCollapsed,
   saveSidebarWidth,
@@ -173,6 +166,7 @@ import {
   saveTerminalPanelOpen,
   terminalMaxHeight,
   saveWorkspacePanelOpen,
+  loadWorkspacePanelOpen,
   useLayoutStore,
 } from "./store/layout";
 import { useOverlayStore } from "./store/overlays";
@@ -180,6 +174,7 @@ import { hydrateDisplayMode } from "./lib/displayMode";
 import { DEFAULT_STATUS_BAR_ITEMS, normalizeStatusBarItems, type StatusBarItemId } from "./lib/statusBarItems";
 import { paletteSessionDisplayTitle, paletteSessionHint, paletteSessionKeywords, sessionActivityTime } from "./lib/session";
 import { enqueueNavigationRequest, type PendingNavigationRequest } from "./lib/openTopicCoalescing";
+import { guardBackendNavigationResult, settleNavigationSurfaceIntent } from "./lib/navigationSurfaceTransition";
 import {
   applyTheme,
   clearLegacyThemePreference,
@@ -196,10 +191,10 @@ import { applyConfiguredBaseAppearance, applyThemePack, applyThemeScene, clearTh
 import { ThemeBackground } from "./components/ThemeBackground";
 import { applyTextSize, DEFAULT_TEXT_SIZE, getTextSize, nextTextSize } from "./lib/textSize";
 import { useViewportHeightVar, useWindowStatePersistence } from "./lib/windowState";
-import { resolveLiveWorkspacePanelWidth, resolveWorkspacePanelPlacement, workspacePanelAriaMinWidth } from "./lib/workspaceLayout";
-import { createRafResizeUpdater } from "./lib/resizeDrag";
-import { useGlobalShortcut } from "./lib/keyboardShortcuts";
-import { useMountTransition } from "./lib/useMountTransition";
+import { availableWorkspacePanelWidth, resolveLiveWorkspacePanelWidth, resolveWorkspacePanelPlacement, workspacePanelAriaMinWidth } from "./lib/workspaceLayout";
+import { createPointerResizeLifecycle, createRafResizeUpdater } from "./lib/resizeDrag";
+import { formatShortcutCombo, resolvedShortcutCombo, useGlobalShortcut } from "./lib/keyboardShortcuts";
+import { useWarmTerminalPanel } from "./lib/useWarmTerminalPanel";
 import { topicShortcutIndexFromEvent, useTopicShortcuts, type TopicShortcutEntry } from "./lib/topicShortcuts";
 import { composerDraftKeyForTab } from "./lib/composerDraftKey";
 import { continueDelivery } from "./lib/deliveryContinue";
@@ -208,7 +203,6 @@ import logoWordmark from "./assets/logo-wordmark.svg";
 // Hold reasoning UI until the authoritative desktop startup settings arrive;
 // this prevents a hidden preference from flashing content during first paint.
 setReasoningDisplayPending();
-const TERMINAL_CLOSE_TRANSITION_MS = 250;
 function noticePreviewMockEnabled(): boolean {
   const value = browserMockScenarioParam();
   return value === "notice" || value === "notices" || value === "notice-preview";
@@ -268,7 +262,14 @@ function NoticePreviewPanel() {
       <div style={{ maxWidth: 920, margin: "0 auto" }}>
         {noticePreviewItems().map((item) => {
           if (item.kind !== "notice") return null;
-          return <NoticeCard key={item.id} item={item} onAction={item.action ? () => undefined : undefined} />;
+          return (
+            <NoticeCard
+              key={item.id}
+              item={item}
+              onAction={item.action ? () => undefined : undefined}
+              onAccept={item.action === "continue_delivery" ? () => undefined : undefined}
+            />
+          );
         })}
       </div>
     </div>
@@ -278,6 +279,7 @@ function NoticePreviewPanel() {
 const TranscriptSelectionMenu = lazy(() => import("./components/TranscriptSelectionMenu").then((module) => ({ default: module.TranscriptSelectionMenu })));
 const ContextPanel = lazy(() => import("./components/ContextPanel").then((module) => ({ default: module.ContextPanel })));
 const HistoryPanel = lazy(() => import("./components/HistoryPanel").then((module) => ({ default: module.HistoryPanel })));
+const HeartbeatView = lazy(() => import("./custom/features/heartbeat/HeartbeatPanel").then((module) => ({ default: module.HeartbeatView })));
 const SettingsPanel = lazy(() => import("./components/SettingsPanelEntry").then((module) => ({ default: module.SettingsPanel })));
 const RemotePanel = lazy(() => import("./components/RemotePanel").then((module) => ({ default: module.RemotePanel })));
 const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((module) => ({ default: module.TerminalPanel })));
@@ -291,7 +293,6 @@ const WorkspacePanel = lazy(async () => {
 });
 
 const CHAT_MIN_WIDTH = 400;
-const CHAT_COMFORT_MIN_WIDTH = 560;
 const WORKSPACE_RESIZER_WIDTH = 8;
 
 function stripLegacyGoalBudgetFlags(arg: string): string {
@@ -1068,6 +1069,7 @@ export default function App() {
     drainExtensionNotifications,
     setCollaborationMode: setControllerCollaborationMode,
     setToolApprovalMode: setControllerToolApprovalMode,
+    setQualityFloor: setControllerQualityFloor,
     setComposerProfileForTab: setControllerComposerProfileForTab,
     setGoalForTab: setControllerGoalForTab,
     resumeGoalForTab: resumeControllerGoalForTab,
@@ -1105,6 +1107,7 @@ export default function App() {
     activateTopic,
     noteNavigationIntent,
     isNavigationIntentCurrent,
+    reassertVisibleTabAfterStaleNavigation,
     syncActiveTab,
     ensureBlankTab,
     ensureBlankSurface,
@@ -1116,6 +1119,13 @@ export default function App() {
   const userPlanModeByTabRef = useRef<UserPlanModeIntents>({});
   const [tabMetas, setTabMetas] = useState<TabMeta[]>([]);
   const [tabOrderIds, setTabOrderIds] = useState<string[]>([]);
+  const [navigationSurfaceIntent, setNavigationSurfaceIntent] = useState<number | null>(null);
+  const beginNavigationSurface = useCallback((intent: number) => {
+    flushSync(() => setNavigationSurfaceIntent(intent));
+  }, []);
+  const settleNavigationSurface = useCallback((intent: number) => {
+    setNavigationSurfaceIntent((current) => settleNavigationSurfaceIntent(current, intent));
+  }, []);
   const [tabRevealSignal, setTabRevealSignal] = useState(0);
   const [transcriptRevealSignal, setTranscriptRevealSignal] = useState(0);
   const startupSplashVisible = useOverlayStore((s) => s.startupSplashVisible);
@@ -1161,8 +1171,8 @@ export default function App() {
   const [sidebarImDetailConnectionId, setSidebarImDetailConnectionId] = useState("");
   const sidebarCollapsed = useLayoutStore((s) => s.sidebarCollapsed);
   const setSidebarCollapsed = useLayoutStore((s) => s.setSidebarCollapsed);
-  const heartbeatOpen = useOverlayStore((s) => s.heartbeatOpen);
-  const setHeartbeatOpen = useOverlayStore((s) => s.setHeartbeatOpen);
+  const mainView = useOverlayStore((s) => s.mainView);
+  const setMainView = useOverlayStore((s) => s.setMainView);
   type TimeFilter = "all" | "10" | "20" | "1h" | "3h" | "5h" | "1d";
   const [topicTimeFilter, setTopicTimeFilter] = useState<TimeFilter>(() => {
     try {
@@ -1186,7 +1196,6 @@ export default function App() {
   const rightDockTreeWidth = useLayoutStore((s) => s.rightDockTreeWidth);
   const setRightDockTreeWidth = useLayoutStore((s) => s.setRightDockTreeWidth);
   const rightDockPreviewWidth = useLayoutStore((s) => s.rightDockPreviewWidth);
-  const setRightDockPreviewWidth = useLayoutStore((s) => s.setRightDockPreviewWidth);
   const workspacePreviewActive = useLayoutStore((s) => s.workspacePreviewActive);
   const setWorkspacePreviewActive = useLayoutStore((s) => s.setWorkspacePreviewActive);
   const attentionChimeEvents = useRef(new Set<string>());
@@ -1244,10 +1253,7 @@ export default function App() {
   const setRightDockMode = useLayoutStore((s) => s.setRightDockMode);
   const terminalPanelOpen = useLayoutStore((s) => s.terminalPanelOpen);
   const setTerminalPanelOpen = useLayoutStore((s) => s.setTerminalPanelOpen);
-  const { mounted: terminalContentVisible } = useMountTransition(
-    terminalPanelOpen,
-    TERMINAL_CLOSE_TRANSITION_MS,
-  );
+  const { mounted: terminalContentVisible, fitEnabled: terminalFitEnabled, prefetch: prefetchTerminalPanel } = useWarmTerminalPanel(terminalPanelOpen, terminalResizing);
   const terminalHeight = useLayoutStore((s) => s.terminalHeight);
   const setTerminalHeight = useLayoutStore((s) => s.setTerminalHeight);
   const [dockRefreshKey, setDockRefreshKey] = useState(0);
@@ -1279,10 +1285,24 @@ export default function App() {
   const setTopicExportOpen = useOverlayStore((s) => s.setTopicExportOpen);
   const sidebarSearchOpen = useOverlayStore((s) => s.sidebarSearchOpen);
   const setSidebarSearchOpen = useOverlayStore((s) => s.setSidebarSearchOpen);
+
+  // Leaving the automation view: any overlay/sidebar surface that signals the
+  // user is returning to the chat workspace switches mainView back to "chat".
+  // Navigation paths (open topic / new session / resume) are covered by
+  // enqueueNavigation.
+  useEffect(() => {
+    if (mainView !== "automation") return;
+    // Any chat-side overlay/surface counts as "returning to the chat
+    // workspace": settings, palette, sidebar search, history, the shortcuts
+    // cheatsheet and the topic export menu all switch mainView back to chat.
+    if (settingsTarget !== null || paletteOpen || sidebarSearchOpen || histView !== null
+      || shortcutsOpen || topicExportOpen) {
+      setMainView("chat");
+    }
+  }, [mainView, settingsTarget, paletteOpen, sidebarSearchOpen, histView, shortcutsOpen, topicExportOpen, setMainView]);
   const sidebarSearchFocusSignal = useOverlayStore((s) => s.sidebarSearchFocusSignal);
   const setSidebarSearchFocusSignal = useOverlayStore((s) => s.setSidebarSearchFocusSignal);
   const [sidebarTogglePressed, setSidebarTogglePressed] = useState(false);
-  const [workspaceTogglePressed, setWorkspaceTogglePressed] = useState(false);
   const [clearContextPending, setClearContextPending] = useState(false);
   const [backgroundRuntimes, setBackgroundRuntimes] = useState<BackgroundRuntimeView[]>([]);
   const [workspaceConflict, setWorkspaceConflict] = useState<WorkspaceConflictView | null>(null);
@@ -1293,12 +1313,13 @@ export default function App() {
   const topicRenameCommitHandledRef = useRef(false);
   const appRef = useRef<HTMLDivElement>(null);
   const layoutRef = useRef<HTMLDivElement>(null);
+  const workspacePanelResizeFinishRef = useRef<(() => void) | null>(null);
   const sidebarTogglePressTimerRef = useRef<number | null>(null);
-  const workspaceTogglePressTimerRef = useRef<number | null>(null);
 
   // Persist window geometry across launches.
   useWindowStatePersistence();
   useViewportHeightVar();
+  useEffect(() => () => workspacePanelResizeFinishRef.current?.(), []);
   useEffect(() => {
     document.documentElement.setAttribute("data-platform", desktopPlatform);
   }, [desktopPlatform]);
@@ -1393,18 +1414,6 @@ export default function App() {
     }, 260);
   }, []);
 
-  const pulseWorkspaceToggle = useCallback(() => {
-    if (typeof window === "undefined") return;
-    if (workspaceTogglePressTimerRef.current !== null) {
-      window.clearTimeout(workspaceTogglePressTimerRef.current);
-    }
-    setWorkspaceTogglePressed(true);
-    workspaceTogglePressTimerRef.current = window.setTimeout(() => {
-      workspaceTogglePressTimerRef.current = null;
-      setWorkspaceTogglePressed(false);
-    }, 260);
-  }, []);
-
   const anchorAppScrollToChat = useCallback(() => {
     if (typeof window === "undefined") return;
     const el = appRef.current;
@@ -1421,9 +1430,6 @@ export default function App() {
     return () => {
       if (sidebarTogglePressTimerRef.current !== null) {
         window.clearTimeout(sidebarTogglePressTimerRef.current);
-      }
-      if (workspaceTogglePressTimerRef.current !== null) {
-        window.clearTimeout(workspaceTogglePressTimerRef.current);
       }
     };
   }, []);
@@ -1575,17 +1581,30 @@ export default function App() {
     });
   }, []);
   const rightDockDetailActive = rightDockMode !== "context" && workspacePreviewActive;
-  const preferredWorkspacePanelWidth = rightDockDetailActive ? rightDockPreviewWidth : rightDockTreeWidth;
+  // The dock keeps one width across tab switches (context/files/changed):
+  // the tree width is the single source so toggling tabs never resizes the
+  // sidebar. Preview detail stays inside the dock without widening it.
+  const preferredWorkspacePanelWidth = rightDockTreeWidth;
   const rightDockTreeMinWidth = desktopLayoutStyle === "creation" ? CREATION_RIGHT_DOCK_TREE_MIN_WIDTH : RIGHT_DOCK_TREE_MIN_WIDTH;
   const rightDockTreeWidthClamp = desktopLayoutStyle === "creation" ? clampCreationRightDockTreeWidth : clampRightDockTreeWidth;
   const rightDockMinRenderWidth = desktopLayoutStyle === "creation" && !rightDockDetailActive
     ? CREATION_RIGHT_DOCK_MIN_RENDER_WIDTH
     : RIGHT_DOCK_MIN_RENDER_WIDTH;
-  const workspacePanelMinWidth = rightDockDetailActive ? RIGHT_DOCK_PREVIEW_MIN_WIDTH : rightDockTreeMinWidth;
-  const chatReservedWidth = workspacePanelOpen && !workspacePanelMaximized ? CHAT_COMFORT_MIN_WIDTH : CHAT_MIN_WIDTH;
+  const workspacePanelMinWidth = rightDockTreeMinWidth;
+  const chatReservedWidth = CHAT_MIN_WIDTH;
+  const workspacePanelAvailableWidth = availableWorkspacePanelWidth({
+    viewportWidth,
+    sidebarCollapsed,
+    sidebarWidth,
+    chatMinWidth: chatReservedWidth,
+    resizerWidth: WORKSPACE_RESIZER_WIDTH,
+  });
   const {
     renderWidth: workspacePanelRenderWidth,
     overlay: workspacePanelOverlay,
+    // The automation page fills the main content area; the workbench dock must
+    // not overlay it. main-v2 keeps automation as a popup so its placement
+    // helper has no view concept — apply the exclusion here on top.
     renderable: workspacePanelRenderable,
     gridOpen: workspacePanelGridOpen,
   } = resolveWorkspacePanelPlacement({
@@ -1595,6 +1614,9 @@ export default function App() {
     minWidth: workspacePanelMinWidth, minRenderWidth: rightDockMinRenderWidth,
     liveWidth: liveWorkspacePanelRenderWidth,
   });
+  const automationView = mainView === "automation";
+  const effectiveWorkspacePanelRenderable = automationView ? false : workspacePanelRenderable;
+  const effectiveWorkspacePanelGridOpen = automationView ? false : workspacePanelGridOpen;
   const resolveLiveWorkspacePanelRenderWidth = useCallback(
     (preferredWidth: number, nextSidebarWidth = sidebarWidth) =>
       resolveLiveWorkspacePanelWidth({
@@ -1658,10 +1680,12 @@ export default function App() {
     activeTab?.scope ?? "",
     activeTab?.workspaceRoot ?? state.meta?.cwd ?? "",
   ].join("\u0000");
-  const restoreWorkspaceDockWidths = useCallback((treeWidth: number, previewWidth: number) => {
-    setRightDockTreeWidth(rightDockTreeWidthClamp(treeWidth));
-    setRightDockPreviewWidth(clampRightDockPreviewWidth(previewWidth));
-  }, [rightDockTreeWidthClamp]);
+  const restoreWorkspaceDockWidths = useCallback((treeWidth: number, _previewWidth: number) => {
+    // Single-width dock: only the tree width is meaningful; clamp it to the
+    // dynamic available width (chat keeps its 400px floor), never a fixed
+    // 560 ceiling, so the user's remembered width is preserved when reopened.
+    setRightDockTreeWidth(rightDockTreeWidthClamp(treeWidth, workspacePanelAvailableWidth));
+  }, [rightDockTreeWidthClamp, workspacePanelAvailableWidth]);
   const sidebarImDetailConnection = useMemo(
     () => sidebarImConnections.find((connection) => connection.id === sidebarImDetailConnectionId) ?? null,
     [sidebarImConnections, sidebarImDetailConnectionId],
@@ -1712,7 +1736,7 @@ export default function App() {
   const goal = composerProfile.goal;
   const collaborationMode = displayedComposerProfileCollaborationMode(composerProfile);
   const toolApprovalMode = composerProfile.toolApprovalMode;
-  const runtimeTransitioning = false;
+  const runtimeTransitioning = navigationSurfaceIntent !== null;
   const controllerReady =
     state.meta?.ready === true &&
     (!state.meta.runtime || state.meta.runtime.phase === "ready") &&
@@ -1732,6 +1756,8 @@ export default function App() {
     if (clearContextPending) return "clear_context";
     return null;
   }, [clearContextPending, pendingClose, state.approval, state.ask, state.extensionForm, workspaceConflict]);
+  const visibleDecisionSurface = runtimeTransitioning ? null : decisionSurface;
+  const composerSurfaceHidden = runtimeTransitioning || Boolean(decisionSurface);
   decisionSurfaceRef.current = decisionSurface;
   useEffect(() => {
     // Close composer menus/popovers when a decision takes over the footer.
@@ -1916,6 +1942,14 @@ export default function App() {
       void setControllerToolApprovalMode(m);
     },
     [activeTabId, patchActiveComposerProfile, setControllerToolApprovalMode, toolApprovalMode],
+  );
+  const applyQualityFloor = useCallback(
+    (floor: QualityFloor) => {
+      if (!activeTabId) return;
+      patchActiveComposerProfile({ qualityFloor: floor }, ["qualityFloor"]);
+      void setControllerQualityFloor(floor);
+    },
+    [activeTabId, patchActiveComposerProfile, setControllerQualityFloor],
   );
   const toggleYoloApprovalMode = useCallback(() => {
     if (!activeTabId) return;
@@ -2207,12 +2241,13 @@ export default function App() {
     [remoteSession, showToast],
   );
   // Matches Composer's onCancel shape (the inbox cancel contract); the
-  // remote turn cancel is fire-and-forget with a toast on failure.
-  const remoteCancel = useCallback((_queuedItemIDs?: string[]) => {
+  // remote turn cancel is fire-and-forget with a toast on failure, and the
+  // remote surface has no local inbox items to discard.
+  const remoteCancel = useCallback(async (_queuedItemIDs?: string[]): Promise<CancelOutcome> => {
     void remoteSession.cancelTurn().catch((e) => {
       showToast(e instanceof Error ? e.message : String(e), "error");
     });
-    return undefined;
+    return { discardedItemIds: [] };
   }, [remoteSession, showToast]);
   const handleSend = useCallback(
     async (displayText: string, submitText = displayText, requestedTabId = activeTabId, structured?: StructuredInvocationSubmit) => {
@@ -2737,75 +2772,69 @@ export default function App() {
   const setSavedWorkspacePanelWidth = useCallback(
     (width: number) => {
       closeTransientOverlays();
-      if (rightDockDetailActive) {
-        const next = clampRightDockPreviewWidth(width);
-        setRightDockPreviewWidth(next);
-        saveRightDockPreviewWidth(next);
-        return;
-      }
-      const next = rightDockTreeWidthClamp(width);
+      const next = rightDockTreeWidthClamp(width, workspacePanelAvailableWidth);
       setRightDockTreeWidth(next);
       saveRightDockTreeWidth(next);
     },
-    [closeTransientOverlays, rightDockDetailActive, rightDockTreeWidthClamp],
+    [closeTransientOverlays, rightDockTreeWidthClamp, workspacePanelAvailableWidth],
   );
 
   const ensureWorkspacePanelWidth = useCallback(
     (width: number) => {
       closeTransientOverlays();
       if (rightDockMode === "context") return;
-      const next = clampRightDockPreviewWidth(width);
-      setRightDockPreviewWidth(next);
-      saveRightDockPreviewWidth(next);
+      const next = rightDockTreeWidthClamp(width, workspacePanelAvailableWidth);
+      setRightDockTreeWidth(next);
+      saveRightDockTreeWidth(next);
     },
-    [closeTransientOverlays, rightDockMode],
+    [closeTransientOverlays, rightDockTreeWidthClamp, workspacePanelAvailableWidth],
   );
 
   const startWorkspacePanelResize = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>) => {
-      if (!workspacePanelOpen) return;
+      if (event.button !== 0 || !workspacePanelOpen) return;
       const layout = layoutRef.current;
       if (!layout) return;
       event.preventDefault();
+      workspacePanelResizeFinishRef.current?.();
       closeTransientOverlays();
       setWorkspacePanelResizing(true);
+      const separator = event.currentTarget;
+      const pointerId = event.pointerId;
       const startX = event.clientX;
       const startDockWidth = workspacePanelRenderWidth;
       let nextDockWidth = startDockWidth;
       const liveResize = createRafResizeUpdater({
         target: layout,
-        separator: event.currentTarget,
+        separator,
         cssVar: "--workspace-width",
         onApply: setLiveWorkspacePanelRenderWidth,
       });
       const onMove = (moveEvent: PointerEvent) => {
         const delta = moveEvent.clientX - startX;
         nextDockWidth = startDockWidth - delta;
-        if (rightDockDetailActive) {
-          nextDockWidth = clampRightDockPreviewWidth(nextDockWidth);
-        } else {
-          nextDockWidth = rightDockTreeWidthClamp(nextDockWidth);
-        }
+        nextDockWidth = rightDockTreeWidthClamp(nextDockWidth, workspacePanelAvailableWidth);
         liveResize.schedule(resolveLiveWorkspacePanelRenderWidth(nextDockWidth));
       };
-      const onDone = () => {
-        liveResize.flush();
-        setSavedWorkspacePanelWidth(nextDockWidth);
-        setLiveWorkspacePanelRenderWidth(null);
-        setWorkspacePanelResizing(false);
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onDone);
-        window.removeEventListener("pointercancel", onDone);
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-      };
+      const lifecycle = createPointerResizeLifecycle({
+        separator,
+        pointerId,
+        onMove,
+        onFinish: () => {
+          liveResize.flush();
+          setSavedWorkspacePanelWidth(nextDockWidth);
+          setLiveWorkspacePanelRenderWidth(null);
+          setWorkspacePanelResizing(false);
+          workspacePanelResizeFinishRef.current = null;
+          document.body.style.cursor = "";
+          document.body.style.userSelect = "";
+        },
+      });
+      workspacePanelResizeFinishRef.current = lifecycle.finish;
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onDone);
-      window.addEventListener("pointercancel", onDone);
     },
-    [closeTransientOverlays, resolveLiveWorkspacePanelRenderWidth, rightDockDetailActive, rightDockTreeWidthClamp, setSavedWorkspacePanelWidth, workspacePanelOpen, workspacePanelRenderWidth],
+    [closeTransientOverlays, resolveLiveWorkspacePanelRenderWidth, rightDockDetailActive, rightDockTreeWidthClamp, setSavedWorkspacePanelWidth, workspacePanelAvailableWidth, workspacePanelOpen, workspacePanelRenderWidth],
   );
 
   const resizeWorkspacePanelWithKeyboard = useCallback(
@@ -2815,13 +2844,13 @@ export default function App() {
         setSavedWorkspacePanelWidth(workspacePanelRenderWidth + (event.key === "ArrowLeft" ? 16 : -16));
       } else if (event.key === "Home") {
         event.preventDefault();
-        setSavedWorkspacePanelWidth(rightDockDetailActive ? RIGHT_DOCK_PREVIEW_MIN_WIDTH : rightDockTreeMinWidth);
+        setSavedWorkspacePanelWidth(rightDockTreeMinWidth);
       } else if (event.key === "End") {
         event.preventDefault();
-        setSavedWorkspacePanelWidth(rightDockDetailActive ? RIGHT_DOCK_MAX_WIDTH : RIGHT_DOCK_TREE_MAX_WIDTH);
+        setSavedWorkspacePanelWidth(workspacePanelAvailableWidth);
       }
     },
-    [rightDockDetailActive, rightDockTreeMinWidth, setSavedWorkspacePanelWidth, workspacePanelRenderWidth],
+    [rightDockDetailActive, rightDockTreeMinWidth, setSavedWorkspacePanelWidth, workspacePanelAvailableWidth, workspacePanelRenderWidth],
   );
 
   const terminalRenderHeight = clampTerminalHeight(terminalHeight, viewportHeight);
@@ -2892,6 +2921,8 @@ export default function App() {
     [setSavedTerminalHeight, terminalPanelOpen, terminalRenderHeight, terminalResizeMaxHeight],
   );
 
+  const activeWorkspaceRoot = activeTab?.workspaceRoot ?? state.meta?.cwd ?? "";
+
   const openWorkspacePanel = useCallback(
     (mode: RightDockMode = rightDockMode) => {
       closeTransientOverlays();
@@ -2913,9 +2944,9 @@ export default function App() {
         return;
       }
       setWorkspacePanelOpen(true);
-      saveWorkspacePanelOpen(true);
+      saveWorkspacePanelOpen(true, activeWorkspaceRoot);
     },
-    [closeTransientOverlays, rightDockMode, workspacePanelMaximized, workspacePanelOpen],
+    [activeWorkspaceRoot, closeTransientOverlays, rightDockMode, workspacePanelMaximized, workspacePanelOpen],
   );
 
   const closeWorkspacePanel = useCallback(() => {
@@ -2926,12 +2957,19 @@ export default function App() {
     setLiveWorkspacePanelRenderWidth(null);
     setWorkspacePanelMaximized(false);
     setWorkspacePanelOpen(false);
-    saveWorkspacePanelOpen(false);
-  }, [closeTransientOverlays, workspacePanelOpen]);
+    saveWorkspacePanelOpen(false, activeWorkspaceRoot);
+  }, [activeWorkspaceRoot, closeTransientOverlays, workspacePanelOpen]);
+
+  // Restore the right dock's open/closed state per project: switching to a
+  // different workspace root (or a global session) restores that scope's own
+  // preference instead of carrying the previous project's state over.
+  useEffect(() => {
+    setWorkspacePanelOpen(loadWorkspacePanelOpen(activeWorkspaceRoot));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeWorkspaceRoot]);
 
   const toggleWorkspacePanel = useCallback(() => {
-    pulseWorkspaceToggle();
-    if (workspacePanelRenderable) {
+    if (effectiveWorkspacePanelRenderable) {
       closeWorkspacePanel();
       return;
     }
@@ -2941,8 +2979,10 @@ export default function App() {
       openWorkspacePanel(rightDockMode === "changed" ? "changed" : "files");
       return;
     }
-    openWorkspacePanel("context");
-  }, [closeWorkspacePanel, desktopLayoutStyle, openWorkspacePanel, pulseWorkspaceToggle, rightDockMode, workspacePanelRenderable]);
+    // Reopen with the previously active tab (rightDockMode is kept in the
+    // store across close/open) instead of forcing "context".
+    openWorkspacePanel();
+  }, [closeWorkspacePanel, desktopLayoutStyle, effectiveWorkspacePanelRenderable, openWorkspacePanel, rightDockMode]);
 
   const openRightDockMode = useCallback(
     (mode: RightDockMode) => {
@@ -2950,6 +2990,22 @@ export default function App() {
     },
     [openWorkspacePanel],
   );
+
+  const verificationRevealSequenceRef = useRef(0);
+  const [verificationRevealRequest, setVerificationRevealRequest] = useState<WorkspaceVerificationRevealRequest | null>(null);
+  const openTurnVerification = useCallback((summary: WireCompletionSummary) => {
+    openRightDockMode("changed");
+    verificationRevealSequenceRef.current += 1;
+    setVerificationRevealRequest({
+      id: verificationRevealSequenceRef.current,
+      summary,
+      tabId: activeTabId ?? "",
+      turnStartAt: state.turnStartAt,
+      currentSummary: state.completionSummary,
+    });
+  }, [activeTabId, openRightDockMode, state.completionSummary, state.turnStartAt]);
+
+  useEffect(() => { setVerificationRevealRequest(null); }, [activeTabId, state.completionSummary, state.turnStartAt]);
 
   const toggleTerminalPanel = useCallback(() => {
     setTerminalPanelOpen((prev) => {
@@ -3118,16 +3174,17 @@ export default function App() {
     }
   }, [activeTabId, addWorkspaceTextToComposer, showToast, t]);
 
-  const addSelectedTextToComposer = useCallback((text: string) => {
+  const addSelectedTextToComposer = useCallback((text: string, source?: SelectedTextInsertRequest["source"]) => {
     const selected = text.trim();
     if (!activeTabId || !selected) return;
     selectedTextRequestIdRef.current += 1;
     setSelectedTextRequestsByTab((current) => ({
       ...current,
-      [activeTabId]: { id: selectedTextRequestIdRef.current, text: selected },
+      [activeTabId]: { id: selectedTextRequestIdRef.current, text: selected, ...(source ? { source } : {}) },
     }));
   }, [activeTabId]);
 
+  const addTerminalSelectionToComposer = useCallback((text: string) => addSelectedTextToComposer(text, "terminal"), [addSelectedTextToComposer]);
   const addWorkspaceCodeToComposer = useCallback((path: string, code: string) => {
     if (!activeTabId || !code.trim()) return;
     if (workspaceInsertTarget === "planRevision" && state.approval?.tool === "exit_plan_mode") {
@@ -3157,38 +3214,63 @@ export default function App() {
   const tabSwitchSeqRef = useRef(0);
   const tabSwitchRunningRef = useRef(false);
   const tabSwitchPendingRef = useRef<PendingNavigationRequest<{ tabId: string; optimisticTab?: TabMeta; navigationIntentSeq: number }> | null>(null);
+  const enterChatViewForTabNavigation = useCallback(() => {
+    setMainView("chat");
+  }, [setMainView]);
   const enqueueTabSwitch = useCallback(
     (tabId: string, optimisticTab?: TabMeta): Promise<void> => {
+      enterChatViewForTabNavigation();
       // Claim the shared navigation epoch at click time, before this request
       // can wait behind an older tab switch. That immediately invalidates any
       // in-flight blank/topic completion from a previous user intent.
       const navigationIntentSeq = noteNavigationIntent();
+      beginNavigationSurface(navigationIntentSeq);
       return enqueueNavigationRequest(
         { seqRef: tabSwitchSeqRef, runningRef: tabSwitchRunningRef, pendingRef: tabSwitchPendingRef },
         { tabId, optimisticTab, navigationIntentSeq },
         async (request) => {
-          if (!isNavigationIntentCurrent(request.navigationIntentSeq)) return;
-          await switchTab(request.tabId, request.optimisticTab, request.navigationIntentSeq);
-          if (!isNavigationIntentCurrent(request.navigationIntentSeq)) return;
-          await refreshTabMetas(
-            () => isNavigationIntentCurrent(request.navigationIntentSeq),
-            { afterMutation: true },
-          );
+          try {
+            if (!isNavigationIntentCurrent(request.navigationIntentSeq)) return;
+            await switchTab(request.tabId, request.optimisticTab, request.navigationIntentSeq);
+            if (!isNavigationIntentCurrent(request.navigationIntentSeq)) return;
+            await refreshTabMetas(
+              () => isNavigationIntentCurrent(request.navigationIntentSeq),
+              { afterMutation: true },
+            );
+          } finally {
+            settleNavigationSurface(request.navigationIntentSeq);
+          }
         },
       );
     },
-    [isNavigationIntentCurrent, noteNavigationIntent, refreshTabMetas, switchTab],
+    [beginNavigationSurface, enterChatViewForTabNavigation, isNavigationIntentCurrent, noteNavigationIntent, refreshTabMetas, settleNavigationSurface, switchTab],
   );
 
   const revealBackgroundRuntime = useCallback(async (tabId: string): Promise<void> => {
+    enterChatViewForTabNavigation();
+    const navigationIntentSeq = noteNavigationIntent();
+    beginNavigationSurface(navigationIntentSeq);
     try {
       const meta = await app.RevealBackgroundRuntime(tabId);
-      await switchTab(meta.id, meta);
-      await refreshTabMetas(undefined, { afterMutation: true });
+      if (!await guardBackendNavigationResult({
+        intent: navigationIntentSeq,
+        targetTabId: meta.id,
+        kind: "tab.reveal-background",
+        isIntentCurrent: isNavigationIntentCurrent,
+        reassert: reassertVisibleTabAfterStaleNavigation,
+      })) return;
+      await switchTab(meta.id, meta, navigationIntentSeq);
+      if (!isNavigationIntentCurrent(navigationIntentSeq)) return;
+      await refreshTabMetas(
+        () => isNavigationIntentCurrent(navigationIntentSeq),
+        { afterMutation: true },
+      );
     } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err), "error");
+      if (isNavigationIntentCurrent(navigationIntentSeq)) showToast(err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      settleNavigationSurface(navigationIntentSeq);
     }
-  }, [refreshTabMetas, showToast, switchTab]);
+  }, [beginNavigationSurface, enterChatViewForTabNavigation, isNavigationIntentCurrent, noteNavigationIntent, reassertVisibleTabAfterStaleNavigation, refreshTabMetas, settleNavigationSurface, showToast, switchTab]);
 
   const handleTabChange = useCallback((id: string) => {
     closeTransientOverlays();
@@ -3255,28 +3337,48 @@ export default function App() {
 
   const revealWorkspaceWriter = useCallback(async () => {
     if (!activeTabId) return;
+    enterChatViewForTabNavigation();
+    const navigationIntentSeq = noteNavigationIntent();
+    beginNavigationSurface(navigationIntentSeq);
     try {
       const meta = await app.RevealWorkspaceWriterForTab(activeTabId);
+      if (!await guardBackendNavigationResult({
+        intent: navigationIntentSeq,
+        targetTabId: meta.id,
+        kind: "tab.reveal-workspace-writer",
+        isIntentCurrent: isNavigationIntentCurrent,
+        reassert: reassertVisibleTabAfterStaleNavigation,
+      })) return;
       setWorkspaceConflict(null);
-      await switchTab(meta.id, meta);
-      await refreshTabMetas(undefined, { afterMutation: true });
+      await switchTab(meta.id, meta, navigationIntentSeq);
+      if (!isNavigationIntentCurrent(navigationIntentSeq)) return;
+      await refreshTabMetas(
+        () => isNavigationIntentCurrent(navigationIntentSeq),
+        { afterMutation: true },
+      );
     } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err), "error");
+      if (isNavigationIntentCurrent(navigationIntentSeq)) showToast(err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      settleNavigationSurface(navigationIntentSeq);
     }
-  }, [activeTabId, refreshTabMetas, showToast, switchTab]);
+  }, [activeTabId, beginNavigationSurface, enterChatViewForTabNavigation, isNavigationIntentCurrent, noteNavigationIntent, reassertVisibleTabAfterStaleNavigation, refreshTabMetas, settleNavigationSurface, showToast, switchTab]);
 
   const continueInDeliveryWorktree = useCallback(async () => {
     const root = state.meta?.workspaceRoot || state.meta?.workspacePath || state.meta?.cwd;
     if (!root) return;
     cancel();
     setWorkspaceConflict(null);
+    const navigationIntentSeq = noteNavigationIntent();
+    beginNavigationSurface(navigationIntentSeq);
     try {
-      await createIsolatedWorktree(root);
+      await createIsolatedWorktree(root, navigationIntentSeq);
       await refreshTabMetas(undefined, { afterMutation: true });
     } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err), "error");
+      if (isNavigationIntentCurrent(navigationIntentSeq)) showToast(err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      settleNavigationSurface(navigationIntentSeq);
     }
-  }, [cancel, createIsolatedWorktree, refreshTabMetas, showToast, state.meta?.cwd, state.meta?.workspacePath, state.meta?.workspaceRoot]);
+  }, [beginNavigationSurface, cancel, createIsolatedWorktree, isNavigationIntentCurrent, noteNavigationIntent, refreshTabMetas, settleNavigationSurface, showToast, state.meta?.cwd, state.meta?.workspacePath, state.meta?.workspaceRoot]);
 
   const handleTabsClose = useCallback(async (ids: string[], nextActiveTabId?: string) => {
     closeTransientOverlays();
@@ -3371,11 +3473,15 @@ export default function App() {
   // (desktopLayoutStyle is available here; sidebarCreation is declared later.)
   const creationEmptyHero =
     desktopLayoutStyle === "creation" &&
+    !runtimeTransitioning &&
     !sidebarImDetailConnection &&
     !sessionHasContent &&
     !transcriptHydrating &&
     !hydratePlaceholderActive;
   const transcriptItems = hydratePlaceholderActive ? state.hydratePlaceholderItems! : state.items;
+  const handleLoadOlderHistory = useCallback((targetTurn?: number) => (
+    activeTabId ? loadOlderHistory(activeTabId, targetTurn) : Promise.resolve(false)
+  ), [activeTabId, loadOlderHistory]);
 
   // Display items: backend history is authoritative after immediate commit.
   // rewindState only drives the undo banner, not optimistic truncation.
@@ -3384,7 +3490,7 @@ export default function App() {
     for (let i = state.items.length - 1; i >= 0; i--) {
       const item = state.items[i];
       if (item.kind === "notice" && item.text.startsWith("↪ ")) {
-        return { key: item.id, text: item.text.slice(2) };
+        return { key: item.id, itemId: item.inboxItemId, text: item.text.slice(2) };
       }
     }
     return null;
@@ -3747,14 +3853,24 @@ export default function App() {
   }, [activateTopic, createIsolatedWorktree, ensureBlankSurface, ensureBlankTab, isNavigationIntentCurrent, openChannelSession, openGlobalTab, openProjectTab, openTopicSession, refreshHistoryView, resumeSession, seedActiveTabMeta, showToast, singleSurfaceLayout, t]);
 
   const enqueueNavigationWithIntent = useCallback((input: DesktopNavigationIntent, navigationIntentSeq: number): Promise<void> => {
+    beginNavigationSurface(navigationIntentSeq);
     return enqueueNavigationRequest(
       { seqRef: navigationSeqRef, runningRef: navigationRunningRef, pendingRef: navigationPendingRef },
       { ...input, navigationIntentSeq } as DesktopNavigationInput,
-      runNavigationRequest,
+      async (request) => {
+        try {
+          await runNavigationRequest(request);
+        } finally {
+          settleNavigationSurface(request.navigationIntentSeq);
+        }
+      },
     );
-  }, [runNavigationRequest]);
+  }, [beginNavigationSurface, runNavigationRequest, settleNavigationSurface]);
 
   const enqueueNavigation = useCallback((input: DesktopNavigationIntent): Promise<void> => {
+    // Any navigation (open topic / new session / resume) leaves the automation
+    // view and returns to the chat workspace.
+    setMainView("chat");
     // Invalidate any in-flight activation's stale apply at ENQUEUE time. The
     // queue serializes requests, so a click made while another request runs
     // only advances the controller's navigation epoch when it eventually
@@ -3763,7 +3879,7 @@ export default function App() {
     // newer surface's cached state (#6613 review).
     const navigationIntentSeq = noteNavigationIntent();
     return enqueueNavigationWithIntent(input, navigationIntentSeq);
-  }, [enqueueNavigationWithIntent, noteNavigationIntent]);
+  }, [enqueueNavigationWithIntent, noteNavigationIntent, setMainView]);
 
   const openBlankSession = useCallback((scope: string, workspaceRoot: string): Promise<void> =>
     enqueueNavigation({ kind: "blank", scope, workspaceRoot: scope === "project" ? workspaceRoot : "" }),
@@ -3805,19 +3921,29 @@ export default function App() {
     // switches tabs while the task/session lookup is pending, its completion is
     // stale and must not enqueue a newer navigation request.
     const navigationIntentSeq = noteNavigationIntent();
-    const session = await resolveTaskMonitorSession({
-      tabID,
-      taskID,
-      intentSeq: navigationIntentSeq,
-      isIntentCurrent: isNavigationIntentCurrent,
-      openTaskSessionForTab: (sourceTabID, sourceTaskID) => app.OpenTaskSessionForTab(sourceTabID, sourceTaskID),
-      listSessionsForTab: async (sourceTabID) => asArray(await app.ListSessionsForTab(sourceTabID)),
-      sessionIDFromPath: taskSessionIDFromPath,
-    });
-    if (!session) return false;
+    beginNavigationSurface(navigationIntentSeq);
+    let session: SessionMeta | null;
+    try {
+      session = await resolveTaskMonitorSession({
+        tabID,
+        taskID,
+        intentSeq: navigationIntentSeq,
+        isIntentCurrent: isNavigationIntentCurrent,
+        openTaskSessionForTab: (sourceTabID, sourceTaskID) => app.OpenTaskSessionForTab(sourceTabID, sourceTaskID),
+        listSessionsForTab: async (sourceTabID) => asArray(await app.ListSessionsForTab(sourceTabID)),
+        sessionIDFromPath: taskSessionIDFromPath,
+      });
+    } catch (error) {
+      settleNavigationSurface(navigationIntentSeq);
+      throw error;
+    }
+    if (!session) {
+      settleNavigationSurface(navigationIntentSeq);
+      return false;
+    }
     await enqueueNavigationWithIntent({ kind: "resume-session", session }, navigationIntentSeq);
     return isNavigationIntentCurrent(navigationIntentSeq);
-  }, [enqueueNavigationWithIntent, isNavigationIntentCurrent, noteNavigationIntent, singleSurfaceLayout, state.running, t]);
+  }, [beginNavigationSurface, enqueueNavigationWithIntent, isNavigationIntentCurrent, noteNavigationIntent, settleNavigationSurface, singleSurfaceLayout, state.running, t]);
 
   // Command palette: ⌘K / Ctrl+K opens a fuzzy navigator over commands and
   // recent sessions. Sessions are snapshotted on open so the list is stable
@@ -4077,13 +4203,25 @@ export default function App() {
   // Workspace: open the folder chooser and switch projects. The hook resets the
   // transcript and refreshes meta on a pick. A cancel is a no-op.
   const switchFolder = useCallback(async (path?: string) => {
-    const picked = path === undefined ? await pickWorkspace() : await switchWorkspace(path);
-    if (picked) {
-      setProjectRevision((value) => value + 1);
-      await refreshTabMetas(undefined, { afterMutation: true });
+    const navigationIntentSeq = noteNavigationIntent();
+    beginNavigationSurface(navigationIntentSeq);
+    try {
+      const picked = path === undefined
+        ? await pickWorkspace(navigationIntentSeq)
+        : await switchWorkspace(path, navigationIntentSeq);
+      if (!isNavigationIntentCurrent(navigationIntentSeq)) return picked;
+      if (picked) {
+        setProjectRevision((value) => value + 1);
+        await refreshTabMetas(
+          () => isNavigationIntentCurrent(navigationIntentSeq),
+          { afterMutation: true },
+        );
+      }
+      return picked;
+    } finally {
+      settleNavigationSurface(navigationIntentSeq);
     }
-    return picked;
-  }, [pickWorkspace, switchWorkspace, refreshTabMetas]);
+  }, [beginNavigationSurface, isNavigationIntentCurrent, noteNavigationIntent, pickWorkspace, refreshTabMetas, settleNavigationSurface, switchWorkspace]);
 
   const refreshProjectsAndTabs = useCallback(async () => {
     setProjectRevision((value) => value + 1);
@@ -4159,14 +4297,36 @@ export default function App() {
   const browserPreviewChrome = typeof window !== "undefined" && !window.runtime;
   const browserMockScenario = browserPreviewChrome ? browserMockScenarioParam() : "";
   const guidanceQueueMockItems = isGuidanceMockScenario(browserMockScenario) ? GUIDANCE_QUEUE_MOCK_ITEMS : undefined;
-  const workspacePanelResetWidth = rightDockDetailActive
-    ? RIGHT_DOCK_PREVIEW_DEFAULT_WIDTH
-    : desktopLayoutStyle === "creation"
-      ? defaultCreationRightDockTreeWidth()
-      : defaultRightDockTreeWidth();
+  const workspacePanelResetWidth = desktopLayoutStyle === "creation"
+    ? defaultCreationRightDockTreeWidth()
+    : defaultRightDockTreeWidth();
   const workspacePanelResizeMinWidth = workspacePanelAriaMinWidth(workspacePanelMinWidth, workspacePanelRenderWidth);
-  const workspacePanelMaxWidth = rightDockDetailActive ? RIGHT_DOCK_MAX_WIDTH : RIGHT_DOCK_TREE_MAX_WIDTH;
+  const workspacePanelResizeMaxWidth = workspacePanelAvailableWidth;
   const sidebarCreation = desktopLayoutStyle === "creation";
+  // Command palette shortcut label (⌘K / Ctrl+K), platform-aware.
+  const commandPaletteShortcut = formatShortcutCombo(
+    resolvedShortcutCombo("commandPalette.open", desktopPlatform),
+    desktopPlatform,
+  );
+  // Dock collapse/expand toggle. Rendered in the dock's own tools row when the
+  // dock is open (its top-right corner), and in the topic bar when closed.
+  const dockToggleButton = (
+    <Tooltip label={effectiveWorkspacePanelRenderable ? t("rightDock.collapse") : t("rightDock.expand")}>
+      <button
+        className={[
+          "topicbar__chrome-btn",
+          "topicbar__chrome-btn--workspace",
+          effectiveWorkspacePanelRenderable ? "topicbar__chrome-btn--active" : "",
+        ].filter(Boolean).join(" ")}
+        type="button"
+        onClick={toggleWorkspacePanel}
+        aria-label={effectiveWorkspacePanelRenderable ? t("rightDock.collapse") : t("rightDock.expand")}
+        aria-pressed={effectiveWorkspacePanelRenderable}
+      >
+        <PanelRight size={15} />
+      </button>
+    </Tooltip>
+  );
   const topicbarTitle = sidebarImDetailConnection ? t("botDetail.title", { name: sidebarImDetailConnection.title }) : topicDisplayTitle(activeTab);
   const topicbarWorkspaceLabel = sidebarImDetailConnection ? t("botDetail.subtitle") : activeTab ? tabWorkspaceTitle(activeTab) : "";
   const topicbarWorkspacePath = activeTab?.scope === "project" ? activeTab.workspaceRoot || state.meta?.cwd : "";
@@ -4175,7 +4335,7 @@ export default function App() {
     ? sidebarImDetailConnection.platformLabel
     : topicbarImSource ? t("msg.fromIm", { source: topicbarImSource.label }) : "";
   const topicbarImSourcePlatform = sidebarImDetailConnection?.platform ?? topicbarImSource?.platform;
-  const topicbarSubtitleVisible = !sidebarCreation && Boolean(topicbarWorkspaceLabel || topicbarImSourceLabel);
+  const topicbarSubtitleVisible = !sidebarCreation && Boolean(activeTab?.isolatedWorktree || topicbarImSourceLabel);
   const topicbarSubtitleTitle = sidebarImDetailConnection
     ? [topicbarWorkspaceLabel, topicbarImSourceLabel, sidebarImScopeLabel(sidebarImDetailConnection, t)].filter(Boolean).join(" · ")
     : [topicbarWorkspacePath || topicbarWorkspaceLabel, topicbarImSourceLabel].filter(Boolean).join(" · ");
@@ -4227,6 +4387,7 @@ export default function App() {
       ].filter(Boolean).join(" ")}
     >
       <ThemeBackground />
+      {sidebarWorkbench && <div className="app__dock-toggle">{dockToggleButton}</div>}
       <div
         ref={layoutRef}
         className={[
@@ -4237,7 +4398,7 @@ export default function App() {
           sidebarImDetailConnection ? "layout--statusbar-hidden" : "",
           sidebarCollapsed ? "layout--sidebar-collapsed" : "",
           sidebarResizing ? "layout--resizing layout--sidebar-resizing" : "",
-          workspacePanelGridOpen ? "layout--workspace-open" : "",
+          effectiveWorkspacePanelGridOpen ? "layout--workspace-open" : "",
           workspacePanelOverlay ? "layout--workspace-overlay" : "",
           "layout--terminal-drawer-open",
           terminalPanelOpen ? "layout--terminal-drawer-expanded" : "",
@@ -4263,9 +4424,8 @@ export default function App() {
             sidebarCollapsed={sidebarCollapsed}
             sidebarToggleTitle={sidebarToggleTitle}
             workspacePanelMaximized={workspacePanelMaximized}
-            workspacePanelRenderable={workspacePanelRenderable}
-            workspaceTogglePressed={workspaceTogglePressed}
-            workspacePanelLabel={workspacePanelRenderable ? t("rightDock.collapse") : t("rightDock.expand")}
+            workspacePanelRenderable={effectiveWorkspacePanelRenderable}
+            workspacePanelLabel={effectiveWorkspacePanelRenderable ? t("rightDock.collapse") : t("rightDock.expand")}
             onToggleSidebar={toggleSidebar}
             onToggleWorkspacePanel={toggleWorkspacePanel}
             onTabChange={(id) => void handleTabChange(id)}
@@ -4360,7 +4520,7 @@ export default function App() {
                 <button
                   className="sidebar-feature-zone__item"
                   type="button"
-                  onClick={() => setHeartbeatOpen(true)}
+                  onClick={() => setMainView("automation")}
                 >
                   <AlarmClock size={14} aria-hidden="true" />
                   <span>{t("sidebar.automation")}</span>
@@ -4413,7 +4573,7 @@ export default function App() {
                   <button
                     className="sidebar__utility-button"
                     type="button"
-                    onClick={() => setHeartbeatOpen(true)}
+                    onClick={() => setMainView("automation")}
                   >
                     <AlarmClock size={16} aria-hidden="true" />
                     <span className="sr-only">{t("sidebar.automation")}</span>
@@ -4466,7 +4626,7 @@ export default function App() {
                 <Tooltip label={t("heartbeat.scheduler")} fill side="right" disabled={sidebarNavTooltipDisabled}>
                   <button
                     className="sidebar__navitem"
-                    onClick={() => setHeartbeatOpen(true)}
+                    onClick={() => setMainView("automation")}
                   >
                     <AlarmClock size={15} />
                     <span>{t("sidebar.automation")}</span>
@@ -4516,6 +4676,13 @@ export default function App() {
         )}
 
         <section className={`chat-pane${creationEmptyHero ? " chat-pane--creation-empty" : ""}`}>
+          {mainView === "automation" ? (
+            <Suspense fallback={<div className="heartbeat-page" />}>
+              <HeartbeatView onOpenTopic={(scope, workspaceRoot, topicId) => {
+                void handleOpenTopic(scope, workspaceRoot, topicId);
+              }} />
+            </Suspense>
+          ) : (
           <>
           <header className="topicbar">
             {workbenchChromeHidden && (
@@ -4547,6 +4714,7 @@ export default function App() {
                       size={sidebarCreation ? topicbarTitleEditSize : undefined}
                       value={topicTitleDraft}
                       onChange={(event) => setTopicTitleDraft(event.target.value)}
+                      onFocus={(event) => event.currentTarget.select()}
                       onKeyDown={(event: KeyboardEvent<HTMLInputElement>) => {
                         if (event.key === "Enter") {
                           event.preventDefault();
@@ -4560,7 +4728,7 @@ export default function App() {
                       onBlur={() => void commitActiveTopicRename()}
                     />
                   </div>
-                ) : sidebarCreation && topicbarCanRename ? (
+                ) : topicbarCanRename ? (
                   <h1 title={topicTitle(activeTab)}>
                     <button
                       className="topicbar__title-button"
@@ -4574,23 +4742,14 @@ export default function App() {
                 ) : (
                   <h1 title={sidebarImDetailConnection ? topicbarTitle : topicTitle(activeTab)}>{topicbarTitle}</h1>
                 )}
-                {!sidebarCreation && (
-                  <Tooltip label={t("topicBar.renameSession")}>
-                    <button
-                      className="topicbar__icon-btn"
-                      type="button"
-                      disabled={!topicbarCanRename || topicbarEditing}
-                      onClick={startActiveTopicRename}
-                      aria-label={t("topicBar.renameSession")}
-                    >
-                      <Pencil size={14} />
-                    </button>
-                  </Tooltip>
+                {topicbarWorkspaceLabel && (
+                  <span className="topicbar__workspace-label" title={topicbarWorkspaceLabel}>
+                    {topicbarWorkspaceLabel}
+                  </span>
                 )}
               </div>
               {topicbarSubtitleVisible && (
                 <div className="topicbar__subtitle" title={topicbarSubtitleTitle}>
-                  {topicbarWorkspaceLabel && <span>{topicbarWorkspaceLabel}</span>}
                   {activeTab?.isolatedWorktree && <WorktreeBadge size={11} />}
                   {topicbarImSourcePlatform && (
                     <span className={`topicbar__source-chip topicbar__source-chip--${topicbarImSourcePlatform}`}>
@@ -4602,115 +4761,32 @@ export default function App() {
             </div>
             <div className="topicbar__spacer" />
             <div className="topicbar__actions">
-              {sidebarCreation && shouldMountExternalOpener(activeTab, Boolean(sidebarImDetailConnection)) && activeTab && (
-                <ExternalOpener key={activeTab.id} tabId={activeTab.id} dismissSignal={transientOverlayDismissSignal} />
-              )}
-              {!sidebarImDetailConnection && (
-              <>
-              <Tooltip label={t("topicBar.copyAll")}>
-                <CopyButton
-                  getText={getSessionMarkdown}
-                  label={t("topicBar.copyAll")}
-                  className="topicbar__action-btn topicbar__action-btn--icon topicbar__action-btn--utility"
-                  showInlineLabel={false}
-                />
-              </Tooltip>
-              <div className={`topicbar__export${topicExportOpen ? " topicbar__export--open" : ""}`}>
-                <Tooltip label={t("topicBar.export")}>
-                  <button
-                    className="topicbar__action-btn topicbar__action-btn--icon topicbar__action-btn--utility"
-                    type="button"
-                    disabled={!sessionHasContent}
-                    aria-label={t("topicBar.export")}
-                    aria-haspopup="menu"
-                    aria-expanded={topicExportOpen}
-                    onClick={() => setTopicExportOpen((open) => !open)}
-                  >
-                    <Download size={14} />
-                  </button>
-                </Tooltip>
-                {topicExportOpen && (
-                  <div className="topicbar__export-menu" role="menu">
-                    <button type="button" role="menuitem" onClick={() => void exportSession("markdown")}>
-                      <FileText size={13} />
-                      <span>{t("topicBar.exportMarkdown")}</span>
-                    </button>
-                    <button type="button" role="menuitem" onClick={() => void exportSession("json")}>
-                      <FileJson size={13} />
-                      <span>{t("topicBar.exportJson")}</span>
-                    </button>
-                    <button type="button" role="menuitem" onClick={() => void exportSession("pdf")}>
-                      <FileDown size={13} />
-                      <span>{t("topicBar.exportPdf")}</span>
-                    </button>
-                    <button type="button" role="menuitem" onClick={() => void exportSession("image")}>
-                      <FileImage size={13} />
-                      <span>{t("topicBar.exportImage")}</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-              </>
-              )}
-              {!sidebarCreation && (
-                <Tooltip label={t("workspace.changedTab")}>
-                  <button
-                    className="topicbar__action-btn topicbar__action-btn--label"
-                    type="button"
-                    aria-label={t("workspace.changedTab")}
-                    aria-pressed={workspacePanelRenderable && rightDockMode === "changed"}
-                    onClick={() => openRightDockMode("changed")}
-                  >
-                    <GitBranch size={14} />
-                    <span>{t("workspace.changedTab")}</span>
-                  </button>
-                </Tooltip>
-              )}
-              {!sidebarImDetailConnection && (
-                <Tooltip label={t("rightDock.terminal")}>
-                  <button
-                    className="topicbar__action-btn topicbar__action-btn--icon topicbar__action-btn--utility"
-                    type="button"
-                    aria-label={t("rightDock.terminal")}
-                    aria-pressed={terminalPanelOpen}
-                    onClick={toggleTerminalPanel}
-                  >
-                    <TerminalSquare size={14} />
-                  </button>
-                </Tooltip>
-              )}
-              {!sidebarCreation && shouldMountExternalOpener(activeTab, Boolean(sidebarImDetailConnection)) && activeTab && (
-                <ExternalOpener key={activeTab.id} tabId={activeTab.id} dismissSignal={transientOverlayDismissSignal} />
-              )}
-              <Tooltip label={t("summary.session")}>
+              <Tooltip label={`${t("shortcuts.action.commandPalette")} ${commandPaletteShortcut}`}>
                 <button
-                  className={`topicbar__action-btn topicbar__action-btn--icon topicbar__action-btn--utility${tasksOpen ? " topicbar__action-btn--active" : ""}`}
+                  className="topicbar__action-btn topicbar__action-btn--icon topicbar__action-btn--utility"
                   type="button"
-                  aria-label={t("summary.session")}
-                  aria-expanded={Boolean(tasksOpen)}
-                  onClick={() => setTasksOpen((open) => open ? false : "session")}
+                  aria-label={t("shortcuts.action.commandPalette")}
+                  onClick={() => void openPalette()}
                 >
-                  <Activity size={14} />
+                  <Search size={15} />
                 </button>
               </Tooltip>
-              {(sidebarCreation || workbenchChromeHidden) && (
-                <Tooltip label={workspacePanelRenderable ? t("rightDock.collapse") : t("rightDock.expand")}>
-                  <button
-                    className={[
-                      "topicbar__chrome-btn",
-                      "topicbar__chrome-btn--workspace",
-                      workspacePanelRenderable ? "topicbar__chrome-btn--active" : "",
-                      workspaceTogglePressed ? "topicbar__chrome-btn--pressed" : "",
-                    ].filter(Boolean).join(" ")}
-                    type="button"
-                    onClick={toggleWorkspacePanel}
-                    aria-label={workspacePanelRenderable ? t("rightDock.collapse") : t("rightDock.expand")}
-                    aria-pressed={workspacePanelRenderable}
-                  >
-                    <PanelRight size={15} />
-                  </button>
-                </Tooltip>
+              {shouldMountExternalOpener(activeTab, Boolean(sidebarImDetailConnection)) && activeTab && (
+                <ExternalOpener key={activeTab.id} tabId={activeTab.id} dismissSignal={transientOverlayDismissSignal} />
               )}
+              {!sidebarImDetailConnection && (
+                <TopicbarMoreMenu
+                  sessionHasContent={sessionHasContent}
+                  getSessionMarkdown={getSessionMarkdown}
+                  exportSession={(format) => void exportSession(format)}
+                  openChangedDock={() => openRightDockMode("changed")}
+                  toggleTerminal={toggleTerminalPanel}
+                  prefetchTerminal={prefetchTerminalPanel}
+                  openSessionSummary={() => setTasksOpen((open) => open ? false : "session")}
+                  tasksOpen={Boolean(tasksOpen)}
+                />
+              )}
+              {sidebarCreation && dockToggleButton}
               {tasksOpen && (
                 <div className="taskmonitor-popover" role="dialog" aria-label={t("summary.session")}>
                   <Suspense fallback={null}>
@@ -4789,7 +4865,7 @@ export default function App() {
           />
 
           <main className="main">
-            {sidebarImDetailConnection ? (
+            {sidebarImDetailConnection && !runtimeTransitioning ? (
               <SidebarImConnectionDetail
                 connection={sidebarImDetailConnection}
                 onClose={() => setSidebarImDetailConnectionId("")}
@@ -4806,14 +4882,16 @@ export default function App() {
             ) : (
               <>
                 <Transcript
-                  items={displayItems}
-                  live={state.live}
+                  items={runtimeTransitioning ? [] : displayItems}
+                  live={runtimeTransitioning ? undefined : state.live}
                   liveStore={liveStore}
                   tabId={activeTabId}
                   footerHeight={footerHeight}
                   onPrompt={handleTranscriptPrompt}
                   onDeliveryContinue={() => void handleDeliveryContinue()}
+                  onAcceptDelivery={() => void app.AcceptDeliveryToTab(activeTabIdRef.current ?? "")}
                   onOpenChanges={() => openRightDockMode("changed")}
+                  onOpenVerification={openTurnVerification}
                   onEditPrompt={handleEditPrompt}
                   onRewind={handleMessageAction}
                   checkpoints={state.checkpoints}
@@ -4821,27 +4899,29 @@ export default function App() {
                   rewindDisabled={Boolean(activeTab?.readOnly) || !controllerReady || hydratePlaceholderActive || rewindState != null || rewindCommitting || state.running || state.messageAction != null || state.approval != null || state.ask != null || clearContextPending}
                   running={state.running || rewindCommitting}
                   turnStartAt={state.turnStartAt}
+                  contentRevision={state.historyLayoutRevision}
                   welcomeVariant={sidebarCreation ? "creation" : "default"}
                   creationMode={sidebarCreation}
-                  actionHoverMenus={sidebarCreation && !hydratePlaceholderActive}
+                  actionHoverMenus={sidebarCreation && !hydratePlaceholderActive && !runtimeTransitioning}
                   rewindSignal={rewindSignal}
                   revealSignal={transcriptRevealSignal}
-                  historyLayoutRevision={state.historyLayoutRevision}
-                  hydrating={transcriptHydrating}
-                  hasOlderHistory={state.historyHasOlder && !rewindState}
-                  olderHistoryCount={state.historyStartTurn}
+                  hydrating={runtimeTransitioning || transcriptHydrating}
+                  hasOlderHistory={!runtimeTransitioning && state.historyHasOlder && !rewindState}
+                  historyStartTurn={state.historyStartTurn}
+                  historyTotalTurns={state.historyTotalTurns}
                   loadingOlderHistory={state.historyOlderLoading}
-                  onLoadOlderHistory={() => activeTabId && loadOlderHistory(activeTabId)}
+                  olderHistoryError={state.historyOlderError}
+                  onLoadOlderHistory={handleLoadOlderHistory}
                   invocationMetadata={activeTabId ? invocationMetadataByTab[activeTabId] : undefined}
                 />
-                {state.hydrateError ? <div className="history-load-error" role="alert"><span>{state.hydrateError}</span><button type="button" className="btn btn--small" onClick={() => void retrySessionHistory(activeTabId)}>{t("common.retry")}</button></div> : null}
+                {!runtimeTransitioning && state.hydrateError ? <div className="history-load-error" role="alert"><span>{state.hydrateError}</span><button type="button" className="btn btn--small" onClick={() => void retrySessionHistory(activeTabId)}>{t("common.retry")}</button></div> : null}
               </>
             )}
           </main>
 
           {!sidebarImDetailConnection && (
-          <footer className={["footer", terminalPanelOpen && !sidebarCreation ? "footer--compact" : "", decisionSurface ? "footer--decision" : ""].filter(Boolean).join(" ")} ref={footerRef}>
-            {showTodos && (
+          <footer className={["footer", terminalPanelOpen && !sidebarCreation ? "footer--compact" : "", visibleDecisionSurface ? "footer--decision" : ""].filter(Boolean).join(" ")} ref={footerRef}>
+            {!runtimeTransitioning && showTodos && (
               <TodoPanel
                 key={scopedTodoBatch}
                 stateKey={scopedTodoBatch}
@@ -4849,7 +4929,7 @@ export default function App() {
                 onDismiss={dismissTodos}
               />
             )}
-            {rewindState && (
+            {!runtimeTransitioning && rewindState && (
               <Suspense fallback={null}><UndoRewindBanner
                 meta={{
                   turns: rewindState.turnDiff,
@@ -4876,7 +4956,7 @@ export default function App() {
                 }}
               /></Suspense>
             )}
-            {decisionSurface === "tool_approval" || decisionSurface === "plan_approval"
+            {visibleDecisionSurface === "tool_approval" || visibleDecisionSurface === "plan_approval"
               ? state.approval && (
               <ApprovalModal
                 key={`${activeTabId ?? ""}:${state.approval.id}`}
@@ -4920,7 +5000,7 @@ export default function App() {
                 toolApprovalMode={toolApprovalMode}
               />
               )
-            : decisionSurface === "ask"
+            : visibleDecisionSurface === "ask"
               ? state.ask && (
               <AskCard
                 key={`${activeTabId ?? ""}:${state.ask.id}`}
@@ -4932,7 +5012,7 @@ export default function App() {
                 }}
               />
               )
-            : decisionSurface === "extension_form"
+            : visibleDecisionSurface === "extension_form"
               ? state.extensionForm && (
               <ExtensionFormDialog
                 key={`${activeTabId ?? ""}:${state.extensionForm.pluginId}:${state.extensionForm.surfaceId}`}
@@ -4942,13 +5022,13 @@ export default function App() {
                 onCancel={() => void cancelExtensionForm()}
               />
               )
-            : decisionSurface === "workspace_conflict" && workspaceConflict ? (
+            : visibleDecisionSurface === "workspace_conflict" && workspaceConflict ? (
               <RuntimeDecisionCard
                 id="workspace-conflict"
                 title={t("runtime.workspaceConflictTitle")}
                 badge={t("runtime.workspaceConflictBadge")}
                 meta={workspaceConflict.state === "local"
-                  ? t("runtime.workspaceConflictLocal", { title: workspaceConflict.ownerTitle || t("runtime.unknownTask") })
+                  ? t("runtime.workspaceConflictLocal", { title: workspaceConflict.ownerTitle || t("runtime.unknownTask"), label: workspaceConflict.ownerLabel || t("workspace.title") })
                   : t("runtime.workspaceConflictExternal")}
                 note={t("runtime.workspaceConflictNote")}
                 onCancel={() => {
@@ -4971,7 +5051,7 @@ export default function App() {
                 }}
               />
             )
-            : decisionSurface === "close_active" && pendingClose ? (
+            : visibleDecisionSurface === "close_active" && pendingClose ? (
               <RuntimeDecisionCard
                 id="close-active"
                 title={t("runtime.closeTitle")}
@@ -4995,7 +5075,7 @@ export default function App() {
                 }}
               />
             )
-            : decisionSurface === "clear_context" ? (
+            : visibleDecisionSurface === "clear_context" ? (
               <ClearContextCard
                 onCancel={cancelClearContext}
                 onConfirm={() => {
@@ -5008,12 +5088,12 @@ export default function App() {
             <div
               className={[
                 "composer-decision-host",
-                decisionSurface ? "composer-decision-host--hidden" : "",
+                composerSurfaceHidden ? "composer-decision-host--hidden" : "",
                 creationEmptyHero ? "composer-decision-host--creation-hero" : "",
               ].filter(Boolean).join(" ")}
-              hidden={Boolean(decisionSurface) || undefined}
-              inert={decisionSurface ? true : undefined}
-              aria-hidden={decisionSurface ? true : undefined}
+              hidden={composerSurfaceHidden || undefined}
+              inert={composerSurfaceHidden ? true : undefined}
+              aria-hidden={composerSurfaceHidden ? true : undefined}
             >
             {creationEmptyHero && (
               <h2 className="welcome-creation__headline">{t("welcome.creation.title")}</h2>
@@ -5022,6 +5102,9 @@ export default function App() {
               running={remoteSurfaceActive ? remoteSession.running : state.running || rewindCommitting}
               collaborationMode={collaborationMode}
               toolApprovalMode={toolApprovalMode}
+              qualityFloor={composerProfile.qualityFloor}
+              floorInferred={(activeTab?.floorInferred ?? false) && !composerProfile.pending.qualityFloor}
+              onSetQualityFloor={applyQualityFloor}
               turnPhase={state.turnPhase}
               goal={goal}
               goalStatus={state.meta?.goalStatus}
@@ -5069,12 +5152,14 @@ export default function App() {
               workspaceScopeKey={workspaceScopeKey}
               fileRefRefreshKey={composerFileRefRefreshKey}
               guidanceConsumedKey={latestGuidanceConsumed?.key}
+              guidanceConsumedItemId={latestGuidanceConsumed?.itemId}
               guidanceConsumedText={latestGuidanceConsumed?.text}
               guidanceQueuePreviewItems={guidanceQueueMockItems}
               showContextWindowRing={sidebarCreation}
               heroMode={creationEmptyHero}
               context={state.context}
               turnCost={state.turnCost}
+              turnRateBand={state.turnRateBand}
               currency={state.sessionCurrency}
               cacheHitTokens={state.usage?.cacheHitTokens}
               cacheMissTokens={state.usage?.cacheMissTokens}
@@ -5084,9 +5169,10 @@ export default function App() {
           </footer>
           )}
           </>
+          )}
         </section>
 
-        {workspacePanelGridOpen && (
+        {effectiveWorkspacePanelGridOpen && (
           <button
             className="workspace-panel-resizer"
             type="button"
@@ -5094,7 +5180,7 @@ export default function App() {
             aria-orientation="vertical"
             aria-label={t("rightDock.resize")}
             aria-valuemin={workspacePanelResizeMinWidth}
-            aria-valuemax={Math.max(workspacePanelMaxWidth, workspacePanelRenderWidth)}
+            aria-valuemax={Math.max(workspacePanelResizeMaxWidth, workspacePanelRenderWidth)}
             aria-valuenow={workspacePanelRenderWidth}
             onPointerDown={startWorkspacePanelResize}
             onKeyDown={resizeWorkspacePanelWithKeyboard}
@@ -5102,7 +5188,7 @@ export default function App() {
           />
         )}
 
-        {workspacePanelRenderable && (
+        {effectiveWorkspacePanelRenderable && (
           <aside
             className={[
               "workbench-dock",
@@ -5176,6 +5262,7 @@ export default function App() {
                     sessionTurns={sessionTurns}
                     turnTokens={state.turnTotalTokens}
                     turnCost={state.turnCost}
+                    turnRateBand={state.turnRateBand}
                     balance={state.balance}
                     sessionGen={state.sessionGen}
                     refreshKey={dockRefreshKey + state.contextPanelSeq}
@@ -5185,7 +5272,8 @@ export default function App() {
               ) : (
                 <Suspense fallback={null}>
                   <WorkspacePanel
-                    open={workspacePanelRenderable}
+                    key={workspaceTreeMemoryKey}
+                    open={effectiveWorkspacePanelRenderable}
                     tabId={activeTabId}
                     cwd={state.meta?.cwd}
                     workspaceScopeKey={workspaceScopeKey}
@@ -5209,6 +5297,9 @@ export default function App() {
                     onOpenInTerminal={openTerminalForPath}
                     initialViewMode={rightDockMode === "changed" ? "changed" : "files"}
                     completionSummary={state.completionSummary}
+                    turnStartAt={state.turnStartAt}
+                    verificationRevealRequest={verificationRevealRequest}
+                    qualityFloor={composerProfile.qualityFloor}
                     showViewTabs={false}
                     creationMode={sidebarCreation}
                   />
@@ -5221,6 +5312,7 @@ export default function App() {
           <aside
             className="terminal-drawer"
             aria-label={t("terminal.title")}
+            aria-hidden={!terminalPanelOpen} inert={!terminalPanelOpen ? true : undefined}
           >
             {terminalContentVisible && (
               <Suspense fallback={<div className="terminal-empty"><span className="terminal-empty__spinner" />{t("terminal.loading")}</div>}>
@@ -5228,11 +5320,13 @@ export default function App() {
                   tabId={activeTabId ?? ""}
                   cwd={state.meta?.cwd}
                   readOnly={Boolean(activeTab?.readOnly)}
+                  open={terminalPanelOpen} fitEnabled={terminalFitEnabled}
                   onClose={() => {
                     setTerminalPanelOpen(false);
                     saveTerminalPanelOpen(false);
                   }}
                   onAddOutput={(sessionId) => void addTerminalOutputToComposer(sessionId)}
+                  onAddToChat={addTerminalSelectionToComposer}
                 />
               </Suspense>
             )}
@@ -5275,6 +5369,7 @@ export default function App() {
             lastTurnOutputEstimated={state.lastTurnOutputEstimated}
             lastRequestTps={state.lastRequestTps}
             turnCost={state.turnCost}
+            turnRateBand={state.turnRateBand}
             cost={state.sessionCost}
             currency={state.sessionCurrency}
             modelLabel={state.meta?.label}
@@ -5385,14 +5480,12 @@ export default function App() {
         />
       )}
 
-      <HeartbeatPanel open={heartbeatOpen} onClose={() => setHeartbeatOpen(false)} onOpenTopic={(scope, workspaceRoot, topicId) => {
-        void handleOpenTopic(scope, workspaceRoot, topicId);
-      }} />
-      <Suspense fallback={null}><TranscriptSelectionMenu
-        enabled={Boolean(activeTabId && !activeTab?.readOnly && !decisionSurface && !sidebarImDetailConnection && !hydratePlaceholderActive)}
-        resetKey={activeTabId ?? ""}
-        onAddToChat={addSelectedTextToComposer}
-      />
+      <Suspense fallback={null}>
+        <TranscriptSelectionMenu
+          enabled={Boolean(activeTabId && !activeTab?.readOnly && !decisionSurface && !sidebarImDetailConnection && !hydratePlaceholderActive)}
+          resetKey={activeTabId ?? ""}
+          onAddToChat={addSelectedTextToComposer}
+        />
       </Suspense>
       {windowsFramelessChrome && (
         <WindowsWindowControls

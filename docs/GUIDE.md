@@ -69,7 +69,7 @@ reasoning_language = "auto"      # visible reasoning text: auto|zh|en
 # max_subagent_depth = 2              # nested delegation depth; set 1 for the old single-layer boundary
 # max_subagent_concurrency = 6        # session-wide sub-agent concurrency (task/fleet/skills)
 # max_parallel_writers = 3            # concurrent writers with non-overlapping write_paths
-# compact_ratio = 0.85             # sole auto trigger; presets 0.70 / 0.80 / 0.85
+# compact_ratio = 0.80             # sole auto trigger; presets 0.70 / 0.80 / 0.85
 # max_output_tokens = 0            # auto: official DeepSeek omits the field (server 384K) until the window is tight
 # max_output_tokens = 32768        # optional cost cap; still clipped to physical remaining
 # max_output_tokens = 65536        # optional cost cap
@@ -1198,6 +1198,14 @@ read-only: an explicit old path can be recovered as an ordinary Goal, but new
 runs never create or update those directories. Deprecated budget flags are
 accepted for compatibility but are hidden from help and completion.
 
+### Ordered batch sign-offs
+
+The host may process multiple `complete_step` calls from one provider tool-call
+round. They must follow the canonical Todo order, and each step's work and
+evidence must already exist before its sign-off call. The host advances the
+Todo state after each successful call; skipped, pending, or out-of-order steps
+remain rejected. This does not change the provider-visible tool schema.
+
 ## @ references
 
 Embed `@` references in a message and Reasonix resolves them before sending, as
@@ -1230,7 +1238,7 @@ Ordinary requests always stay with the executor. The dedicated planner runs
 only for an explicit `plan first` / `先规划` request, an explicit wait-for-
 approval boundary, an explicit `plan only` / `不要执行` request, or Goal
 start. Wording such as "complex refactor" or "fix login" does not start the
-planner. There is no automatic light / full planning depth. Explicit Plan Mode
+planner. There is no automatic planning depth. Explicit Plan Mode
 remains a separate host workflow on the executor and is never planned twice.
 `just do it` / `直接改` also stays with the executor. Execution boundaries are
 recognized across the request, not only at its beginning, while quoted
@@ -1392,8 +1400,22 @@ non-destructive MCP, while a strict child requires an explicit reader hint and
 never exposes writers at all.
 
 Reasonix uses **fact-driven execution**. Ordinary requests always enter the
-executor. There is no automatic simple / light / full task mode. Planner,
+executor. There is no automatic task mode. The one session role is the quality floor: standard (default) or delivery; facts can still raise it. Planner,
 Goal, permission, sandbox, and the task contract are independent states.
+
+For an explicit write request, Standard gives the executor up to 12 bounded
+follow-up turns when no successful mutation has been observed, when a
+`todo_write` created during the current task still has unfinished items after a
+mutation, or when the assistant explicitly promises another implementation
+action after a mutation without creating a task todo. New host-observed progress
+resets the stall counter; two consecutive follow-ups without new progress pause
+the task. Repeating the same read, command, result, or prose does not qualify as
+progress. Historical canonical todos remain visible but do not block a new
+ordinary task, and a completed or cleared current-task todo remains authoritative.
+Standard still treats verification, review, and sign-off gaps as completion
+attention rather than Delivery-strength automatic closure. If the bounded
+follow-ups are exhausted, Reasonix pauses with a recoverable "Task is not
+complete" result and preserves the current evidence for `/continue-checks`.
 
 Every task shares the same provider-visible core tool surface: direct
 read/bash/edit/write, background-shell lifecycle tools, `ask`/`compress` when
