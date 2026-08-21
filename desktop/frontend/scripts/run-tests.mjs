@@ -56,6 +56,7 @@ const OWNED_ELSEWHERE = new Map(Object.entries({
   "remote-hosts-page.test.tsx": "test:remote",
   "remote-secret-dialog.test.tsx": "test:remote",
   "remote-server-panel.test.tsx": "test:remote (needs the svg stub register)",
+  "remote-session-surface.test.tsx": "test:remote (needs the svg stub register)",
   "updater-shared-state.test.tsx": "test:updater",
   "window-state-ordering.test.ts": "test:window-state",
 }));
