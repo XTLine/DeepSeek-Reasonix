@@ -5700,7 +5700,7 @@ function makeMockApp(): AppBindings {
     // ── Remote project tabs mock ──
     async AddRemoteProject(hostId: string, workspace: string) {
       const dedupe = mockRemoteProjects.find((p) => p.hostId === hostId && p.workspace === workspace);
-      if (dedupe) return dedupe;
+      if (dedupe) return { ...dedupe, merged: true };
       const view = { hostId, workspace, title: `${hostId}:${workspace}` };
       mockRemoteProjects = [...mockRemoteProjects, view];
       return view;

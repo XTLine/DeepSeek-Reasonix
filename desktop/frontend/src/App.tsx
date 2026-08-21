@@ -1621,6 +1621,7 @@ export default function App() {
     remoteSurfaceActive && activeTab ? activeTab.id : undefined,
     activeTab?.remoteState,
   );
+  const remoteComposerReady = remoteSurfaceActive && remoteSession.state === "ready";
   const activePlanRevisionInsertRequest =
     planRevisionInsertRequest &&
     planRevisionInsertRequest.tabId === activeTabId &&
@@ -1978,6 +1979,10 @@ export default function App() {
   // controller silently uses normal gating.
   const switchModel = useCallback(
     async (name: string) => {
+      if (remoteSurfaceActive && activeTabId) {
+        await app.SetRemoteTabModel(activeTabId, name);
+        return true;
+      }
       const switched = await setModel(name);
       if (!switched) return false;
       if (!activeTabId) return false;
@@ -1990,7 +1995,7 @@ export default function App() {
       );
       return profileApplied;
     },
-    [activeTabId, composerProfile, goal, setControllerComposerProfileForTab, setModel, toolApprovalMode],
+    [activeTabId, composerProfile, goal, remoteSurfaceActive, setControllerComposerProfileForTab, setModel, toolApprovalMode],
   );
 
   // Startup and workspace/model rebuilds create a fresh controller in normal
@@ -1998,7 +2003,7 @@ export default function App() {
   // where the user picked YOLO while boot was still loading and the legacy
   // SetBypass binding was a harmless no-op.
   useEffect(() => {
-    if (!controllerReady || !activeTabId) return;
+    if (!controllerReady || !activeTabId || remoteSurfaceActive) return;
     runGoalAction(async () => {
       await setControllerComposerProfileForTab(
         activeTabId,
@@ -2008,7 +2013,7 @@ export default function App() {
         { propagateError: true },
       );
     });
-  }, [activeTabId, composerProfile, controllerReady, goal, runGoalAction, setControllerComposerProfileForTab, toolApprovalMode]);
+  }, [activeTabId, composerProfile, controllerReady, goal, remoteSurfaceActive, runGoalAction, setControllerComposerProfileForTab, toolApprovalMode]);
 
   // The live task list pinned above the composer comes from the most recent
   // successful top-level todo_write result; failed or still-running attempts do
@@ -5022,7 +5027,7 @@ export default function App() {
               goalStatus={state.meta?.goalStatus}
               goalRuntime={state.meta?.goalRuntime}
               cwd={state.meta?.cwd}
-              modelLabel={remoteSurfaceActive ? remoteSession.modelLabel || activeTab?.label || t("status.connecting") : state.meta?.label ?? t("status.connecting")}
+              modelLabel={remoteSurfaceActive ? activeTab?.label || remoteSession.modelLabel || t("status.connecting") : state.meta?.label ?? t("status.connecting")}
               imageInputEnabled={state.meta?.imageInputEnabled !== false}
               tabId={activeTabId}
               effort={state.effort}
@@ -5044,9 +5049,9 @@ export default function App() {
               selectedTextRequest={selectedTextRequest}
               readOnly={Boolean(activeTab?.readOnly)}
               disabled={runtimeTransitioning || rewindCommitting || state.messageAction != null || Boolean(decisionSurface)}
-              submitDisabled={!controllerReady}
+              submitDisabled={remoteSurfaceActive ? !remoteComposerReady : !controllerReady}
               decisionPending={rewindCommitting || state.messageAction != null || Boolean(decisionSurface)}
-              ready={controllerReady}
+              ready={remoteSurfaceActive ? remoteComposerReady : controllerReady}
               turnStartAt={state.turnStartAt}
               turnWaitAccumMs={state.turnWaitAccumMs}
               promptWaitStartedAt={state.promptWaitStartedAt}

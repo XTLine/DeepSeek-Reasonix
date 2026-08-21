@@ -33,7 +33,8 @@ export type EventKind =
   | "context_maintenance"
   | "workspace_changed"
   | "turn_phase"
-  | "completion_summary";
+  | "completion_summary"
+  | "provider_unreachable";
 export type StreamAttemptAction = "begin" | "discard" | "commit";
 export interface WireStreamAttempt {
   id: string;
@@ -934,6 +935,8 @@ export interface Meta {
   goalStatus?: GoalStatus;
   goalRuntime?: GoalRuntime;
   canonicalTodos?: Todo[]; dismissedTodoBatches?: string[];
+  /** Set for remote session tabs: readiness flows through remote-tab state events instead. */
+  remote?: RemoteTabRefView;
 }
 
 export type CollaborationMode = "normal" | "plan" | "goal";
@@ -1538,6 +1541,8 @@ export interface RemoteProjectView {
   workspace: string;
   title?: string;
   color?: string;
+  /** Set when an overlapping pin existed: workspace is the canonical group's path. */
+  merged?: boolean;
 }
 
 export interface RemoteSessionView {

@@ -9,6 +9,23 @@ import type { HistoryMessage, RemoteTabStateValue, WireEvent } from "./types";
 // history action. The surface and composer therefore consume exactly the
 // shapes the local UI consumes.
 
+// remoteStatusToAction maps the serve's raw /status payload onto the shared
+// backend_status action so the remote surface reuses the local tab's running
+// reconciliation (including its staleness guards). The serve reports the
+// fields it knows; the rest stay undefined and the reducer keeps prior values.
+function remoteStatusToAction(status: unknown, snapshotAt: number) {
+  const raw = (status ?? null) as { running?: unknown; pendingPrompt?: unknown; backgroundJobs?: unknown; cancelRequested?: unknown; cancellable?: unknown } | null;
+  return {
+    type: "backend_status" as const,
+    running: raw?.running === true,
+    pendingPrompt: raw?.pendingPrompt === undefined ? undefined : raw.pendingPrompt === true,
+    backgroundJobs: typeof raw?.backgroundJobs === "number" ? raw.backgroundJobs : undefined,
+    cancelRequested: raw?.cancelRequested === undefined ? undefined : raw.cancelRequested === true,
+    cancellable: raw?.cancellable === undefined ? (raw?.running === true) : raw.cancellable === true,
+    snapshotAt,
+  };
+}
+
 // RemoteSessionApi is the surface-facing contract of useRemoteSession.
 export interface RemoteSessionApi {
   state: RemoteTabStateValue;
@@ -29,8 +46,8 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
   const [error, setError] = useState("");
   const [transcript, setTranscript] = useState<State>(initialState);
   const [modelLabel, setModelLabel] = useState("");
-  const hydratedRef = useRef(false);
   const [hydrated, setHydrated] = useState(false);
+  const hydratedRef = useRef(false);
 
   useEffect(() => {
     if (!tabId) return;
@@ -67,9 +84,16 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
           const messages = Array.isArray(snap.history) ? (snap.history as HistoryMessage[]) : [];
           hydratedRef.current = true;
           setHydrated(true);
-          const statusLabel = (snap.status as { label?: unknown } | undefined)?.label;
-          setModelLabel(typeof statusLabel === "string" ? statusLabel : "");
-          setTranscript((s) => reducer(s, { type: "history", messages }));
+          const status = (snap.status ?? null) as { label?: unknown } | null;
+          setModelLabel(typeof status?.label === "string" ? status.label : "");
+          setTranscript((s) => {
+            let next = reducer(s, { type: "history", messages });
+            // Hydrate doubles as the post-reconnect running reconciliation:
+            // whatever the serve reports about its current state lands now,
+            // not only after the next watchdog tick.
+            next = reducer(next, remoteStatusToAction(snap.status, Date.now()));
+            return next;
+          });
           return;
         } catch {
           // Executor form: the src tsconfig lib predates Promise.withResolvers.
@@ -83,7 +107,14 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
       if (cancelled) return;
       setState(s.state);
       setError(s.error ?? "");
-      if (s.state === "ready") void hydrate(true);
+      if (s.state === "ready") {
+        void hydrate(true);
+      } else {
+        // Leaving ready can only mean the serve connection dropped. A turn
+        // that was running is now unobservable — stop the pill instead of
+        // spinning forever on a turn_done that can never arrive.
+        setTranscript((prev) => (prev.running || prev.turnActive ? reducer(prev, { type: "turn_interrupted" }) : prev));
+      }
     });
     const offEvent = onRemoteTabEvent(tabId, (raw) => {
       if (cancelled) return;
@@ -96,14 +127,47 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
     };
   }, [tabId]);
 
+  // Running-state watchdog: while the pill claims a turn is running, poll the
+  // serve's /status and feed it through the shared backend_status reducer.
+  // This is the remote twin of the local tab's reconcile loop — a lost
+  // turn_done frame (dropped SSE, slow-consumer drop, half-dead tunnel) then
+  // clears within one tick instead of spinning forever.
+  useEffect(() => {
+    if (!tabId || !hydrated || state !== "ready" || !transcript.running) return;
+    let cancelled = false;
+    const reconcile = async () => {
+      try {
+        const snap = await app.RemoteTabSnapshot(tabId);
+        if (cancelled) return;
+        setTranscript((s) => reducer(s, remoteStatusToAction(snap.status, Date.now())));
+      } catch {
+        // Transient; the next tick retries.
+      }
+    };
+    const timer = window.setInterval(reconcile, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [tabId, hydrated, state, transcript.running]);
+
   const submit = useCallback(async (text: string) => {
     if (!tabId) return;
     const trimmed = text.trim();
     if (!trimmed) return;
     // Optimistic user bubble, exactly like the local send path. seq rides
     // the reducer's counter; the submission id only needs uniqueness.
-    setTranscript((s) => reducer(s, { type: "user", text: trimmed, seq: s.seq, submissionId: `remote-${Date.now()}` }));
-    await app.SubmitRemoteTab(tabId, trimmed);
+    const submissionId = `remote-${Date.now()}`;
+    setTranscript((s) => reducer(s, { type: "user", text: trimmed, seq: s.seq, submissionId }));
+    try {
+      await app.SubmitRemoteTab(tabId, trimmed);
+    } catch (e) {
+      // Roll the optimistic running flag back — a refused/failed submit must
+      // never leave the pill spinning (same contract as the local send path).
+      const error = `Send failed: ${e instanceof Error ? e.message : String(e)}`;
+      setTranscript((s) => reducer(s, { type: "send_failed", submissionId, error }));
+      throw e;
+    }
   }, [tabId]);
 
   const cancelTurn = useCallback(async () => {

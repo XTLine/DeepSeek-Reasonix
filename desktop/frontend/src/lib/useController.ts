@@ -782,6 +782,7 @@ type Action =
   | { type: "unsend" }
   | { type: "send_confirmed"; submissionId: string }
   | { type: "send_failed"; submissionId: string; error: string }
+  | { type: "turn_interrupted" }
   | { type: "backend_status"; running: boolean; pendingPrompt?: boolean; backgroundJobs?: number; cancelRequested?: boolean; cancellable?: boolean; snapshotAt?: number }
   | { type: "cancel_requested" }
   | { type: "meta"; meta: Meta }
@@ -846,6 +847,19 @@ export function historyMessagesToItems(messages: HistoryMessage[], idPrefix: str
   let items: Item[] = [];
   let seq = startSeq;
   const consumedToolIDs = new Set<string>();
+  const usedItemIDs = new Set<string>();
+  const uniqueItemID = (preferred: string, fallback: string): string => {
+    let id = preferred || fallback;
+    if (!usedItemIDs.has(id)) {
+      usedItemIDs.add(id);
+      return id;
+    }
+    let n = 1;
+    while (usedItemIDs.has(`${preferred || fallback}#${n}`)) n += 1;
+    id = `${preferred || fallback}#${n}`;
+    usedItemIDs.add(id);
+    return id;
+  };
   for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
     const m = messages[messageIndex];
     if (m.role === "system") continue;
@@ -924,7 +938,7 @@ export function historyMessagesToItems(messages: HistoryMessage[], idPrefix: str
         const fileDiff = fileDiffFromWire(tc);
         items.push({
           kind: "tool",
-          id: tc.id || `${idPrefix}tool${seq}`,
+          id: uniqueItemID(tc.id || "", `${idPrefix}tool${seq}`),
           name: tc.name,
           args: tc.arguments ?? "",
           readOnly: typeof tc.resolvedReadOnly === "boolean" ? tc.resolvedReadOnly : isReadOnlyTool(tc.name),
@@ -950,7 +964,7 @@ export function historyMessagesToItems(messages: HistoryMessage[], idPrefix: str
       const error = m.toolResultError || (output ? historyToolError(output) : undefined);
       items.push({
         kind: "tool",
-        id: m.toolCallId || `${idPrefix}tool${seq}`,
+        id: uniqueItemID(m.toolCallId || "", `${idPrefix}tool${seq}`),
         name: m.toolName || "tool",
         args: "",
         readOnly: isReadOnlyTool(m.toolName || "tool"),
@@ -1430,6 +1444,16 @@ function applyEvent(s: State, e: WireEvent): State {
       turnStartAt: s.turnStartAt || Date.now(),
     };
   }
+  if (e.kind === "provider_unreachable") {
+    // The provider endpoint could not be reached at all (typically the
+    // desktop credential tunnel died and the serve dials a dead loopback
+    // port). The sibling retrying event keeps the turn alive; this surfaces
+    // WHY in the transcript with one self-replacing notice instead of a
+    // stack of identical warnings per retry.
+    const detail = typeof e.text === "string" ? e.text : "";
+    const notice: Item = { kind: "notice", id: "provider-unreachable", level: "warn", text: t("notice.remoteProviderUnreachable", { detail }) };
+    return { ...s, items: [...s.items.filter((it) => it.id !== "provider-unreachable"), notice] };
+  }
   if (e.kind === "stream_attempt") {
     return applyStreamAttempt(s, e);
   }
@@ -1441,6 +1465,9 @@ function applyEvent(s: State, e: WireEvent): State {
       // instant the backend acknowledges the turn — no dead gap waiting for
       // the first text/reasoning token.
       const fresh = { ...s, pendingSearchSources: undefined };
+      if (fresh.items.some((it) => it.id === "provider-unreachable")) {
+        fresh.items = fresh.items.filter((it) => it.id !== "provider-unreachable");
+      }
       const { items, id, seq } = ensureAssistant(fresh);
       return {
         ...fresh,
@@ -1945,6 +1972,38 @@ export function reducer(s: State, a: Action): State {
       const items = idx >= 0 ? s.items.map((it, i) => (i === idx ? { ...it, submissionId: undefined, failed: true } : it)) : s.items;
       const notice: Item = { kind: "notice", id: `n${s.seq}`, level: "warn", text: a.error };
       return { ...s, pendingUser: undefined, pendingSubmissionId: undefined, deliveryRecoveryActive: false, running: false, turnActive: false, pendingPrompt: false, cancelRequested: false, cancellable: false, live: undefined, seq: s.seq + 1, items: [...items, notice] };
+    }
+    case "turn_interrupted": {
+      // The serve connection dropped mid-turn: the turn's fate cannot be
+      // observed from here, so stop the run indicator and say why. A later
+      // /status reconciliation or the reconnected history hydrate settles
+      // whatever the serve actually did with the turn.
+      if (!s.running && !s.turnActive) return s;
+      const items = s.items.map((it) => {
+        if (it.kind === "assistant" && s.live && it.id === s.live.id) return { ...it, text: s.live.text, reasoning: s.live.reasoning, streaming: false };
+        if (it.kind === "assistant" && it.streaming) return { ...it, streaming: false };
+        if (it.kind === "tool" && it.status === "running") return { ...it, status: "stopped" as const };
+        return it;
+      });
+      const notice: Item = { kind: "notice", id: `n${s.seq}`, level: "warn", text: t("notice.remoteTurnInterrupted") };
+      return {
+        ...s,
+        items: [...items, notice],
+        running: false,
+        turnActive: false,
+        pendingPrompt: false,
+        cancelRequested: false,
+        cancellable: false,
+        pendingUser: undefined,
+        pendingSubmissionId: undefined,
+        deliveryRecoveryActive: false,
+        retry: undefined,
+        approval: undefined,
+        ask: undefined,
+        live: undefined,
+        currentAssistant: undefined,
+        seq: s.seq + 1,
+      };
     }
     case "backend_status": {
       // A snapshot fetched before the live approval/ask event arrived cannot
@@ -3552,10 +3611,13 @@ export function useController() {
 
   // If the startup ready event is missed, keep the composer lock in sync with
   // the active tab's backend metadata without kicking off tab activation work.
+  // Remote tabs are exempt: their readiness flows through remote-tab state
+  // events, and MetaForTab reports ready:false for them forever — reconciling
+  // would just burn every attempt on a surface that never uses it.
   useEffect(() => {
     const tabId = activeTabId;
     const meta = activeState.meta;
-    if (!tabId || !meta || meta.ready || meta.startupErr || activeState.backendActivationPending) {
+    if (!tabId || !meta || meta.remote || meta.ready || meta.startupErr || activeState.backendActivationPending) {
       readyMetaReconcileSeq.current += 1;
       readyMetaReconcileActive.current = undefined;
       return;
