@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1685,6 +1686,32 @@ func toolBudgetNoticeText() string {
 	return "Tool round limit reached; asking the assistant to summarize progress."
 }
 
+// providerUnreachableText classifies a retry error as a connection-level
+// failure (the endpoint never answered at all) and returns the dial detail,
+// or "" when the failure happened after a connection was established.
+func providerUnreachableText(err error) string {
+	if err == nil {
+		return ""
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return err.Error()
+	}
+	msg := err.Error()
+	for _, marker := range []string{
+		"connection refused",
+		"connection reset",
+		"no such host",
+		"i/o timeout",
+		"context deadline exceeded",
+	} {
+		if strings.Contains(msg, marker) {
+			return msg
+		}
+	}
+	return ""
+}
+
 // stream runs one completion, emitting reasoning and text deltas as typed
 // events and collecting complete tool calls. A Message event closes the text
 // stream so a sink can re-render the streamed raw text as styled markdown. The
@@ -1700,6 +1727,13 @@ func (a *Agent) stream(ctx context.Context, turn int, sink event.Sink) streamedT
 func (a *Agent) streamWithFrozen(ctx context.Context, turn int, sink event.Sink, frozen *samplingRequest, attemptID string) streamedTurn {
 	ctx = provider.WithRetryNotify(ctx, func(info provider.RetryInfo) {
 		sink.Emit(event.Event{Kind: event.Retrying, RetryAttempt: info.Attempt, RetryMax: info.Max, RetryScope: event.RetryScopeHeaders})
+		// A connection-level failure means the provider endpoint itself is
+		// unreachable (e.g. the desktop credential-proxy tunnel died): say so
+		// explicitly so frontends can distinguish "channel down, retrying"
+		// from ordinary transient retries.
+		if detail := providerUnreachableText(info.Err); detail != "" {
+			sink.Emit(event.Event{Kind: event.ProviderUnreachable, Text: detail, RetryAttempt: info.Attempt, RetryMax: info.Max})
+		}
 	})
 	// Reuse a parent attempt counter when present so stream retries accumulate
 	// into one RequestCount; otherwise install a fresh counter for this call.

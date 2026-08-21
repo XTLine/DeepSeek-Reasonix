@@ -123,6 +123,14 @@ const (
 	// render the successful state early; append-only consumers should ignore it.
 	// The later ToolResult remains the call's only terminal event.
 	ToolResultPreview
+	// ProviderUnreachable reports that the provider endpoint itself could not
+	// be reached (dial refused/reset, DNS, timeout) before any HTTP exchange.
+	// Text carries the underlying error (which includes the dialed address);
+	// RetryAttempt/RetryMax mirror the sibling Retrying event. A frontend
+	// should say "credential/provider channel down" instead of a generic
+	// running indicator. Appended last to keep earlier Kind values
+	// wire-stable; older clients ignore unknown kinds.
+	ProviderUnreachable
 	// KindCount is a sentinel one past the last real Kind. New event kinds must
 	// be inserted above it so completeness tests cover them automatically.
 	KindCount

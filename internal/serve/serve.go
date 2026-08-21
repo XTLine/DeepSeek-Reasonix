@@ -501,6 +501,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /summarize", s.summarize)
 	mux.HandleFunc("POST /tool-approval-mode", s.toolApprovalMode)
 	mux.HandleFunc("POST /model", s.switchModelHTTP)
+	mux.HandleFunc("POST /providers/reload", s.providersReload)
 	mux.HandleFunc("POST /effort", s.switchEffortHTTP)
 	mux.HandleFunc("POST /auto-approve-tools", s.autoApproveTools)
 	mux.HandleFunc("POST /bypass", s.bypass)
@@ -825,6 +826,10 @@ func (s *Server) newSession(w http.ResponseWriter, _ *http.Request) {
 	s.bindMu.Lock()
 	defer s.bindMu.Unlock()
 	if err := s.ctl().NewSession(); err != nil {
+		if control.IsSessionRotationBusy(err) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1003,6 +1008,10 @@ func (s *Server) fork(w http.ResponseWriter, r *http.Request) {
 	defer s.bindMu.Unlock()
 	path, err := s.ctl().ForkNamed(body.Turn, body.Name)
 	if err != nil {
+		if control.IsSessionRotationBusy(err) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1071,6 +1080,20 @@ func (s *Server) switchModelHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"model": req.Ref})
+}
+
+// providersReload rebuilds the controller with the CURRENT model so provider
+// construction re-reads the on-disk config. The desktop calls this after a
+// reverse credential-tunnel rebind (the loopback port changes on every SSH
+// reconnect): a running serve otherwise keeps the base_url it was built with.
+// Busy serves answer 409 — the desktop retries on its next ensure round.
+func (s *Server) providersReload(w http.ResponseWriter, r *http.Request) {
+	ref := s.ctl().ModelRef()
+	if err := s.switchModel(r.Context(), ref); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	writeJSON(w, map[string]string{"model": ref})
 }
 
 // switchEffortHTTP adjusts the active provider's reasoning-effort level.
@@ -1405,6 +1428,14 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		"cacheHit":         hit,
 		"cacheMiss":        miss,
 	}
+	// Runtime reconciliation fields for desktop running-state watchdogs: the
+	// remote tab surface polls /status and maps these onto the same
+	// reconciliation the local tabs get from ListTabs.
+	rs := s.ctl().RuntimeStatus()
+	sess["pendingPrompt"] = rs.PendingPrompt
+	sess["backgroundJobs"] = rs.BackgroundJobs
+	sess["cancelRequested"] = rs.CancelRequested
+	sess["cancellable"] = rs.Cancellable
 	if u := s.ctl().LastUsage(); u != nil {
 		sess["lastUsage"] = u
 	}

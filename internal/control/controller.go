@@ -84,6 +84,14 @@ var (
 	errRotationInProgress  = errors.New("cannot start a new session while another session change is in progress")
 )
 
+// IsSessionRotationBusy reports whether a session-rotation error (NewSession /
+// Resume / Fork) is a transient busy refusal — a turn in flight or a rotation
+// already in progress — rather than a real failure. Serve maps these to 409 so
+// clients retry or surface a friendly hint instead of an opaque 500.
+func IsSessionRotationBusy(err error) bool {
+	return errors.Is(err, errTurnRunningRotation) || errors.Is(err, errRotationInProgress)
+}
+
 // errNoSessionPath is returned by snapshot when a session has content to persist
 // but no resolved session path — a misconfiguration (e.g. an unresolvable data
 // dir in a bot deployment) that previously dropped conversations silently
