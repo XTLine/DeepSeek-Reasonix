@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"sort"
@@ -26,12 +27,21 @@ import (
 
 // serveHandshake exchanges the pre-shared token for the session cookie.
 // Serve replies 204 on success; the cookie lands in client's jar.
+
+// serveURL joins a serve base URL with an endpoint path. EnsureServer
+// reports LocalURL with a trailing slash ("http://host/"), so a naive
+// base+path concatenation hits "//endpoint" and the serve answers 401/404 —
+// every call site joins through this helper instead.
+func serveURL(base, path string) string {
+	return strings.TrimRight(base, "/") + path
+}
+
 func serveHandshake(ctx context.Context, client *http.Client, base, token string) error {
 	body, err := json.Marshal(map[string]string{"token": token})
 	if err != nil {
 		return err
 	}
-	resp, err := serveDo(ctx, client, http.MethodPost, base+"/auth/token", body)
+	resp, err := serveDo(ctx, client, http.MethodPost, serveURL(base, "/auth/token"), body)
 	if err != nil {
 		return err
 	}
@@ -61,7 +71,7 @@ type serveSessionEntry struct {
 func enterRemoteSession(ctx context.Context, client *http.Client, base string, opts RemoteTabOpenOptions) error {
 	name := strings.TrimSpace(opts.SessionName)
 	if opts.NewSession || name == "" {
-		return servePost(ctx, client, base+"/new", nil)
+		return servePost(ctx, client, serveURL(base, "/new"), nil)
 	}
 	sessions, err := serveSessions(ctx, client, base)
 	if err != nil {
@@ -73,7 +83,7 @@ func enterRemoteSession(ctx context.Context, client *http.Client, base string, o
 			if err != nil {
 				return err
 			}
-			return servePost(ctx, client, base+"/resume", body)
+			return servePost(ctx, client, serveURL(base, "/resume"), body)
 		}
 	}
 	return fmt.Errorf("remote session %q not found", name)
@@ -94,6 +104,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token strin
 	}
 	client := &http.Client{Jar: jar} // no overall timeout: /events is long-lived; per-call contexts bound the rest
 	if err := serveHandshake(callCtx, client, base, token); err != nil {
+		log.Printf("[remote] attachRemoteTabServe: handshake FAILED tab=%s base=%q err=%v", tabID, base, err)
 		return err
 	}
 
@@ -103,15 +114,38 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token strin
 		a.remoteTabMu.Unlock()
 		return fmt.Errorf("remote tab %q closed during bootstrap", tabID)
 	}
+	// A reconnect reattach may have attached this tab while the bootstrap was
+	// still running (restored tab + OpenRemoteProjectTab revive). Retire the
+	// previous pump before starting ours so exactly one pump owns the event
+	// stream — otherwise every frame is delivered twice.
+	tab.gen++
+	if tab.cancel != nil {
+		tab.cancel()
+	}
 	tab.client = client
 	tab.base = base
 	tab.token = token
+	gen := tab.gen
 	pumpCtx, cancelPump := context.WithCancel(ctx)
 	tab.cancel = cancelPump
 	a.remoteTabMu.Unlock()
 
-	a.goSafe("remoteTabPump", func() { a.remoteTabPump(pumpCtx, tabID, tab.gen) })
-	return enterRemoteSession(callCtx, client, base, opts)
+	a.goSafe("remoteTabPump", func() { a.remoteTabPump(pumpCtx, tabID, gen) })
+	err = enterRemoteSession(callCtx, client, base, opts)
+	if err != nil {
+		// A busy serve (turn in flight, typically one waiting on a tool
+		// approval) refuses /new and /resume with 409. The serve still holds a
+		// perfectly usable session — fail-soft: keep the attach so the surface
+		// renders the CURRENT session (and its pending approval card, which is
+		// the only way the user can unblock the turn from the UI).
+		if strings.Contains(err.Error(), "status 409") || strings.Contains(err.Error(), "while a turn is running") {
+			log.Printf("[remote] attachRemoteTabServe: enterRemoteSession BUSY (attached to current session) tab=%s err=%v", tabID, err)
+			return nil
+		}
+		log.Printf("[remote] attachRemoteTabServe: enterRemoteSession FAILED tab=%s err=%v", tabID, err)
+	} else {
+	}
+	return err
 }
 
 // remoteTabPump streams the Serve event feed for one tab generation and
@@ -131,7 +165,7 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64) {
 		return
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/events", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, serveURL(base, "/events"), nil)
 	if err != nil {
 		a.emitRemoteTabState(tabID, "error", err.Error())
 		return
@@ -140,12 +174,15 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64) {
 	resp, err := client.Do(req)
 	if err != nil {
 		if ctx.Err() == nil {
+			log.Printf("[remote] remoteTabPump: /events DO-FAILED tab=%s err=%v", tabID, err)
 			a.emitRemoteTabState(tabID, "error", err.Error())
+		} else {
 		}
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		log.Printf("[remote] remoteTabPump: /events BAD-STATUS tab=%s status=%d", tabID, resp.StatusCode)
 		a.emitRemoteTabState(tabID, "error", fmt.Sprintf("serve /events: status %d", resp.StatusCode))
 		return
 	}
@@ -153,6 +190,7 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64) {
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
+			log.Printf("[remote] remoteTabPump: READ-EXIT tab=%s gen=%d err=%v ctxErr=%v", tabID, gen, err, ctx.Err())
 			break
 		}
 		line = strings.TrimRight(line, "\r\n")
@@ -163,11 +201,15 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64) {
 		if frame == "" {
 			continue
 		}
-		a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:event", tabID), json.RawMessage(frame))
 		var probe struct {
 			Kind string `json:"kind"`
 		}
-		if json.Unmarshal([]byte(frame), &probe) == nil && probe.Kind == "turn_done" {
+		kind := "?"
+		if json.Unmarshal([]byte(frame), &probe) == nil && probe.Kind != "" {
+			kind = probe.Kind
+		}
+		a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:event", tabID), json.RawMessage(frame))
+		if kind == "turn_done" {
 			// The serve generates the session title from the finished
 			// conversation; pick it up shortly after the turn settles.
 			a.goSafe("remoteTabTitle", func() {
@@ -186,6 +228,7 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64) {
 	if stillCurrent && ctx.Err() == nil {
 		a.emitRemoteTabState(tabID, "reconnecting", "")
 		a.goSafe("remoteTabReattach", func() { a.reattachRemoteTab(tabID) })
+	} else {
 	}
 }
 
@@ -234,7 +277,7 @@ func serveGet(ctx context.Context, client *http.Client, url string) (json.RawMes
 }
 
 func serveSessions(ctx context.Context, client *http.Client, base string) ([]serveSessionEntry, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/sessions", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, serveURL(base, "/sessions"), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -286,9 +329,45 @@ func (a *App) remoteTabCommandClient(tabID string) (*http.Client, string, error)
 	}
 	a.remoteTabMu.Unlock()
 	if !usable {
+		log.Printf("[remote] remoteTabCommandClient: REFUSED tab=%q (tab=%v client=%v)", tabID, tab != nil, tab != nil && tab.client != nil)
 		return nil, "", fmt.Errorf("remote tab %q is not connected", tabID)
 	}
 	return client, base, nil
+}
+
+func (a *App) isRemoteTab(tabID string) bool {
+	if strings.TrimSpace(tabID) == "" {
+		return false
+	}
+	a.remoteTabMu.Lock()
+	_, ok := a.remoteTabs[tabID]
+	a.remoteTabMu.Unlock()
+	return ok
+}
+
+// remoteTabRefFor returns the host+workspace ref when tabID belongs to a
+// remote tab; view builders use it to mark remote-shaped metas.
+func (a *App) remoteTabRefFor(tabID string) (RemoteTabRef, bool) {
+	a.remoteTabMu.Lock()
+	defer a.remoteTabMu.Unlock()
+	if tab := a.remoteTabs[tabID]; tab != nil {
+		return tab.ref, true
+	}
+	return RemoteTabRef{}, false
+}
+
+func (a *App) remoteTabCurrentModel(tabID string) (string, bool) {
+	if !a.isRemoteTab(tabID) {
+		return "", false
+	}
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	cur := ""
+	if tab != nil {
+		cur = tab.model
+	}
+	a.remoteTabMu.Unlock()
+	return cur, true
 }
 
 func (a *App) SubmitRemoteTab(tabID, text string) error {
@@ -299,7 +378,12 @@ func (a *App) SubmitRemoteTab(tabID, text string) error {
 	ctx, cancel := commandContext(a)
 	defer cancel()
 	body, _ := json.Marshal(map[string]string{"input": text})
-	return servePost(ctx, client, base+"/submit", body)
+	started := time.Now()
+	err = servePost(ctx, client, serveURL(base, "/submit"), body)
+	if err != nil {
+		log.Printf("[remote] submit failed tab=%s dur=%s err=%v", tabID, time.Since(started).Round(time.Millisecond), err)
+	}
+	return err
 }
 
 func (a *App) CancelRemoteTab(tabID string) error {
@@ -309,7 +393,7 @@ func (a *App) CancelRemoteTab(tabID string) error {
 	}
 	ctx, cancel := commandContext(a)
 	defer cancel()
-	return servePost(ctx, client, base+"/cancel", nil)
+	return servePost(ctx, client, serveURL(base, "/cancel"), nil)
 }
 
 // ApproveRemoteTab answers a tool-approval request. Serve takes
@@ -323,7 +407,7 @@ func (a *App) ApproveRemoteTab(tabID, callID, decision string) error {
 	ctx, cancel := commandContext(a)
 	defer cancel()
 	body, _ := json.Marshal(map[string]any{"id": callID, "allow": strings.EqualFold(strings.TrimSpace(decision), "allow")})
-	return servePost(ctx, client, base+"/approve", body)
+	return servePost(ctx, client, serveURL(base, "/approve"), body)
 }
 
 // AnswerRemoteTab answers an ask_request. Serve decodes event.AskAnswer
@@ -340,7 +424,7 @@ func (a *App) AnswerRemoteTab(tabID, callID, answer string) error {
 		"id":      callID,
 		"answers": []map[string]any{{"QuestionID": callID, "Selected": []string{answer}}},
 	})
-	return servePost(ctx, client, base+"/answer", body)
+	return servePost(ctx, client, serveURL(base, "/answer"), body)
 }
 
 // RewindRemoteTab rewinds to a checkpoint. Serve identifies checkpoints by
@@ -357,7 +441,7 @@ func (a *App) RewindRemoteTab(tabID, checkpointID string) error {
 		return fmt.Errorf("invalid checkpoint id %q: want the turn index", checkpointID)
 	}
 	body, _ := json.Marshal(map[string]any{"turn": turn, "scope": "both"})
-	return servePost(ctx, client, base+"/rewind", body)
+	return servePost(ctx, client, serveURL(base, "/rewind"), body)
 }
 
 func (a *App) SetRemoteTabToolApprovalMode(tabID, mode string) error {
@@ -368,7 +452,7 @@ func (a *App) SetRemoteTabToolApprovalMode(tabID, mode string) error {
 	ctx, cancel := commandContext(a)
 	defer cancel()
 	body, _ := json.Marshal(map[string]string{"mode": mode})
-	return servePost(ctx, client, base+"/tool-approval-mode", body)
+	return servePost(ctx, client, serveURL(base, "/tool-approval-mode"), body)
 }
 
 func (a *App) SetRemoteTabGoal(tabID, goal string) error {
@@ -379,7 +463,7 @@ func (a *App) SetRemoteTabGoal(tabID, goal string) error {
 	ctx, cancel := commandContext(a)
 	defer cancel()
 	body, _ := json.Marshal(map[string]string{"goal": goal})
-	return servePost(ctx, client, base+"/goal", body)
+	return servePost(ctx, client, serveURL(base, "/goal"), body)
 }
 
 // RemoteTabSnapshot mirrors the frontend shape: raw serve payloads passed
@@ -417,7 +501,7 @@ func (a *App) RemoteTabSnapshot(tabID string) (RemoteTabSnapshot, error) {
 		wg.Add(1)
 		go func(path string, dst *json.RawMessage) {
 			defer wg.Done()
-			data, err := serveGet(ctx, client, base+path)
+			data, err := serveGet(ctx, client, serveURL(base, path))
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -449,10 +533,11 @@ type RemoteSessionView struct {
 	Pinned         bool   `json:"pinned,omitempty"`
 }
 
-// serveClientForRef resolves an HTTP client for a host+workspace: a live
-// tab's client when one is open, otherwise a one-shot EnsureServer +
-// handshake (no pump, no tab). The returned done() releases the one-shot
-// context; for a live tab it is a no-op.
+// serveClientForRef resolves an HTTP client for a host+workspace WITHOUT
+// waking anything: a live tab's client when one is open, otherwise a one-shot
+// handshake against an already-ready serve registration. A serve that is not
+// running reports an error — query paths must never cold-start one. The
+// returned done() releases the one-shot context; for a live tab it is a no-op.
 func (a *App) serveClientForRef(hostID, workspace string) (*http.Client, string, func(), error) {
 	a.remoteTabMu.Lock()
 	for _, tab := range a.remoteTabs {
@@ -468,13 +553,13 @@ func (a *App) serveClientForRef(hostID, workspace string) (*http.Client, string,
 	if err != nil {
 		return nil, "", nil, err
 	}
+	view, token, ok := rt.ServeSnapshot(hostID, workspace)
+	if !ok {
+		return nil, "", nil, fmt.Errorf("remote serve for %s:%s is not running", hostID, workspace)
+	}
 	ctx := a.bootContext()
 	if ctx == nil {
 		ctx = context.Background()
-	}
-	view, token, err := rt.EnsureServer(ctx, hostID, workspace)
-	if err != nil || view.State != "ready" || view.LocalURL == "" {
-		return nil, "", nil, fmt.Errorf("remote serve for %s:%s is not ready", hostID, workspace)
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	jar, jarErr := cookiejar.New(nil)
@@ -624,7 +709,7 @@ func (a *App) resumeRemoteTabSession(tabID, name string) {
 			continue
 		}
 		body, _ := json.Marshal(map[string]string{"path": entry.Path})
-		if err := servePost(ctx, client, base+"/resume", body); err != nil {
+		if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
 			a.emitRemoteTabState(tabID, "error", err.Error())
 			return
 		}
@@ -673,7 +758,7 @@ func (a *App) DeleteRemoteProjectSession(hostID, workspace, name string) error {
 	ctx, cancel := commandContext(a)
 	defer cancel()
 	body, _ := json.Marshal(map[string]string{"name": name})
-	return servePost(ctx, client, base+"/delete-session", body)
+	return servePost(ctx, client, serveURL(base, "/delete-session"), body)
 }
 
 // remoteTabPost marshals body and forwards one command to the tab's serve.
@@ -688,7 +773,7 @@ func (a *App) remoteTabPost(tabID, path string, body map[string]any) error {
 	if body != nil {
 		payload, _ = json.Marshal(body)
 	}
-	return servePost(ctx, client, base+path, payload)
+	return servePost(ctx, client, serveURL(base, path), payload)
 }
 
 // remoteTabGet fetches one raw JSON member from the tab's serve.
@@ -699,11 +784,125 @@ func (a *App) remoteTabGet(tabID, path string) (json.RawMessage, error) {
 	}
 	ctx, cancel := commandContext(a)
 	defer cancel()
-	return serveGet(ctx, client, base+path)
+	return serveGet(ctx, client, serveURL(base, path))
 }
 
+// SetRemoteTabModel switches a remote tab's model. Local-proxy hosts own the
+// model on the desktop — the credential proxy rewrites chat request bodies,
+// and the serve session keeps running. Remote-credential hosts hold their
+// keys on the remote, so the switch goes through the serve's per-session
+// endpoint. Both paths apply BEFORE the tab state commits: a failure leaves
+// the previous model fully intact instead of half-switched.
 func (a *App) SetRemoteTabModel(tabID, ref string) error {
-	return a.remoteTabPost(tabID, "/model", map[string]any{"ref": ref})
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil
+	}
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil {
+		a.remoteTabMu.Unlock()
+		return fmt.Errorf("remote tab %q is not connected", tabID)
+	}
+	hostID := tab.ref.HostID
+	workspace := tab.ref.Workspace
+	hostLabel := tab.hostLabel
+	a.remoteTabMu.Unlock()
+	localProxy := a.remoteTabLocalProxy(tabID)
+
+	next := ref
+	if localProxy {
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		entry, ok := cfg.ResolveModel(ref)
+		if !ok {
+			return fmt.Errorf("unknown model %q", ref)
+		}
+		if !modelProviderAccessAllowed(cfg.Desktop.ProviderAccess, entry.Name) {
+			return fmt.Errorf("model %q is not available", ref)
+		}
+		canonical := entry.Name + "/" + entry.Model
+		if _, err := a.applyCredentialProxyModel(hostID, workspace, canonical); err != nil {
+			return err
+		}
+		next = canonical
+	} else if err := a.remoteTabPost(tabID, "/model", map[string]any{"ref": ref}); err != nil {
+		return err
+	}
+
+	a.remoteTabMu.Lock()
+	if current := a.remoteTabs[tabID]; current != nil {
+		current.model = next
+		current.modelSeq = remoteTabModelSeq.Add(1)
+	}
+	a.remoteTabMu.Unlock()
+	a.saveTabsFromRemote()
+	a.remoteTabMu.Lock()
+	metaTab := a.remoteTabs[tabID]
+	a.remoteTabMu.Unlock()
+	if metaTab != nil {
+		a.activateRemoteTab(tabID, remoteTabMeta(metaTab, hostLabel))
+	}
+	return nil
+}
+
+// remoteTabLocalProxy reports whether the tab's host runs local-proxy
+// credential mode (desktop-owned model selection). Unknown hosts read as
+// remote-credential, matching the pre-split default.
+func (a *App) remoteTabLocalProxy(tabID string) bool {
+	hostID, ok := a.remoteTabHostID(tabID)
+	if !ok {
+		return false
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return false
+	}
+	host, ok := cfg.RemoteHost(hostID)
+	return ok && host.CredentialProxyEnabled()
+}
+
+func (a *App) remoteTabHostID(tabID string) (string, bool) {
+	a.remoteTabMu.Lock()
+	defer a.remoteTabMu.Unlock()
+	if tab := a.remoteTabs[tabID]; tab != nil {
+		return tab.ref.HostID, true
+	}
+	return "", false
+}
+
+// remoteServeModelsForTab lists the models the tab's remote serve offers,
+// mapped into ModelInfo for the picker. It errors while the tab has no live
+// client (still connecting) — remote-credential hosts can only be switched
+// against their own provider set.
+func (a *App) remoteServeModelsForTab(tabID, current string) ([]ModelInfo, error) {
+	raw, err := a.remoteTabGet(tabID, "/models")
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Models []struct {
+			Ref      string `json:"ref"`
+			Provider string `json:"provider"`
+			Model    string `json:"model"`
+			Active   bool   `json:"active"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	cur := strings.TrimSpace(current)
+	out := make([]ModelInfo, 0, len(payload.Models))
+	for _, e := range payload.Models {
+		ref := strings.TrimSpace(e.Ref)
+		if ref == "" {
+			continue
+		}
+		out = append(out, ModelInfo{Ref: ref, Provider: e.Provider, Model: e.Model, Current: ref == cur || e.Active})
+	}
+	return out, nil
 }
 
 func (a *App) SetRemoteTabEffort(tabID, level string) error {
@@ -822,7 +1021,7 @@ func (a *App) resetRemoteTabSession(tabID string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := servePost(ctx, client, base+"/new", nil); err != nil {
+	if err := servePost(ctx, client, serveURL(base, "/new"), nil); err != nil {
 		a.emitRemoteTabState(tabID, "error", err.Error())
 		return
 	}
@@ -885,6 +1084,7 @@ func (a *App) remoteTabsFileEntries() ([]desktopRemoteTabEntry, []string, string
 			HostID:     tab.ref.HostID,
 			Workspace:  tab.ref.Workspace,
 			TopicTitle: tab.topicTitle,
+			Model:      tab.model,
 		})
 	}
 	order := append([]string(nil), ids...)
@@ -992,6 +1192,7 @@ func (a *App) reattachRemoteTab(tabID string) {
 	}
 	view, token, err := rt.EnsureServer(ctx, hostID, workspace)
 	if err != nil || view.State != "ready" || view.LocalURL == "" {
+		log.Printf("[remote] reattachRemoteTab: EnsureServer NOT-READY tab=%s err=%v state=%s localURL=%q", tabID, err, view.State, view.LocalURL)
 		return
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -1002,6 +1203,7 @@ func (a *App) reattachRemoteTab(tabID string) {
 	}
 	client := &http.Client{Jar: jar}
 	if err := serveHandshake(callCtx, client, view.LocalURL, token); err != nil {
+		log.Printf("[remote] reattachRemoteTab: handshake FAILED tab=%s base=%q err=%v", tabID, view.LocalURL, err)
 		return
 	}
 

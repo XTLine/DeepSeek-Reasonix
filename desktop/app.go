@@ -1719,10 +1719,12 @@ func (a *App) SetCollaborationMode(mode string) {
 // turn cannot observe collaboration, approval, and goal from different UI
 // generations.
 func (a *App) SetComposerProfileForTab(tabID, collaborationMode, toolApprovalMode, goal string) ([]string, error) {
+	if a.isRemoteTab(tabID) {
+		return []string{}, nil
+	}
 	collaborationMode = normalizeCollaborationMode(collaborationMode)
 	toolApprovalMode = normalizeToolApprovalMode(toolApprovalMode)
 	goal = strings.TrimSpace(goal)
-
 	tab := a.tabByID(tabID)
 	if tab == nil {
 		return []string{}, fmt.Errorf("tab is no longer available")
@@ -6494,6 +6496,9 @@ type Meta struct {
 	CanonicalTodos *[]evidence.TodoItem `json:"canonicalTodos,omitempty"`
 	// Closed completed todo fingerprints from this session and its lineage.
 	DismissedTodoBatches []string `json:"dismissedTodoBatches,omitempty"`
+	// Remote marks a remote session tab: readiness flows through remote-tab
+	// state events, so the local-tab fields above stay zero for it.
+	Remote *RemoteTabRef `json:"remote,omitempty"`
 }
 
 type GoalRuntimeView struct {
@@ -6564,7 +6569,11 @@ func (a *App) MetaForTab(tabID string) Meta {
 	runtimeView := a.sessionRuntimeViewLocked(tab)
 	a.mu.RUnlock()
 	if tab == nil {
-		return Meta{EventChannel: eventChannel}
+		meta := Meta{EventChannel: eventChannel}
+		if ref, ok := a.remoteTabRefFor(tabID); ok {
+			meta.Remote = &ref
+		}
+		return meta
 	}
 	cwd := snap.workspaceRoot
 	if cwd == "" {
@@ -9236,6 +9245,19 @@ func (a *App) Models() []ModelInfo {
 }
 
 func (a *App) ModelsForTab(tabID string) []ModelInfo {
+	if cur, ok := a.remoteTabCurrentModel(tabID); ok {
+		// Remote-credential hosts keep their providers and keys on the
+		// remote: offer exactly what that serve offers, and only when it is
+		// reachable — the desktop catalog would list models the remote
+		// cannot call. Local-proxy hosts own selection on the desktop.
+		if !a.remoteTabLocalProxy(tabID) {
+			if infos, err := a.remoteServeModelsForTab(tabID, cur); err == nil {
+				return infos
+			}
+			return []ModelInfo{}
+		}
+		return a.desktopModelCatalog(cur, "", nil)
+	}
 	a.mu.RLock()
 	curModel := ""
 	workspaceRoot := ""
@@ -9246,9 +9268,10 @@ func (a *App) ModelsForTab(tabID string) []ModelInfo {
 		ctrl = tab.Ctrl
 	}
 	a.mu.RUnlock()
-	// The tab controller's merged catalog carries extension sidecar providers
-	// (plugin/... refs). Read it off-lock: a cold catalog fetch can block on a
-	// sidecar RPC and must never park a.mu.
+	return a.desktopModelCatalog(curModel, workspaceRoot, ctrl)
+}
+
+func (a *App) desktopModelCatalog(curModel, workspaceRoot string, ctrl control.SessionAPI) []ModelInfo {
 	var extensionCatalog []provider.Descriptor
 	if ctrl != nil {
 		extensionCatalog = ctrl.ProviderCatalog()
@@ -9600,7 +9623,13 @@ type modelSwitchTiming struct {
 }
 
 func (a *App) SetModelForTab(tabID, name string) (retErr error) {
-	if a.ctx == nil || name == "" {
+	if name == "" {
+		return nil
+	}
+	if a.isRemoteTab(tabID) {
+		return a.SetRemoteTabModel(tabID, name)
+	}
+	if a.ctx == nil {
 		return nil
 	}
 	tab := a.tabByID(tabID)

@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
+	"net/http"
+	"net/http/cookiejar"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,7 +16,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"reasonix/internal/config"
 	"reasonix/internal/netclient"
@@ -179,6 +186,9 @@ type remoteKernel interface {
 	EnsureServer(ctx context.Context, hostID, workspace string) (RemoteServerView, string, error)
 	StopServer(hostID, workspace string) error
 	ServerStatus(hostID, workspace string) RemoteServerView
+	// ServeSnapshot is the read-only lookup for already-running serves; it
+	// must never contact the remote or wake anything up.
+	ServeSnapshot(hostID, workspace string) (RemoteServerView, string, bool)
 	ServerLogs(ctx context.Context, hostID, workspace string, tailLines int) (string, error)
 	CheckPlatform(ctx context.Context, hostID string) error
 
@@ -644,13 +654,25 @@ type managedHost struct {
 	secretPromptID string                  // opaque ID prevents a stale dialog resolving a later prompt
 	verifiedPeer   *RemoteFingerprintView  // authenticated target key; retained after pending UI clears
 	serveMu        sync.Mutex              // serializes EnsureServer/StopServer for this host
+	// credPort is the reverse credential-tunnel port the remote config last
+	// pointed at; 0 = unknown. It is reset on every (re)connect because the
+	// reverse forward rebinds a fresh ephemeral port each time. Atomic: read
+	// under serveMu (EnsureServer), written under m.mu (status dispatch).
+	credPort atomic.Int64
+	// credFallbackAt throttles the legacy-serve replacement fallback (unix
+	// seconds of the last attempt) so a serve that cannot reload its
+	// providers is replaced at most once every couple of minutes.
+	credFallbackAt atomic.Int64
 }
 
 // serveEntry is one workspace's serve registration: the published view (with
-// its loopback tunnel URL) and the auth token for that serve.
+// its loopback tunnel URL), the auth token for that serve, and the remote
+// bind address the forward targets (kept so a ready entry can be revalidated
+// without a fresh ensure round trip).
 type serveEntry struct {
 	view  RemoteServerView
 	token string
+	addr  string
 }
 
 type remoteSecretAnswer struct {
@@ -1139,6 +1161,13 @@ func (m *desktopRemoteManager) onClientStatus(hostID string, generation *managed
 		return
 	}
 	mh.status = view
+	if view.State == "connected" {
+		// The reverse credential forward rebinds a fresh ephemeral port on
+		// every (re)connect. Forget the healed port HERE (we already hold m.mu
+		// and the sink must not re-enter the manager) so the next EnsureServer
+		// re-heals the channel instead of fast-reusing a dead port.
+		mh.credPort.Store(0)
+	}
 	if m.sink != nil {
 		m.sink.onStatus(view)
 	}
@@ -1365,11 +1394,39 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 	}
 	var previousServer RemoteServerView
 	previousToken := ""
+	previousAddr := ""
 	if e := mh.serves[workspace]; e != nil {
-		previousServer, previousToken = e.view, e.token
+		previousServer, previousToken, previousAddr = e.view, e.token, e.addr
 	}
 	m.mu.Unlock()
 	c := mh.client
+	// Ready fast path: a registry-ready serve with a live tunnel revalidates
+	// in milliseconds through the local forward. Only a failed probe falls
+	// through to the full SSH ensure below, which re-checks the remote
+	// process itself.
+	if previousServer.State == "ready" && previousServer.LocalURL != "" && previousToken != "" && previousAddr != "" &&
+		hasUsableServeForward(c.Forwards().List(), serveForwardName(workspace), previousAddr, previousServer.LocalURL) &&
+		serveTunnelAlive(ctx, previousServer.LocalURL) {
+		// Credential-proxy gate: the reverse loopback port drifts on every SSH
+		// reconnect, and a reused serve keeps dialing the port it was built
+		// with. Fast reuse is only safe when the reverse channel is provably
+		// alive AND the port still matches what the remote config points at.
+		if cfgFast, cfgErr := config.Load(); cfgErr == nil {
+			if entryFast, ok := cfgFast.RemoteHost(hostID); ok && entryFast.CredentialProxyEnabled() {
+				port, has := credentialForwardPort(c, hostID)
+				healed := int(mh.credPort.Load())
+				if !has || healed != port || probeReverseTunnel(c, port) != nil {
+					log.Printf("[remote] EnsureServer: FAST-REUSE blocked (credential channel) host=%s ws=%s port=%d has=%v healedPort=%d", hostID, workspace, port, has, healed)
+				} else {
+					return previousServer, previousToken, nil
+				}
+			} else {
+				return previousServer, previousToken, nil
+			}
+		} else {
+			return previousServer, previousToken, nil
+		}
+	}
 	opCtx, cancel := managedOperationContext(ctx, mh)
 	defer cancel()
 
@@ -1379,7 +1436,7 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 	}
 	entry, _ := cfg.RemoteHost(hostID)
 	starting := RemoteServerView{HostID: hostID, Workspace: workspace, State: "starting"}
-	if !m.publishServerIfCurrent(hostID, mh, starting, "") {
+	if !m.publishServerIfCurrent(hostID, mh, starting, "", "") {
 		return RemoteServerView{}, "", fmt.Errorf("host %q connection was replaced", hostID)
 	}
 	// Local-proxy credential mode: start the desktop key holder, open the
@@ -1387,18 +1444,13 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 	// entry to install on the remote. The real key never leaves this machine.
 	var credOpts *bootstrap.CredentialProxyOptions
 	if entry.CredentialProxyEnabled() {
-		token, model, remotePort, cerr := m.credentialProxySetup(c, hostID)
+		opts, cerr := m.credentialProxySetup(c, hostID, workspace)
 		if cerr != nil {
 			view := RemoteServerView{HostID: hostID, Workspace: workspace, State: "error", Error: cerr.Error()}
-			m.publishFailedServeStart(hostID, mh, previousServer, previousToken, view)
+			m.publishFailedServeStart(hostID, mh, previousServer, previousToken, previousAddr, view)
 			return view, "", cerr
 		}
-		credOpts = &bootstrap.CredentialProxyOptions{
-			BaseURL:  fmt.Sprintf("http://127.0.0.1:%d", remotePort),
-			Token:    token,
-			Provider: credentialProxyProviderName,
-			Model:    model,
-		}
+		credOpts = opts
 	}
 	res, err := m.ensureServe(opCtx, c, bootstrap.Options{
 		Workspace:       workspace,
@@ -1412,12 +1464,12 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 		CredentialProxy: credOpts,
 		Progress: func(step, detail string) {
 			view := RemoteServerView{HostID: hostID, Workspace: workspace, State: step, Message: detail}
-			m.publishServerIfCurrent(hostID, mh, view, "")
+			m.publishServerIfCurrent(hostID, mh, view, "", "")
 		},
 	})
 	if err != nil {
 		view := RemoteServerView{HostID: hostID, Workspace: workspace, State: "error", Error: err.Error()}
-		m.publishFailedServeStart(hostID, mh, previousServer, previousToken, view)
+		m.publishFailedServeStart(hostID, mh, previousServer, previousToken, previousAddr, view)
 		return view, "", err
 	}
 	if !m.isCurrent(hostID, mh) {
@@ -1425,8 +1477,11 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 	}
 	if res.Reused && previousServer.State == "ready" && previousServer.Workspace == workspace &&
 		hasUsableServeForward(c.Forwards().List(), serveForwardName(workspace), res.State.Addr, previousServer.LocalURL) {
-		if !m.publishServerIfCurrent(hostID, mh, previousServer, res.Token) {
+		if !m.publishServerIfCurrent(hostID, mh, previousServer, res.Token, res.State.Addr) {
 			return RemoteServerView{}, "", fmt.Errorf("host %q connection was replaced", hostID)
+		}
+		if entry.CredentialProxyEnabled() {
+			m.healCredentialChannel(opCtx, c, mh, hostID, workspace, previousServer.LocalURL, res.Token, res)
 		}
 		return previousServer, res.Token, nil
 	}
@@ -1442,16 +1497,74 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 			cleanupCancel()
 		}
 		view := RemoteServerView{HostID: hostID, Workspace: workspace, State: "error", Error: ferr.Error()}
-		m.publishFailedServeStart(hostID, mh, previousServer, previousToken, view)
+		m.publishFailedServeStart(hostID, mh, previousServer, previousToken, previousAddr, view)
 		return view, "", ferr
 	}
 	localURL := fmt.Sprintf("http://%s/", bound)
 	view := RemoteServerView{HostID: hostID, Workspace: workspace, State: "ready", LocalURL: localURL}
-	if !m.publishServerIfCurrent(hostID, mh, view, res.Token) {
+	if !m.publishServerIfCurrent(hostID, mh, view, res.Token, res.State.Addr) {
 		_ = c.Forwards().Remove(serveForwardName(workspace))
 		return RemoteServerView{}, "", fmt.Errorf("host %q connection was replaced", hostID)
 	}
+	if entry.CredentialProxyEnabled() {
+		m.healCredentialChannel(opCtx, c, mh, hostID, workspace, localURL, res.Token, res)
+	}
 	return view, res.Token, nil
+}
+
+// healCredentialChannel runs at the END of a successful ensure round, when the
+// serve's forward and registration are live. The reverse forward rebinds a
+// fresh ephemeral port on every SSH reconnect, and the heal inside ensureServe
+// only rewrites the CONFIG — a reused serve's in-memory providers still dial
+// the old port. When the port moved (or the heal rewrote anything), tell the
+// serve(s) on this host to rebuild their providers, then verify the channel
+// end to end before recording the port as healed.
+func (m *desktopRemoteManager) healCredentialChannel(ctx context.Context, c desktopSSHClient, mh *managedHost, hostID, workspace, base, token string, res bootstrap.Result) {
+	port, has := credentialForwardPort(c, hostID)
+	if !has {
+		return
+	}
+	reloadOK := true
+	if res.Reused && (int(mh.credPort.Load()) != port || res.CredentialConfigChanged) {
+		log.Printf("[remote] EnsureServer: cred port drift host=%s old=%d new=%d configChanged=%v -> reloading serve providers", hostID, mh.credPort.Load(), port, res.CredentialConfigChanged)
+		// base+token is the serve this round just ensured: the registry may
+		// not hold it yet (it is published moments before this call), and an
+		// empty registry must not turn the reload into a silent no-op.
+		reloadOK = m.reloadServeProviders(ctx, hostID, workspace, base, token)
+	}
+	if perr := probeReverseTunnel(c, port); perr != nil {
+		log.Printf("[remote] EnsureServer: reverse probe FAILED host=%s ws=%s port=%d err=%v", hostID, workspace, port, perr)
+	} else if reloadOK {
+		m.mu.Lock()
+		if m.hosts[hostID] == mh {
+			mh.credPort.Store(int64(port))
+		}
+		m.mu.Unlock()
+	} else {
+		// The channel is up but the serve could not reload its providers
+		// (busy turn, or a serve too old for /providers/reload). Leave
+		// credPort invalidated so every later EnsureServer retries the reload
+		// instead of fast-reusing a stale serve.
+		log.Printf("[remote] EnsureServer: reverse probe OK but provider reload FAILED; keeping gate closed host=%s ws=%s port=%d", hostID, workspace, port)
+	}
+}
+
+// serveTunnelAlive probes the local serve forward: any HTTP response —
+// including auth redirects and error statuses — proves both the tunnel and
+// the remote serve behind it are answering.
+func serveTunnelAlive(ctx context.Context, localURL string) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, serveURL(localURL, "/"), nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	_ = resp.Body.Close()
+	return true
 }
 
 func (m *desktopRemoteManager) StopServer(hostID, workspace string) error {
@@ -1479,7 +1592,7 @@ func (m *desktopRemoteManager) StopServer(hostID, workspace string) error {
 	// Tear down the local serve tunnel so a stale forward can't linger.
 	_ = c.Forwards().Remove(serveForwardName(workspace))
 	view := RemoteServerView{HostID: hostID, Workspace: workspace, State: "stopped"}
-	m.publishServerIfCurrent(hostID, mh, view, "")
+	m.publishServerIfCurrent(hostID, mh, view, "", "")
 	return nil
 }
 
@@ -1499,6 +1612,25 @@ func (m *desktopRemoteManager) ServerStatus(hostID, workspace string) RemoteServ
 		}
 	}
 	return RemoteServerView{HostID: hostID, Workspace: workspace, State: "stopped"}
+}
+
+// ServeSnapshot is the read-only resolution for callers that want to talk to
+// an already-running serve without waking one: it returns the registry's view
+// and token only when the recorded state is ready with a usable URL. Query
+// paths (session listing) must go through this — a full EnsureServer from a
+// poll serializes behind tab bootstraps on the per-host lock and starves them.
+func (m *desktopRemoteManager) ServeSnapshot(hostID, workspace string) (RemoteServerView, string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mh := m.hosts[hostID]
+	if mh == nil {
+		return RemoteServerView{}, "", false
+	}
+	e := mh.serves[workspace]
+	if e == nil || e.view.State != "ready" || e.view.LocalURL == "" || e.token == "" {
+		return RemoteServerView{}, "", false
+	}
+	return e.view, e.token, true
 }
 
 func (m *desktopRemoteManager) ServerLogs(ctx context.Context, hostID, workspace string, tailLines int) (string, error) {
@@ -1527,26 +1659,31 @@ func (m *desktopRemoteManager) ServerLogs(ctx context.Context, hostID, workspace
 	return sb.String(), nil
 }
 
-// credentialProxySetup prepares local-proxy credential mode for one host:
-// starts the desktop key holder, registers the host's virtual token against
-// the desktop's default provider, and opens the reverse tunnel the remote
-// serve will call through. Returns the virtual token, the model name the
-// remote provider entry should carry, and the remote loopback port the
-// tunnel actually bound.
-func (m *desktopRemoteManager) credentialProxySetup(c desktopSSHClient, hostID string) (string, string, int, error) {
+// credentialProxySetup prepares local-proxy credential mode for one
+// workspace: starts the desktop key holder, registers the workspace's virtual
+// token against the model its tabs run, and opens the reverse tunnel the
+// remote serve will call through. The returned options are ready to hand to
+// the bootstrap (BaseURL points at the tunnel's remote loopback port).
+func (m *desktopRemoteManager) credentialProxySetup(c desktopSSHClient, hostID, workspace string) (*bootstrap.CredentialProxyOptions, error) {
 	app, ok := m.sink.(*App)
 	if !ok || app == nil {
-		return "", "", 0, fmt.Errorf("credential proxy: app unavailable")
+		return nil, fmt.Errorf("credential proxy: app unavailable")
 	}
-	token, model, port, err := app.registerCredentialProxyRoute(hostID)
+	info, err := app.registerCredentialProxyRoute(hostID, workspace)
 	if err != nil {
-		return "", "", 0, err
+		return nil, err
 	}
-	remotePort, err := ensureCredentialProxyForward(c, hostID, port)
+	remotePort, err := ensureCredentialProxyForward(c, hostID, info.port)
 	if err != nil {
-		return "", "", 0, fmt.Errorf("credential proxy: reverse tunnel: %w", err)
+		return nil, fmt.Errorf("credential proxy: reverse tunnel: %w", err)
 	}
-	return token, model, remotePort, nil
+	return &bootstrap.CredentialProxyOptions{
+		BaseURL:  fmt.Sprintf("http://127.0.0.1:%d", remotePort),
+		Token:    info.token,
+		Provider: credentialProxyProviderName,
+		Model:    info.model,
+		Kind:     info.kind,
+	}, nil
 }
 
 // ensureCredentialProxyForward opens (idempotently) the reverse tunnel: the
@@ -1576,6 +1713,145 @@ func ensureCredentialProxyForward(c desktopSSHClient, hostID string, desktopPort
 		return 0, fmt.Errorf("reverse tunnel bound unexpected address %q", bound)
 	}
 	return port, nil
+}
+
+// credentialForwardPort reports the remote-side port of the host's reverse
+// credential forward, when one is up. This is the port the remote serve's
+// provider config must point at.
+func credentialForwardPort(c desktopSSHClient, hostID string) (int, bool) {
+	name := "cred-proxy:" + hostID
+	for _, f := range c.Forwards().List() {
+		if f.Spec.Name == name && f.Up {
+			if port, ok := portOfAddr(f.BoundAddr); ok {
+				return port, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// probeReverseTunnel verifies the reverse credential channel end to end. The
+// desktop cannot dial the remote-side loopback listener itself, so the probe
+// rides the same SSH connection as a direct-tcpip channel — the remote sshd
+// connects to its own 127.0.0.1:<port>, which forwards back through the
+// tunnel to the desktop credential proxy. Any HTTP response to /healthz
+// proves the whole chain; a refused dial or timeout means the channel the
+// serve depends on is dead.
+func probeReverseTunnel(c desktopSSHClient, port int) error {
+	type sshDialer interface{ SSH() (*ssh.Client, error) }
+	d, ok := c.(sshDialer)
+	if !ok {
+		return errors.New("reverse probe: ssh client does not expose a raw connection")
+	}
+	cl, err := d.SSH()
+	if err != nil {
+		return fmt.Errorf("reverse probe: no ssh connection: %w", err)
+	}
+	conn, err := cl.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return fmt.Errorf("reverse probe: remote dial 127.0.0.1:%d: %w", port, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write([]byte("GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")); err != nil {
+		return fmt.Errorf("reverse probe: write: %w", err)
+	}
+	statusLine, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("reverse probe: read: %w", err)
+	}
+	if !strings.Contains(statusLine, "HTTP/") {
+		return fmt.Errorf("reverse probe: non-HTTP response %q", strings.TrimSpace(statusLine))
+	}
+	return nil
+}
+
+// reloadServeProviders asks every running serve on the host to rebuild its
+// providers: POST /providers/reload rebinds the controller with the CURRENT
+// model, re-reading the healed config. Needed after a reverse credential
+// tunnel rebind — a reused serve otherwise keeps dialing the dead old port.
+// workspace+extraBase+extraToken target the serve this ensure round just
+// produced (the registry may not list it yet); registry entries cover the
+// host's other workspaces, which share the same healed config. Returns false
+// when any serve could not reload (busy turn, or a serve too old to know the
+// endpoint): callers keep their heal gate closed so the next ensure retries.
+func (m *desktopRemoteManager) reloadServeProviders(ctx context.Context, hostID, workspace, extraBase, extraToken string) bool {
+	type target struct{ base, token string }
+	m.mu.Lock()
+	mh := m.hosts[hostID]
+	targets := make(map[string]target, len(mh.serves)+1)
+	for ws, e := range mh.serves {
+		if e != nil && e.view.LocalURL != "" && e.token != "" {
+			targets[ws] = target{e.view.LocalURL, e.token}
+		}
+	}
+	m.mu.Unlock()
+	if mh == nil {
+		return false
+	}
+	if extraBase != "" && extraToken != "" && workspace != "" {
+		// The just-ensured serve takes precedence under its REAL workspace
+		// key; drop any registry entry pointing at the same base so it is
+		// not reloaded twice.
+		targets[workspace] = target{extraBase, extraToken}
+		for ws, t := range targets {
+			if ws != workspace && t.base == extraBase {
+				delete(targets, ws)
+			}
+		}
+	}
+	allOK := true
+	for ws, t := range targets {
+		jar, err := cookiejar.New(nil)
+		if err != nil {
+			allOK = false
+			continue
+		}
+		client := &http.Client{Jar: jar}
+		callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err = serveHandshake(callCtx, client, t.base, t.token)
+		if err == nil {
+			err = servePost(callCtx, client, serveURL(t.base, "/providers/reload"), nil)
+		}
+		cancel()
+		if err != nil {
+			log.Printf("[remote] reloadServeProviders: FAILED host=%s ws=%s err=%v", hostID, ws, err)
+			allOK = false
+			// A 404/405 means the serve predates /providers/reload (405: the
+			// old router answers unknown methods under /providers with Method
+			// Not Allowed). A fresh launch reads the healed config at startup,
+			// so replace the serve — throttled, and asynchronously: EnsureServer
+			// holds serveMu here.
+			if (strings.Contains(err.Error(), "status 404") || strings.Contains(err.Error(), "status 405")) && m.markCredFallback(hostID) {
+				log.Printf("[remote] reloadServeProviders: legacy serve -> replacing host=%s ws=%s", hostID, ws)
+				go func(hostID, ws string) {
+					if err := m.StopServer(hostID, ws); err != nil {
+					}
+					if _, _, err := m.EnsureServer(context.Background(), hostID, ws); err != nil {
+					}
+				}(hostID, ws)
+			}
+			continue
+		}
+	}
+	return allOK
+}
+
+// markCredFallback rate-limits the legacy-serve replacement to at most one
+// attempt every two minutes per host.
+func (m *desktopRemoteManager) markCredFallback(hostID string) bool {
+	m.mu.Lock()
+	mh := m.hosts[hostID]
+	m.mu.Unlock()
+	if mh == nil {
+		return false
+	}
+	now := time.Now().Unix()
+	last := mh.credFallbackAt.Load()
+	if last != 0 && now-last < 120 {
+		return false
+	}
+	return mh.credFallbackAt.CompareAndSwap(last, now)
 }
 
 func portOfAddr(addr string) (int, bool) {
@@ -1667,15 +1943,15 @@ func managedOperationContext(parent context.Context, mh *managedHost) (context.C
 // actually runs; the failure is delivered through the EnsureServer return
 // value and the caller's actionErr. When there is no previous ready Serve
 // (first start), the error view is published so the UI can show it.
-func (m *desktopRemoteManager) publishFailedServeStart(hostID string, generation *managedHost, previous RemoteServerView, previousToken string, failed RemoteServerView) {
+func (m *desktopRemoteManager) publishFailedServeStart(hostID string, generation *managedHost, previous RemoteServerView, previousToken, previousAddr string, failed RemoteServerView) {
 	if previous.State == "ready" {
-		m.publishServerIfCurrent(hostID, generation, previous, previousToken)
+		m.publishServerIfCurrent(hostID, generation, previous, previousToken, previousAddr)
 		return
 	}
-	m.publishServerIfCurrent(hostID, generation, failed, "")
+	m.publishServerIfCurrent(hostID, generation, failed, "", "")
 }
 
-func (m *desktopRemoteManager) publishServerIfCurrent(hostID string, generation *managedHost, view RemoteServerView, token string) bool {
+func (m *desktopRemoteManager) publishServerIfCurrent(hostID string, generation *managedHost, view RemoteServerView, token, addr string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.hosts[hostID] != generation {
@@ -1684,7 +1960,7 @@ func (m *desktopRemoteManager) publishServerIfCurrent(hostID string, generation 
 	if generation.serves == nil {
 		generation.serves = map[string]*serveEntry{}
 	}
-	generation.serves[view.Workspace] = &serveEntry{view: view, token: token}
+	generation.serves[view.Workspace] = &serveEntry{view: view, token: token, addr: addr}
 	if m.sink != nil {
 		m.sink.onServer(view)
 	}

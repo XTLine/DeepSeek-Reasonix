@@ -4966,6 +4966,7 @@ type desktopRemoteTabEntry struct {
 	HostID     string `json:"hostId"`
 	Workspace  string `json:"workspace"`
 	TopicTitle string `json:"topicTitle,omitempty"`
+	Model      string `json:"model,omitempty"`
 }
 
 type desktopTabsFile struct {

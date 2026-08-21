@@ -4,11 +4,18 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"reasonix/internal/config"
 )
+
+// remoteTabModelSeq stamps every remote-tab model assignment; the credential
+// proxy uses the stamps to resolve "most recently set" without relying on map
+// iteration order.
+var remoteTabModelSeq atomic.Uint64
 
 // ── View structs mirrored in frontend/src/lib/types.ts ──
 
@@ -23,6 +30,9 @@ type RemoteProjectView struct {
 	Workspace string `json:"workspace"`
 	Title     string `json:"title,omitempty"`
 	Color     string `json:"color,omitempty"`
+	// Merged marks that an overlapping pin already existed and the returned
+	// Workspace is that existing group's canonical path — no new pin was added.
+	Merged bool `json:"merged,omitempty"`
 }
 
 // RemoteTabOpenOptions mirrors the frontend opts bag: NewSession lands the
@@ -57,6 +67,12 @@ type remoteTab struct {
 	// NewSession open reuses this blank instead of resetting again — the
 	// same contract as the local reusable-blank tab.
 	sessionReset bool
+	// model is the desktop-owned current model ref for this remote tab.
+	// Chat requests still tunnel through the credential proxy; the serve
+	// session is not rebuilt on switch. modelSeq orders concurrent writes so
+	// route registration can pick the most recent deterministically.
+	model    string
+	modelSeq uint64
 
 	// Bridge fields, mutated under App.remoteTabMu. client keeps the serve
 	// session cookie in its jar across reconnects; token is retained for a
@@ -84,11 +100,23 @@ func (a *App) ListRemoteProjects() ([]RemoteProjectView, error) {
 }
 
 func (a *App) AddRemoteProject(hostID, workspace string) (RemoteProjectView, error) {
+	hostID = strings.TrimSpace(hostID)
+	workspace = strings.TrimSpace(workspace)
 	var view RemoteProjectView
 	err := editUserConfig(func(c *config.Config) error {
+		// Overlapping pins on one host collapse into the existing group:
+		// re-running the wizard on a nested directory must not multiply serve
+		// processes and session lists over the same files. The returned view
+		// carries the canonical (existing) workspace with Merged set.
+		if merged, ok := resolveOverlappingWorkspace(c.Remote.Projects, hostID, workspace); ok {
+			workspace = merged
+			view = remoteProjectEntryToView(config.RemoteProjectEntry{HostID: hostID, Workspace: merged})
+			view.Merged = true
+			return nil
+		}
 		entry := config.RemoteProjectEntry{
-			HostID:    strings.TrimSpace(hostID),
-			Workspace: strings.TrimSpace(workspace),
+			HostID:    hostID,
+			Workspace: workspace,
 		}
 		if err := c.UpsertRemoteProject(entry); err != nil {
 			return err
@@ -100,6 +128,65 @@ func (a *App) AddRemoteProject(hostID, workspace string) (RemoteProjectView, err
 		return RemoteProjectView{}, err
 	}
 	return view, nil
+}
+
+// resolveOverlappingWorkspace finds the existing pin on the same host that the
+// requested workspace should merge into: an exact match wins, then the
+// nearest ancestor pin, then the shallowest descendant pin. Remote paths are
+// POSIX; "~" and unresolvable relatives simply never overlap (safe default).
+func resolveOverlappingWorkspace(existing []config.RemoteProjectEntry, hostID, workspace string) (string, bool) {
+	target := cleanRemoteWorkspace(workspace)
+	if target == "" {
+		return "", false
+	}
+	ancestor, ancestorDepth := "", -1
+	descendant, descendantDepth := "", 1<<30
+	for _, p := range existing {
+		if p.HostID != hostID {
+			continue
+		}
+		cand := cleanRemoteWorkspace(p.Workspace)
+		if cand == "" {
+			continue
+		}
+		switch {
+		case cand == target:
+			return p.Workspace, true
+		case isRemoteSubpath(cand, target): // existing pin is an ancestor of the request
+			if d := pathDepth(cand); ancestor == "" || d > ancestorDepth {
+				ancestor, ancestorDepth = p.Workspace, d
+			}
+		case isRemoteSubpath(target, cand): // existing pin is a descendant of the request
+			if d := pathDepth(cand); descendant == "" || d < descendantDepth {
+				descendant, descendantDepth = p.Workspace, d
+			}
+		}
+	}
+	if ancestor != "" {
+		return ancestor, true
+	}
+	return descendant, descendant != ""
+}
+
+func cleanRemoteWorkspace(ws string) string {
+	ws = strings.TrimSpace(ws)
+	if ws == "" || ws == "~" {
+		return ws
+	}
+	return path.Clean(strings.TrimRight(ws, "/"))
+}
+
+// isRemoteSubpath reports parent/child nesting between two cleaned POSIX
+// paths; equal paths are deliberately not subpaths of each other.
+func isRemoteSubpath(parent, child string) bool {
+	return strings.HasPrefix(child, parent+"/")
+}
+
+func pathDepth(cleaned string) int {
+	if cleaned == "" || cleaned == "/" {
+		return 0
+	}
+	return strings.Count(cleaned, "/")
 }
 
 func (a *App) RemoveRemoteProject(hostID, workspace string) error {
@@ -159,9 +246,14 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 	if !ok {
 		return TabMeta{}, fmt.Errorf("remote host %q is not configured", hostID)
 	}
-	if _, err := a.AddRemoteProject(hostID, workspace); err != nil {
+	// The pin registry collapses overlapping paths into the existing group:
+	// whatever nested path the caller asked for, the tab must land on the
+	// canonical workspace so tabs and serves stay one-per-group.
+	proj, err := a.AddRemoteProject(hostID, workspace)
+	if err != nil {
 		return TabMeta{}, err
 	}
+	workspace = proj.Workspace
 
 	// Reuse a live tab for the same remote workspace: repeated clicks on the
 	// tree group (or wizard finish followed by a group click) must not stack
@@ -203,7 +295,8 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 
 	ref := RemoteTabRef{HostID: hostID, Workspace: workspace}
 	tabID := newTabID()
-	tab := &remoteTab{id: tabID, ref: ref, state: "connecting", newSession: opts.NewSession, sessionName: opts.SessionName, hostLabel: host.Name, topicTitle: remoteWorkspaceName(workspace)}
+	tab := &remoteTab{id: tabID, ref: ref, state: "connecting", newSession: opts.NewSession, sessionName: opts.SessionName, hostLabel: host.Name, topicTitle: remoteWorkspaceName(workspace), model: resolveNewSessionModel(cfg)}
+	tab.modelSeq = remoteTabModelSeq.Add(1)
 	a.remoteTabMu.Lock()
 	if a.remoteTabs == nil {
 		a.remoteTabs = map[string]*remoteTab{}
@@ -270,11 +363,13 @@ func (a *App) restoreRemoteTabShells(f desktopTabsFile) {
 		if title == "" {
 			title = remoteWorkspaceName(ws)
 		}
-		a.remoteTabs[id] = &remoteTab{
+		restored := &remoteTab{
 			id: id, ref: RemoteTabRef{HostID: hostID, Workspace: ws},
 			state: "disconnected", newSession: true,
-			hostLabel: hostLabel, topicTitle: title,
+			hostLabel: hostLabel, topicTitle: title, model: strings.TrimSpace(entry.Model),
 		}
+		restored.modelSeq = remoteTabModelSeq.Add(1)
+		a.remoteTabs[id] = restored
 		a.remoteTabOrder = append(a.remoteTabOrder, id)
 	}
 	if f.ActiveTab != "" && a.remoteTabs[f.ActiveTab] != nil {
@@ -307,13 +402,17 @@ func (a *App) activateRemoteTab(tabID string, meta TabMeta) {
 // create and reuse paths share it so both return identical metas. RemoteState
 // seeds the surface before any state event arrives this run (restored shells).
 func remoteTabMeta(tab *remoteTab, hostLabel string) TabMeta {
+	label := hostLabel
+	if strings.TrimSpace(tab.model) != "" {
+		label = tab.model
+	}
 	return TabMeta{
 		ID:            tab.id,
 		Scope:         "project",
 		WorkspaceRoot: tab.ref.Workspace,
 		WorkspaceName: remoteWorkspaceName(tab.ref.Workspace),
 		TopicTitle:    tab.topicTitle,
-		Label:         hostLabel,
+		Label:         label,
 		Mode:          "normal",
 		Active:        true,
 		Cwd:           tab.ref.Workspace,
@@ -326,6 +425,18 @@ func remoteTabMeta(tab *remoteTab, hostLabel string) TabMeta {
 // SSH connection, ensure the remote Serve + loopback tunnel, then report
 // ready (or the failure) on the tab's state channel.
 func (a *App) bootstrapRemoteTab(tabID, hostID, workspace string) {
+	// Idempotence guard: a concurrent reattach may have brought this tab to
+	// ready while the open call was still in flight — bootstrapping again
+	// would re-enter the session and stack a second pump.
+	a.remoteTabMu.Lock()
+	tabState := ""
+	if tab := a.remoteTabs[tabID]; tab != nil {
+		tabState = tab.state
+	}
+	a.remoteTabMu.Unlock()
+	if tabState == "ready" {
+		return
+	}
 	rt, err := a.remoteRT()
 	if err != nil {
 		a.emitRemoteTabState(tabID, "error", err.Error())

@@ -55,6 +55,15 @@ func (fs *fakeServe) record(method, path, body string) {
 	fs.mu.Unlock()
 }
 
+// newFakeServe builds a stand-in for the workspace Serve's HTTP surface. The
+// mux is wrapped in a token-mode gate that mirrors the real authGate's
+// contract: POST /auth/token is matched on the EXACT path (a "//auth/token"
+// double slash — what naive base+path joins produce from EnsureServer's
+// trailing-slash LocalURL — is denied with 401 before routing), and every
+// other path requires the session cookie the bootstrap installs. A bare mux
+// cannot catch this: it 301-redirects unclean paths and Go's client follows
+// preserving POST, so a double-slash request would silently succeed here
+// while the real Serve rejects it.
 func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fakeServe {
 	t.Helper()
 	fs := &fakeServe{t: t, token: token, sessions: sessions}
@@ -155,11 +164,22 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 	snapshot("/context", `{"used":10}`)
 	snapshot("/todos", `[]`)
 	snapshot("/checkpoints", `[{"turn":1}]`)
-	snapshot("/models", `["m1"]`)
+	snapshot("/models", `{"current":"remote/chat","label":"chat","models":[{"ref":"remote/chat","provider":"remote","model":"chat","active":true}]}`)
 	snapshot("/status", `{"state":"ready"}`)
 	snapshot("/branches", `{"branches":[]}`)
 	snapshot("/skills", `[]`)
-	fs.server = httptest.NewServer(mux)
+	gate := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/token" {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		if c, err := r.Cookie("reasonix_token"); err == nil && c.Value == fs.token {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	})
+	fs.server = httptest.NewServer(gate)
 	t.Cleanup(fs.server.Close)
 	return fs
 }
@@ -309,6 +329,33 @@ func TestRemoteTabBridgeEntersNewSessionAndStreams(t *testing.T) {
 	}
 }
 
+// TestRemoteTabBridgeToleratesTrailingSlashBase pins the production LocalURL
+// shape: EnsureServer reports "http://127.0.0.1:port/" with a trailing slash.
+// Naive base+"/auth/token" concatenation used to hit "//auth/token", which the
+// serve auth gate rejects with 401 before routing the endpoint — the handshake
+// died on every wizard-completed connect.
+func TestRemoteTabBridgeToleratesTrailingSlashBase(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL + "/"},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+
+	meta, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{NewSession: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForTabState(t, a, meta.ID, "ready")
+	newCalled, _, cookieOnNew := fs.snapshot()
+	if newCalled != 1 || !cookieOnNew {
+		t.Fatalf("handshake with trailing-slash base failed: /new=%d cookie=%v", newCalled, cookieOnNew)
+	}
+}
+
 // TestRemoteTabBridgeHandshakeFailureSurfacesError pins that a rejected
 // token lands the tab in error instead of a phantom ready shell.
 func TestRemoteTabBridgeHandshakeFailureSurfacesError(t *testing.T) {
@@ -425,7 +472,6 @@ func TestRemoteTabCommandsForwardedToServe(t *testing.T) {
 		{"rewind", func() error { return a.RewindRemoteTab(meta.ID, "3") }, `POST /rewind {"scope":"both","turn":3}`},
 		{"approval-mode", func() error { return a.SetRemoteTabToolApprovalMode(meta.ID, "auto") }, `POST /tool-approval-mode {"mode":"auto"}`},
 		{"goal", func() error { return a.SetRemoteTabGoal(meta.ID, "ship it") }, `POST /goal {"goal":"ship it"}`},
-		{"model", func() error { return a.SetRemoteTabModel(meta.ID, "deepseek/chat") }, `POST /model {"ref":"deepseek/chat"}`},
 		{"effort", func() error { return a.SetRemoteTabEffort(meta.ID, "high") }, `POST /effort {"level":"high"}`},
 		{"plan-on", func() error { return a.SetRemoteTabPlanMode(meta.ID, true) }, `POST /plan {"on":true}`},
 		{"compact", func() error { return a.CompactRemoteTab(meta.ID) }, "POST /compact {}"},
@@ -486,6 +532,227 @@ func TestRemoteTabCommandRejectsUnknownOrUnreadyTab(t *testing.T) {
 	}
 }
 
+// TestModelsForTabRemoteUsesDesktopCatalog: a remote tab's model switcher
+// lists the desktop provider catalog. Current is the desktop-owned tab model,
+// not the remote serve GET /models payload.
+func TestModelsForTabRemoteUsesDesktopCatalog(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	setDesktopTestCredential(t, "DEEPSEEK_API_KEY", "sk-test")
+	cfg := config.Default()
+	cfg.DefaultModel = "deepseek/deepseek-v4-flash"
+	cfg.Desktop.ProviderAccess = []string{"deepseek"}
+	cfg.Providers = append(cfg.Providers, config.ProviderEntry{
+		Name: "deepseek", Kind: "anthropic", BaseURL: "https://api.deepseek.com/anthropic",
+		Models: []string{"deepseek-v4-flash", "deepseek-v4-pro"}, Default: "deepseek-v4-flash", APIKeyEnv: "DEEPSEEK_API_KEY",
+	})
+	if err := cfg.UpsertRemoteHost(config.RemoteHostEntry{Name: "box", Host: "127.0.0.1", Port: 22, User: "dev", CredentialMode: "local-proxy"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SaveTo(config.UserConfigPath()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+
+	got := a.ModelsForTab(meta.ID)
+	refs := map[string]bool{}
+	current := ""
+	for _, m := range got {
+		refs[m.Ref] = true
+		if m.Current {
+			current = m.Ref
+		}
+	}
+	if !refs["deepseek/deepseek-v4-flash"] || !refs["deepseek/deepseek-v4-pro"] {
+		t.Fatalf("ModelsForTab(%s) = %+v, want desktop deepseek catalog", meta.ID, got)
+	}
+	if refs["remote/chat"] {
+		t.Fatalf("ModelsForTab leaked the serve catalog: %+v", got)
+	}
+	if current != "deepseek/deepseek-v4-flash" {
+		t.Fatalf("current = %q, want desktop default_model", current)
+	}
+}
+
+// TestSetModelForTabRemoteOwnsModelOnDesktop: picking a model on a remote
+// tab stores it on the desktop tab and does not POST /model to the serve.
+func TestSetModelForTabRemoteOwnsModelOnDesktop(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	setDesktopTestCredential(t, "DEEPSEEK_API_KEY", "sk-test")
+	cfg := config.Default()
+	cfg.DefaultModel = "deepseek/deepseek-v4-flash"
+	cfg.Desktop.ProviderAccess = []string{"deepseek"}
+	cfg.Providers = append(cfg.Providers, config.ProviderEntry{
+		Name: "deepseek", Kind: "anthropic", BaseURL: "https://api.deepseek.com/anthropic",
+		Models: []string{"deepseek-v4-flash", "deepseek-v4-pro"}, Default: "deepseek-v4-flash", APIKeyEnv: "DEEPSEEK_API_KEY",
+	})
+	if err := cfg.UpsertRemoteHost(config.RemoteHostEntry{Name: "box", Host: "127.0.0.1", Port: 22, User: "dev", CredentialMode: "local-proxy"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SaveTo(config.UserConfigPath()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+
+	if err := a.SetModelForTab(meta.ID, "deepseek/deepseek-v4-pro"); err != nil {
+		t.Fatalf("SetModelForTab: %v", err)
+	}
+	for _, c := range fs.recorded() {
+		if strings.HasPrefix(c, "POST /model") {
+			t.Fatalf("serve saw %v, desktop-owned switch must not POST /model", fs.recorded())
+		}
+	}
+	var current string
+	for _, m := range a.ModelsForTab(meta.ID) {
+		if m.Current {
+			current = m.Ref
+		}
+	}
+	if current != "deepseek/deepseek-v4-pro" {
+		t.Fatalf("current = %q, want deepseek/deepseek-v4-pro", current)
+	}
+}
+
+// TestModelsForTabRemoteCredentialHostOffersServeCatalog: when the host keeps
+// its keys on the remote, the picker lists the serve's own catalog, not the
+// desktop's.
+func TestModelsForTabRemoteCredentialHostOffersServeCatalog(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	cfg := config.Default()
+	if err := cfg.UpsertRemoteHost(config.RemoteHostEntry{Name: "box", Host: "127.0.0.1", Port: 22, User: "dev"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SaveTo(config.UserConfigPath()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+
+	got := a.ModelsForTab(meta.ID)
+	if len(got) != 1 || got[0].Ref != "remote/chat" || !got[0].Current {
+		t.Fatalf("ModelsForTab = %+v, want the serve catalog with remote/chat current", got)
+	}
+}
+
+// TestSetModelForTabRemoteCredentialPostsServeModel: remote-credential hosts
+// switch through the serve's per-session endpoint.
+func TestSetModelForTabRemoteCredentialPostsServeModel(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	cfg := config.Default()
+	if err := cfg.UpsertRemoteHost(config.RemoteHostEntry{Name: "box", Host: "127.0.0.1", Port: 22, User: "dev"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SaveTo(config.UserConfigPath()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+
+	if err := a.SetModelForTab(meta.ID, "remote/chat"); err != nil {
+		t.Fatalf("SetModelForTab: %v", err)
+	}
+	posted := false
+	for _, c := range fs.recorded() {
+		if strings.HasPrefix(c, "POST /model ") && strings.Contains(c, `"ref":"remote/chat"`) {
+			posted = true
+		}
+	}
+	if !posted {
+		t.Fatalf("serve never saw POST /model with the ref: %v", fs.recorded())
+	}
+	a.remoteTabMu.Lock()
+	model := ""
+	if tab := a.remoteTabs[meta.ID]; tab != nil {
+		model = tab.model
+	}
+	a.remoteTabMu.Unlock()
+	if model != "remote/chat" {
+		t.Fatalf("tab.model = %q, want remote/chat", model)
+	}
+}
+
+// TestSetRemoteTabModelFailureKeepsPreviousModel: a local-proxy switch that
+// fails at the credential-proxy step must leave the tab's previous model
+// intact instead of half-committing the new one.
+func TestSetRemoteTabModelFailureKeepsPreviousModel(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	setDesktopTestCredential(t, "DEEPSEEK_API_KEY", "sk-test")
+	cfg := config.Default()
+	cfg.DefaultModel = "deepseek/deepseek-v4-flash"
+	cfg.Desktop.ProviderAccess = []string{"deepseek"}
+	cfg.Providers = append(cfg.Providers, config.ProviderEntry{
+		Name: "deepseek", Kind: "anthropic", BaseURL: "https://api.deepseek.com/anthropic",
+		Models: []string{"deepseek-v4-flash", "deepseek-v4-pro"}, Default: "deepseek-v4-flash", APIKeyEnv: "DEEPSEEK_API_KEY",
+	})
+	if err := cfg.UpsertRemoteHost(config.RemoteHostEntry{Name: "box", Host: "127.0.0.1", Port: 22, User: "dev", CredentialMode: "local-proxy"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SaveTo(config.UserConfigPath()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+
+	// Kill the local key after the tab seeded its default: config.Load()
+	// re-pins credentials-file values into the environment, so the stored
+	// entry itself must be cleared. The proxy step of the switch must fail,
+	// and the tab must keep the seeded model.
+	if _, err := config.SetCredential("DEEPSEEK_API_KEY", ""); err != nil {
+		t.Fatalf("clear credential: %v", err)
+	}
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	if err := a.SetModelForTab(meta.ID, "deepseek/deepseek-v4-pro"); err == nil {
+		t.Fatal("SetModelForTab must fail without the local key")
+	}
+	a.remoteTabMu.Lock()
+	model := ""
+	if tab := a.remoteTabs[meta.ID]; tab != nil {
+		model = tab.model
+	}
+	a.remoteTabMu.Unlock()
+	if model != "deepseek/deepseek-v4-flash" {
+		t.Fatalf("tab.model = %q, want the untouched previous model", model)
+	}
+}
+
 // TestRemoteTabSnapshotMergesServeMembers: all six GETs merge in parallel;
 // only /history is required — its failure errors, optional members degrade.
 func TestRemoteTabSnapshotMergesServeMembers(t *testing.T) {
@@ -521,9 +788,10 @@ func TestRemoteTabSnapshotMergesServeMembers(t *testing.T) {
 	}
 }
 
-// TestRemoteProjectSessionsWithoutOpenTab pins the one-shot path: listing
-// sessions for a workspace with no live tab ensures the serve, handshakes,
-// and maps entries to the frontend view.
+// TestRemoteProjectSessionsWithoutOpenTab pins the read-only one-shot path:
+// listing sessions for a workspace with no live tab reuses the registry's
+// ready registration, handshakes, and maps entries to the frontend view —
+// without ever ensuring a serve.
 func TestRemoteProjectSessionsWithoutOpenTab(t *testing.T) {
 	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
 		{Name: "s1", Path: "/x.jsonl", Title: "First", Turns: 2},
@@ -551,6 +819,61 @@ func TestRemoteProjectSessionsWithoutOpenTab(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("GET /sessions not reached: %v", fs.recorded())
+	}
+	if kernel.ensureCalls != 0 {
+		t.Fatalf("listing woke the serve: %d EnsureServer calls", kernel.ensureCalls)
+	}
+}
+
+// TestRemoteProjectSessionsNeverWakesServe: a query path must never
+// cold-start a serve — no ready registration means an error, and EnsureServer
+// must not even be attempted (the old behavior here starved tab bootstraps
+// on the per-host serve lock).
+func TestRemoteProjectSessionsNeverWakesServe(t *testing.T) {
+	kernel := &fakeRemoteKernel{
+		statuses: []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		// No ready registration: ServeSnapshot reports nothing.
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+
+	if _, err := a.RemoteProjectSessions("box", "~/app"); err == nil {
+		t.Fatal("listing must report the serve as not running")
+	}
+	if kernel.ensureCalls != 0 {
+		t.Fatalf("listing woke the serve: %d EnsureServer calls", kernel.ensureCalls)
+	}
+}
+
+// TestResolveOverlappingWorkspace pins the merge rules for overlapping pins:
+// exact match wins, then the nearest ancestor, then the shallowest
+// descendant; disjoint paths never merge.
+func TestResolveOverlappingWorkspace(t *testing.T) {
+	entries := []config.RemoteProjectEntry{
+		{HostID: "box", Workspace: "/srv/app"},
+		{HostID: "box", Workspace: "/srv/app/sub"},
+		{HostID: "other", Workspace: "/srv/app"},
+	}
+	for _, tc := range []struct {
+		ws   string
+		want string
+		ok   bool
+	}{
+		{ws: "/srv/app", want: "/srv/app", ok: true},             // exact
+		{ws: "/srv/app/", want: "/srv/app", ok: true},            // trailing slash normalizes to exact
+		{ws: "/srv/app/sub/deep", want: "/srv/app/sub", ok: true}, // nearest ancestor
+		{ws: "/srv", want: "/srv/app", ok: true},                  // ancestor request merges into shallowest descendant
+		{ws: "/srv/other", want: "", ok: false},                   // sibling never merges
+		{ws: "", want: "", ok: false},                             // empty never merges
+	} {
+		got, ok := resolveOverlappingWorkspace(entries, "box", tc.ws)
+		if ok != tc.ok || got != tc.want {
+			t.Fatalf("resolveOverlappingWorkspace(%q) = (%q, %v), want (%q, %v)", tc.ws, got, ok, tc.want, tc.ok)
+		}
+	}
+	// Host scoping: the same path on another host must not capture the merge.
+	if got, ok := resolveOverlappingWorkspace(entries, "other", "/srv/app/sub/x"); !ok || got != "/srv/app" {
+		t.Fatalf("cross-host overlap merged: (%q, %v)", got, ok)
 	}
 }
 
