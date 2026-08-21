@@ -226,6 +226,19 @@ export function buildTurnModels(
     }
   }
   flush();
+  const usedSegmentKeys = new Set<string>();
+  const uniqueSegmentKey = (base: string): string => {
+    let key = base || "seg";
+    if (!usedSegmentKeys.has(key)) {
+      usedSegmentKeys.add(key);
+      return key;
+    }
+    let n = 1;
+    while (usedSegmentKeys.has(`${base || "seg"}#${n}`)) n += 1;
+    key = `${base || "seg"}#${n}`;
+    usedSegmentKeys.add(key);
+    return key;
+  };
 
   for (let index = 0; index < turns.length; index += 1) {
     const model = turns[index];
@@ -237,7 +250,7 @@ export function buildTurnModels(
       const displayItems = foldDisplayItems(segment.processItems, live, hideReasoning);
       const turnActive = model.isActive && isLastSegment;
       return {
-        key: segment.processItems[0]?.id ?? "",
+        key: uniqueSegmentKey(segment.processItems[0]?.id ?? ""),
         processItems: segment.processItems,
         outsideItems: segment.outsideItems,
         displayItems,
@@ -546,7 +559,22 @@ export function buildTranscriptRows(models: readonly TurnModel[], options: Build
       rows.push({ kind: "turn-actions", key: `ta:${user.id}`, turn, text: model.actionText });
     }
   }
-  return rows;
+  return uniquifyTranscriptRowKeys(rows);
+}
+
+function uniquifyTranscriptRowKeys(rows: TranscriptRow[]): TranscriptRow[] {
+  const used = new Set<string>();
+  return rows.map((row) => {
+    if (!used.has(row.key)) {
+      used.add(row.key);
+      return row;
+    }
+    let n = 1;
+    while (used.has(`${row.key}#${n}`)) n += 1;
+    const key = `${row.key}#${n}`;
+    used.add(key);
+    return { ...row, key };
+  });
 }
 
 // ── Live turn split ───────────────────────────────────────────────────────────

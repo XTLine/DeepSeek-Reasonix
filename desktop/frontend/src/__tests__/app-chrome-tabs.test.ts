@@ -447,7 +447,7 @@ ok(
   /const controllerReady =\s*state\.meta\?\.ready === true &&\s*\(!state\.meta\.runtime \|\| state\.meta\.runtime\.phase === "ready"\) &&\s*!state\.meta\.startupErr &&\s*!state\.backendActivationPending &&\s*!runtimeTransitioning;/.test(appSource) &&
     /if \(!activeTabId \|\| !controllerReady\) return;\s*void commitThenSend\(activeTabId, text\)\.catch/.test(appSource) &&
     /onPrompt=\{handleTranscriptPrompt\}/.test(appSource) &&
-    /submitDisabled=\{!controllerReady\}/.test(appSource),
+    /submitDisabled=\{remoteSurfaceActive \? !remoteComposerReady : !controllerReady\}/.test(appSource),
   "welcome prompts and composer submit share the controller readiness gate",
 );
 

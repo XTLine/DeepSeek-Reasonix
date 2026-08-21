@@ -58,9 +58,12 @@ function parentOf(path: string): string {
 export function RemoteConnectWizard({
   onRefresh,
   onClose,
+  onMerged,
 }: {
   onRefresh: () => Promise<void>;
   onClose: () => void;
+  /** Fired with a pre-translated notice when the chosen path merged into an existing pinned group. */
+  onMerged?: (message: string) => void;
 }) {
   const t = useT();
   const hosts = useRemoteStore((s) => s.hosts);
@@ -241,23 +244,34 @@ export function RemoteConnectWizard({
     setBusy(true);
     setError("");
     try {
+      let project: Awaited<ReturnType<typeof app.AddRemoteProject>> | null = null;
       try {
-        await app.AddRemoteProject(hostId, target);
+        project = await app.AddRemoteProject(hostId, target);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         return;
       }
+      // The registry collapses overlapping paths: the canonical workspace is
+      // where the tab must land, and a merge means no new pin exists to roll
+      // back — removing it would delete the user's existing group.
+      const canonical = project.merged ? project.workspace : target;
+      if (project.merged) {
+        onMerged?.(t("remoteWizard.mergedProject", { path: canonical }));
+      }
       try {
-        await app.OpenRemoteProjectTab(hostId, target, { newSession: true });
+        await app.OpenRemoteProjectTab(hostId, canonical, { newSession: true });
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         // All-or-nothing: a failed open rolls the just-registered project
-        // back so no half-applied pin survives. If the rollback itself
-        // fails, the pin is on disk — refresh so the tree stays honest.
-        try {
-          await app.RemoveRemoteProject(hostId, target);
-        } catch {
-          await onRefresh().catch(() => {});
+        // back so no half-applied pin survives. A merged finish added no pin,
+        // so there is nothing to remove. If the rollback itself fails, the
+        // pin is on disk — refresh so the tree stays honest.
+        if (!project.merged) {
+          try {
+            await app.RemoveRemoteProject(hostId, target);
+          } catch {
+            await onRefresh().catch(() => {});
+          }
         }
         return;
       }

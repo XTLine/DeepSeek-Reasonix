@@ -309,6 +309,18 @@ const keys = (rows: TranscriptRow[]) => rows.map((row) => row.key).join(",");
   eq(historyEntryIdForRow({ kind: "older-history", key: "older-history" }), undefined, "the paging row has no entry");
 }
 
+{
+  const localOnly: Item[] = [
+    { kind: "user", id: "u1", text: "first" },
+    { kind: "tool", id: "__reasonix_local_only__", name: "__reasonix_local_only__", args: "", status: "done", output: "partial one" },
+    { kind: "user", id: "u2", text: "second" },
+    { kind: "tool", id: "__reasonix_local_only__", name: "__reasonix_local_only__", args: "", status: "done", output: "partial two" },
+  ];
+  const rows = buildTranscriptRows(buildTurnModels(localOnly), rowOptions(EMPTY_FOLDS, "expanded"));
+  const rowKeys = rows.map((row) => row.key);
+  eq(new Set(rowKeys).size, rowKeys.length, "two local-only recoveries cannot share ph:/t: row keys");
+}
+
 // ── Size estimates ────────────────────────────────────────────────────────────
 
 {

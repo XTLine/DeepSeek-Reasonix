@@ -4,6 +4,10 @@ import React from "react";
 import { JSDOM } from "jsdom";
 import { act } from "react";
 
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import type { AppBindings } from "../lib/bridge";
 import type { RemoteHostView } from "../lib/types";
 
@@ -353,6 +357,24 @@ ok(tape.some((entry) => entry.startsWith("AddRemoteHost:10.9.8.7:10.9.8.7")), "a
 ok(lastAddInput?.credentialMode === "local-proxy", `AddRemoteHost carries the chosen credential mode (got ${lastAddInput?.credentialMode})`);
 
 await act(async () => secondRoot.unmount());
+
+// ── Merged finish: source contract for overlapping workspaces ──
+const here = dirname(fileURLToPath(import.meta.url));
+const wizardSource = readFileSync(resolve(here, "../components/RemoteConnectWizard.tsx"), "utf8");
+ok(
+  /const canonical = project\.merged \? project\.workspace : target;/.test(wizardSource) &&
+    /OpenRemoteProjectTab\(hostId, canonical, \{ newSession: true \}\)/.test(wizardSource),
+  "a merged finish opens the tab on the canonical workspace",
+);
+ok(
+  /if \(!project\.merged\) \{[\s\S]*?RemoveRemoteProject\(hostId, target\)/.test(wizardSource),
+  "rollback only removes a pin the wizard actually added (a merge owns none)",
+);
+ok(
+  /onMerged\?\.\(t\("remoteWizard\.mergedProject"/.test(wizardSource),
+  "a merged finish notifies through onMerged",
+);
+
 dom.window.close();
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

@@ -83,12 +83,32 @@ ok(
 );
 
 ok(
-  /project-tree__remote-badge--\$\{remoteStatuses\[node\.remote\.hostId\]\?\.state/.test(source),
-  "the group row badge reflects the live host status",
+  /project-tree__remote-badge--\$\{remoteServeBadgeState\(remoteServers\[node\.remote\.hostId\]\?\.\[node\.remote\.workspace\]\)\}/.test(source),
+  "the group row badge reflects the workspace's own serve state",
+);
+ok(
+  /case "ready":\s*\n\s*return "serve-ready";/.test(source) &&
+    /case "error":\s*\n\s*return "serve-error";/.test(source) &&
+    /serve-idle/.test(source),
+  "badge states map ready/busy/error/idle per serve",
 );
 ok(
   /onSend=\{remoteSurfaceActive \? remoteSend : handleSend\}/.test(appSource),
   "the shared Composer sends through the remote session on remote tabs",
+);
+ok(
+  /if \(remoteSurfaceActive && activeTabId\) \{[\s\S]*?await app\.SetRemoteTabModel\(activeTabId, name\)/.test(appSource),
+  "the shared Composer model switcher posts SetRemoteTabModel on remote tabs",
+);
+ok(
+  /if \(!controllerReady \|\| !activeTabId \|\| remoteSurfaceActive\) return;/.test(appSource),
+  "composer-profile apply skips remote tabs so it cannot toast tab is no longer available",
+);
+ok(
+  /submitDisabled=\{remoteSurfaceActive \? !remoteComposerReady : !controllerReady\}/.test(appSource) &&
+    /ready=\{remoteSurfaceActive \? remoteComposerReady : controllerReady\}/.test(appSource) &&
+    /const remoteComposerReady = remoteSurfaceActive && remoteSession\.state === "ready";/.test(appSource),
+  "the shared Composer send button uses remote serve ready, not the local controller",
 );
 ok(
   /mockRemoteProjects: RemoteProjectView\[\] = \[\s*\/\/ Demo preseed[\s\S]*?hostId: "demo"/.test(bridgeSource),

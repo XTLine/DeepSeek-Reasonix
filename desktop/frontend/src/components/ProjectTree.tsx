@@ -12,7 +12,7 @@ import { app } from "../lib/bridge";
 import { onProjectTreeChangedV2 } from "../lib/sessionCatalogBridge";
 import { isRuntimeSessionNode, isTopicNode, loadWorkbenchOrganizeMode, loadWorkbenchSortMode, mergeProjectTopicPage, projectTreeDedupedExactTime, projectTreeEventAffectsFolder, projectTreeFolderDisclosure, projectTreeReadActivityKey, projectTreeRevisionIsFresh, projectTreeShellChildren, projectTreeShellSignature, projectTreeShouldApplyShellSnapshot, projectTreeShouldRenderTopicActions, projectTreeShouldSuppressOpenForRename, projectTreeTopicArchiveBlocked, projectTreeTopicHasUnreadActivity, projectTreeTopicHoverCardModel, projectTreeTopicMenuOffersPin, projectTreeTopicMetaLine, projectTreeTopicOpenRequest, projectTreeTopicPageIsFresh, projectTreeWithoutTopic, topicActivityAt, topicActivityDateLabel, topicActivityLabel, topicIsActive, topicStatus, topicStatusLabel, topicUnknownTimeLabel, WORKBENCH_ORGANIZE_KEY, WORKBENCH_SORT_KEY, type ProjectTreePendingTopicOpen, type ProjectTreeReadActivity, type ProjectTreeTopicHoverCard, type ProjectTreeVariant, type WorkbenchOrganizeMode, type WorkbenchSortMode } from "../lib/projectTreeTopic";
 export * from "../lib/projectTreeTopic";
-import type { ProjectNode, RemoteSessionView, RemoteTabRefView, SessionCatalogStatus } from "../lib/types";
+import type { ProjectNode, RemoteServerView, RemoteSessionView, RemoteTabRefView, SessionCatalogStatus } from "../lib/types";
 import { useRemoteStore } from "../store/remote";
 import { onRemoteTabOpened } from "../lib/bridge";
 import { topicActivityTime } from "../lib/session";
@@ -59,6 +59,23 @@ type ProjectTreeImTopicSource = {
 
 function projectNodeKey(node: ProjectNode, depth: number): string {
   return node.key || `${node.kind}-${node.root ?? ""}-${node.topicId ?? ""}-${depth}`;
+}
+
+// The group dot reports the workspace's OWN serve: green only when that
+// serve is actually ready, amber while it boots/installs, red on error, grey
+// when it has never been woken. Host connectivity stays on the hosts surface.
+function remoteServeBadgeState(view?: RemoteServerView): string {
+  switch (view?.state) {
+    case "ready":
+      return "serve-ready";
+    case "error":
+      return "serve-error";
+    case "stopped":
+    case undefined:
+      return "serve-idle";
+    default:
+      return "serve-busy"; // starting + install/launch progress states
+  }
 }
 
 type ProjectDropPosition = "before" | "after";
@@ -608,9 +625,10 @@ export function ProjectTree({
     }
   }, [showToast]);
 
-  // Remote group badges follow the live host status; statuses hydrate once
-  // on mount so badges are correct without a wizard run first.
-  const remoteStatuses = useRemoteStore((s) => s.statuses);
+  // Remote group badges follow the workspace's own serve state; the registry
+  // hydrates once per group set and live updates arrive through remote:server
+  // events (wired in App).
+  const remoteServers = useRemoteStore((s) => s.servers);
   const remoteStatusesSeededRef = useRef(false);
   useEffect(() => {
     if (remoteStatusesSeededRef.current) return;
@@ -637,12 +655,35 @@ export function ProjectTree({
     }
     return keys;
   }, [tree]);
+  // Serve-state hydration is a local registry read (never wakes anything);
+  // it seeds the dots before any remote:server event fires this session.
+  useEffect(() => {
+    for (const groupKey of remoteGroupKeys) {
+      const [hostId, workspace] = groupKey.split("\u0000");
+      void app.RemoteServerStatus(hostId, workspace)
+        .then((view) => useRemoteStore.getState().setServer(view))
+        .catch(() => {});
+    }
+  }, [remoteGroupKeys]);
+  // Layer-2 on-demand listing: a group's sessions are fetched only while the
+  // group is expanded (or the tree search is active) and re-pulled on the
+  // refresh signals above — never speculatively for every pinned group. The
+  // backend resolves read-only, so an unvisited group costs nothing.
+  const remoteGroupNodeKeys = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const node of tree) {
+      if (node.remote) map.set(`${node.remote.hostId}\u0000${node.remote.workspace}`, projectNodeKey(node, 0));
+    }
+    return map;
+  }, [tree]);
+  const remoteSearchActive = query.trim() !== "";
   useEffect(() => {
     let cancelled = false;
     for (const groupKey of remoteGroupKeys) {
+      const nodeKey = remoteGroupNodeKeys.get(groupKey);
+      if (!nodeKey) continue;
+      if (!expanded.has(nodeKey) && !remoteSearchActive) continue;
       const [hostId, workspace] = groupKey.split("\u0000");
-      const state = remoteStatuses[hostId]?.state;
-      if (state !== "connected" && state !== "degraded") continue;
       void app.RemoteProjectSessions(hostId, workspace)
         .then((rows) => {
           if (!cancelled) setRemoteSessions((current) => ({ ...current, [groupKey]: rows }));
@@ -650,7 +691,7 @@ export function ProjectTree({
         .catch(() => {});
     }
     return () => { cancelled = true; };
-  }, [remoteGroupKeys, remoteStatuses, remoteSessionsRevision]);
+  }, [remoteGroupKeys, remoteGroupNodeKeys, expanded, remoteSearchActive, remoteSessionsRevision]);
 
   // topicId → remote session identity for the synthesized rows; rebuilt
   // during render so the topic-branch action functions can route remotely.
@@ -2043,7 +2084,7 @@ export function ProjectTree({
             <span className={`project-tree__folder-label${!hasChildren ? " project-tree__folder-label--empty" : ""}`}>
               {projectLabel}
               {node.isolatedWorktree && <WorktreeBadge size={11} />}
-              {node.remote ? <span className={`project-tree__remote-badge project-tree__remote-badge--${remoteStatuses[node.remote.hostId]?.state ?? "disconnected"}`} aria-hidden="true" /> : null}
+              {node.remote ? <span className={`project-tree__remote-badge project-tree__remote-badge--${remoteServeBadgeState(remoteServers[node.remote.hostId]?.[node.remote.workspace])}`} aria-hidden="true" /> : null}
             </span>
           </button>
           {compactTopics && (

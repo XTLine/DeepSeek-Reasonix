@@ -38565,3 +38565,16 @@ body > .mermaid-diagram--fullscreen {
 .project-tree__remote-badge--error {
   background: var(--danger, var(--fg));
 }
+/* Per-workspace serve state: green only when that group's serve is ready. */
+.project-tree__remote-badge--serve-ready {
+  background: var(--ok);
+}
+.project-tree__remote-badge--serve-busy {
+  background: var(--warn, var(--fg));
+}
+.project-tree__remote-badge--serve-error {
+  background: var(--danger, var(--fg));
+}
+.project-tree__remote-badge--serve-idle {
+  background: var(--fg-faint);
+}
