@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -522,5 +525,77 @@ func TestOpenRemoteWorkspacePersistsLastWorkspace(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(config.MemoryUserDir(), "desktop-remote.json")); err != nil {
 		t.Fatalf("desktop-remote.json not written: %v", err)
+	}
+}
+
+// TestReloadServeProvidersCancelsBusyTurn pins the credential-heal deadlock
+// breaker: when /providers/reload refuses with 409 (busy turn), the reload
+// aborts the doomed turn via POST /cancel and retries until it lands.
+func TestReloadServeProvidersCancelsBusyTurn(t *testing.T) {
+	var mu sync.Mutex
+	canceled := false
+	reloadCalls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /auth/token", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /cancel", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		canceled = true
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /providers/reload", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		reloadCalls++
+		if !canceled {
+			http.Error(w, "cannot switch model while active work or background jobs are running", http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	mgr := newDesktopRemoteManager(&App{})
+	mgr.mu.Lock()
+	mgr.hosts["box"] = &managedHost{serves: map[string]*serveEntry{
+		"ws": {view: RemoteServerView{LocalURL: srv.URL + "/"}, token: "tok"},
+	}}
+	mgr.mu.Unlock()
+
+	if ok := mgr.reloadServeProviders(context.Background(), "box", "ws", srv.URL+"/", "tok"); !ok {
+		t.Fatal("reloadServeProviders = false, want true after cancel + retry")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !canceled {
+		t.Fatal("busy turn was not canceled")
+	}
+	if reloadCalls < 2 {
+		t.Fatalf("reload attempts = %d, want >= 2 (409 then success)", reloadCalls)
+	}
+}
+
+// TestCredentialChannelDecision pins the watchdog's health policy: any of a
+// missing forward, a dead probe, an unrecorded heal, or a rebound forward
+// port (SSH reconnect) forces a re-heal.
+func TestCredentialChannelDecision(t *testing.T) {
+	cases := []struct {
+		name string
+		d    credentialChannelDecision
+		want bool
+	}{
+		{"healthy", credentialChannelDecision{HasForward: true, ForwardPort: 41000, HealedPort: 41000, ProbeOK: true}, false},
+		{"no forward", credentialChannelDecision{ProbeOK: false}, true},
+		{"probe dead", credentialChannelDecision{HasForward: true, ForwardPort: 41000, HealedPort: 41000, ProbeOK: false}, true},
+		{"never healed", credentialChannelDecision{HasForward: true, ForwardPort: 41000, HealedPort: 0, ProbeOK: true}, true},
+		{"port rebound after reconnect", credentialChannelDecision{HasForward: true, ForwardPort: 42000, HealedPort: 41000, ProbeOK: true}, true},
+	}
+	for _, tc := range cases {
+		if got := tc.d.needsHeal(); got != tc.want {
+			t.Errorf("%s: needsHeal = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

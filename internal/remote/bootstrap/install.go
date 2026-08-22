@@ -82,19 +82,32 @@ func locate(ctx context.Context, conn Conn, uploaded, minVersion string) (bin, v
 	if path == "" {
 		return "", ""
 	}
-	supportsPortFile := false
+	supportsPortFile, supportsSessionEvents, supportsDetachedHeal, supportsCaps := false, false, false, false
 	for _, ln := range lines[1:] {
 		ln = strings.TrimSpace(ln)
 		if ln == "portfile:yes" {
 			supportsPortFile = true
 		} else if ln == "portfile:no" {
 			supportsPortFile = false
+		} else if ln == "sessionevents:yes" {
+			supportsSessionEvents = true
+		} else if ln == "sessionevents:no" {
+			supportsSessionEvents = false
+		} else if ln == "detachedheal:yes" {
+			supportsDetachedHeal = true
+		} else if ln == "detachedheal:no" {
+			supportsDetachedHeal = false
+		} else if ln == "caps:yes" {
+			supportsCaps = true
+		} else if ln == "caps:no" {
+			supportsCaps = false
 		} else if v, verr := ParseVersion(ln); verr == nil {
 			version = v
 		}
 	}
-	if !supportsPortFile {
-		// Missing the --port-file flag: treat as unusable so it is upgraded.
+	if !supportsPortFile || !supportsSessionEvents || !supportsDetachedHeal || !supportsCaps {
+		// Missing a required serve capability flag: treat as unusable so it
+		// is upgraded.
 		return "", ""
 	}
 	return path, version

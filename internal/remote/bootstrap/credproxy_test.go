@@ -243,3 +243,94 @@ func TestEnsureCredentialProviderRewritesKindDrift(t *testing.T) {
 		t.Fatalf("matching re-run rewrote the config:\n%s\n---\n%s", rewritten, again)
 	}
 }
+
+// TestEnsureCredentialProviderHealsPaddedLegacyBlock pins the duplicate-root
+// fix: a block whose keys carry alignment padding (name    = "...") comes
+// from older heal writers; the matcher must recognize it and rewrite it in
+// place instead of appending a second, diverging block.
+func TestEnsureCredentialProviderHealsPaddedLegacyBlock(t *testing.T) {
+	skipOnWindows(t)
+	root := t.TempDir()
+	conn := newFakeConn(t, root, func(string) (remote.ExecResult, error) { return ok("") })
+	fs, err := conn.SFTP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfgDir := filepath.Join(root, ".reasonix")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `default_model = "deepseek-v4-flash"
+
+[[providers]]
+name        = "reasonix-desktop-proxy"
+kind        = "openai"
+base_url    = "http://127.0.0.1:38769"
+model       = "deepseek-v4-flash"
+api_key_env = "REASONIX_PROXY_TOKEN"
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ensureCredentialProvider(context.Background(), fs, root, credProxyOpts("http://127.0.0.1:45149")); err != nil {
+		t.Fatalf("heal: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(cfgDir, "config.toml"))
+	if strings.Contains(string(got), "38769") {
+		t.Fatalf("stale base_url survived:\n%s", got)
+	}
+	if n := strings.Count(string(got), `[[providers]]`); n != 1 {
+		t.Fatalf("expected exactly one provider block, got %d:\n%s", n, got)
+	}
+	if !strings.Contains(string(got), `base_url    = "http://127.0.0.1:45149"`) &&
+		!strings.Contains(string(got), `base_url = "http://127.0.0.1:45149"`) {
+		t.Fatalf("new base_url missing:\n%s", got)
+	}
+}
+
+// TestEnsureCredentialProviderRewritesAllDuplicates pins the consistency
+// rule: when the same provider name appears in several blocks (whatever
+// wrote them), every copy is rewritten so the config loader resolves the
+// healed endpoint no matter which block it picks.
+func TestEnsureCredentialProviderRewritesAllDuplicates(t *testing.T) {
+	skipOnWindows(t)
+	root := t.TempDir()
+	conn := newFakeConn(t, root, func(string) (remote.ExecResult, error) { return ok("") })
+	fs, err := conn.SFTP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfgDir := filepath.Join(root, ".reasonix")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dup := `[[providers]]
+name = "reasonix-desktop-proxy"
+kind = "openai"
+base_url = "http://127.0.0.1:38769"
+model = "deepseek-v4-flash"
+api_key_env = "REASONIX_PROXY_TOKEN"
+
+[[providers]]
+name = "reasonix-desktop-proxy"
+kind = "openai"
+base_url = "http://127.0.0.1:38769"
+model = "deepseek-v4-flash"
+api_key_env = "REASONIX_PROXY_TOKEN"
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(dup), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ensureCredentialProvider(context.Background(), fs, root, credProxyOpts("http://127.0.0.1:45149")); err != nil {
+		t.Fatalf("heal: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(cfgDir, "config.toml"))
+	if strings.Contains(string(got), "38769") {
+		t.Fatalf("a duplicate block kept the stale base_url:\n%s", got)
+	}
+	if n := strings.Count(string(got), "45149"); n != 2 {
+		t.Fatalf("expected both blocks healed, found %d:\n%s", n, got)
+	}
+}

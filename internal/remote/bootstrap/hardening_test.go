@@ -26,7 +26,7 @@ func TestEnsureServeRejectsStalePortFile(t *testing.T) {
 		case strings.Contains(cmd, "uname"):
 			return ok("Linux x86_64\n")
 		case strings.Contains(cmd, "command -v reasonix"):
-			return ok("/usr/bin/reasonix\nreasonix v9.9.0\nportfile:yes\n")
+			return ok("/usr/bin/reasonix\nreasonix v9.9.0\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
 		case strings.Contains(cmd, "nohup"):
 			if strings.Contains(cmd, "rm -f "+shellQuote(paths.PortFile)) {
 				_ = os.Remove(paths.PortFile) // model the generated launch command
@@ -53,11 +53,15 @@ func TestEnsureServeSerializesConcurrentClients(t *testing.T) {
 		case strings.Contains(cmd, "uname"):
 			return ok("Linux x86_64\n")
 		case strings.Contains(cmd, "command -v reasonix"):
-			return ok("/usr/bin/reasonix\nreasonix v9.9.0\nportfile:yes\n")
+			return ok("/usr/bin/reasonix\nreasonix v9.9.0\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
 		case strings.Contains(cmd, "nohup"):
 			launches.Add(1)
 			_ = os.WriteFile(paths.PortFile, []byte("127.0.0.1:45123\n"), 0o600)
 			return ok("321\n")
+		// The capability probe mentions ps -p too; match it before the
+		// serve-alive check.
+		case strings.Contains(cmd, "session-events"):
+			return ok("yes\n") // supports --session-events
 		case strings.Contains(cmd, "ps -p 321"):
 			return ok("1\n")
 		default:
@@ -126,7 +130,7 @@ func TestAutoInstallDownloadsVerifiedCrossPlatformBinaryAfterNPMFailure(t *testi
 			return remote.ExecResult{Stdout: []byte("npm: command not found"), ExitCode: 127}, nil
 		case strings.Contains(cmd, "command -v reasonix"):
 			if _, err := os.Stat(uploaded); err == nil {
-				return ok(uploaded + "\nreasonix v1.2.3\nportfile:yes\n")
+				return ok(uploaded + "\nreasonix v1.2.3\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
 			}
 			return ok("\n")
 		default:

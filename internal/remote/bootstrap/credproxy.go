@@ -127,32 +127,31 @@ func ensureCredentialProvider(ctx context.Context, fs *sftpfs.FS, home string, o
 	// default_model refers to as an explicit entry first; default_model
 	// itself is never rewritten.
 	existing = materializeDefaultProvider(existing)
-	if idx := providerBlockIndex(existing, opts.Provider); idx >= 0 {
-		if providerBlockHasBaseURL(existing[idx:], opts.BaseURL) && providerBlockHasKind(existing[idx:], kind) {
-			// Config is already current, but the .env token is healed
-			// independently — an unchanged base_url must not skip it.
-			envChanged, err := ensureCredentialToken(ctx, fs, home, opts.Token)
-			if err != nil {
-				return false, err
-			}
-			return envChanged, nil
-		}
-		if !providerBlockHasBaseURL(existing[idx:], opts.BaseURL) {
-			updated, ok := replaceProviderBaseURL(existing, idx, opts.BaseURL)
-			if !ok {
-				return false, fmt.Errorf("bootstrap: remote config provider %q needs a manual base_url update", opts.Provider)
-			}
-			existing = updated
-		}
-		if !providerBlockHasKind(existing[idx:], kind) {
-			updated, ok := replaceProviderKind(existing, idx, kind)
-			if !ok {
-				return false, fmt.Errorf("bootstrap: remote config provider %q needs a manual kind update", opts.Provider)
-			}
-			existing = updated
-		}
-	} else {
+	// Rewrite EVERY block carrying this provider name (older heal formats
+	// could leave aligned-key duplicates behind; the config loader resolves
+	// one of them, so all copies must agree). Indexes are processed from the
+	// last to the first so rewrites do not shift the remaining offsets.
+	idxs := providerBlockIndexes(existing, opts.Provider)
+	if len(idxs) == 0 {
 		existing += credentialProviderBlock(opts)
+	} else {
+		for i := len(idxs) - 1; i >= 0; i-- {
+			idx := idxs[i]
+			if !providerBlockHasBaseURL(existing[idx:], opts.BaseURL) {
+				updated, ok := replaceProviderBaseURL(existing, idx, opts.BaseURL)
+				if !ok {
+					return false, fmt.Errorf("bootstrap: remote config provider %q needs a manual base_url update", opts.Provider)
+				}
+				existing = updated
+			}
+			if !providerBlockHasKind(existing[idx:], kind) {
+				updated, ok := replaceProviderKind(existing, idx, kind)
+				if !ok {
+					return false, fmt.Errorf("bootstrap: remote config provider %q needs a manual kind update", opts.Provider)
+				}
+				existing = updated
+			}
+		}
 	}
 	if err := fs.MkdirAll(ctx, path.Dir(cfgPath)); err != nil {
 		return false, err
@@ -200,36 +199,65 @@ func ensureCredentialToken(ctx context.Context, fs *sftpfs.FS, home, token strin
 	return true, fs.WriteFileAtomic(ctx, envPath, []byte(content), 0o600)
 }
 
-// providerBlockIndex finds the start of the [[providers]] block whose name
-// equals provider, or -1. Blocks are scanned line-wise; a block ends at the
-// next table header.
+// tomlKeyValue extracts the unquoted value of a `key = "value"` table line,
+// tolerating any whitespace padding around the equals sign — earlier heal
+// writers aligned assignments (name    = "..."), and an exact-match lookup
+// fails to see those blocks, appending duplicates instead of healing them.
+func tomlKeyValue(line, key string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, key) {
+		return "", false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(trimmed, key))
+	if !strings.HasPrefix(rest, "=") {
+		return "", false
+	}
+	value := strings.Trim(strings.TrimSpace(strings.TrimPrefix(rest, "=")), `"`)
+	return value, true
+}
+
+// providerBlockIndex finds the start of the FIRST [[providers]] block whose
+// name equals provider, or -1.
 func providerBlockIndex(text, provider string) int {
-	want := "name = " + tomlString(provider)
+	idxs := providerBlockIndexes(text, provider)
+	if len(idxs) == 0 {
+		return -1
+	}
+	return idxs[0]
+}
+
+// providerBlockIndexes returns the byte offsets of EVERY [[providers]] block
+// with the given name (a config may carry duplicates from older heal
+// formats); callers rewrite all of them so whichever block the config loader
+// resolves stays consistent.
+func providerBlockIndexes(text, provider string) []int {
 	lines := strings.Split(text, "\n")
 	offset := 0
 	inBlock := false
+	var idxs []int
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "[[") || strings.HasPrefix(trimmed, "[") {
 			inBlock = strings.HasPrefix(trimmed, "[[providers]]")
-		} else if inBlock && trimmed == want {
-			return offset
+		} else if inBlock {
+			if name, ok := tomlKeyValue(line, "name"); ok && name == provider {
+				idxs = append(idxs, offset)
+			}
 		}
 		offset += len(line) + 1
 	}
-	return -1
+	return idxs
 }
 
 // providerBlockHasBaseURL reports whether the block starting at idx contains
 // the given base_url assignment before its next table header.
 func providerBlockHasBaseURL(block, baseURL string) bool {
-	want := "base_url = " + tomlString(baseURL)
 	for _, line := range strings.Split(block, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "[") {
 			return false
 		}
-		if trimmed == want {
+		if v, ok := tomlKeyValue(line, "base_url"); ok && v == baseURL {
 			return true
 		}
 	}
@@ -258,13 +286,12 @@ func replaceProviderBaseURL(text string, idx int, baseURL string) (string, bool)
 // providerBlockHasKind reports whether the block starting at idx contains the
 // given kind assignment before its next table header.
 func providerBlockHasKind(block, kind string) bool {
-	want := "kind = " + tomlString(kind)
 	for _, line := range strings.Split(block, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "[") {
 			return false
 		}
-		if trimmed == want {
+		if v, ok := tomlKeyValue(line, "kind"); ok && v == kind {
 			return true
 		}
 	}
@@ -377,4 +404,22 @@ func providerEntryBlock(p config.ProviderEntry) string {
 		fmt.Fprintf(&b, "balance_url = %s\n", tomlString(p.BalanceURL))
 	}
 	return b.String()
+}
+
+// HealCredentialProvider exposes the credential-config heal for callers
+// outside a full EnsureServe round (the desktop's runtime credential
+// watchdog): it installs/refreshes the desktop-proxy provider entry in the
+// remote user config for opts.BaseURL. The returned bool reports whether
+// anything was rewritten — callers use it to decide that RUNNING serves must
+// reload their providers.
+func HealCredentialProvider(ctx context.Context, conn Conn, opts *CredentialProxyOptions) (bool, error) {
+	fs, err := conn.SFTP()
+	if err != nil {
+		return false, err
+	}
+	home, err := fs.RealPath(ctx, "~")
+	if err != nil {
+		return false, fmt.Errorf("bootstrap: resolve remote home: %w", err)
+	}
+	return ensureCredentialProvider(ctx, fs, home, opts)
 }

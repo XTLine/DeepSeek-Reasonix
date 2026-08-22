@@ -127,6 +127,11 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 		requireLaunchArgs = append(requireLaunchArgs, "--model "+opts.CredentialProxy.Provider)
 		stopMismatchedServe(ctx, conn, fs, paths, workspace, requireLaunchArgs)
 	}
+	// A live serve whose binary predates a required capability (--session-
+	// events) is stopped and replaced, not reused: the desktop depends on
+	// session-tagged frames and background sessions across switches, and a
+	// plain relaunch would orphan the old process (still holding leases).
+	stopOutdatedServe(ctx, conn, fs, paths, workspace)
 
 	// 1. Reuse a live process if the recorded pid is still running.
 	if st, tok, ok := tryReuse(ctx, conn, fs, paths, workspace, requireLaunchArgs...); ok {
@@ -312,6 +317,12 @@ func tryReuse(ctx context.Context, conn Conn, fs *sftpfs.FS, paths StatePaths, w
 	if !validServeAddr(st.Addr) || !pidIsServe(ctx, conn, st.PID, paths, requireArgs...) {
 		return ServeState{}, "", false
 	}
+	// A live serve predating multi-session switching (--session-events) must
+	// be replaced, not reused: the desktop depends on session-tagged frames
+	// and background sessions across switches.
+	if res, err := conn.Exec(ctx, SupportsSessionEventsCommand(st.PID)); err != nil || strings.TrimSpace(string(res.Stdout)) != "yes" {
+		return ServeState{}, "", false
+	}
 	// The state record is informational; the workspace-derived path is the
 	// authority, so a tampered record cannot make us read an arbitrary file.
 	tok, err := readToken(ctx, fs, paths.TokenFile)
@@ -333,6 +344,23 @@ func stopMismatchedServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths St
 		return
 	}
 	if pidIsServe(ctx, conn, st.PID, paths) && !pidIsServe(ctx, conn, st.PID, paths, requireArgs...) {
+		_, _ = conn.Exec(ctx, StopCommand(st.PID, paths))
+	}
+}
+
+// stopOutdatedServe TERMs a live serve whose executable lacks the
+// --session-events capability. tryReuse rejects the same condition, so
+// without this stop the old process would keep running (holding the
+// workspace's state files and session leases) beside the replacement.
+func stopOutdatedServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths StatePaths, workspace string) {
+	st, err := readState(ctx, fs, paths.StateJSON)
+	if err != nil || st.PID <= 0 || !validServeAddr(st.Addr) || st.Workspace != workspace {
+		return
+	}
+	if !pidIsServe(ctx, conn, st.PID, paths) {
+		return
+	}
+	if res, err := conn.Exec(ctx, SupportsSessionEventsCommand(st.PID)); err != nil || strings.TrimSpace(string(res.Stdout)) != "yes" {
 		_, _ = conn.Exec(ctx, StopCommand(st.PID, paths))
 	}
 }

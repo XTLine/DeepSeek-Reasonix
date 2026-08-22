@@ -52,7 +52,7 @@ func newMultiWS(t *testing.T) *multiWS {
 		case strings.Contains(cmd, "uname"):
 			return ok("Linux x86_64\n")
 		case strings.Contains(cmd, "command -v reasonix"):
-			return ok("/usr/bin/reasonix\nreasonix v9.9.0\nportfile:yes\n")
+			return ok("/usr/bin/reasonix\nreasonix v9.9.0\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
 		case strings.Contains(cmd, "nohup"):
 			if strings.Contains(cmd, "cd '"+m.wsA+"'") {
 				_ = os.WriteFile(m.pathsA.PortFile, []byte("127.0.0.1:44321\n"), 0o600)
@@ -60,6 +60,10 @@ func newMultiWS(t *testing.T) *multiWS {
 			}
 			_ = os.WriteFile(m.pathsB.PortFile, []byte("127.0.0.1:44322\n"), 0o600)
 			return ok("222\n")
+		// The capability probe mentions ps -p too; match it before the
+		// serve-alive check.
+		case strings.Contains(cmd, "session-events"):
+			return ok("yes\n") // both live serves support --session-events
 		case strings.Contains(cmd, "ps -p 111"), strings.Contains(cmd, "ps -p 222"):
 			return ok("1\n")
 		default:

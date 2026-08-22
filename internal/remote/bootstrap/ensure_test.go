@@ -101,7 +101,7 @@ func TestEnsureServeLaunchesWhenAbsent(t *testing.T) {
 			return ok("Linux x86_64\n")
 		case strings.Contains(cmd, "command -v reasonix"):
 			// LocateCommand: report a path and a fresh version.
-			return ok("/usr/bin/reasonix\nreasonix v9.9.0\nportfile:yes\n")
+			return ok("/usr/bin/reasonix\nreasonix v9.9.0\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
 		case strings.Contains(cmd, "nohup"):
 			// Simulate serve writing the port file, then echo the pid.
 			if portFile != "" {
@@ -178,6 +178,9 @@ func TestEnsureServeReusesLiveProcess(t *testing.T) {
 		if strings.Contains(cmd, "kill -0 777") {
 			return ok("1\n") // alive
 		}
+		if strings.Contains(cmd, "readlink /proc/777/exe") {
+			return ok("yes\n") // supports --session-events
+		}
 		if strings.Contains(cmd, "uname") || strings.Contains(cmd, "nohup") {
 			t.Errorf("reuse path should not detect/launch; ran: %s", cmd)
 		}
@@ -220,7 +223,7 @@ func TestEnsureServeRelaunchesDeadProcess(t *testing.T) {
 		case strings.Contains(cmd, "uname"):
 			return ok("Linux aarch64\n")
 		case strings.Contains(cmd, "command -v reasonix"):
-			return ok("/usr/bin/reasonix\nreasonix v9.9.0\nportfile:yes\n")
+			return ok("/usr/bin/reasonix\nreasonix v9.9.0\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
 		case strings.Contains(cmd, "nohup"):
 			_ = os.WriteFile(paths.PortFile, []byte("127.0.0.1:6001\n"), 0o600)
 			return ok("999\n")

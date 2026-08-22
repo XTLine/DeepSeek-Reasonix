@@ -119,12 +119,28 @@ func LogsCommand(logFile string, n int) string {
 // the flag name registered in runServe.
 const servePortFileMarker = "port-file"
 
-// LocateCommand probes for a usable reasonix binary. It prints three lines:
-// the resolved path (or empty), the `--version` output, and "portfile:yes" when
-// `serve --help` advertises the --port-file flag. The bootstrap gates on the
-// flag, not the version number, because --port-file/--token-file ship in this
-// change: a version gate cannot know its own future release number, and any
-// already-released binary would pass a numeric gate yet still lack the flags.
+// serveSessionEventsMarker gates on the multi-session capability: serves
+// advertising --session-events tag SSE frames with sessionPath and keep
+// background sessions running across switches. A located binary without it is
+// treated as unusable so it is upgraded, exactly like the port-file gate.
+const serveSessionEventsMarker = "session-events"
+
+// serveDetachedHealMarker gates on the credential-heal fix: a reload retires
+// background controllers instead of leaving them on a stale reverse-tunnel
+// port. Serves without it are upgraded away like every other marker.
+const serveDetachedHealMarker = "detached-heal"
+
+// serveCapsToken is the rolling capability revision advertised in
+// `serve --help`; bumping it retires every previously deployed serve.
+const serveCapsToken = "reasonix-serve-caps-20260822c"
+
+// LocateCommand probes for a usable reasonix binary. It prints the resolved
+// path (or empty), the `--version` output, and "portfile:yes" /
+// "sessionevents:yes" when `serve --help` advertises the respective flags.
+// The bootstrap gates on the flags, not the version number, because
+// --port-file/--token-file ship in this change: a version gate cannot know
+// its own future release number, and any already-released binary would pass a
+// numeric gate yet still lack the flags.
 func LocateCommand(uploadedBin string) string {
 	return fmt.Sprintf(
 		"BIN=\"$(command -v reasonix 2>/dev/null)\"; "+
@@ -132,7 +148,24 @@ func LocateCommand(uploadedBin string) string {
 			"if [ -z \"$BIN\" ]; then P=\"$(npm prefix -g 2>/dev/null)\"; if [ -n \"$P\" ] && [ -x \"$P/bin/reasonix\" ]; then BIN=\"$P/bin/reasonix\"; fi; fi; "+
 			"echo \"$BIN\"; "+
 			"if [ -n \"$BIN\" ]; then \"$BIN\" --version 2>/dev/null; "+
-			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo portfile:yes; else echo portfile:no; fi; fi",
-		shellQuote(uploadedBin), shellQuote(uploadedBin), shellQuote(servePortFileMarker),
+			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo portfile:yes; else echo portfile:no; fi; "+
+			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo sessionevents:yes; else echo sessionevents:no; fi; "+
+			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo detachedheal:yes; else echo detachedheal:no; fi; "+
+			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo caps:yes; else echo caps:no; fi; fi",
+		shellQuote(uploadedBin), shellQuote(uploadedBin), shellQuote(servePortFileMarker), shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(serveCapsToken),
+	)
+}
+
+// SupportsSessionEventsCommand probes a RUNNING serve process's binary for
+// the --session-events capability, printing "yes" or "no". The executable is
+// resolved via /proc/<pid>/exe (Linux) with a ps fallback (macOS). tryReuse
+// and stopOutdatedServe use it to replace a live serve that predates
+// multi-session switching.
+func SupportsSessionEventsCommand(pid int) string {
+	return fmt.Sprintf(
+		"BIN=$(readlink /proc/%d/exe 2>/dev/null); "+
+			"if [ -z \"$BIN\" ]; then BIN=$(ps -p %d -o comm= 2>/dev/null | tr -d ' '); fi; "+
+			"if [ -n \"$BIN\" ] && [ -x \"$BIN\" ] && \"$BIN\" serve --help 2>&1 | grep -q -- %s && \"$BIN\" serve --help 2>&1 | grep -q -- %s && \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo yes; else echo no; fi",
+		pid, pid, shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(serveCapsToken),
 	)
 }
