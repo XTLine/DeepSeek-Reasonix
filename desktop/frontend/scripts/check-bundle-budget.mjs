@@ -179,6 +179,8 @@ const rawInitialBytes = [...initialJS, ...initialCSS, ...appShellCSS]
 // Removing the disconnected placeholder, aligning remote row active identity,
 // and the revive-as-connecting hook path move the measured build to 2381.2
 // KiB raw; keep 0.1 KiB of build-SHA headroom.
-const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_381.3 : 2_381.3;
+// The remote-fix pass (cold-start group click, quick-action remote routing,
+// switch busy feedback) measures 2382.0 KiB raw; ratchet with 0.2 KiB headroom.
+const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_382.2 : 2_382.2;
 assertBudget("initial raw JavaScript and CSS", rawInitialBytes, rawInitialBudgetKiB * 1024);
 assertBudget("largest initial JavaScript chunk raw", largestInitialJSRaw, 1_000 * 1024);
