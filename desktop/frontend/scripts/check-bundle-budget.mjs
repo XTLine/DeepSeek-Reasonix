@@ -170,6 +170,12 @@ const rawInitialBytes = [...initialJS, ...initialCSS, ...appShellCSS]
 // build to 2380.5 KiB raw; keep 0.3 KiB of build-SHA headroom. The test
 // channel now matches the stable path after the merge, so both gates share
 // the ratchet.
-const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_380.8 : 2_380.8;
+// Remote switchTab early-out plus session-identity restore on revive add a
+// measured 0.1 KiB raw (2380.9) on the initial path. Retain that attributable
+// delta with 0.1 KiB of build-SHA headroom instead of widening gzip gates.
+// Removing the disconnected placeholder, aligning remote row active identity,
+// and the revive-as-connecting hook path move the measured build to 2381.2
+// KiB raw; keep 0.1 KiB of build-SHA headroom.
+const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_381.3 : 2_381.3;
 assertBudget("initial raw JavaScript and CSS", rawInitialBytes, rawInitialBudgetKiB * 1024);
 assertBudget("largest initial JavaScript chunk raw", largestInitialJSRaw, 1_000 * 1024);

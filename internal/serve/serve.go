@@ -920,6 +920,9 @@ func historyMessages(msgs []provider.Message) []historyMessage {
 			}
 		}
 		hm := historyMessage{Role: string(m.Role), Content: m.Content}
+		if m.Role == provider.RoleUser {
+			hm.Content = agent.UserMessageText(m)
+		}
 		if m.Role == provider.RoleAssistant {
 			hm.Reasoning = m.ReasoningContent
 			if len(m.ToolCalls) > 0 {
