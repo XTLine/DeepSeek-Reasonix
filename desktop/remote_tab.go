@@ -1343,13 +1343,22 @@ func (a *App) refreshRemoteTabTitle(tabID string) {
 			continue
 		}
 		title := strings.TrimSpace(entry.Title)
-		if title == "" {
-			return
-		}
+		name := strings.TrimSpace(entry.Name)
 		a.remoteTabMu.Lock()
-		changed := tab.topicTitle != title
-		if changed {
+		// Adopt the whole Current identity, not just the title: the tree row
+		// highlight matches on session name/path, so a blank session that
+		// just materialized must hand its highlight to the named row.
+		changed := (title != "" && tab.topicTitle != title) ||
+			(name != "" && tab.sessionName != name) ||
+			(entry.Path != "" && tab.currentSessionPath != entry.Path)
+		if title != "" {
 			tab.topicTitle = title
+		}
+		if name != "" {
+			tab.sessionName = name
+		}
+		if entry.Path != "" {
+			tab.currentSessionPath = entry.Path
 		}
 		tab.sessionReset = false
 		active := a.remoteActiveTabID == tab.id
@@ -1383,8 +1392,11 @@ func (a *App) resetRemoteTabSession(tabID string) {
 	client, base := tab.client, tab.base
 	// Same default title a fresh local session gets, so the strip and the
 	// tree both read "新的会话" until the conversation earns a real title.
+	// The old session name must go too: the tab now points at the blank
+	// pending row, and a stale name would keep the old row highlighted.
 	tab.topicTitle = a.localizedDefaultTopicTitle()
 	tab.sessionReset = true
+	tab.sessionName = ""
 	a.remoteTabMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

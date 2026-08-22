@@ -483,9 +483,11 @@ func remoteTabMeta(tab *remoteTab, hostLabel string, active bool) TabMeta {
 }
 
 // remoteTabTopicID matches the synthesized remote session row topicId:
-// hostId\0workspace\0sessionName. Blank/new sessions have no name yet.
+// hostId\0workspace\0sessionName. A pending blank session has no name yet, so
+// its id ends in the separator — the same shape the frontend synthesizes for
+// the blank row, and never equal to a named row's id.
 func remoteTabTopicID(tab *remoteTab) string {
-	if tab == nil || strings.TrimSpace(tab.sessionName) == "" {
+	if tab == nil {
 		return ""
 	}
 	return tab.ref.HostID + "\x00" + tab.ref.Workspace + "\x00" + tab.sessionName
