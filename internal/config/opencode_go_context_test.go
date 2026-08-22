@@ -147,6 +147,7 @@ func TestNormalizeLegacyOpenCodeGoRouteCatalogSplitsAggregateModelsAndRetargetsH
 		DefaultModel: "opencode-go/grok-4.5",
 		Agent: AgentConfig{
 			PlannerModel:   "grok-4.5",
+			VisionModel:    "opencode-go/grok-4.5",
 			SubagentModel:  "opencode-go/qwen3.7-plus",
 			SubagentModels: map[string]string{"review": "grok-4.5", "local": "private-model"},
 		},
@@ -172,8 +173,8 @@ func TestNormalizeLegacyOpenCodeGoRouteCatalogSplitsAggregateModelsAndRetargetsH
 	if !ok || anthropic.Kind != "anthropic" || !anthropic.HasModel("qwen3.7-plus") || anthropic.HasModel("grok-4.5") {
 		t.Fatalf("anthropic provider after split = %+v", anthropic)
 	}
-	if c.DefaultModel != "opencode-go-responses/grok-4.5" || c.Agent.PlannerModel != "opencode-go-responses/grok-4.5" || c.Agent.SubagentModel != "opencode-go-anthropic/qwen3.7-plus" || c.Bot.Model != "opencode-go-responses/grok-4.5" {
-		t.Fatalf("historical model refs = default:%q planner:%q subagent:%q bot:%q", c.DefaultModel, c.Agent.PlannerModel, c.Agent.SubagentModel, c.Bot.Model)
+	if c.DefaultModel != "opencode-go-responses/grok-4.5" || c.Agent.PlannerModel != "opencode-go-responses/grok-4.5" || c.Agent.VisionModel != "opencode-go-responses/grok-4.5" || c.Agent.SubagentModel != "opencode-go-anthropic/qwen3.7-plus" || c.Bot.Model != "opencode-go-responses/grok-4.5" {
+		t.Fatalf("historical model refs = default:%q planner:%q vision:%q subagent:%q bot:%q", c.DefaultModel, c.Agent.PlannerModel, c.Agent.VisionModel, c.Agent.SubagentModel, c.Bot.Model)
 	}
 	if len(c.Agent.SubagentModels) != 2 || c.Agent.SubagentModels["review"] != "opencode-go-responses/grok-4.5" || c.Agent.SubagentModels["local"] != "private-model" {
 		t.Fatalf("historical subagent refs = %v", c.Agent.SubagentModels)

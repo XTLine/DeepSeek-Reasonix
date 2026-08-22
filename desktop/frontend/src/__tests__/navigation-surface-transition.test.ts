@@ -56,8 +56,10 @@ ok(await staleAcceptedPromise === false, "a stale backend-activating result is r
 ok(reasserted === "tab.reveal-background:tab-stale", "stale reassertion receives the mutating target identity");
 
 const appSource = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
-ok(appSource.includes("flushSync(() => setNavigationSurfaceIntent(intent))"), "navigation masking commits synchronously before the Wails await");
-ok(appSource.includes("items={runtimeTransitioning ? [] : displayItems}"), "App removes source transcript rows during navigation");
+ok(appSource.includes("flushSync(() => {"), "navigation masking commits synchronously before the Wails await");
+ok(appSource.includes("setPreservedTranscriptSurface(rendered)"), "the last stable transcript is retained during navigation");
+ok(appSource.includes("items={visibleTranscriptItems}"), "the visible transcript is decoupled from the hydrating target");
+ok(appSource.includes("transcript-navigation-overlay"), "navigation renders a blocking transcript overlay");
 ok(appSource.includes("live={runtimeTransitioning ? undefined : state.live}"), "App removes source live output during navigation");
 ok(appSource.includes("hidden={composerSurfaceHidden || undefined}"), "App keeps the composer mounted but hidden during navigation");
 ok(appSource.includes("inert={composerSurfaceHidden ? true : undefined}"), "the hidden composer is inert during navigation");

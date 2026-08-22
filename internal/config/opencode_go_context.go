@@ -319,6 +319,7 @@ func retargetOpenCodeGoRefs(c *Config, oldName string, models []string, newName,
 	}
 	c.DefaultModel = rewrite(c.DefaultModel)
 	c.Agent.PlannerModel = rewrite(c.Agent.PlannerModel)
+	c.Agent.VisionModel = rewrite(c.Agent.VisionModel)
 	c.Agent.GuardianModel = rewrite(c.Agent.GuardianModel)
 	c.Agent.RecoveryModel = rewrite(c.Agent.RecoveryModel)
 	c.Agent.SubagentModel = rewrite(c.Agent.SubagentModel)

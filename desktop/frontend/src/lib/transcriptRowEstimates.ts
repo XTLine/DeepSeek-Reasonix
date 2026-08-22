@@ -55,10 +55,6 @@ export function eastAsianWidthColumns(text: string): number {
   return columns;
 }
 
-const CAPPED_LINES = Math.ceil(
-  (TRANSCRIPT_MAX_ESTIMATED_TEXT_HEIGHT - 44) / TRANSCRIPT_ESTIMATED_LINE_HEIGHT,
-);
-
 /**
  * Estimated rendered height for a block of text. Each explicit line segment
  * wraps independently at TRANSCRIPT_ESTIMATED_LINE_COLUMNS display columns;
@@ -66,29 +62,36 @@ const CAPPED_LINES = Math.ceil(
  * TRANSCRIPT_MAX_ESTIMATED_TEXT_HEIGHT. Mirrors the shape of the previous
  * char-based estimator so callers can swap implementations.
  */
-export function estimateTranscriptTextHeight(text: string | undefined, minimum: number): number {
+export function estimateTranscriptTextHeight(
+  text: string | undefined,
+  minimum: number,
+  options: { lineColumns?: number; maximum?: number } = {},
+): number {
   if (!text) return minimum;
+  const lineCapacity = Math.max(1, Math.round(options.lineColumns ?? TRANSCRIPT_ESTIMATED_LINE_COLUMNS));
+  const maximum = Math.max(minimum, options.maximum ?? TRANSCRIPT_MAX_ESTIMATED_TEXT_HEIGHT);
+  const cappedLines = Math.max(1, Math.ceil((maximum - 44) / TRANSCRIPT_ESTIMATED_LINE_HEIGHT));
   let totalLines = 0;
-  let lineColumns = 0;
+  let segmentColumns = 0;
   const flushSegment = (): boolean => {
-    totalLines += Math.max(1, Math.ceil(lineColumns / TRANSCRIPT_ESTIMATED_LINE_COLUMNS));
-    lineColumns = 0;
-    return totalLines >= CAPPED_LINES;
+    totalLines += Math.max(1, Math.ceil(segmentColumns / lineCapacity));
+    segmentColumns = 0;
+    return totalLines >= cappedLines;
   };
   for (const char of text) {
     if (char === "\n") {
-      if (flushSegment()) return TRANSCRIPT_MAX_ESTIMATED_TEXT_HEIGHT;
+      if (flushSegment()) return maximum;
       continue;
     }
-    lineColumns += codePointColumns(char.codePointAt(0) ?? 0);
+    segmentColumns += codePointColumns(char.codePointAt(0) ?? 0);
     // Cheap early exit for very long single-line blobs.
-    if (totalLines + Math.ceil(lineColumns / TRANSCRIPT_ESTIMATED_LINE_COLUMNS) >= CAPPED_LINES) {
-      return TRANSCRIPT_MAX_ESTIMATED_TEXT_HEIGHT;
+    if (totalLines + Math.ceil(segmentColumns / lineCapacity) >= cappedLines) {
+      return maximum;
     }
   }
   flushSegment();
   return Math.min(
-    TRANSCRIPT_MAX_ESTIMATED_TEXT_HEIGHT,
+    maximum,
     Math.max(minimum, 44 + totalLines * TRANSCRIPT_ESTIMATED_LINE_HEIGHT),
   );
 }

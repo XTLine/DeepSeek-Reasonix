@@ -99,7 +99,11 @@ function firstTextNode(root: Node): Text | null {
     dispatchScroll(el);
     await harness.flush();
     const before = el.scrollTop;
-    const anchor = harness.container.querySelector<HTMLElement>("#question-anchor-u5")?.closest<HTMLElement>(".transcript__row") ?? null;
+    // Height seeds are deliberately kind/state-aware, so a fixed logical row
+    // is not guaranteed to be in the overscan window before its first real
+    // measurement. Anchor on whichever stable question Virtuoso actually
+    // mounted at this physical position.
+    const anchor = harness.container.querySelector<HTMLElement>("[data-question-anchor]")?.closest<HTMLElement>(".transcript__row") ?? null;
     const anchorIdBefore = anchor?.querySelector("[data-question-anchor]")?.id;
     const absoluteIndexBefore = anchor?.dataset.itemIndex;
     ok(anchorIdBefore != null && absoluteIndexBefore != null, "found a stable mounted anchor row before the prepend");

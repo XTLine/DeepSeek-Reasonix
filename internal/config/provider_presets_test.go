@@ -350,7 +350,7 @@ func TestDeepSeekResponsesPresetMatchesOfficialSupport(t *testing.T) {
 	if entry.ModelsURL != "" {
 		t.Fatalf("deepseek responses models URL = %q, want static supported-model list", entry.ModelsURL)
 	}
-	if !EffectiveWebSearch(&entry) || entry.Vision || entry.VisionModels != nil {
+	if !EffectiveWebSearch(&entry) || entry.Vision {
 		t.Fatalf("deepseek responses capabilities = web_search:%t vision:%t vision_models:%v", EffectiveWebSearch(&entry), entry.Vision, entry.VisionModels)
 	}
 	var cfg Config

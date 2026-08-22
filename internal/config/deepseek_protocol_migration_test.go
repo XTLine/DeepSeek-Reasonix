@@ -88,10 +88,19 @@ future_provider_field = "untouched"
 		if !ok {
 			t.Fatalf("migrated provider %q missing", name)
 		}
+		model := strings.TrimSpace(entry.Default)
+		if model == "" {
+			model = strings.TrimSpace(entry.Model)
+		}
+		resolved, ok := cfg.ResolveModel(name + "/" + model)
+		if !ok {
+			t.Fatalf("migrated provider %q model %q did not resolve", name, model)
+		}
+		cap := EffortCapabilityForEntry(resolved)
 		if entry.Kind != "anthropic" || entry.BaseURL != deepSeekAnthropicBaseURL ||
 			entry.Thinking != "enabled" || !EffectiveWebSearch(entry) ||
-			len(entry.SupportedEfforts) == 0 || entry.DefaultEffort != "high" {
-			t.Errorf("migrated provider %q capabilities = %+v", name, entry)
+			cap.Default != "high" || len(cap.Levels) == 0 {
+			t.Errorf("migrated provider %q capabilities = %+v effort=%+v", name, entry, cap)
 		}
 	}
 

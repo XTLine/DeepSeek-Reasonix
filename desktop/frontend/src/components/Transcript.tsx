@@ -1,13 +1,13 @@
-import { forwardRef, lazy, memo, Suspense, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type TouchEvent as ReactTouchEvent, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type WheelEvent as ReactWheelEvent } from "react";
-import { Virtuoso, type Components, type ItemProps, type ListItem, type ListProps } from "react-virtuoso";
+import { lazy, Suspense, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type WheelEvent as ReactWheelEvent } from "react";
+import { Virtuoso, type ListItem } from "react-virtuoso";
 import type { ControllerLiveStore, Item, LiveStream } from "../lib/useController";
 import type { CheckpointMeta, WireCompletionSummary } from "../lib/types";
 import type { InvocationMetadataMap } from "../lib/invocationDisplay";
 import { useT } from "../lib/i18n";
-import { AssistantMessage, InvocationMetadataContext, TurnActions, UserMessage } from "./Message";
+import { InvocationMetadataContext, TurnActions, UserMessage } from "./Message";
 import { ToolCard } from "./ToolCard";
 import { ExtensionCard } from "./ExtensionCard";
-import { ArrowDown, Loader2, RotateCcw } from "lucide-react";
+import { ArrowDown, Loader2 } from "lucide-react";
 import { Welcome } from "./Welcome";
 import { ReadOnlyBatch } from "./ReadOnlyBatch";
 import { ToolGroup } from "./ToolGroup";
@@ -24,7 +24,6 @@ import {
   foldMapWithReasoningOpen,
   foldMapWithToggle,
   foldSegmentStates,
-  historyEntryIdForRow,
   reconcileFoldEntries,
   splitTranscriptLiveRows,
   EMPTY_FOLDS,
@@ -36,18 +35,23 @@ import {
   type TranscriptRow,
   transcriptRowMeasurementVersion,
 } from "../lib/transcriptRows";
-import { getTranscriptStore } from "../lib/transcriptStore";
-import { createTranscriptMeasuredSizes } from "../lib/transcriptMeasuredSizes";
+import { createTranscriptMeasuredSizes, type TranscriptSynthesizedSizes } from "../lib/transcriptMeasuredSizes";
+import {
+  transcriptRowLayoutVariant,
+  type TranscriptEstimateSource,
+  type TranscriptGeometryEnvironment,
+  type TranscriptRowLayoutVariant,
+} from "../lib/transcriptRowGeometry";
+import { readTranscriptGeometryEnvironment } from "../lib/transcriptGeometryEnvironment";
+import { onTypographyPreferencesChange } from "../lib/typographyPreferences";
 import { acquireMarkdownWorkerClient, releaseMarkdownWorkerClient } from "../lib/markdownWorkerClient";
 import { noteTranscriptRecoveryTerminal, noteTranscriptRowCounts } from "../lib/sessionDiagnostics";
 import { useReasoningDisplayMode } from "../lib/reasoningDisplayPreference";
 import { InlineAssistantReasoning } from "./InlineAssistantReasoning";
-import { LiveTurnRegion } from "./LiveTurnRegion";
 import { ProcessFoldHeader } from "./ProcessFoldHeader";
 import { CompactionCard, NoticeCard, PhaseCard, SteerCard } from "./TranscriptCards";
 import { LiveStreamContext } from "./LiveStreamContext";
 import { useTranscriptSelectableRows } from "../lib/useTranscriptSelectableRows";
-import { TranscriptSelectionOverlay } from "./TranscriptSelectionOverlay";
 import { useCreationTranscriptScrollbar } from "../lib/useCreationTranscriptScrollbar";
 import { useTranscriptScrollInteractions } from "../lib/useTranscriptScrollInteractions";
 import { hasTranscriptScrollableRange, TRANSCRIPT_AT_BOTTOM_THRESHOLD_PX, useTranscriptScrollArbiter } from "../lib/useTranscriptScrollArbiter";
@@ -55,199 +59,33 @@ import { useTranscriptLayoutIntegrity } from "../lib/useTranscriptLayoutIntegrit
 import { TranscriptLayoutIntentProvider, TranscriptScrollWriteProvider } from "./TranscriptLayoutIntentContext";
 import { MarkdownImageTabContext } from "./MarkdownImageContext";
 import { recordTranscriptScrollDiagnostic } from "../lib/transcriptScrollProbe";
+import { recordFrontendDiagnostic } from "../lib/frontendDiagnosticBridge";
 import { useTranscriptQuestionJump, useTranscriptQuestions } from "../lib/useTranscriptQuestionNavigation";
+import {
+  LiveAssistantMessage,
+  SHOW_SCROLL_DIAGNOSTICS,
+  TRANSCRIPT_VIRTUOSO_COMPONENTS,
+  TRANSCRIPT_VIRTUOSO_COMPONENTS_WITH_HEADER,
+  type TranscriptVirtuosoContext,
+} from "./TranscriptVirtuosoParts";
 
 // NoticeCard lives with the other row cards; keep the historical export path.
 export { NoticeCard } from "./TranscriptCards";
 type OpenTurnAction = { turn: number; menu: "summary" | "rewind" };
 const QUESTION_NAV_MIN_COUNT = 2;
-type AssistantReasoningDisplay = "normal" | "hide";
 const EMPTY_CHECKPOINTS: CheckpointMeta[] = [];
 const EMPTY_INVOCATION_METADATA: InvocationMetadataMap = {};
 const NO_HELD_ROWS: readonly TranscriptRow[] = [];
 const QuestionJumpBar = lazy(() => import("./QuestionJumpBar"));
-const SHOW_SCROLL_DIAGNOSTICS = typeof __BUILD_CHANNEL__ === "undefined" || __BUILD_CHANNEL__ === "test" || import.meta.env.DEV;
-const ScrollDiagnosticPanel = SHOW_SCROLL_DIAGNOSTICS ? lazy(() => import("./ScrollDiagnosticPanel")) : null;
-
-const LiveAssistantMessage = memo(function LiveAssistantMessage({
-  item,
-  defaultExpanded = false,
-  expandWhileStreaming = false,
-  creationMode = false,
-  reasoningDisplay = "normal",
-}: {
-  item: AssistantItem;
-  defaultExpanded?: boolean;
-  expandWhileStreaming?: boolean;
-  creationMode?: boolean;
-  reasoningDisplay?: AssistantReasoningDisplay;
-}) {
-  const live = useContext(LiveStreamContext);
-  const shown = useMemo(
-    () => {
-      const merged =
-        live && live.id === item.id
-          ? {
-              ...item,
-              text: live.text,
-              reasoning: live.reasoning,
-              streaming: true,
-              reasoningComplete: live.reasoningComplete,
-              reasoningDurationMs:
-                live.reasoningStartedAt && live.reasoningCompletedAt && live.reasoningCompletedAt >= live.reasoningStartedAt
-                  ? live.reasoningCompletedAt - live.reasoningStartedAt
-                  : item.reasoningDurationMs,
-            }
-          : item;
-      if (reasoningDisplay === "hide") {
-        return { ...merged, reasoning: "", reasoningComplete: true, reasoningDurationMs: undefined };
-      }
-      return merged;
-    },
-    [item, live?.id, live?.text, live?.reasoning, live?.reasoningComplete, live?.reasoningStartedAt, live?.reasoningCompletedAt, reasoningDisplay],
-  );
-  return (
-    <AssistantMessage
-      item={shown}
-      defaultExpanded={defaultExpanded}
-      expandWhileStreaming={expandWhileStreaming}
-      creationMode={creationMode}
-    />
-  );
-});
+const SHOW_FRONTEND_DIAGNOSTICS = typeof __BUILD_CHANNEL__ === "undefined"
+  || __BUILD_CHANNEL__ === "test"
+  || __BUILD_CHANNEL__ === "preview"
+  || __BUILD_CHANNEL__ === "canary"
+  || Boolean(import.meta.env?.DEV);
+const FrontendDiagnosticsPanel = SHOW_FRONTEND_DIAGNOSTICS
+  ? lazy(() => import("./FrontendDiagnosticsPanel"))
+  : null;
 const VIRTUAL_OVERSCAN_ROWS = 8;
-
-type TranscriptVirtuosoContext = {
-  tabId?: string;
-  scrollElement: HTMLDivElement | null;
-  nativeScrollbarDragging: boolean;
-  overlayRevision: string;
-  scrollDiagnostics?: { heightEstimates: readonly number[]; contentRevision: number };
-  /** The active turn's in-flow footer region; null when no turn is live. */
-  liveRegion: null | {
-    rows: readonly TranscriptRow[];
-    renderRow: (row: TranscriptRow) => ReactNode;
-    showStatus: boolean;
-    turnStartAt?: number;
-    onPointerDownCapture: (event: ReactPointerEvent<HTMLElement>) => void;
-  };
-  olderHistory: null | {
-    loading: boolean;
-    error?: string;
-    onRetry: () => void;
-  };
-};
-
-const TranscriptVirtuosoItem = forwardRef<HTMLDivElement, ItemProps<TranscriptRow> & { context: TranscriptVirtuosoContext }>(
-  function TranscriptVirtuosoItem({ item, context, children, style, ...props }, ref) {
-    const entryId = historyEntryIdForRow(item);
-    useEffect(() => {
-      if (entryId) getTranscriptStore().requestEntryFullContent(context.tabId, entryId);
-    }, [context.tabId, entryId]);
-    const knownSize = Number.parseFloat(String(props["data-known-size"] ?? ""));
-    // data-index is logical; data-item-index includes the large prepend anchor.
-    const rowIndex = SHOW_SCROLL_DIAGNOSTICS
-      ? Number.parseInt(String(props["data-index"] ?? ""), 10)
-      : Number.NaN;
-    const estimatedSize = Number.isInteger(rowIndex) && rowIndex >= 0
-      ? context.scrollDiagnostics?.heightEstimates[rowIndex]
-      : undefined;
-    const diagnosticAttributes = SHOW_SCROLL_DIAGNOSTICS
-      ? {
-          "data-logical-index": Number.isInteger(rowIndex) && rowIndex >= 0 ? rowIndex : undefined,
-          "data-estimated-size": estimatedSize,
-          "data-content-revision": context.scrollDiagnostics?.contentRevision,
-        }
-      : {};
-    const frozenStyle = context.nativeScrollbarDragging && Number.isFinite(knownSize) && knownSize > 0
-      ? { ...style, boxSizing: "border-box" as const, height: knownSize, overflow: "hidden" as const }
-      : style;
-    return (
-      <div
-        {...props}
-        ref={ref}
-        style={frozenStyle}
-        data-row-key={String(item.key)}
-        data-row-kind={item.kind}
-        data-layout-version={transcriptRowMeasurementVersion(item)}
-        {...diagnosticAttributes}
-        className="transcript__row"
-      >
-        {children}
-      </div>
-    );
-  },
-);
-
-const TranscriptVirtuosoList = forwardRef<HTMLDivElement, ListProps & { context: TranscriptVirtuosoContext }>(
-  function TranscriptVirtuosoList({ context, children, ...props }, ref) {
-    return (
-      <div {...props} ref={ref} className="transcript__virtual-sizer">
-        <TranscriptSelectionOverlay
-          tabId={context.tabId ?? ""}
-          scrollElement={context.scrollElement}
-          virtualRevision={context.overlayRevision}
-        />
-        {children}
-      </div>
-    );
-  },
-);
-
-function TranscriptVirtuosoHeader({ context }: { context: TranscriptVirtuosoContext }) {
-  const t = useT();
-  const older = context.olderHistory;
-  if (!older) return null;
-  return (
-    <div className="transcript__header">
-      <div className="transcript__older-status" role={older.error ? "alert" : "status"}>
-        {older.loading ? (
-          <>
-            <Loader2 className="transcript__older-spinner" size={14} aria-hidden="true" />
-            <span>{t("common.loading")}</span>
-          </>
-        ) : (
-          <>
-            <span>{older.error}</span>
-            <button type="button" className="btn btn--small" onClick={older.onRetry}>
-              <RotateCcw size={14} aria-hidden="true" />
-              <span>{t("common.retry")}</span>
-            </button>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// The live turn region is the list's in-flow Footer: it scrolls with the
-// transcript but is never part of Virtuoso's measured size tree.
-function TranscriptVirtuosoFooter({ context }: { context: TranscriptVirtuosoContext }) {
-  const live = context.liveRegion;
-  if (!live || (live.rows.length === 0 && !live.showStatus)) return null;
-  return (
-    <LiveTurnRegion
-      rows={live.rows}
-      renderRow={live.renderRow}
-      showStatus={live.showStatus}
-      turnStartAt={live.turnStartAt}
-      tabId={context.tabId}
-      scrollElement={context.scrollElement}
-      onPointerDownCapture={live.onPointerDownCapture}
-    />
-  );
-}
-
-const TRANSCRIPT_VIRTUOSO_COMPONENTS: Components<TranscriptRow, TranscriptVirtuosoContext> = {
-  Item: TranscriptVirtuosoItem,
-  List: TranscriptVirtuosoList,
-  Footer: TranscriptVirtuosoFooter,
-};
-
-const TRANSCRIPT_VIRTUOSO_COMPONENTS_WITH_HEADER: Components<TranscriptRow, TranscriptVirtuosoContext> = {
-  ...TRANSCRIPT_VIRTUOSO_COMPONENTS,
-  Header: TranscriptVirtuosoHeader,
-};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -262,6 +100,7 @@ export function Transcript({
   live: liveProp,
   liveStore,
   tabId,
+  geometrySessionKey,
   footerHeight = 0,
   onPrompt,
   onDeliveryContinue,
@@ -295,6 +134,8 @@ export function Transcript({
   live?: LiveStream;
   liveStore?: ControllerLiveStore;
   tabId?: string;
+  /** Stable, memory-only session identity for safe geometry reuse. */
+  geometrySessionKey?: string;
   footerHeight?: number;
   onPrompt: (text: string) => void;
   onDeliveryContinue?: () => void;
@@ -335,8 +176,47 @@ export function Transcript({
   );
   const live = useSyncExternalStore(subscribeLive, getLiveSnapshot, getLiveSnapshot);
   const layoutSurfaceKey = `${tabId ?? ""}:${revealSignal}`;
-  const measuredSizes = useMemo(() => createTranscriptMeasuredSizes(), [layoutSurfaceKey]);
+  const resolvedGeometrySessionKey = geometrySessionKey || `tab:${tabId ?? "preview"}`;
+  // Transcript survives tab switches; the bounded LRU therefore survives
+  // reveal resets while the Virtuoso view state still resets independently.
+  const measuredSizes = useMemo(() => createTranscriptMeasuredSizes(), []);
+  const [geometryEnvironment, setGeometryEnvironment] = useState<TranscriptGeometryEnvironment>({
+    contentWidth: undefined,
+    typographySignature: "unresolved",
+  });
+  const geometrySessionKeyRef = useRef(resolvedGeometrySessionKey);
+  geometrySessionKeyRef.current = resolvedGeometrySessionKey;
+  const geometryEnvironmentRef = useRef(geometryEnvironment);
+  geometryEnvironmentRef.current = geometryEnvironment;
+  const recordMeasuredGeometry = useCallback((
+    rowKey: string,
+    kind: TranscriptRow["kind"],
+    layoutVariant: TranscriptRowLayoutVariant,
+    height: number,
+    width: number,
+    measurementVersion: string | undefined,
+    _estimateSource: TranscriptEstimateSource | undefined,
+    staticEstimate: number | undefined,
+  ) => {
+    measuredSizes.recordGeometry(geometrySessionKeyRef.current, {
+      rowKey,
+      kind,
+      layoutVariant,
+      height,
+      environment: { ...geometryEnvironmentRef.current, contentWidth: width },
+      measurementVersion: measurementVersion ?? "0:0",
+      staticEstimate,
+    });
+  }, [measuredSizes]);
+  useEffect(() => {
+    recordFrontendDiagnostic("transcript", "transcript.surface", {
+      hasActiveTab: Boolean(tabId),
+      totalRows: items.length,
+    });
+  }, [items.length, layoutSurfaceKey, tabId]);
   const [layoutWidth, setLayoutWidth] = useState<number>();
+  const [geometryBootstrapComplete, setGeometryBootstrapComplete] = useState(false);
+  const geometryBootstrapRevisionRef = useRef<string | null>(null);
   const {
     virtuosoRef,
     scrollRef,
@@ -367,11 +247,10 @@ export function Transcript({
     submitRecoveryRequest,
     retryRecoveryRequest,
     lastGoodAnchorRef,
-    captureStateSnapshot,
     layoutTransientRef,
   } = useTranscriptScrollArbiter({
     onRecoveryTerminal: noteTranscriptRecoveryTerminal,
-    onItemMeasured: measuredSizes.record,
+    onItemMeasured: recordMeasuredGeometry,
   });
   const virtuosoReadyRef = useRef(false);
   const entranceRef = useTranscriptEntranceAnimation<HTMLDivElement>(tabId, revealSignal, items);
@@ -428,9 +307,19 @@ export function Transcript({
 
   // Row measurement and footer resize share the same coalesced height path.
   useEffect(() => {
-    if (!virtuosoReadyRef.current || !stick.current) return;
+    if (hydrating || !virtuosoReadyRef.current || !stick.current) return;
     followGrowingTail();
-  }, [footerHeight, followGrowingTail, stick]);
+  }, [footerHeight, followGrowingTail, hydrating, stick]);
+
+  const refreshGeometryEnvironment = useCallback((element: HTMLElement) => {
+    const next = readTranscriptGeometryEnvironment(element);
+    setGeometryEnvironment((current) => (
+      Math.abs((current.contentWidth ?? 0) - (next.contentWidth ?? 0)) <= 1
+        && current.typographySignature === next.typographySignature
+        ? current
+        : next
+    ));
+  }, []);
 
   // The live region grows from zero height and shrinks the history viewport
   // mid-stream; keep the tail pinned across that viewport resize.
@@ -440,21 +329,30 @@ export function Transcript({
     let lastHeight = element.clientHeight;
     let lastWidth = element.clientWidth;
     setLayoutWidth(lastWidth);
+    refreshGeometryEnvironment(element);
     const observer = new ResizeObserver(() => {
       const height = element.clientHeight;
       const width = element.clientWidth;
       if (width !== lastWidth) {
         lastWidth = width;
         setLayoutWidth(width);
+        refreshGeometryEnvironment(element);
       }
       if (height !== lastHeight) {
         lastHeight = height;
-        followGrowingTail();
+        if (!hydrating) followGrowingTail();
       }
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [scrollElement, followGrowingTail]);
+  }, [hydrating, scrollElement, followGrowingTail, refreshGeometryEnvironment]);
+
+  // Typography settings update CSS variables synchronously. Re-read the
+  // geometry signature without remounting Virtuoso; old exact samples then
+  // fail their font key and static state-aware seeds take over.
+  useEffect(() => onTypographyPreferencesChange(() => {
+    if (scrollElement) refreshGeometryEnvironment(scrollElement);
+  }), [refreshGeometryEnvironment, scrollElement]);
 
   // Sub-agent calls carry a parentId; collect them under their parent `task`
   // call so the parent card can render them nested, and skip them at top level.
@@ -527,8 +425,17 @@ export function Transcript({
   const checkpointsByTurn = useMemo(() => new Map(checkpoints.map((checkpoint) => [checkpoint.turn, checkpoint])), [checkpoints]);
   const hasCheckpointForTurn = useCallback((turn: number) => checkpointsByTurn.has(turn), [checkpointsByTurn]);
   const rows = useMemo(
-    () => buildTranscriptRows(turnModels, { folds, foldPreference, hasOlderHistory, creationMode, turnForUser, hasCheckpointForTurn }),
-    [turnModels, folds, foldPreference, hasOlderHistory, creationMode, turnForUser, hasCheckpointForTurn],
+    () => buildTranscriptRows(turnModels, {
+      folds,
+      foldPreference,
+      hasOlderHistory,
+      creationMode,
+      turnForUser,
+      hasCheckpointForTurn,
+      reasoningDisplayMode,
+      subcallsByParent,
+    }),
+    [turnModels, folds, foldPreference, hasOlderHistory, creationMode, turnForUser, hasCheckpointForTurn, reasoningDisplayMode, subcallsByParent],
   );
   // The active (streaming) turn renders as the list's in-flow Footer, outside
   // the measured size tree: the list only ever owns static, bounded rows, so
@@ -583,9 +490,10 @@ export function Transcript({
     submitRecoveryRequest,
     retryRecoveryRequest,
     lastGoodAnchorRef,
-    captureStateSnapshot,
     layoutTransientRef,
     layoutWidth,
+    geometrySessionKey: resolvedGeometrySessionKey,
+    geometryEnvironment,
   });
   const selectionRetention = useTranscriptSelectionRetention({
     tabId,
@@ -641,10 +549,61 @@ export function Transcript({
     onScrollEnd: finishProgrammaticScroll,
     onSelectionPointerDown: selectionRetention.onPointerDownCapture,
   });
-  // Keep estimates stable across token patches; refresh for rows, width, or remount.
-  const heightEstimates = useMemo(
-    () => measuredSizes.synthesize(virtualRows, layoutWidth),
-    [layoutWidth, measuredSizes, virtuosoResetKey, virtualRows],
+  const virtualRowsGeometryRevision = useMemo(
+    () => virtualRows.map((row) => [
+      String(row.key),
+      row.kind,
+      transcriptRowLayoutVariant(row),
+      transcriptRowMeasurementVersion(row),
+    ].join("\u0000")).join("\u0001"),
+    [virtualRows],
+  );
+  const geometryEnvironmentReady = geometryEnvironment.typographySignature !== "unresolved"
+    && Number.isFinite(geometryEnvironment.contentWidth)
+    && (geometryEnvironment.contentWidth ?? 0) > 0;
+  // Fold reconciliation and initial history normalization run in effects. Do
+  // not let Virtuoso construct its first size tree between those two commits:
+  // that would seed one tree from the pre-fold row model and then apply a
+  // whole-list geometry delta during the user's first upward gesture. Wait
+  // for one quiet animation frame after the environment and row revision are
+  // both stable; subsequent revisions remain incremental and do not remount.
+  useEffect(() => {
+    if (geometryBootstrapComplete || !geometryEnvironmentReady) return;
+    const revision = virtualRowsGeometryRevision;
+    geometryBootstrapRevisionRef.current = revision;
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        if (geometryBootstrapRevisionRef.current === revision) setGeometryBootstrapComplete(true);
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [geometryBootstrapComplete, geometryEnvironmentReady, virtualRowsGeometryRevision]);
+  // Measurements mutate the bounded cache but must never rebuild the whole
+  // array while a Virtuoso surface is alive. A ref-backed seed makes this
+  // explicit: only a real geometry-contract key (row state/content, width or
+  // typography, session, or an explicit reset) synthesizes a new initial
+  // seed. This prevents calibration samples arriving during the first upward
+  // traversal from changing the size tree underneath the pointer.
+  const geometrySeedKey = [
+    resolvedGeometrySessionKey,
+    virtuosoResetKey,
+    geometryEnvironment.contentWidth ?? "unknown",
+    geometryEnvironment.typographySignature,
+    virtualRowsGeometryRevision,
+  ].join("\u0002");
+  const geometrySeedRef = useRef<{ key: string; value: TranscriptSynthesizedSizes } | null>(null);
+  if (geometrySeedRef.current?.key !== geometrySeedKey) {
+    geometrySeedRef.current = {
+      key: geometrySeedKey,
+      value: measuredSizes.synthesizeDetailed(resolvedGeometrySessionKey, virtualRows, geometryEnvironment),
+    };
+  }
+  const synthesizedSizes = geometrySeedRef.current.value;
+  const heightEstimates = synthesizedSizes.heightEstimates;
+  const estimateSources = synthesizedSizes.estimateSources;
+  const estimatedTotalHeight = useMemo(
+    () => heightEstimates.reduce((total, height) => total + height, 0),
+    [heightEstimates],
   );
   const overlayRevision = useMemo(
     () => virtualRows.map((row) => String(row.key)).join("|"),
@@ -654,8 +613,11 @@ export function Transcript({
     scrollerRef(node);
     const element = node instanceof HTMLElement ? node as HTMLDivElement : null;
     entranceRef.current = element;
-    if (element) setLayoutWidth(element.clientWidth);
-  }, [entranceRef, scrollerRef]);
+    if (element) {
+      setLayoutWidth(element.clientWidth);
+      refreshGeometryEnvironment(element);
+    }
+  }, [entranceRef, refreshGeometryEnvironment, scrollerRef]);
   const handleTranscriptScroll = useCallback(() => {
     deliverScroll();
     noteScrollActivity();
@@ -672,6 +634,7 @@ export function Transcript({
     loadingOlderHistory,
     olderHistoryError,
     running,
+    suppressAutoComplete: hydrating,
     onLoadOlderHistory,
     clearTranscriptSelection,
     invalidateAnchors,
@@ -690,6 +653,7 @@ export function Transcript({
   };
 
   const empty = items.length === 0;
+  const geometryReady = geometryEnvironmentReady && geometryBootstrapComplete;
 
   // ── Row rendering ─────────────────────────────────────────────────────────
   // renderRow/itemContent keep stable identities: Transcript re-renders on
@@ -913,15 +877,22 @@ export function Transcript({
 
   const handleTotalListHeightChanged = useCallback((height: number) => {
     if (SHOW_SCROLL_DIAGNOSTICS) recordTranscriptScrollDiagnostic("list-height", { listHeight: height });
+    if (hydrating) return;
     followGrowingTail();
-  }, [followGrowingTail]);
+  }, [followGrowingTail, hydrating]);
 
   const virtuosoContext = useMemo<TranscriptVirtuosoContext>(() => ({
     tabId,
     scrollElement,
     nativeScrollbarDragging,
     overlayRevision,
-    scrollDiagnostics: SHOW_SCROLL_DIAGNOSTICS ? { heightEstimates, contentRevision } : undefined,
+    geometryEnvironment,
+    rowGeometry: {
+      heightEstimates,
+      estimateSources,
+      rowIndexByKey,
+      contentRevision,
+    },
     liveRegion: showLiveRegion
       ? {
           rows: liveSplit.liveActive ? liveSplit.liveRows : heldLiveRows,
@@ -941,6 +912,8 @@ export function Transcript({
   }), [
     hasOlderHistory,
     heightEstimates,
+    estimateSources,
+    geometryEnvironment,
     heldLiveRows,
     liveSplit.liveActive,
     liveSplit.liveRows,
@@ -950,6 +923,7 @@ export function Transcript({
     olderHistoryError,
     overlayRevision,
     renderRow,
+    rowIndexByKey,
     retryOlderHistory,
     scrollElement,
     selectionRetention.onPointerDownCapture,
@@ -979,6 +953,16 @@ export function Transcript({
             </div>
           ) : <Welcome onPrompt={onPrompt} variant={welcomeVariant} />}
         </div>
+      ) : !geometryReady ? (
+        // Bootstrap the real readable width/font signature before Virtuoso
+        // constructs its empty size tree. This element is the first scroller,
+        // not a remount/recovery cycle; later environment changes stay live.
+        <div
+          className={`transcript${creationMode ? " transcript--creation-scrollbar" : ""}`}
+          ref={(node) => handleScrollerRef(node)}
+          aria-busy="true"
+          data-transcript-geometry-bootstrap="true"
+        />
       ) : (
         <LiveStreamContext.Provider value={live}>
           <Virtuoso<TranscriptRow, TranscriptVirtuosoContext>
@@ -986,13 +970,19 @@ export function Transcript({
             ref={virtuosoRef}
             className={`transcript${creationMode ? " transcript--creation-scrollbar" : ""}${creationMode && creationScrollbar.hot ? " transcript--scrollbar-hot" : ""}`}
             data-transcript-row-count={virtualRows.length}
+            data-transcript-estimated-total={estimatedTotalHeight}
+            data-transcript-reset-key={virtuosoResetKey}
+            data-transcript-typography={geometryEnvironment.typographySignature}
+            data-transcript-estimate-sources={JSON.stringify(estimateSources.reduce((counts, source) => {
+              counts[source] = (counts[source] ?? 0) + 1;
+              return counts;
+            }, {} as Record<string, number>))}
             data={virtualRows}
             context={virtuosoContext}
             components={virtuosoContext.olderHistory ? TRANSCRIPT_VIRTUOSO_COMPONENTS_WITH_HEADER : TRANSCRIPT_VIRTUOSO_COMPONENTS}
-            computeItemKey={(_index, row) => `${tabId ?? ""}:${String(row.key)}`}
+            computeItemKey={(_index, row) => `${resolvedGeometrySessionKey}:${String(row.key)}`}
             firstItemIndex={firstItemIndex}
-            // A captured state snapshot (measured tree + scrollTop) restores
-            // through the same initial-location stream as
+            // A validated captured state restores through the same stream as
             // initialTopMostItemIndex, so the two never apply together.
             restoreStateFrom={restoreSnapshot}
             initialTopMostItemIndex={restoreSnapshot ? undefined : restoreLocation}
@@ -1062,7 +1052,7 @@ export function Transcript({
           <ArrowDown size={18} strokeWidth={2.2} aria-hidden="true" />
         </button>
       )}
-      {ScrollDiagnosticPanel && <Suspense fallback={null}><ScrollDiagnosticPanel scrollElement={scrollElement} totalRows={virtualRows.length} /></Suspense>}
+      {FrontendDiagnosticsPanel && <Suspense fallback={null}><FrontendDiagnosticsPanel scrollElement={scrollElement} totalRows={virtualRows.length} /></Suspense>}
     </div>
     </TranscriptScrollWriteProvider>
     </TranscriptLayoutIntentProvider>

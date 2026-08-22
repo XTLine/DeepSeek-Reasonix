@@ -54,6 +54,33 @@
   white-space: nowrap;
 }
 
+.frontend-diagnostics__toggle {
+  border: 1px solid var(--border) !important;
+  background: var(--bg-elev) !important;
+  color: var(--fg-dim) !important;
+  white-space: nowrap;
+}
+
+.frontend-diagnostics__toggle:hover,
+.frontend-diagnostics__toggle--on {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border)) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+}
+
+.frontend-diagnostics__toggle--on {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.frontend-diagnostics--embedded {
+  position: relative;
+  left: auto;
+  bottom: auto;
+  align-self: stretch;
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .scroll-diagnostics__export {
   background: var(--accent-soft) !important;
   color: var(--accent) !important;

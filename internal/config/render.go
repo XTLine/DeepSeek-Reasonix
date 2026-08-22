@@ -253,6 +253,11 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 	} else {
 		b.WriteString("# planner_model = \"deepseek-pro\"   # optional: enable two-model collaboration\n")
 	}
+	if c.Agent.VisionModel != "" {
+		fmt.Fprintf(&b, "vision_model = %q   # image understanding fallback: auto or provider/model\n", c.Agent.VisionModel)
+	} else {
+		b.WriteString("# vision_model = \"auto\"   # optional: summarize images for text-only models\n")
+	}
 	if c.Agent.SubagentModel != "" {
 		fmt.Fprintf(&b, "subagent_model = %q   # default model for runAs=subagent skills\n", c.Agent.SubagentModel)
 	} else {
@@ -997,6 +1002,10 @@ func RenderTOMLProjectDelta(c *Config) string {
 	}
 	if c.Agent.PlannerModel != "" && c.Agent.PlannerModel != d.Agent.PlannerModel {
 		fmt.Fprintf(&agentBuf, "planner_model = %q\n", c.Agent.PlannerModel)
+		anyAgent = true
+	}
+	if c.Agent.VisionModel != d.Agent.VisionModel {
+		fmt.Fprintf(&agentBuf, "vision_model = %q\n", c.Agent.VisionModel)
 		anyAgent = true
 	}
 	if c.Agent.SubagentModel != "" && c.Agent.SubagentModel != d.Agent.SubagentModel {

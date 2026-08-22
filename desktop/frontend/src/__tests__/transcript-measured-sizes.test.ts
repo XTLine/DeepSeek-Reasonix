@@ -22,6 +22,7 @@ import {
   type TranscriptRow,
 } from "../lib/transcriptRows";
 import { createTranscriptMeasuredSizes } from "../lib/transcriptMeasuredSizes";
+import { transcriptRowLayoutVariant } from "../lib/transcriptRowGeometry";
 import { initialState, reducer, type Item } from "../lib/useController";
 
 let passed = 0;
@@ -106,25 +107,99 @@ function fakeRow(key: string, kind: TranscriptRow["kind"], text: string): Transc
 }
 
 function estimateFor(store: ReturnType<typeof createTranscriptMeasuredSizes>, row: TranscriptRow, width?: number) {
-  return store.synthesize([row], width)[0];
+  return estimatesFor(store, [row], width)[0];
+}
+
+function estimatesFor(store: ReturnType<typeof createTranscriptMeasuredSizes>, rows: readonly TranscriptRow[], width?: number) {
+  return store.synthesizeDetailed("test-session", rows, { contentWidth: width, typographySignature: "test-font" }).heightEstimates;
+}
+
+function recordRow(store: ReturnType<typeof createTranscriptMeasuredSizes>, row: TranscriptRow, height: number, width?: number) {
+  store.recordGeometry("test-session", {
+    rowKey: String(row.key),
+    kind: row.kind,
+    layoutVariant: transcriptRowLayoutVariant(row),
+    height,
+    environment: { contentWidth: width, typographySignature: "test-font" },
+    measurementVersion: transcriptRowMeasurementVersion(row),
+    staticEstimate: estimateTranscriptRowSize(row, width),
+  });
 }
 
 {
   const store = createTranscriptMeasuredSizes();
   const row = fakeRow("r1", "answer", "hello");
   ok(estimateFor(store, row) === estimateTranscriptRowSize(row), "no data falls back to the static prior");
-  store.record("r1", "answer", 432, undefined, transcriptRowMeasurementVersion(row));
+  recordRow(store, row, 432);
   eq(estimateFor(store, row), 432, "exact rowKey measurement wins");
-  store.record("r1", "answer", 0);
-  store.record("r1", "answer", Number.NaN);
+  recordRow(store, row, 0);
+  recordRow(store, row, Number.NaN);
   eq(estimateFor(store, row), 432, "non-positive and NaN measurements are ignored");
+}
+
+// ── Geometry-contract cache ────────────────────────────────────────────────
+
+{
+  const store = createTranscriptMeasuredSizes();
+  const collapsed = fakeRow("reasoning", "reasoning", "hidden body");
+  collapsed.layoutVariant = "reasoning-summary";
+  const expanded = { ...collapsed, layoutVariant: "reasoning-expanded" as const };
+  const environment = { contentWidth: 960, typographySignature: "font-a" };
+  store.recordGeometry("session-a", {
+    rowKey: "reasoning",
+    kind: "reasoning",
+    layoutVariant: "reasoning-expanded",
+    height: 1_200,
+    environment,
+    measurementVersion: transcriptRowMeasurementVersion(expanded),
+    staticEstimate: estimateTranscriptRowSize(expanded, environment.contentWidth),
+  });
+  const synthesized = store.synthesizeDetailed("session-a", [collapsed], environment);
+  eq(synthesized.heightEstimates[0], 64, "expanded reasoning measurement cannot poison collapsed geometry");
+  eq(synthesized.estimateSources[0], "static", "cross-state rejection reports the static source");
+}
+
+{
+  const store = createTranscriptMeasuredSizes();
+  const row = fakeRow("answer", "answer", "wrapped answer");
+  row.layoutVariant = "text-flow";
+  const environment = { contentWidth: 960, typographySignature: "font-a" };
+  store.recordGeometry("session-a", {
+    rowKey: "answer",
+    kind: "answer",
+    layoutVariant: "text-flow",
+    height: 320,
+    environment,
+    measurementVersion: transcriptRowMeasurementVersion(row),
+    staticEstimate: estimateTranscriptRowSize(row, environment.contentWidth),
+  });
+  eq(store.synthesizeDetailed("session-a", [row], environment).heightEstimates[0], 320, "exact geometry matches all cache dimensions");
+  ok(store.synthesizeDetailed("session-a", [row], { ...environment, contentWidth: 760 }).heightEstimates[0] !== 320, "content width rejects an exact sample");
+  ok(store.synthesizeDetailed("session-a", [row], { ...environment, typographySignature: "font-b" }).heightEstimates[0] !== 320, "typography rejects an exact sample");
+}
+
+{
+  const store = createTranscriptMeasuredSizes({ maxSessions: 2, maxRowsPerSession: 2, maxCalibrationSamples: 1 });
+  const rowA = fakeRow("a", "answer", "answer A");
+  rowA.layoutVariant = "text-flow";
+  const environment = { contentWidth: 960, typographySignature: "font-a" };
+  store.recordGeometry("session-a", {
+    rowKey: "a", kind: "answer", layoutVariant: "text-flow", height: 222,
+    environment, measurementVersion: transcriptRowMeasurementVersion(rowA), staticEstimate: estimateTranscriptRowSize(rowA, 960),
+  });
+  store.synthesizeDetailed("session-b", [], environment);
+  eq(store.synthesizeDetailed("session-a", [rowA], environment).heightEstimates[0], 222, "A to B to A restores safe geometry without a scroll position");
+  store.synthesizeDetailed("session-c", [], environment);
+  store.synthesizeDetailed("session-d", [], environment);
+  ok(store.synthesizeDetailed("session-a", [rowA], environment).heightEstimates[0] !== 222, "session LRU evicts beyond the configured cap");
+  ok(store.synthesizeDetailed("session-b", [rowA], environment).heightEstimates[0] !== 222, "session LRU remains bounded");
 }
 
 {
   const store = createTranscriptMeasuredSizes();
   const before = fakeRow("late", "answer", "preview");
   const after = fakeRow("late", "answer", "resolved content");
-  store.record("late", "answer", 777, 960, transcriptRowMeasurementVersion(before));
+  recordRow(store, before, 777, 960);
   eq(estimateFor(store, before, 960), 777, "an exact sample matches its row content version");
   ok(estimateFor(store, after, 960) !== 777, "the same row key and width reject an old content version");
 }
@@ -134,9 +209,9 @@ function estimateFor(store: ReturnType<typeof createTranscriptMeasuredSizes>, ro
   const changedBefore = fakeRow("changed", "answer", "preview");
   const changedAfter = fakeRow("changed", "answer", "resolved");
   const untouched = fakeRow("untouched", "answer", "stable");
-  store.record("changed", "answer", 900, 960, transcriptRowMeasurementVersion(changedBefore));
-  store.record("untouched", "answer", 240, 960, transcriptRowMeasurementVersion(untouched));
-  const estimates = store.synthesize([changedAfter, untouched], 960);
+  recordRow(store, changedBefore, 900, 960);
+  recordRow(store, untouched, 240, 960);
+  const estimates = estimatesFor(store, [changedAfter, untouched], 960);
   ok(estimates[0] !== 900, "patching one row invalidates its own exact sample");
   eq(estimates[1], 240, "patching one row preserves another row's exact sample");
 }
@@ -146,8 +221,8 @@ function estimateFor(store: ReturnType<typeof createTranscriptMeasuredSizes>, ro
   const staleBefore = fakeRow("stale", "answer", "preview");
   const stale = fakeRow("stale", "answer", "resolved");
   const unseen = fakeRow("unseen", "answer", "fresh");
-  store.record("stale", "answer", 999, 960, transcriptRowMeasurementVersion(staleBefore));
-  const estimates = store.synthesize([stale, unseen], 960);
+  recordRow(store, staleBefore, 999, 960);
+  const estimates = estimatesFor(store, [stale, unseen], 960);
   ok(estimates[1] !== 999, "a stale-version sample is excluded from the kind median");
 }
 
@@ -193,7 +268,7 @@ function estimateFor(store: ReturnType<typeof createTranscriptMeasuredSizes>, ro
   const beforeRow = beforeRows.find((row) => row.kind === "answer")!;
   const store = createTranscriptMeasuredSizes();
   const beforeVersion = transcriptRowMeasurementVersion(beforeRow);
-  store.record(String(beforeRow.key), beforeRow.kind, 88, 960, beforeVersion);
+  recordRow(store, beforeRow, 88, 960);
   const after = reducer(before, {
     type: "history_items_patch",
     patches: { [preview.id]: { ...preview, text: "resolved ".repeat(2_000) } },
@@ -214,9 +289,9 @@ function estimateFor(store: ReturnType<typeof createTranscriptMeasuredSizes>, ro
 
 {
   const store = createTranscriptMeasuredSizes();
-  store.record("a1", "answer", 100);
-  store.record("a2", "answer", 300);
-  store.record("a3", "answer", 200);
+  recordRow(store, fakeRow("a1", "answer", "first"), 100);
+  recordRow(store, fakeRow("a2", "answer", "second"), 300);
+  recordRow(store, fakeRow("a3", "answer", "third"), 200);
   const unseen = fakeRow("a4", "answer", "some answer text that is long enough to matter");
   eq(estimateFor(store, unseen), 200, "unseen row of a sampled kind uses the kind median");
   const toolRow = fakeRow("t1", "tool", "");
@@ -228,9 +303,9 @@ function estimateFor(store: ReturnType<typeof createTranscriptMeasuredSizes>, ro
   const first = fakeRow("a1", "answer", "first answer");
   const second = fakeRow("a2", "answer", "second answer");
   const unseen = fakeRow("a3", "answer", "unseen answer");
-  store.record("a1", "answer", 291, 960, transcriptRowMeasurementVersion(first));
-  store.record("a1", "answer", 632, 960, transcriptRowMeasurementVersion(first));
-  store.record("a2", "answer", 400, 960, transcriptRowMeasurementVersion(second));
+  recordRow(store, first, 291, 960);
+  recordRow(store, first, 632, 960);
+  recordRow(store, second, 400, 960);
   eq(estimateFor(store, first, 960), 632, "a later real measurement replaces the stale estimate for the same row");
   eq(estimateFor(store, second, 960), 400, "a second row keeps its own latest measurement");
   eq(estimateFor(store, unseen, 960), 516, "kind fallback uses one latest sample per row instead of duplicate observations");
@@ -239,7 +314,7 @@ function estimateFor(store: ReturnType<typeof createTranscriptMeasuredSizes>, ro
 {
   const store = createTranscriptMeasuredSizes();
   const row = fakeRow("width-sensitive", "answer", "wrapped answer");
-  store.record("width-sensitive", "answer", 632, 960, transcriptRowMeasurementVersion(row));
+  recordRow(store, row, 632, 960);
   eq(estimateFor(store, row, 960), 632, "an exact measurement is reused at the measured width");
   ok(
     estimateFor(store, row, 760) === estimateTranscriptRowSize(row),
@@ -250,19 +325,11 @@ function estimateFor(store: ReturnType<typeof createTranscriptMeasuredSizes>, ro
 {
   const store = createTranscriptMeasuredSizes();
   const rows = [fakeRow("r1", "user", "hi"), fakeRow("r2", "answer", "hello there")];
-  store.record("r1", "user", 64, undefined, transcriptRowMeasurementVersion(rows[0]));
-  const estimates = store.synthesize(rows);
+  recordRow(store, rows[0], 64);
+  const estimates = estimatesFor(store, rows);
   eq(estimates.length, 2, "synthesize stays aligned with the row array");
   eq(estimates[0], 64, "synthesize uses the exact measurement where present");
   ok(estimates[1] > 0, "synthesize falls back cleanly for unmeasured rows");
-}
-
-{
-  const store = createTranscriptMeasuredSizes();
-  store.record("r1", "answer", 500);
-  store.clear();
-  const row = fakeRow("r1", "answer", "hello");
-  ok(estimateFor(store, row) === estimateTranscriptRowSize(row), "clear() drops measurements and medians");
 }
 
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);

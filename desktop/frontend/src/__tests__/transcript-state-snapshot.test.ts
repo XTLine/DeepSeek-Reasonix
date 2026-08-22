@@ -1,7 +1,12 @@
 // Run: tsx src/__tests__/transcript-state-snapshot.test.ts
 
 import type { StateSnapshot, VirtuosoHandle } from "react-virtuoso";
-import { captureTranscriptVirtuosoState, resolveTranscriptStateSnapshot } from "../lib/transcriptStateSnapshot";
+import {
+  captureTranscriptVirtuosoState,
+  createTranscriptStateGeometry,
+  resolveTranscriptStateSnapshot,
+} from "../lib/transcriptStateSnapshot";
+import type { TranscriptRow } from "../lib/transcriptRows";
 
 let passed = 0;
 let failed = 0;
@@ -62,6 +67,32 @@ check(
 const prepended = resolveTranscriptStateSnapshot({ keys, snapshot: base }, ["n1", "n2", "a", "b", "c"]);
 check(prepended === undefined, "prepended rows discard the snapshot instead of translating internal ranges");
 check(base.ranges[0].startIndex === 0, "discarding changed data never mutates the captured snapshot");
+
+const answer = { kind: "answer", key: "a", item: { kind: "assistant", id: "a", text: "answer", reasoning: "", streaming: false }, layoutVariant: "text-flow" } as TranscriptRow;
+const reasoningCollapsed = { kind: "reasoning", key: "r", item: { kind: "assistant", id: "r", text: "", reasoning: "long", streaming: false }, segmentKey: "r", layoutVariant: "reasoning-summary" } as TranscriptRow;
+const geometry = createTranscriptStateGeometry("session-a", [answer, reasoningCollapsed], { contentWidth: 960, typographySignature: "font-a" });
+const geometryRecord = { keys: ["a", "r"], geometry, snapshot: base };
+check(resolveTranscriptStateSnapshot(geometryRecord, ["a", "r"], geometry) === base, "matching geometry contract restores the size tree");
+check(
+  resolveTranscriptStateSnapshot(
+    geometryRecord,
+    ["a", "r"],
+    createTranscriptStateGeometry("session-a", [answer, { ...reasoningCollapsed, layoutVariant: "reasoning-expanded" }], { contentWidth: 960, typographySignature: "font-a" }),
+  ) === undefined,
+  "layout state changes reject the snapshot",
+);
+check(
+  resolveTranscriptStateSnapshot(geometryRecord, ["a", "r"], createTranscriptStateGeometry("session-a", [answer, reasoningCollapsed], { contentWidth: 760, typographySignature: "font-a" })) === undefined,
+  "content width changes reject the snapshot",
+);
+check(
+  resolveTranscriptStateSnapshot(geometryRecord, ["a", "r"], createTranscriptStateGeometry("session-a", [answer, reasoningCollapsed], { contentWidth: 960, typographySignature: "font-b" })) === undefined,
+  "typography changes reject the snapshot",
+);
+check(
+  resolveTranscriptStateSnapshot(geometryRecord, ["a", "r"], createTranscriptStateGeometry("session-b", [answer, reasoningCollapsed], { contentWidth: 960, typographySignature: "font-a" })) === undefined,
+  "another session cannot restore an old scrollTop",
+);
 
 if (failed > 0) {
   console.error(`\n${failed} transcript state snapshot test(s) failed; ${passed} passed.`);

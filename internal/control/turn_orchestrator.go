@@ -282,6 +282,10 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 	if !turn.synthetic {
 		modelInput = c.withCapabilityRoute(ctx, input, turn.raw)
 	}
+	modelInput, ctx, err = c.prepareVisionTurn(ctx, modelInput, imageCandidates)
+	if err != nil {
+		return err
+	}
 	// Real user turns open a fresh Recovery Episode. Goal auto-continues and
 	// other synthetic turns inherit the current Episode so budgets accumulate
 	// only within one host-owned execution round.
