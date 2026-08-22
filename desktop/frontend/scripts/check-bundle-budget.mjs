@@ -99,7 +99,10 @@ console.log("\nbundle budgets");
 // tracks: production rides 437.0 KiB. Retain the merged capacity with 0.2 KiB
 // headroom; the historical test-channel diagnostics delta no longer
 // materializes after the merge, so both channels share one ratchet.
-const initialJSBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 437.2 : 437.2;
+// The remote-fix pass (cold-start group click, quick-action remote routing,
+// switch busy feedback) adds ~0.15 KiB: measured 437.3 KiB, ratcheted to
+// 437.5 with the same 0.2 KiB headroom policy.
+const initialJSBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 437.5 : 437.5;
 assertBudget("initial JavaScript gzip", initialJSGzip, initialJSBudgetKiB * 1024);
 assertBudget("largest initial JavaScript chunk gzip", largestInitialJS, 280 * 1024);
 // Render-blocking CSS is intentionally absent: styles.css loads deferred via
