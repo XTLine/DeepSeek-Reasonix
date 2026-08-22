@@ -284,6 +284,29 @@ func (l *eventLog) add(name string, payload any) {
 	l.mu.Unlock()
 }
 
+// swapHook is an App.remoteEventHook stand-in whose target can be replaced
+// while remote goroutines are still emitting: the App-level hook itself must
+// stay immutable after startup, or background emitters race with the swap.
+type swapHook struct {
+	mu sync.Mutex
+	fn func(name string, payload any)
+}
+
+func (s *swapHook) set(fn func(name string, payload any)) {
+	s.mu.Lock()
+	s.fn = fn
+	s.mu.Unlock()
+}
+
+func (s *swapHook) add(name string, payload any) {
+	s.mu.Lock()
+	fn := s.fn
+	s.mu.Unlock()
+	if fn != nil {
+		fn(name, payload)
+	}
+}
+
 func (l *eventLog) recorded() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -1692,7 +1715,8 @@ func TestRemoteTabPumpRoutesFramesBySession(t *testing.T) {
 		ensureToken: "s3cret",
 	}
 	seedBridgeTestHost(t, "box")
-	a := &App{remoteRuntime: kernel, remoteEventHook: func(string, any) {}}
+	hook := &swapHook{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: hook.add}
 	cleanupRemoteTabPumps(t, a)
 	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionName: "s1"})
 
@@ -1704,14 +1728,14 @@ func TestRemoteTabPumpRoutesFramesBySession(t *testing.T) {
 	}
 
 	log1 := &eventLog{}
-	a.remoteEventHook = log1.add
+	hook.set(log1.add)
 	fs.pushFrame(`{"kind":"text","sessionPath":"/remote/sessions/s1.jsonl","text":"hi"}`)
 	if got := log1.waitFor("remote-tab:"+meta.ID+":event", 2*time.Second); !strings.Contains(got, `"text"`) {
 		t.Fatalf("current-session frame not forwarded: %q", got)
 	}
 
 	log2 := &eventLog{}
-	a.remoteEventHook = log2.add
+	hook.set(log2.add)
 	fs.pushFrame(`{"kind":"text","sessionPath":"/remote/sessions/s2.jsonl","text":"bg"}`)
 	fs.pushFrame(`{"kind":"turn_started","sessionPath":"/remote/sessions/s2.jsonl"}`)
 	bgRunning := false
@@ -1888,12 +1912,13 @@ func TestOpenRemoteProjectTabEmitsOpenedOnce(t *testing.T) {
 	}
 	seedBridgeTestHost(t, "box")
 	log := &eventLog{}
-	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
+	hook := &swapHook{fn: log.add}
+	a := &App{remoteRuntime: kernel, remoteEventHook: hook.add}
 	cleanupRemoteTabPumps(t, a)
 	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionName: "s1"})
 
 	log2 := &eventLog{}
-	a.remoteEventHook = log2.add
+	hook.set(log2.add)
 	if _, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{SessionName: "s2", SessionPath: "/remote/sessions/s2.jsonl"}); err != nil {
 		t.Fatal(err)
 	}
