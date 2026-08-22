@@ -92,6 +92,10 @@ type remoteTab struct {
 	// route registration can pick the most recent deterministically.
 	model    string
 	modelSeq uint64
+	// resumeGen orders in-flight session switches: a background /resume whose
+	// generation no longer matches must not apply its results — a newer click
+	// owns the tab now.
+	resumeGen uint64
 
 	// Bridge fields, mutated under App.remoteTabMu. client keeps the serve
 	// session cookie in its jar across reconnects; token is retained for a
@@ -121,6 +125,16 @@ func (a *App) ListRemoteProjects() ([]RemoteProjectView, error) {
 func (a *App) AddRemoteProject(hostID, workspace string) (RemoteProjectView, error) {
 	hostID = strings.TrimSpace(hostID)
 	workspace = strings.TrimSpace(workspace)
+	// Fast path: already pinned (the common case — OpenRemoteProjectTab
+	// re-registers on every click). A read-only overlap check avoids taking
+	// the config edit lock and rewriting the file per session switch.
+	if cfg, err := config.Load(); err == nil {
+		if merged, ok := resolveOverlappingWorkspace(cfg.Remote.Projects, hostID, workspace); ok {
+			view := remoteProjectEntryToView(config.RemoteProjectEntry{HostID: hostID, Workspace: merged})
+			view.Merged = true
+			return view, nil
+		}
+	}
 	var view RemoteProjectView
 	err := editUserConfig(func(c *config.Config) error {
 		// Overlapping pins on one host collapse into the existing group:
@@ -317,8 +331,18 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 				reuse.topicTitle = title
 			}
 			reuse.newSession = false
+			reuse.resumeGen++
+			resumeGen := reuse.resumeGen
+			tabID := reuse.id
 			a.remoteTabMu.Unlock()
-			a.resumeRemoteTabSession(reuse.id, name, strings.TrimSpace(opts.SessionPath), strings.TrimSpace(opts.SessionTitle))
+			// The serve-side /resume (snapshot + full session load under the
+			// serve lock) must not block the binding: adopt the identity,
+			// flag connecting for the surface spinner, and finish the switch
+			// in the background — same contract as the bootstrap itself.
+			a.emitRemoteTabState(tabID, "connecting", "")
+			a.goSafe("remoteTabResume", func() {
+				a.resumeRemoteTabSession(tabID, resumeGen, name, strings.TrimSpace(opts.SessionPath), strings.TrimSpace(opts.SessionTitle))
+			})
 		} else {
 			a.remoteTabMu.Lock()
 			blank := reuse.sessionReset

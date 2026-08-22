@@ -1164,8 +1164,18 @@ func (a *App) RenameRemoteProjectSession(hostID, workspace, name, title string) 
 // snapshot. A multi-session serve accepts the switch even while the outgoing
 // session's turn is running: the old controller keeps finishing in the
 // background (writing its own file) and its frames stay tagged away from the
-// displayed transcript.
-func (a *App) resumeRemoteTabSession(tabID, name, knownPath, knownTitle string) {
+// displayed transcript. resumeGen guards the background switch: a newer
+// open must own the tab by the time this round trip lands.
+func (a *App) resumeRemoteTabSession(tabID string, resumeGen uint64, name, knownPath, knownTitle string) {
+	stillCurrent := func() bool {
+		a.remoteTabMu.Lock()
+		defer a.remoteTabMu.Unlock()
+		tab := a.remoteTabs[tabID]
+		return tab != nil && tab.resumeGen == resumeGen
+	}
+	if !stillCurrent() {
+		return
+	}
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
 	if tab == nil || tab.client == nil {
@@ -1205,7 +1215,14 @@ func (a *App) resumeRemoteTabSession(tabID, name, knownPath, knownTitle string) 
 	if title == "" {
 		title = name
 	}
+	if !stillCurrent() {
+		return
+	}
 	a.remoteTabMu.Lock()
+	if tab := a.remoteTabs[tabID]; tab == nil || tab.resumeGen != resumeGen {
+		a.remoteTabMu.Unlock()
+		return
+	}
 	tab.topicTitle = title
 	tab.sessionReset = false
 	tab.sessionName = name

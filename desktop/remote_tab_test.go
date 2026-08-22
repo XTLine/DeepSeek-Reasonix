@@ -37,6 +37,7 @@ type fakeServe struct {
 	eventsConns int                      // /events connections opened
 	statusJSON  string                   // GET /status payload; default is an idle serve
 	historyBody string                   // overrides the /history payload when set
+	slowResume  time.Duration            // artificial /resume delay to force overlap
 	slowHistory time.Duration            // artificial /history delay to force overlap
 	sseWriters  map[chan string]struct{} // live /events connections
 }
@@ -120,10 +121,14 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		}
 		fs.mu.Lock()
 		fs.resumePath = body.Path
+		delay := fs.slowResume
 		for i := range fs.sessions {
 			fs.sessions[i].Current = fs.sessions[i].Path == body.Path
 		}
 		fs.mu.Unlock()
+		if delay > 0 {
+			time.Sleep(delay)
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /sessions", func(w http.ResponseWriter, r *http.Request) {
@@ -346,6 +351,19 @@ func (l *eventLog) count(prefix string) int {
 		}
 	}
 	return n
+}
+
+// currentResumeGen reads a tab's live resume generation for direct
+// resumeRemoteTabSession calls in tests.
+func currentResumeGen(t *testing.T, a *App, tabID string) uint64 {
+	t.Helper()
+	a.remoteTabMu.Lock()
+	defer a.remoteTabMu.Unlock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil {
+		t.Fatalf("remote tab %s vanished", tabID)
+	}
+	return tab.resumeGen
 }
 
 func waitForTabState(t *testing.T, a *App, tabID, want string) {
@@ -1355,7 +1373,6 @@ func TestListTabsRemoteActiveFollowsHighlight(t *testing.T) {
 	}
 }
 
-
 // TestRemoteTabTitleAdoptsServeSession pins the title pipeline: the serve's
 // LLM-generated title for the current session replaces the workspace-name
 // default and reaches the chrome through the tab-opened channel.
@@ -1611,7 +1628,7 @@ func TestResumeRemoteTabSessionSwitchesWhileBusy(t *testing.T) {
 	fs.statusJSON = `{"running":true,"pendingPrompt":false,"backgroundJobs":0}`
 	fs.mu.Unlock()
 
-	a.resumeRemoteTabSession(meta.ID, "s2", "", "")
+	a.resumeRemoteTabSession(meta.ID, currentResumeGen(t, a, meta.ID), "s2", "", "")
 
 	if _, resumePath, _ := fs.snapshot(); resumePath != "/remote/sessions/s2.jsonl" {
 		t.Fatalf("busy serve must receive POST /resume for s2, got resumePath=%q", resumePath)
@@ -1880,7 +1897,7 @@ func TestResumeRemoteTabSessionKnownPathSkipsListing(t *testing.T) {
 			listingsBefore++
 		}
 	}
-	a.resumeRemoteTabSession(meta.ID, "s2", "/remote/sessions/s2.jsonl", "S2 Title")
+	a.resumeRemoteTabSession(meta.ID, currentResumeGen(t, a, meta.ID), "s2", "/remote/sessions/s2.jsonl", "S2 Title")
 	listingsAfter := 0
 	for _, call := range fs.recorded() {
 		if strings.HasPrefix(call, "GET /sessions") {

@@ -485,13 +485,19 @@ export function ProjectTree({
   // the connection + Serve + tab exist. The Set only guards in-flight double
   // clicks; repeat opens after settle are deduped by the backend reuse path.
   const openingRemoteRef = useRef(new Set<string>());
-  // Assigned below the session-cache block; a new-session open refreshes
-  // the listing once it lands.
+  // The row being switched to right now: its side slot shows a spinning
+  // refresh icon until the binding resolves, so remote switches feel as
+  // immediate as local ones instead of silently hanging on the round trip.
+  const [remoteRowOpening, setRemoteRowOpening] = useState<string | null>(null);
+  // Assigned below the session-cache block; a new-session open refreshes the
+  // listing once it lands.
   const bumpRemoteSessionsRef = useRef<() => void>(() => {});
   const openRemoteProject = useCallback(async (ref: RemoteTabRefView, opts?: { newSession?: boolean; sessionName?: string; sessionPath?: string; sessionTitle?: string; focus?: boolean }) => {
     const dedupeKey = `${ref.hostId}\u0000${ref.workspace}`;
     if (openingRemoteRef.current.has(dedupeKey)) return;
     openingRemoteRef.current.add(dedupeKey);
+    const rowTopicId = opts?.sessionName ? `${ref.hostId}\u0000${ref.workspace}\u0000${opts.sessionName}` : null;
+    if (rowTopicId) setRemoteRowOpening(rowTopicId);
     try {
       if (opts?.focus) {
         // Activate the existing tab for this workspace; no session change.
@@ -506,6 +512,7 @@ export function ProjectTree({
       showToast(e instanceof Error ? e.message : String(e), "error");
     } finally {
       openingRemoteRef.current.delete(dedupeKey);
+      if (rowTopicId) setRemoteRowOpening((current) => (current === rowTopicId ? null : current));
     }
   }, [showToast]);
 
@@ -1559,7 +1566,9 @@ export function ProjectTree({
             </span>
             {sideTimeVisible && (
               <span className={`project-tree__topic-side${!timeLabel && !showStatusInSide && !showWaitingPill ? " project-tree__topic-side--empty" : ""}`}>
-                {showWaitingPill && statusLabel ? (
+                {node.remoteSession && remoteRowOpening === node.topicId ? (
+                  <RefreshCw size={12} className="ico spin" aria-hidden="true" />
+                ) : showWaitingPill && statusLabel ? (
                   <span
                     className="project-tree__topic-waiting-pill"
                     title={statusLabel}

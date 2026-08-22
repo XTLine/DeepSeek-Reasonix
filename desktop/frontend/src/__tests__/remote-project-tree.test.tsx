@@ -147,6 +147,14 @@ ok(
   /project-tree__folder-action--busy/.test(source) && /RefreshCw/.test(source),
   "the group action slot shows a spinning refresh icon while connecting",
 );
+ok(
+  /remoteRowOpening === node\.topicId/.test(source) && /setRemoteRowOpening\(rowTopicId\)/.test(source),
+  "the switching remote row shows a spinning refresh icon until the open resolves",
+);
+ok(
+  /reuse\.resumeGen\+\+[\s\S]*?a\.goSafe\("remoteTabResume"/.test(readFileSync(resolve(here, "../../../remote_projects.go"), "utf8")),
+  "session switches resume in the background behind a generation guard",
+);
 
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);
