@@ -76,7 +76,11 @@ type serveSessionEntry struct {
 // ready shell.
 func enterRemoteSession(ctx context.Context, client *http.Client, base string, opts RemoteTabOpenOptions) (string, error) {
 	name := strings.TrimSpace(opts.SessionName)
-	if opts.NewSession || name == "" {
+	path := strings.TrimSpace(opts.SessionPath)
+	// Resume whenever we have a concrete session identity. Only fall back to
+	// POST /new when the caller explicitly wants a blank session or has no
+	// remembered name/path (legacy disconnected shells).
+	if opts.NewSession || (name == "" && path == "") {
 		data, err := servePostJSON(ctx, client, serveURL(base, "/new"), nil)
 		if err != nil {
 			return "", err
@@ -89,7 +93,6 @@ func enterRemoteSession(ctx context.Context, client *http.Client, base string, o
 		}
 		return currentSessionPathOf(ctx, client, base), nil
 	}
-	path := strings.TrimSpace(opts.SessionPath)
 	if path == "" {
 		sessions, err := serveSessions(ctx, client, base)
 		if err != nil {
@@ -186,6 +189,11 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token strin
 	tab.base = base
 	tab.token = token
 	tab.currentSessionPath = enteredPath
+	if name := strings.TrimSpace(opts.SessionName); name != "" {
+		tab.sessionName = name
+	}
+	tab.newSession = false
+	tab.sessionReset = false
 	gen := tab.gen
 	pumpCtx, cancelPump := context.WithCancel(ctx)
 	tab.cancel = cancelPump
@@ -1015,9 +1023,10 @@ func (a *App) RenameRemoteProjectSession(hostID, workspace, name, title string) 
 		if changed {
 			live.topicTitle = next
 		}
+		active := a.remoteActiveTabID == live.id
 		a.remoteTabMu.Unlock()
 		if changed {
-			a.emitRemoteEvent("remote-tab:opened", remoteTabMeta(live, live.hostLabel))
+			a.emitRemoteEvent("remote-tab:opened", remoteTabMeta(live, live.hostLabel, active))
 			a.saveTabsFromRemote()
 		}
 		return nil
@@ -1075,11 +1084,14 @@ func (a *App) resumeRemoteTabSession(tabID, name, knownPath, knownTitle string) 
 	a.remoteTabMu.Lock()
 	tab.topicTitle = title
 	tab.sessionReset = false
+	tab.sessionName = name
 	tab.currentSessionPath = entry.Path
+	tab.newSession = false
 	a.remoteTabMu.Unlock()
 	// No SSE resubscribe: the serve replays the new session's pending
 	// prompts onto the existing stream after a resume, and the pump routes
-	// per frame anyway.
+	// per frame anyway. OpenRemoteProjectTab re-emits opened after this
+	// returns with the adopted identity.
 	a.saveTabsFromRemote()
 	a.emitRemoteTabState(tabID, "ready", "")
 }
@@ -1198,7 +1210,7 @@ func (a *App) SetRemoteTabModel(tabID, ref string) error {
 	metaTab := a.remoteTabs[tabID]
 	a.remoteTabMu.Unlock()
 	if metaTab != nil {
-		a.activateRemoteTab(tabID, remoteTabMeta(metaTab, hostLabel))
+		a.activateRemoteTab(tabID, remoteTabMeta(metaTab, hostLabel, true))
 	}
 	return nil
 }
@@ -1340,9 +1352,10 @@ func (a *App) refreshRemoteTabTitle(tabID string) {
 			tab.topicTitle = title
 		}
 		tab.sessionReset = false
+		active := a.remoteActiveTabID == tab.id
 		a.remoteTabMu.Unlock()
 		if changed {
-			a.emitRemoteEvent("remote-tab:opened", remoteTabMeta(tab, tab.hostLabel))
+			a.emitRemoteEvent("remote-tab:opened", remoteTabMeta(tab, tab.hostLabel, active))
 			a.saveTabsFromRemote()
 		}
 		return
@@ -1407,7 +1420,7 @@ func (a *App) remoteTabMetas() ([]TabMeta, string) {
 	metas := make([]TabMeta, 0, len(ids))
 	for _, id := range ids {
 		if tab := a.remoteTabs[id]; tab != nil {
-			metas = append(metas, remoteTabMeta(tab, tab.hostLabel))
+			metas = append(metas, remoteTabMeta(tab, tab.hostLabel, id == a.remoteActiveTabID))
 		}
 	}
 	return metas, a.remoteActiveTabID
@@ -1449,11 +1462,13 @@ func (a *App) remoteTabsFileEntries() ([]desktopRemoteTabEntry, []string, string
 			continue
 		}
 		entries = append(entries, desktopRemoteTabEntry{
-			ID:         tab.id,
-			HostID:     tab.ref.HostID,
-			Workspace:  tab.ref.Workspace,
-			TopicTitle: tab.topicTitle,
-			Model:      tab.model,
+			ID:          tab.id,
+			HostID:      tab.ref.HostID,
+			Workspace:   tab.ref.Workspace,
+			TopicTitle:  tab.topicTitle,
+			Model:       tab.model,
+			SessionName: tab.sessionName,
+			SessionPath: tab.currentSessionPath,
 		})
 	}
 	order := append([]string(nil), ids...)

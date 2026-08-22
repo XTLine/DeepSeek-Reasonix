@@ -1279,6 +1279,56 @@ func TestListTabsIncludesRemoteEntries(t *testing.T) {
 	}
 }
 
+// TestListTabsRemoteActiveFollowsHighlight pins the strip Active contract:
+// only the highlighted remote tab (remoteActiveTabID) carries Active=true.
+// Hard-coding Active on every remote meta made ListTabs report multiple
+// actives whenever disconnected shells existed beside a local surface.
+func TestListTabsRemoteActiveFollowsHighlight(t *testing.T) {
+	a := &App{
+		tabs: map[string]*WorkspaceTab{
+			"local-1": {ID: "local-1", Scope: "global", WorkspaceRoot: t.TempDir()},
+		},
+		tabOrder:    []string{"local-1"},
+		activeTabID: "local-1",
+		remoteTabs: map[string]*remoteTab{
+			"remote-1": {
+				id: "remote-1", ref: RemoteTabRef{HostID: "box", Workspace: "/ws"},
+				state: "disconnected", hostLabel: "box", topicTitle: "ws",
+			},
+			"remote-2": {
+				id: "remote-2", ref: RemoteTabRef{HostID: "box", Workspace: "/ws2"},
+				state: "disconnected", hostLabel: "box", topicTitle: "ws2",
+			},
+		},
+		remoteTabOrder:    []string{"remote-1", "remote-2"},
+		remoteActiveTabID: "",
+	}
+
+	tabs := a.ListTabs()
+	activeIDs := make([]string, 0, 1)
+	for _, tab := range tabs {
+		if tab.Active {
+			activeIDs = append(activeIDs, tab.ID)
+		}
+	}
+	if len(activeIDs) != 1 || activeIDs[0] != "local-1" {
+		t.Fatalf("local highlight: active=%v, want exactly [local-1]", activeIDs)
+	}
+
+	a.remoteActiveTabID = "remote-2"
+	tabs = a.ListTabs()
+	activeIDs = activeIDs[:0]
+	for _, tab := range tabs {
+		if tab.Active {
+			activeIDs = append(activeIDs, tab.ID)
+		}
+	}
+	if len(activeIDs) != 1 || activeIDs[0] != "remote-2" {
+		t.Fatalf("remote highlight: active=%v, want exactly [remote-2]", activeIDs)
+	}
+}
+
+
 // TestRemoteTabTitleAdoptsServeSession pins the title pipeline: the serve's
 // LLM-generated title for the current session replaces the workspace-name
 // default and reaches the chrome through the tab-opened channel.
@@ -1873,5 +1923,85 @@ func TestEnterRemoteSessionUsesNewBodyPath(t *testing.T) {
 	}
 	if path != "/remote/sessions/fresh.jsonl" {
 		t.Fatalf("entered path = %q, want the /new body's sessionPath", path)
+	}
+}
+
+// TestRemoteTabMetaExposesSessionIdentity pins the left-tree highlight contract:
+// after a named remote session is open, ListTabs must carry TopicID + SessionPath
+// that match the synthesized remote session row identity.
+func TestRemoteTabMetaExposesSessionIdentity(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "s1", Path: "/remote/sessions/s1.jsonl", Title: "First chat", Turns: 2},
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{
+		SessionName:  "s1",
+		SessionPath:  "/remote/sessions/s1.jsonl",
+		SessionTitle: "First chat",
+	})
+
+	wantTopicID := "box\x00~/app\x00s1"
+	var listed TabMeta
+	found := false
+	for _, tab := range a.ListTabs() {
+		if tab.ID == meta.ID {
+			listed, found = tab, true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("remote tab missing from ListTabs")
+	}
+	if listed.TopicID != wantTopicID {
+		t.Fatalf("TopicID = %q, want %q", listed.TopicID, wantTopicID)
+	}
+	if listed.SessionPath != "/remote/sessions/s1.jsonl" {
+		t.Fatalf("SessionPath = %q, want /remote/sessions/s1.jsonl", listed.SessionPath)
+	}
+	if listed.WorkspaceRoot != "~/app" {
+		t.Fatalf("WorkspaceRoot = %q, want ~/app", listed.WorkspaceRoot)
+	}
+}
+
+// TestRemoteTabMetaIdentityAvailableOnOpen pins that a SessionName/SessionPath
+// open returns those fields on the immediate TabMeta so the tree can highlight
+// the clicked row before bootstrap finishes.
+func TestRemoteTabMetaIdentityAvailableOnOpen(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "s1", Path: "/remote/sessions/s1.jsonl", Title: "First chat", Turns: 1},
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+
+	meta, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{
+		SessionName:  "s1",
+		SessionPath:  "/remote/sessions/s1.jsonl",
+		SessionTitle: "First chat",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupRemoteTabPumps(t, a)
+
+	wantTopicID := "box\x00~/app\x00s1"
+	if meta.TopicID != wantTopicID {
+		t.Fatalf("open TopicID = %q, want %q", meta.TopicID, wantTopicID)
+	}
+	if meta.SessionPath != "/remote/sessions/s1.jsonl" {
+		t.Fatalf("open SessionPath = %q, want /remote/sessions/s1.jsonl", meta.SessionPath)
 	}
 }

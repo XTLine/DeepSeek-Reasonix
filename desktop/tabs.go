@@ -4931,15 +4931,17 @@ type desktopTabEntry struct {
 	ToolApprovalMode string  `json:"toolApprovalMode,omitempty"`
 }
 
-// desktopRemoteTabEntry persists one open remote tab as a disconnected shell:
-// no session is recorded — clicking the restored shell reconnects and lands
-// in a fresh blank session, and the tree's session rows switch conversations.
+// desktopRemoteTabEntry persists one open remote tab as a disconnected shell.
+// When SessionName/SessionPath are present, revive resumes that serve session
+// instead of POSTing /new into a blank transcript.
 type desktopRemoteTabEntry struct {
-	ID         string `json:"id"`
-	HostID     string `json:"hostId"`
-	Workspace  string `json:"workspace"`
-	TopicTitle string `json:"topicTitle,omitempty"`
-	Model      string `json:"model,omitempty"`
+	ID          string `json:"id"`
+	HostID      string `json:"hostId"`
+	Workspace   string `json:"workspace"`
+	TopicTitle  string `json:"topicTitle,omitempty"`
+	Model       string `json:"model,omitempty"`
+	SessionName string `json:"sessionName,omitempty"`
+	SessionPath string `json:"sessionPath,omitempty"`
 }
 
 type desktopTabsFile struct {

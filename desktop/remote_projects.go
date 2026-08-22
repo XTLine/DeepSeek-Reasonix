@@ -293,9 +293,31 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 	a.remoteTabMu.Unlock()
 	if reuse != nil {
 		if revive {
+			// A restored shell that remembered a session must resume it. Only
+			// shells without a persisted session identity fall back to /new.
+			if name := strings.TrimSpace(opts.SessionName); name != "" {
+				reuse.sessionName = name
+				reuse.currentSessionPath = strings.TrimSpace(opts.SessionPath)
+				if title := strings.TrimSpace(opts.SessionTitle); title != "" {
+					reuse.topicTitle = title
+				}
+				reuse.newSession = false
+			}
 			a.emitRemoteTabState(reuse.id, "connecting", "")
 			a.goSafe("remoteTabServe", func() { a.bootstrapRemoteTab(reuse.id, hostID, workspace) })
 		} else if name := strings.TrimSpace(opts.SessionName); name != "" {
+			// Adopt the clicked row identity before resume so the returned /
+			// opened TabMeta can highlight the left tree immediately.
+			a.remoteTabMu.Lock()
+			reuse.sessionName = name
+			if path := strings.TrimSpace(opts.SessionPath); path != "" {
+				reuse.currentSessionPath = path
+			}
+			if title := strings.TrimSpace(opts.SessionTitle); title != "" {
+				reuse.topicTitle = title
+			}
+			reuse.newSession = false
+			a.remoteTabMu.Unlock()
 			a.resumeRemoteTabSession(reuse.id, name, strings.TrimSpace(opts.SessionPath), strings.TrimSpace(opts.SessionTitle))
 		} else {
 			a.remoteTabMu.Lock()
@@ -307,14 +329,23 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 				a.resetRemoteTabSession(reuse.id)
 			}
 		}
-		meta := remoteTabMeta(reuse, host.Name)
+		meta := remoteTabMeta(reuse, host.Name, true)
 		a.activateRemoteTab(reuse.id, meta)
 		return meta, nil
 	}
 
 	ref := RemoteTabRef{HostID: hostID, Workspace: workspace}
 	tabID := newTabID()
-	tab := &remoteTab{id: tabID, ref: ref, state: "connecting", newSession: opts.NewSession, sessionName: opts.SessionName, hostLabel: host.Name, topicTitle: remoteWorkspaceName(workspace), model: resolveNewSessionModel(cfg)}
+	tab := &remoteTab{
+		id: tabID, ref: ref, state: "connecting",
+		newSession: opts.NewSession, sessionName: strings.TrimSpace(opts.SessionName),
+		currentSessionPath: strings.TrimSpace(opts.SessionPath),
+		hostLabel: host.Name, topicTitle: remoteWorkspaceName(workspace),
+		model: resolveNewSessionModel(cfg),
+	}
+	if title := strings.TrimSpace(opts.SessionTitle); title != "" {
+		tab.topicTitle = title
+	}
 	tab.modelSeq = remoteTabModelSeq.Add(1)
 	a.remoteTabMu.Lock()
 	if a.remoteTabs == nil {
@@ -335,7 +366,7 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 
 	a.goSafe("remoteTabServe", func() { a.bootstrapRemoteTab(tabID, hostID, workspace) })
 
-	meta := remoteTabMeta(tab, host.Name)
+	meta := remoteTabMeta(tab, host.Name, true)
 	a.activateRemoteTab(tabID, meta)
 	// Persist after activation so the file records the highlighted remote id.
 	a.saveTabsFromRemote()
@@ -345,7 +376,9 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 // restoreRemoteTabShells rebuilds disconnected registry entries from the
 // persisted tab file so remote tabs survive a restart. Shells never connect
 // on their own: activating one (SetActiveTab) or opening its project
-// bootstraps the reconnect, which lands in a fresh blank session.
+// bootstraps the reconnect. Restored shells stay in the strip/tree only —
+// first open follows the local active surface, because no remote connection
+// exists yet and the disconnected placeholder must not become the startup page.
 func (a *App) restoreRemoteTabShells(f desktopTabsFile) {
 	if len(f.RemoteTabs) == 0 {
 		return
@@ -362,6 +395,7 @@ func (a *App) restoreRemoteTabShells(f desktopTabsFile) {
 
 	cfg, cfgErr := config.Load()
 	a.remoteTabMu.Lock()
+	defer a.remoteTabMu.Unlock()
 	if a.remoteTabs == nil {
 		a.remoteTabs = map[string]*remoteTab{}
 	}
@@ -384,17 +418,19 @@ func (a *App) restoreRemoteTabShells(f desktopTabsFile) {
 		}
 		restored := &remoteTab{
 			id: id, ref: RemoteTabRef{HostID: hostID, Workspace: ws},
-			state: "disconnected", newSession: true,
+			state: "disconnected",
+			newSession: strings.TrimSpace(entry.SessionName) == "" && strings.TrimSpace(entry.SessionPath) == "",
+			sessionName: strings.TrimSpace(entry.SessionName),
+			currentSessionPath: strings.TrimSpace(entry.SessionPath),
 			hostLabel: hostLabel, topicTitle: title, model: strings.TrimSpace(entry.Model),
 		}
 		restored.modelSeq = remoteTabModelSeq.Add(1)
 		a.remoteTabs[id] = restored
 		a.remoteTabOrder = append(a.remoteTabOrder, id)
 	}
-	if f.ActiveTab != "" && a.remoteTabs[f.ActiveTab] != nil {
-		a.remoteActiveTabID = f.ActiveTab
-	}
-	a.remoteTabMu.Unlock()
+	// Intentionally leave remoteActiveTabID empty. Persisted ActiveTab may name
+	// a remote id from the previous run, but startup has no live remote
+	// connection yet — adopting it would open the disconnected placeholder.
 }
 
 // removeRemoteTabOrderID drops one id from the remote strip order.
@@ -420,7 +456,11 @@ func (a *App) activateRemoteTab(tabID string, meta TabMeta) {
 // remoteTabMeta builds the frontend-facing shape of one remote tab; the
 // create and reuse paths share it so both return identical metas. RemoteState
 // seeds the surface before any state event arrives this run (restored shells).
-func remoteTabMeta(tab *remoteTab, hostLabel string) TabMeta {
+// active must follow remoteActiveTabID — hard-coding true made every remote
+// shell look selected beside a local surface.
+// TopicID/SessionPath mirror the synthesized remote session row so
+// topicIsActive can highlight the left tree the same way as local topics.
+func remoteTabMeta(tab *remoteTab, hostLabel string, active bool) TabMeta {
 	label := hostLabel
 	if strings.TrimSpace(tab.model) != "" {
 		label = tab.model
@@ -430,14 +470,25 @@ func remoteTabMeta(tab *remoteTab, hostLabel string) TabMeta {
 		Scope:         "project",
 		WorkspaceRoot: tab.ref.Workspace,
 		WorkspaceName: remoteWorkspaceName(tab.ref.Workspace),
+		TopicID:       remoteTabTopicID(tab),
 		TopicTitle:    tab.topicTitle,
+		SessionPath:   tab.currentSessionPath,
 		Label:         label,
 		Mode:          "normal",
-		Active:        true,
+		Active:        active,
 		Cwd:           tab.ref.Workspace,
 		Remote:        &tab.ref,
 		RemoteState:   tab.state,
 	}
+}
+
+// remoteTabTopicID matches the synthesized remote session row topicId:
+// hostId\0workspace\0sessionName. Blank/new sessions have no name yet.
+func remoteTabTopicID(tab *remoteTab) string {
+	if tab == nil || strings.TrimSpace(tab.sessionName) == "" {
+		return ""
+	}
+	return tab.ref.HostID + "\x00" + tab.ref.Workspace + "\x00" + tab.sessionName
 }
 
 // bootstrapRemoteTab drives one remote tab to a terminal state: ensure the
@@ -499,20 +550,31 @@ func (a *App) bootstrapRemoteTab(tabID, hostID, workspace string) {
 	}
 	// ctx outlives the call: the pump derives from it, while the handshake
 	// and session entry inside run under a bounded sub-context.
-	opts := RemoteTabOpenOptions{NewSession: openTab.newSession, SessionName: openTab.sessionName}
+	opts := RemoteTabOpenOptions{
+		NewSession:   openTab.newSession,
+		SessionName:  openTab.sessionName,
+		SessionPath:  openTab.currentSessionPath,
+		SessionTitle: openTab.topicTitle,
+	}
+	wasNewSession := openTab.newSession
 	if err := a.attachRemoteTabServe(ctx, tabID, view.LocalURL, token, opts); err != nil {
 		a.emitRemoteTabState(tabID, "error", err.Error())
 		return
 	}
 	a.remoteTabMu.Lock()
-	openTab.sessionReset = openTab.newSession
-	if openTab.newSession {
+	// attach clears newSession after landing; use the pre-attach intent so a
+	// fresh blank still marks sessionReset for the reusable-blank contract.
+	openTab.sessionReset = wasNewSession
+	if wasNewSession {
 		// A bootstrapped fresh session carries the localized default title,
 		// same as the live-tab reset path.
 		openTab.topicTitle = a.localizedDefaultTopicTitle()
 	}
 	a.remoteTabMu.Unlock()
 	a.saveLastRemoteWorkspace(hostID, workspace)
+	// Persist after attach so revived shells remember the session they landed
+	// in (path/name), not just the disconnected shell identity.
+	a.saveTabsFromRemote()
 	a.emitRemoteTabState(tabID, "ready", "")
 }
 
