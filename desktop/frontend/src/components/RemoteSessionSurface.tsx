@@ -1,6 +1,5 @@
-import { CloudOff, Loader2, RotateCw, TriangleAlert } from "lucide-react";
+import { CloudOff, Loader2, TriangleAlert } from "lucide-react";
 import { useT } from "../lib/i18n";
-import { app } from "../lib/bridge";
 import { Transcript } from "./Transcript";
 import type { RemoteSessionApi } from "../lib/useRemoteSession";
 import type { TabMeta } from "../lib/types";
@@ -19,25 +18,6 @@ type RemoteAskQuestion = { id?: string; prompt?: string; options?: Array<{ label
 export function RemoteSessionSurface({ tab, session }: { tab: TabMeta; session: RemoteSessionApi }) {
   const t = useT();
   if (!tab.remote) return null;
-
-  if (session.state === "disconnected") {
-    // A restored shell: reconnect lands in a fresh blank session; past
-    // conversations are picked from the tree group's session rows.
-    const reconnect = () => {
-      void app.OpenRemoteProjectTab(tab.remote!.hostId, tab.remote!.workspace, { newSession: true }).catch(() => undefined);
-    };
-    return (
-      <div className="remote-surface remote-surface--disconnected" role="status">
-        <CloudOff size={18} aria-hidden="true" />
-        <span>{t("remoteSurface.disconnected")}</span>
-        <span className="remote-surface__detail">{t("remoteSurface.disconnectedHint")}</span>
-        <button type="button" className="btn btn--ghost" onClick={reconnect}>
-          <RotateCw size={14} aria-hidden="true" />
-          {t("remoteSurface.reconnect")}
-        </button>
-      </div>
-    );
-  }
 
   if (session.state === "serve_down") {
     return (

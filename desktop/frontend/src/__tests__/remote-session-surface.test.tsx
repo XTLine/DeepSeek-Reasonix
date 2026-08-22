@@ -39,6 +39,8 @@ globalThis.requestAnimationFrame = dom.window.requestAnimationFrame?.bind(dom.wi
 globalThis.cancelAnimationFrame = dom.window.cancelAnimationFrame?.bind(dom.window) ?? ((handle: number) => clearTimeout(handle));
 Object.defineProperty(dom.window.HTMLElement.prototype, "detachEvent", { configurable: true, value: () => {} });
 
+globalThis.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
+
 const tape: string[] = [];
 let dedupeBlocked = false;
 window.go = { main: { App: {
@@ -80,6 +82,9 @@ window.go = { main: { App: {
   async OpenRemoteProjectTab(hostId: string, workspace: string, opts?: { newSession?: boolean }) {
     tape.push(`open:${hostId}:${workspace}:${opts?.newSession ? "new" : ""}`);
     return { ...remoteTab, remote: { hostId, workspace } };
+  },
+  async SetActiveTab(tabID: string) {
+    tape.push(`setActive:${tabID}`);
   },
 } as Partial<AppBindings> as AppBindings } };
 
@@ -197,22 +202,47 @@ await act(async () => {
   ok(warning?.textContent?.includes("tunnel closed") === true, "serve error detail renders");
 }
 
-// ── Restored shell: the disconnected state renders a reconnect affordance
-// whose click reopens the project (fresh blank session) ──
+// ── Restored shell: disconnected activation shows connecting and revives ──
+{
+  const shellTab: TabMeta = {
+    ...remoteTab,
+    id: "tab-shell",
+    topicTitle: "shell",
+    remoteState: "disconnected",
+  };
+  let shellSession: RemoteSessionApi | undefined;
+  function ShellHarness() {
+    shellSession = useRemoteSession(shellTab.id, shellTab.remoteState);
+    return <RemoteSessionSurface tab={shellTab} session={shellSession} />;
+  }
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const shellMount = createRoot(host);
+  await act(async () => {
+    shellMount.render(
+      <LocaleProvider>
+        <ShellHarness />
+      </LocaleProvider>,
+    );
+  });
+  await act(async () => flush());
+  ok(!host.querySelector(".remote-surface--disconnected"), "disconnected never parks on the restored-shell placeholder");
+  ok(Boolean(host.querySelector(".remote-surface--waiting")), "disconnected activation shows the connecting surface");
+  ok(host.textContent?.includes("Connecting to the remote session") === true, "connecting copy replaces the reconnect affordance");
+  ok(tape.includes("setActive:tab-shell"), "disconnected mount kicks SetActiveTab revive/bootstrap");
+  ok(shellSession?.state === "connecting", "hook treats initial disconnected as connecting");
+  await act(async () => shellMount.unmount());
+  host.remove();
+}
+
+// Mid-flight disconnected events also refuse the placeholder.
 await act(async () => {
   __emitMockRemoteTab("tab-remote-1", "state", { state: "disconnected" });
   await flush();
 });
 {
-  const shell = document.querySelector(".remote-surface--disconnected");
-  ok(Boolean(shell), "disconnected renders the restored-shell state");
-  const reconnect = [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes("Reconnect"));
-  ok(Boolean(reconnect), "the disconnected surface offers a reconnect button");
-  await act(async () => {
-    reconnect?.click();
-    await flush();
-  });
-  ok(tape.includes("open:gpu-box:~/app:new"), "reconnect reopens the project with a fresh session");
+  ok(!document.querySelector(".remote-surface--disconnected"), "live disconnected events do not render the placeholder");
+  ok(Boolean(document.querySelector(".remote-surface--waiting")), "live disconnected events show connecting instead");
 }
 
 await act(async () => root.unmount());

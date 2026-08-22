@@ -42,7 +42,7 @@ export interface RemoteSessionApi {
 }
 
 export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabStateValue): RemoteSessionApi {
-  const [state, setState] = useState<RemoteTabStateValue>(initial ?? "connecting");
+  const [state, setState] = useState<RemoteTabStateValue>(initial === "disconnected" ? "connecting" : (initial ?? "connecting"));
   const [error, setError] = useState("");
   const [transcript, setTranscript] = useState<State>(initialState);
   const [modelLabel, setModelLabel] = useState("");
@@ -51,9 +51,11 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
 
   useEffect(() => {
     if (!tabId) return;
-    // A restored disconnected shell seeds its state from the meta; live state
-    // then flows through remote-tab:{id}:state events once a connect begins.
-    const start = initial ?? "connecting";
+    // Restored shells arrive as disconnected shells. Activation must kick the
+    // backend revive (SetActiveTab → bootstrap) and never park the UI on a
+    // reconnect placeholder — treat them as connecting until ready/error.
+    const revivedFromShell = initial === "disconnected";
+    const start: RemoteTabStateValue = revivedFromShell ? "connecting" : (initial ?? "connecting");
     setState(start);
     setError("")
     setTranscript(initialState)
@@ -63,7 +65,10 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
     // Never start the snapshot retry loop on a shell with no connection: the
     // ready transition triggers the first hydration instead. (initial is
     // deliberately not a dependency — only the mount-time snapshot matters.)
-    const skipHydrate = start === "disconnected";
+    const skipHydrate = revivedFromShell;
+    if (revivedFromShell) {
+      void app.SetActiveTab(tabId).catch(() => undefined);
+    }
 
     // One logical hydrate at a time. Mount and ready can overlap; coalesce so
     // a force during an in-flight fetch schedules exactly one follow-up instead
@@ -129,6 +134,17 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
 
     const offState = onRemoteTabState(tabId, (s) => {
       if (cancelled) return;
+      if (s.state === "disconnected") {
+        // A live drop back to the shell state should reconnect, not show the
+        // old placeholder page.
+        setState("connecting");
+        setError("");
+        hydratedRef.current = false;
+        setHydrated(false);
+        void app.SetActiveTab(tabId).catch(() => undefined);
+        setTranscript((prev) => (prev.running || prev.turnActive ? reducer(prev, { type: "turn_interrupted" }) : prev));
+        return;
+      }
       setState(s.state);
       setError(s.error ?? "");
       if (s.state === "ready") {
