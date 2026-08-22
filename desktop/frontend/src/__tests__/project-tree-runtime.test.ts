@@ -256,6 +256,64 @@ eq(
   true,
   "logical topic stays active when the representative path is not the open file",
 );
+eq(
+  topicIsActive(
+    {
+      key: "remote-session-box-s1",
+      kind: "topic",
+      label: "First chat",
+      root: "~/app",
+      topicId: "box\u0000~/app\u0000s1",
+      sessionPath: "/remote/sessions/s1.jsonl",
+      remoteSession: { hostId: "box", workspace: "~/app", name: "s1", path: "/remote/sessions/s1.jsonl", title: "First chat" },
+    },
+    "project",
+    "~/app",
+    "box\u0000~/app\u0000s1",
+    "/remote/sessions/s1.jsonl",
+  ),
+  true,
+  "remote session row is active when the open remote tab shares topicId and sessionPath",
+);
+eq(
+  topicIsActive(
+    {
+      key: "remote-session-box-s1",
+      kind: "topic",
+      label: "First chat",
+      root: "~/app",
+      topicId: "box\u0000~/app\u0000s1",
+      sessionPath: "/remote/sessions/s1.jsonl",
+      remoteSession: { hostId: "box", workspace: "~/app", name: "s1", path: "/remote/sessions/s1.jsonl", title: "First chat" },
+    },
+    "project",
+    "~/app",
+    "box\u0000~/app\u0000s2",
+    "/remote/sessions/s2.jsonl",
+  ),
+  false,
+  "remote session row stays inactive when another remote session is open",
+);
+eq(
+  topicIsActive(
+    {
+      key: "remote-session-box-s1",
+      kind: "topic",
+      label: "First chat",
+      root: "~/app",
+      topicId: "box\u0000~/app\u0000s1",
+      sessionPath: "/remote/sessions/s1.jsonl",
+      remoteSession: { hostId: "box", workspace: "~/app", name: "s1", path: "/remote/sessions/s1.jsonl", title: "First chat" },
+    },
+    "project",
+    "~/app",
+    "",
+    "/remote/sessions/s1.jsonl",
+  ),
+  true,
+  "remote session row stays active via sessionPath when topicId is still empty",
+);
+
 
 for (const status of ["thinking", "streaming", "waiting_confirmation", "background_job"] as const) {
   eq(

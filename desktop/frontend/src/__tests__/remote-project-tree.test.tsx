@@ -30,11 +30,19 @@ ok(
   "remote sessions join the tree data as synthetic topic nodes",
 );
 ok(
+  /sessionPath:\s*row\.path/.test(source) && /root:\s*node\.root/.test(source),
+  "synthesized remote rows carry sessionPath and root for topicIsActive",
+);
+ok(
+  /func remoteTabMeta\([\s\S]*?TopicID:[\s\S]*?SessionPath:/.test(readFileSync(resolve(here, "../../../remote_projects.go"), "utf8")),
+  "remoteTabMeta exposes TopicID and SessionPath for left-row active matching",
+);
+ok(
   /treeWithRemoteSessions\s*\.map\(filterNode\)/.test(source),
   "the synthesized rows flow through the local filter/arrange/pinned pipeline",
 );
 ok(
-  /if \(remote && remote\.name\) \{[\s\S]*?\{ sessionName: remote\.name \}[\s\S]*?\} else if \(remote\) \{[\s\S]*?\{ focus: true \}/.test(source),
+  /if \(remote && remote\.name\) \{[\s\S]*?sessionName: remote\.name[\s\S]*?\} else if \(remote\) \{[\s\S]*?\{ focus: true \}/.test(source),
   "row clicks resume named sessions and focus the blank one",
 );
 ok(
