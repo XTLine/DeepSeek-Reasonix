@@ -2140,15 +2140,16 @@ export function ProjectTree({
               if (folderDisclosure.canExpand) {
                 const willExpand = !expanded.has(key);
                 toggleExpand(key, node);
-                // Expanding a remote group is explicit user intent: when the
-                // serve is not running and nothing is cached, cold-start it
-                // (SSH bootstrap included) instead of silently listing
-                // nothing. Passive refresh stays on the read-only listing.
+                // Expanding a remote group is explicit user intent: with no
+                // cached rows, cold-start the serve (SSH bootstrap included)
+                // instead of silently listing nothing. The ensure call is
+                // idempotent — a live serve takes its fast path — and it
+                // must not trust the store's serve state, which can be
+                // stale after a serve stop. Passive refresh stays read-only.
                 if (node.remote && willExpand) {
                   const groupKey = `${node.remote.hostId}\u0000${node.remote.workspace}`;
-                  const serveState = remoteServers[node.remote.hostId]?.[node.remote.workspace]?.state;
                   const cached = remoteSessions[groupKey];
-                  if (serveState !== "ready" && !(cached && cached.length > 0)) {
+                  if (!(cached && cached.length > 0)) {
                     ensureRemoteGroupSessions(node.remote.hostId, node.remote.workspace);
                   }
                 }
