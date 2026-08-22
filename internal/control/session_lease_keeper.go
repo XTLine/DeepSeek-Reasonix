@@ -151,6 +151,79 @@ func (k *SessionLeaseKeeper) HandleSessionTransition(info SessionTransitionInfo)
 	return nil
 }
 
+// Split moves the held lease and its controller binding into a fresh keeper
+// without releasing the lease or revoking the controller's write authority.
+// Multi-session surfaces use it when a busy session's controller moves to
+// the background and must keep writing its own file to completion. The
+// receiver is left empty, ready for its next binding.
+func (k *SessionLeaseKeeper) Split() *SessionLeaseKeeper {
+	if k == nil {
+		return nil
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	dst := &SessionLeaseKeeper{lease: k.lease, controller: k.controller, retired: k.retired}
+	if dst.controller != nil {
+		dst.controller.SetOnSessionTransition(dst.HandleSessionTransition)
+	}
+	k.lease, k.controller, k.retired = nil, nil, nil
+	return dst
+}
+
+// RebindDetaching is Rebind for multi-session surfaces: it acquires path's
+// lease and atomically SPLITS the previously held lease into a returned
+// background keeper instead of releasing it, so the outgoing controller keeps
+// its write authority and can finish a running turn. Fail-atomic like
+// Rebind: on failure the keeper (and its current binding) is unchanged.
+// A nil returned keeper means the path is already the held one.
+func (k *SessionLeaseKeeper) RebindDetaching(path string) (*SessionLeaseKeeper, error) {
+	if k == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(path) == "" {
+		return k.Split(), nil // persistence disabled; nothing to acquire
+	}
+	k.mu.Lock()
+	if k.lease != nil && k.lease.Path() == agent.CanonicalSessionPath(path) {
+		k.mu.Unlock()
+		return nil, nil
+	}
+	lease, err := agent.TryAcquireSessionLease(path)
+	if err != nil {
+		k.mu.Unlock()
+		return nil, err
+	}
+	dst := &SessionLeaseKeeper{lease: k.lease, controller: k.controller, retired: k.retired}
+	if dst.controller != nil {
+		dst.controller.SetOnSessionTransition(dst.HandleSessionTransition)
+	}
+	k.lease, k.controller, k.retired = lease, nil, nil
+	k.mu.Unlock()
+	return dst, nil
+}
+
+// Adopt takes over another keeper's held lease and controller binding;
+// other is left empty. Used to re-attach a background session as the current
+// one: the lease is ours already, so it moves without an acquire round-trip.
+// Anything the receiver still holds is released first (its controller, if
+// any, was demoted via Split beforehand and is no longer bound here).
+func (k *SessionLeaseKeeper) Adopt(other *SessionLeaseKeeper) {
+	if k == nil || other == nil {
+		return
+	}
+	other.mu.Lock()
+	inLease, inCtrl, inRetired := other.lease, other.controller, other.retired
+	other.lease, other.controller, other.retired = nil, nil, nil
+	other.mu.Unlock()
+	if inCtrl != nil {
+		inCtrl.SetOnSessionTransition(k.HandleSessionTransition)
+	}
+	k.mu.Lock()
+	k.releaseLocked()
+	k.lease, k.controller, k.retired = inLease, inCtrl, inRetired
+	k.mu.Unlock()
+}
+
 // Release drops the held lease, if any. Idempotent; call it on frontend
 // teardown after the controller has finished its final writes.
 func (k *SessionLeaseKeeper) Release() {

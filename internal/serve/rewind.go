@@ -33,7 +33,14 @@ func (s *Server) rewind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if scope != control.RewindCode {
-		s.bc.ResetSession()
+		if ctrl, ok := s.ctl().(*control.Controller); ok {
+			if path := ctrl.SessionPath(); path != "" {
+				s.setControllerPath(ctrl, path)
+			}
+		}
+		if path := s.ctl().SessionPath(); path != "" {
+			s.bc.ResetSession(path)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

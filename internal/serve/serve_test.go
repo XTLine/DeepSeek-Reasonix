@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reasonix/internal/boot"
 	"strings"
 	"sync"
 	"testing"
@@ -113,7 +114,7 @@ func TestServeSubmitRunsAndBroadcastsTurnDone(t *testing.T) {
 	srv := httptest.NewServer(New(ctrl, bc, config.ServeConfig{}).Handler())
 	defer srv.Close()
 
-	sub, cancel := bc.Subscribe() // observe the broadcast deterministically
+	sub, cancel := bc.Subscribe(false) // observe the broadcast deterministically
 	defer cancel()
 
 	resp, err := http.Post(srv.URL+"/submit", "application/json", strings.NewReader(`{"input":"hi"}`))
@@ -364,7 +365,7 @@ func TestServeApproveMissingID(t *testing.T) {
 
 func TestServeNewSessionEndpoint(t *testing.T) {
 	bc := NewBroadcaster()
-	ctrl := control.New(control.Options{Sink: bc})
+	ctrl := control.New(control.Options{Sink: bc, SessionDir: t.TempDir()})
 	srv := httptest.NewServer(New(ctrl, bc, config.ServeConfig{}).Handler())
 	defer srv.Close()
 
@@ -372,9 +373,15 @@ func TestServeNewSessionEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		t.Errorf("new session = %d, want 204", resp.StatusCode)
+	defer resp.Body.Close()
+	var body struct {
+		SessionPath string `json:"sessionPath"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("new session body: %v", err)
+	}
+	if body.SessionPath == "" {
+		t.Error("new session must return the fresh sessionPath")
 	}
 }
 
@@ -617,7 +624,7 @@ func TestServeExtensionReloadPublishesOnlySuccessfulReplacement(t *testing.T) {
 	s := New(old, bc, config.ServeConfig{})
 
 	wantErr := errors.New("sidecar did not initialize")
-	s.rebuildController = func(context.Context, *control.Controller, string) (*control.Controller, error) {
+	s.rebuildController = func(context.Context, *control.Controller, string, boot.Options) (*control.Controller, error) {
 		return nil, wantErr
 	}
 	if err := s.reloadExtensions(context.Background()); !errors.Is(err, wantErr) {
@@ -628,7 +635,7 @@ func TestServeExtensionReloadPublishesOnlySuccessfulReplacement(t *testing.T) {
 	}
 
 	replacement := control.New(control.Options{Sink: bc, ModelRef: "default/model"})
-	s.rebuildController = func(_ context.Context, gotOld *control.Controller, ref string) (*control.Controller, error) {
+	s.rebuildController = func(_ context.Context, gotOld *control.Controller, ref string, _ boot.Options) (*control.Controller, error) {
 		if gotOld != old || ref != "default/model" {
 			t.Fatalf("rebuild inputs old=%p ref=%q", gotOld, ref)
 		}
@@ -654,7 +661,7 @@ func TestServeSwitchEffortUsesModelRefForDuplicateModelNames(t *testing.T) {
 	})
 	server := New(ctrl, bc, config.ServeConfig{})
 	var builtRef string
-	server.buildController = func(_ context.Context, ref string) (*control.Controller, error) {
+	server.buildController = func(_ context.Context, ref string, _ boot.Options) (*control.Controller, error) {
 		builtRef = ref
 		return control.New(control.Options{
 			Sink:       bc,
@@ -988,7 +995,7 @@ func TestServeEventsReplaysPendingAskOnAttach(t *testing.T) {
 	srv := httptest.NewServer(New(ctrl, bc, config.ServeConfig{}).Handler())
 	defer srv.Close()
 
-	firstSub, cancelFirst := bc.Subscribe()
+	firstSub, cancelFirst := bc.Subscribe(false)
 	defer cancelFirst()
 
 	askCtx, cancelAsk := context.WithCancel(context.Background())
@@ -1079,7 +1086,7 @@ func TestServeEventsReplayHandoffSerializesPromptEmission(t *testing.T) {
 	var sub <-chan []byte
 	var cancelSub func()
 	ctrl.ReplayPendingPromptsWith(func() event.Sink {
-		sub, cancelSub = bc.Subscribe()
+		sub, cancelSub = bc.Subscribe(false)
 		go func() {
 			_, _ = ctrl.Ask(askCtx, []event.AskQuestion{{
 				ID: "q1", Prompt: "pick one", Options: []event.AskOption{{Label: "A"}, {Label: "B"}},

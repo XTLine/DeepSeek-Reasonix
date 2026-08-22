@@ -1,12 +1,15 @@
 package serve
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reasonix/internal/boot"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -428,5 +431,115 @@ func TestInterleavedResumesForcedThroughBindWindow(t *testing.T) {
 	}
 	if got != agent.CanonicalSessionPath(wantC) {
 		t.Fatalf("last resume should win: controller on %q, want %q", got, wantC)
+	}
+}
+
+// busyTurnController reports active runtime work without a live turn so the
+// /resume rotation gate can be exercised end to end.
+type busyTurnController struct {
+	*control.Controller
+}
+
+func (busyTurnController) RuntimeStatus() control.RuntimeStatus {
+	return control.RuntimeStatus{Running: true}
+}
+
+// TestResumeRefusedWhileTurnRunning pins the cross-talk gate: POST /resume
+// while active work exists must refuse with 409 and leave the controller on
+// its current session — mirroring /new's rotation gate.
+func TestResumeRefusedWhileTurnRunning(t *testing.T) {
+	dir := t.TempDir()
+	active := filepath.Join(dir, "active.jsonl")
+	held := filepath.Join(dir, "held.jsonl")
+	saveServeTestSession(t, active)
+	saveServeTestSession(t, held)
+
+	bc := NewBroadcaster()
+	ctrl := control.New(control.Options{Sink: bc, SessionDir: dir, SessionPath: active})
+	server := New(busyTurnController{ctrl}, bc, config.ServeConfig{})
+	srv := httptest.NewServer(server.Handler())
+	defer srv.Close()
+
+	body, err := json.Marshal(map[string]string{"path": held})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(srv.URL+"/resume", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("busy resume status = %d, want 409 (body %q)", resp.StatusCode, respBody)
+	}
+	if got := server.ctl().SessionPath(); got != active {
+		t.Fatalf("session path after refused resume = %q, want active %q", got, active)
+	}
+}
+
+// TestBusyDetachSwapsControllerAndKeepsBackgroundLease pins the multi-session
+// switch: busyDetach swaps in a fresh controller bound to the target session
+// (which becomes current), while the outgoing controller's session lease is
+// split off to a background keeper — still protecting its file until the
+// watcher closes the controller, then released.
+func TestBusyDetachSwapsControllerAndKeepsBackgroundLease(t *testing.T) {
+	dir := t.TempDir()
+	aPath := filepath.Join(dir, "a.jsonl")
+	bPath := filepath.Join(dir, "b.jsonl")
+	saveServeTestSession(t, aPath)
+	saveServeTestSession(t, bPath)
+
+	bc := NewBroadcaster()
+	ctrlA := control.New(control.Options{Sink: bc, SessionDir: dir, SessionPath: aPath})
+	server := New(ctrlA, bc, config.ServeConfig{})
+	leases := control.NewSessionLeaseKeeper()
+	defer leases.Release()
+	if err := leases.Rebind(aPath); err != nil {
+		t.Fatalf("seed lease on a: %v", err)
+	}
+	if err := leases.BindControllerAuthority(ctrlA); err != nil {
+		t.Fatalf("bind authority: %v", err)
+	}
+	server.SetSessionLeases(leases)
+	// Inject a real builder so busyDetach constructs a live replacement
+	// controller without provider IO beyond config parsing.
+	server.buildController = func(ctx context.Context, ref string, opts boot.Options) (*control.Controller, error) {
+		return control.New(control.Options{Sink: bc, SessionDir: dir}), nil
+	}
+
+	if err := server.busyDetach(context.Background(), ctrlA, bPath, func(newCtrl *control.Controller) error {
+		loaded, err := agent.LoadSession(bPath)
+		if err != nil {
+			return err
+		}
+		newCtrl.Resume(loaded, bPath)
+		return nil
+	}); err != nil {
+		t.Fatalf("busyDetach: %v", err)
+	}
+
+	if got := server.ctl(); got == control.SessionAPI(ctrlA) {
+		t.Fatal("current controller unchanged")
+	}
+	if got, want := server.ctl().SessionPath(), bPath; got != want {
+		t.Fatalf("current session = %q, want %q", got, want)
+	}
+	if got, want := leases.HeldPath(), bPath; got != want {
+		t.Fatalf("server lease = %q, want %q", got, want)
+	}
+	if got := bc.CurrentSession(); got != bPath {
+		t.Fatalf("broadcaster current = %q, want %q", got, bPath)
+	}
+	// The background session's lease is still held (by the split keeper):
+	// an outside runtime must not be able to bind a's file while its
+	// controller is finishing.
+	if _, err := agent.TryAcquireSessionLease(aPath); !errors.Is(err, agent.ErrSessionLeaseHeld) {
+		t.Fatalf("TryAcquireSessionLease(a) after detach = %v, want held", err)
+	}
+	// The idle watcher closes the background controller and releases its lease.
+	server.WaitForDetachedIdle()
+	if _, err := agent.TryAcquireSessionLease(aPath); err != nil {
+		t.Fatalf("TryAcquireSessionLease(a) after close = %v, want free", err)
 	}
 }

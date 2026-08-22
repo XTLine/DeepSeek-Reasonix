@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reasonix/internal/boot"
 	"runtime"
 	"strings"
 	"testing"
@@ -28,7 +29,7 @@ func TestProviderSetupStoresRemoteCredentialAndRebuildsController(t *testing.T) 
 	}
 
 	built := 0
-	s.buildController = func(_ context.Context, ref string) (*control.Controller, error) {
+	s.buildController = func(_ context.Context, ref string, _ boot.Options) (*control.Controller, error) {
 		built++
 		if ref != "remote-demo/model-a" {
 			t.Fatalf("rebuilt ref = %q, want remote-demo/model-a", ref)
@@ -128,7 +129,7 @@ func TestProviderSetupActivationFailureKeepsCredentialAndHidesDetails(t *testing
 	s, secret := newProviderSetupTestServer(t)
 	s.EnableProviderSetupForListener("127.0.0.1:8787")
 	built := 0
-	s.buildController = func(_ context.Context, ref string) (*control.Controller, error) {
+	s.buildController = func(_ context.Context, ref string, _ boot.Options) (*control.Controller, error) {
 		built++
 		if built == 1 {
 			return nil, errors.New("sensitive remote path: /srv/private/config.toml")
@@ -189,7 +190,7 @@ func TestProviderSetupActivationRetryReturnsToMissingWhenCredentialWasRemoved(t 
 	s, secret := newProviderSetupTestServer(t)
 	s.EnableProviderSetupForListener("127.0.0.1:8787")
 	built := 0
-	s.buildController = func(context.Context, string) (*control.Controller, error) {
+	s.buildController = func(context.Context, string, boot.Options) (*control.Controller, error) {
 		built++
 		return nil, errors.New("transient activation failure")
 	}
@@ -228,7 +229,7 @@ func TestProviderSetupRejectsCredentialSavedByAnotherProcess(t *testing.T) {
 	if _, err := config.SetCredential(providerSetupTestKeyEnv, "newer-external-secret"); err != nil {
 		t.Fatal(err)
 	}
-	s.buildController = func(context.Context, string) (*control.Controller, error) {
+	s.buildController = func(context.Context, string, boot.Options) (*control.Controller, error) {
 		t.Fatal("stale setup request rebuilt the controller")
 		return nil, nil
 	}

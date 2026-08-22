@@ -40,8 +40,11 @@ type Event struct {
 	StreamAttempt   *StreamAttempt      `json:"streamAttempt,omitempty"`
 	// ItemID correlates Steer / TurnDone / unapplied-steer with a durable
 	// session-inbox entry. Empty for legacy text-only guidance.
-	ItemID    string            `json:"itemId,omitempty"`
-	Workspace *WorkspaceChanged `json:"workspace,omitempty"`
+	ItemID string `json:"itemId,omitempty"`
+	// SessionPath routes the frame to its session on multi-session surfaces
+	// (serve with detached background controllers). Older clients ignore it.
+	SessionPath string            `json:"sessionPath,omitempty"`
+	Workspace   *WorkspaceChanged `json:"workspace,omitempty"`
 	// Phase is set on turn_phase events: working | checking | verifying | reviewing.
 	Phase string `json:"phase,omitempty"`
 	// Completion is set on completion_summary events (content-free quality summary).
@@ -96,7 +99,7 @@ type StreamAttempt struct {
 
 // ToWire converts a typed runtime event into the shared frontend JSON contract.
 func ToWire(e event.Event) Event {
-	w := Event{Kind: kindNames[e.Kind], Text: e.Text, Detail: e.Detail, Reasoning: e.Reasoning, ItemID: e.ItemID}
+	w := Event{Kind: kindNames[e.Kind], Text: e.Text, Detail: e.Detail, Reasoning: e.Reasoning, ItemID: e.ItemID, SessionPath: e.SessionPath}
 	if len(e.MemoryCitations) > 0 {
 		w.MemoryCitations = ToWireMemoryCitations(e.MemoryCitations)
 	}

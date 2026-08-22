@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reasonix/internal/boot"
 	"strings"
 	"testing"
 	"time"
@@ -53,7 +54,7 @@ func TestSwitchModelKeepsAskInteractive(t *testing.T) {
 
 	askCh := make(chan event.Ask, 1)
 	s := &Server{ctrl: old, bc: bc}
-	s.buildController = func(_ context.Context, _ string) (*control.Controller, error) {
+	s.buildController = func(_ context.Context, _ string, _ boot.Options) (*control.Controller, error) {
 		reg := tool.NewRegistry()
 		reg.Add(agent.NewAskTool())
 		exec := agent.New(&switchAskProvider{}, reg, agent.NewSession("sys"), agent.Options{}, event.Discard)
@@ -153,7 +154,7 @@ func TestSwitchModelContinuesRecoveryPathAfterSnapshotConflict(t *testing.T) {
 	s.SetSessionLeases(leases)
 
 	var built *control.Controller
-	s.buildController = func(_ context.Context, _ string) (*control.Controller, error) {
+	s.buildController = func(_ context.Context, _ string, _ boot.Options) (*control.Controller, error) {
 		built = control.New(control.Options{
 			Executor:   agent.New(nil, nil, agent.NewSession("sys prompt"), agent.Options{}, event.Discard),
 			SessionDir: dir,
@@ -247,7 +248,7 @@ func TestSwitchModelRefreshesLeadingSystemPrompt(t *testing.T) {
 		Sink:       bc,
 	})
 	s := &Server{ctrl: old, bc: bc}
-	s.buildController = func(_ context.Context, _ string) (*control.Controller, error) {
+	s.buildController = func(_ context.Context, _ string, _ boot.Options) (*control.Controller, error) {
 		return control.New(control.Options{
 			Executor:   agent.New(nil, nil, agent.NewSession("new system prompt"), agent.Options{}, event.Discard),
 			SessionDir: dir,
@@ -293,7 +294,7 @@ func TestSwitchModelRestoresSessionAuthorizations(t *testing.T) {
 	})
 
 	s := &Server{ctrl: old, bc: bc}
-	s.buildController = func(_ context.Context, _ string) (*control.Controller, error) {
+	s.buildController = func(_ context.Context, _ string, _ boot.Options) (*control.Controller, error) {
 		return control.New(control.Options{
 			Executor:   agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard),
 			SessionDir: dir,
@@ -345,7 +346,7 @@ func TestSwitchModelPersistsRefreshedSystemPromptToDisk(t *testing.T) {
 		Sink:        bc,
 	})
 	s := &Server{ctrl: old, bc: bc}
-	s.buildController = func(_ context.Context, _ string) (*control.Controller, error) {
+	s.buildController = func(_ context.Context, _ string, _ boot.Options) (*control.Controller, error) {
 		return control.New(control.Options{
 			Executor:   agent.New(nil, nil, agent.NewSession("new system prompt"), agent.Options{}, event.Discard),
 			SessionDir: dir,
@@ -388,7 +389,7 @@ func TestSwitchModelSnapshotFailureKeepsOldController(t *testing.T) {
 	})
 	t.Cleanup(old.Close)
 	s := &Server{ctrl: old, bc: bc}
-	s.buildController = func(_ context.Context, _ string) (*control.Controller, error) {
+	s.buildController = func(_ context.Context, _ string, _ boot.Options) (*control.Controller, error) {
 		return control.New(control.Options{
 			Executor:   agent.New(nil, nil, agent.NewSession("new system prompt"), agent.Options{}, event.Discard),
 			SessionDir: invalidSessionDir,

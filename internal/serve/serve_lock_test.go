@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reasonix/internal/boot"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -84,7 +85,7 @@ func TestSwitchModelDoesNotHoldServerLockDuringSnapshotAndClose(t *testing.T) {
 	old.onClose = expectServerMutexAvailable(t, s, closeChecks)
 
 	var built *control.Controller
-	s.buildController = func(_ context.Context, _ string) (*control.Controller, error) {
+	s.buildController = func(_ context.Context, _ string, _ boot.Options) (*control.Controller, error) {
 		built = control.New(control.Options{Sink: bc})
 		return built, nil
 	}
@@ -119,7 +120,7 @@ func TestSwitchModelDiscardsBuiltControllerOnConcurrentSwap(t *testing.T) {
 	s := &Server{ctrl: old, bc: bc}
 
 	var built *control.Controller
-	s.buildController = func(_ context.Context, _ string) (*control.Controller, error) {
+	s.buildController = func(_ context.Context, _ string, _ boot.Options) (*control.Controller, error) {
 		// Simulate a concurrent path (resume/new-session) replacing the
 		// controller after the off-lock snapshot but before the publish lock.
 		s.mu.Lock()
@@ -145,7 +146,7 @@ func TestSwitchModelRejectsWhileRunning(t *testing.T) {
 	ctrl := control.New(control.Options{Runner: blockingRunner{}, Sink: bc})
 	s := &Server{ctrl: ctrl, bc: bc}
 	built := false
-	s.buildController = func(_ context.Context, _ string) (*control.Controller, error) {
+	s.buildController = func(_ context.Context, _ string, _ boot.Options) (*control.Controller, error) {
 		built = true
 		return control.New(control.Options{Sink: bc}), nil
 	}
@@ -176,7 +177,7 @@ func TestSwitchModelRejectsWhileBackgroundJobRunning(t *testing.T) {
 
 	s := &Server{ctrl: ctrl, bc: bc}
 	built := false
-	s.buildController = func(_ context.Context, _ string) (*control.Controller, error) {
+	s.buildController = func(_ context.Context, _ string, _ boot.Options) (*control.Controller, error) {
 		built = true
 		return control.New(control.Options{Sink: bc}), nil
 	}
@@ -194,7 +195,7 @@ func TestExtensionReloadRejectsWhileTurnRunning(t *testing.T) {
 	ctrl := control.New(control.Options{Runner: blockingRunner{}, Sink: bc})
 	s := New(ctrl, bc, config.ServeConfig{})
 	built := false
-	s.rebuildController = func(_ context.Context, _ *control.Controller, _ string) (*control.Controller, error) {
+	s.rebuildController = func(_ context.Context, _ *control.Controller, _ string, _ boot.Options) (*control.Controller, error) {
 		built = true
 		return control.New(control.Options{Sink: bc}), nil
 	}
@@ -218,7 +219,7 @@ func TestConcurrentExtensionReloadsAreSerialized(t *testing.T) {
 	secondEntered := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	var calls atomic.Int32
-	s.rebuildController = func(_ context.Context, _ *control.Controller, _ string) (*control.Controller, error) {
+	s.rebuildController = func(_ context.Context, _ *control.Controller, _ string, _ boot.Options) (*control.Controller, error) {
 		if calls.Add(1) == 1 {
 			close(firstEntered)
 			<-releaseFirst
@@ -255,7 +256,7 @@ func TestSubmitWaitsForExtensionReloadAndTargetsReplacement(t *testing.T) {
 	buildEntered := make(chan struct{})
 	releaseBuild := make(chan struct{})
 	replacement := control.New(control.Options{Sink: bc, Runner: blockingRunner{}})
-	s.rebuildController = func(_ context.Context, _ *control.Controller, _ string) (*control.Controller, error) {
+	s.rebuildController = func(_ context.Context, _ *control.Controller, _ string, _ boot.Options) (*control.Controller, error) {
 		close(buildEntered)
 		<-releaseBuild
 		return replacement, nil

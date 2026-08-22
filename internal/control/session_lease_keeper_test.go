@@ -281,3 +281,101 @@ func TestSessionInUseMessageFallsBackWithoutInfo(t *testing.T) {
 		}
 	}
 }
+
+// TestSessionLeaseKeeperRebindDetachingSplitsLease pins the multi-session
+// handoff: acquiring the target splits the outgoing lease into a background
+// keeper whose controller keeps its write authority (no release), and the
+// server keeper guards the target.
+func TestSessionLeaseKeeperRebindDetachingSplitsLease(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.jsonl")
+	b := filepath.Join(dir, "b.jsonl")
+
+	k := NewSessionLeaseKeeper()
+	defer k.Release()
+	if err := k.Rebind(a); err != nil {
+		t.Fatalf("Rebind(a): %v", err)
+	}
+
+	bg, err := k.RebindDetaching(b)
+	if err != nil {
+		t.Fatalf("RebindDetaching(b): %v", err)
+	}
+	if bg == nil {
+		t.Fatal("background keeper missing")
+	}
+	defer bg.Release()
+	if got, want := k.HeldPath(), agent.CanonicalSessionPath(b); got != want {
+		t.Fatalf("keeper HeldPath = %q, want %q", got, want)
+	}
+	if got, want := bg.HeldPath(), agent.CanonicalSessionPath(a); got != want {
+		t.Fatalf("background HeldPath = %q, want %q", got, want)
+	}
+	// Both leases are genuinely held: outside acquires fail for either path.
+	if _, err := agent.TryAcquireSessionLease(a); !errors.Is(err, agent.ErrSessionLeaseHeld) {
+		t.Fatalf("TryAcquireSessionLease(a) = %v, want held", err)
+	}
+	if _, err := agent.TryAcquireSessionLease(b); !errors.Is(err, agent.ErrSessionLeaseHeld) {
+		t.Fatalf("TryAcquireSessionLease(b) = %v, want held", err)
+	}
+}
+
+// TestSessionLeaseKeeperRebindDetachingFailAtomic pins that a held target
+// leaves the keeper — and the outgoing background handoff — untouched.
+func TestSessionLeaseKeeperRebindDetachingFailAtomic(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.jsonl")
+	b := filepath.Join(dir, "b.jsonl")
+
+	k := NewSessionLeaseKeeper()
+	defer k.Release()
+	if err := k.Rebind(a); err != nil {
+		t.Fatal(err)
+	}
+	outside, err := agent.TryAcquireSessionLease(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outside.Release()
+
+	bg, err := k.RebindDetaching(b)
+	if !errors.Is(err, agent.ErrSessionLeaseHeld) {
+		t.Fatalf("RebindDetaching(b) = %v, want ErrSessionLeaseHeld", err)
+	}
+	if bg != nil {
+		t.Fatal("background keeper returned on failure")
+	}
+	if got, want := k.HeldPath(), agent.CanonicalSessionPath(a); got != want {
+		t.Fatalf("keeper HeldPath = %q, want unchanged %q", got, want)
+	}
+}
+
+// TestSessionLeaseKeeperAdoptReattachesLease pins the switch-back path: a
+// background keeper's lease moves into the server keeper without an acquire
+// round-trip, and the background keeper is left empty.
+func TestSessionLeaseKeeperAdoptReattachesLease(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.jsonl")
+	b := filepath.Join(dir, "b.jsonl")
+
+	k := NewSessionLeaseKeeper()
+	defer k.Release()
+	if err := k.Rebind(a); err != nil {
+		t.Fatal(err)
+	}
+	bg, err := k.RebindDetaching(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the outgoing current's keeper being split off, then adopt the
+	// background one as current again.
+	outgoing := k.Split()
+	defer outgoing.Release()
+	k.Adopt(bg)
+	if got, want := k.HeldPath(), agent.CanonicalSessionPath(a); got != want {
+		t.Fatalf("keeper HeldPath = %q, want adopted %q", got, want)
+	}
+	if got := bg.HeldPath(); got != "" {
+		t.Fatalf("background HeldPath = %q, want empty", got)
+	}
+}
