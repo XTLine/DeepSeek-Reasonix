@@ -723,6 +723,20 @@ export function ProjectTree({
     // Returning prev unchanged keeps a switch that expands nothing new from
     // re-rendering the tree at all.
     setExpanded((prev) => (keys.every((key) => prev.has(key)) ? prev : new Set([...prev, ...keys])));
+    // An auto-expanded remote group whose serve is down would otherwise sit
+    // empty and silent (the passive listing never wakes a serve). The active
+    // tab makes this group the user's focus, so give it the same cold-start
+    // treatment as an explicit click. `tree` entries still carry `remote`.
+    for (const node of tree) {
+      if (!node.remote) continue;
+      const groupKey = `${node.remote.hostId}\u0000${node.remote.workspace}`;
+      if (!keys.includes(projectNodeKey(node, 0))) continue;
+      const cached = remoteSessions[groupKey];
+      if (!(cached && cached.length > 0)) {
+        ensureRemoteGroupSessions(node.remote.hostId, node.remote.workspace);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tree, activeScope, activeWorkspaceRoot, activeTopicId, activeSessionPath]);
 
   const markNodeRead = useCallback((node: ProjectNode) => {
