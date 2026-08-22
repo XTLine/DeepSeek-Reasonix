@@ -965,15 +965,25 @@ func (a *App) serveClientForRef(hostID, workspace string) (*http.Client, string,
 }
 
 // serveClientEnsured is serveClientForRef plus a cold start: when nothing is
-// running it boots the workspace serve through EnsureServer and handshakes
-// the fresh registration. Reserved for explicit user intent (a group click);
-// query paths stay on serveClientForRef so polls never wake a serve.
+// running it dials the host and boots the workspace serve (the same
+// connect→wait→EnsureServer sequence the tab bootstrap drives), then
+// handshakes the fresh registration. Reserved for explicit user intent (a
+// group click); query paths stay on serveClientForRef so polls never wake a
+// serve.
 func (a *App) serveClientEnsured(hostID, workspace string) (*http.Client, string, func(), error) {
 	if client, base, done, err := a.serveClientForRef(hostID, workspace); err == nil {
 		return client, base, done, nil
 	}
 	rt, err := a.remoteRT()
 	if err != nil {
+		return nil, "", nil, err
+	}
+	// Connect is idempotent: an already connecting/connected host returns
+	// nil, a stopped generation is replaced with a fresh dial.
+	if err := rt.Connect(hostID); err != nil {
+		return nil, "", nil, err
+	}
+	if err := waitForRemoteHost(rt, hostID, 60*time.Second); err != nil {
 		return nil, "", nil, err
 	}
 	bootCtx := a.bootContext()
