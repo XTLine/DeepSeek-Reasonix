@@ -55,7 +55,6 @@ const host: RemoteHostView = {
   proxyJump: "",
   defaultWorkspace: "/srv/app",
   serveInstall: "auto",
-  credentialMode: "remote",
   useSSHConfig: false,
 };
 const rawError = "remote: host key mismatch (/home/dev/.ssh/known_hosts:7)";

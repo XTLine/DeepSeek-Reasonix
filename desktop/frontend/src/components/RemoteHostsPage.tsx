@@ -16,7 +16,6 @@ const EMPTY_INPUT: RemoteHostInput = {
   proxyJump: "",
   defaultWorkspace: "",
   serveInstall: "auto",
-  credentialMode: "remote",
   useSSHConfig: false,
 };
 
@@ -396,13 +395,6 @@ function RemoteHostForm(props: {
           <option value="never">never</option>
         </select>
       </label>
-      <label>
-        {t("remote.host.credentialMode")}
-        <select value={form.credentialMode} onChange={(e) => set("credentialMode", e.target.value)}>
-          <option value="remote">{t("remote.host.credentialModeRemote")}</option>
-          <option value="local-proxy">{t("remote.host.credentialModeLocalProxy")}</option>
-        </select>
-      </label>
       {err && <p className="remote-host-form__error" role="alert">{err}</p>}
       <div className="remote-host-form__actions">
         <button className="btn" onClick={props.onCancel}>{t("remote.host.cancel")}</button>
@@ -482,7 +474,6 @@ function hostToInput(h?: RemoteHostView): RemoteHostInput {
     proxyJump: h.proxyJump,
     defaultWorkspace: h.defaultWorkspace,
     serveInstall: h.serveInstall,
-    credentialMode: h.credentialMode || "remote",
     useSSHConfig: h.useSSHConfig,
     password: "",
     keyPassphrase: "",

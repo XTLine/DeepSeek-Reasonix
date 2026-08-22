@@ -5697,7 +5697,7 @@ function makeMockApp(): AppBindings {
     },
     async ScanSSHConfig() {
       return [
-        { label: "gpu-box", host: "gpu-box", port: 0, user: "", identityFile: "", proxyJump: "", defaultWorkspace: "", serveInstall: "auto", credentialMode: "remote", useSSHConfig: true, preserveExistingSettings: true },
+        { label: "gpu-box", host: "gpu-box", port: 0, user: "", identityFile: "", proxyJump: "", defaultWorkspace: "", serveInstall: "auto", useSSHConfig: true, preserveExistingSettings: true },
       ];
     },
     async ConnectRemoteHost(id) {
@@ -6074,7 +6074,6 @@ function mockRemoteHostView(id: string, input: RemoteHostInput, previous?: Remot
     proxyJump: input.proxyJump,
     defaultWorkspace: input.defaultWorkspace,
     serveInstall: input.serveInstall,
-  credentialMode: input.credentialMode,
     useSSHConfig: input.useSSHConfig,
     passwordSet: input.password ? true : input.clearPassword ? false : previous?.passwordSet,
     keyPassphraseSet: input.keyPassphrase ? true : input.clearPassphrase ? false : previous?.keyPassphraseSet,
@@ -6082,7 +6081,7 @@ function mockRemoteHostView(id: string, input: RemoteHostInput, previous?: Remot
 }
 
 let mockRemoteHosts: RemoteHostView[] = [
-  { id: "demo", label: "demo", host: "192.168.1.10", port: 22, user: "dev", identityFile: "", proxyJump: "", defaultWorkspace: "~/app", serveInstall: "auto", credentialMode: "remote", useSSHConfig: false },
+  { id: "demo", label: "demo", host: "192.168.1.10", port: 22, user: "dev", identityFile: "", proxyJump: "", defaultWorkspace: "~/app", serveInstall: "auto", useSSHConfig: false },
 ];
 let mockRemoteProjects: RemoteProjectView[] = [
   // Demo preseed: a cloud project is present without walking the wizard.
