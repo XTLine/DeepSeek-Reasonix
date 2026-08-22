@@ -615,19 +615,22 @@ export function ProjectTree({
   }, [tree]);
   const remoteSearchActive = query.trim() !== "";
   useEffect(() => {
-    let cancelled = false;
     for (const groupKey of remoteGroupKeys) {
       const nodeKey = remoteGroupNodeKeys.get(groupKey);
       if (!nodeKey) continue;
       if (!expanded.has(nodeKey) && !remoteSearchActive) continue;
       const [hostId, workspace] = groupKey.split("\u0000");
+      // Listing rows are idempotent data (last writer wins), so a run whose
+      // effect was cleaned up mid-flight must still land: gating on a
+      // closure `cancelled` drops the final fetch whenever the deps churn
+      // during load (tree identity, auto-expand), leaving an expanded group
+      // silently empty even with the serve running.
       void app.RemoteProjectSessions(hostId, workspace)
         .then((rows) => {
-          if (!cancelled) setRemoteSessions((current) => ({ ...current, [groupKey]: rows }));
+          setRemoteSessions((current) => ({ ...current, [groupKey]: rows }));
         })
         .catch(() => {});
     }
-    return () => { cancelled = true; };
   }, [remoteGroupKeys, remoteGroupNodeKeys, expanded, remoteSearchActive, remoteSessionsRevision]);
 
   // topicId → remote session identity for the synthesized rows; rebuilt
