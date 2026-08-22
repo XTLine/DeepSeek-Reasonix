@@ -126,6 +126,27 @@ ok(
   /const remoteDemoTabId = `remote-mock-demo-~\/app`\.replace\(/.test(bridgeSource) && /id: remoteDemoTabId/.test(bridgeSource),
   "the mock preseeds a demo remote tab under the computed ensure-reuse id",
 );
+ok(
+  /EnsureRemoteProjectSessions\(hostId: string, workspace: string\): Promise<RemoteSessionView\[\]>;/.test(bridgeSource),
+  "the bridge exposes the explicit-intent ensure listing",
+);
+ok(
+  /app\.EnsureRemoteProjectSessions\(hostId, workspace\)/.test(source) &&
+    /if \(remoteGroupBusyRef\.current\[groupKey\]\) return;/.test(source),
+  "a group click cold-starts the serve through the deduped ensure listing",
+);
+ok(
+  /serveState !== "ready" && !\(cached && cached\.length > 0\)/.test(source),
+  "the ensure path only fires when the serve is down and nothing is cached",
+);
+ok(
+  /project-tree__remote-status/.test(source) && /projectTree\.remoteConnectFailed/.test(source),
+  "remote groups render retryable connect/error rows instead of going silent",
+);
+ok(
+  /project-tree__folder-action--busy/.test(source) && /RefreshCw/.test(source),
+  "the group action slot shows a spinning refresh icon while connecting",
+);
 
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

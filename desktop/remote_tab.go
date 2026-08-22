@@ -896,6 +896,40 @@ func (a *App) serveClientForRef(hostID, workspace string) (*http.Client, string,
 	return client, view.LocalURL, cancel, nil
 }
 
+// serveClientEnsured is serveClientForRef plus a cold start: when nothing is
+// running it boots the workspace serve through EnsureServer and handshakes
+// the fresh registration. Reserved for explicit user intent (a group click);
+// query paths stay on serveClientForRef so polls never wake a serve.
+func (a *App) serveClientEnsured(hostID, workspace string) (*http.Client, string, func(), error) {
+	if client, base, done, err := a.serveClientForRef(hostID, workspace); err == nil {
+		return client, base, done, nil
+	}
+	rt, err := a.remoteRT()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	bootCtx := a.bootContext()
+	if bootCtx == nil {
+		bootCtx = context.Background()
+	}
+	view, token, err := rt.EnsureServer(bootCtx, hostID, workspace)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	callCtx, cancel := context.WithTimeout(bootCtx, 30*time.Second)
+	jar, jarErr := cookiejar.New(nil)
+	if jarErr != nil {
+		cancel()
+		return nil, "", nil, jarErr
+	}
+	client := &http.Client{Jar: jar}
+	if err := serveHandshake(callCtx, client, view.LocalURL, token); err != nil {
+		cancel()
+		return nil, "", nil, err
+	}
+	return client, view.LocalURL, cancel, nil
+}
+
 // remoteSessionsRunning snapshots the per-session running map of a
 // workspace's live tab (nil when no tab is attached).
 func (a *App) remoteSessionsRunning(hostID, workspace string) map[string]bool {
@@ -921,6 +955,28 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 	defer done()
 	ctx, cancel := commandContext(a)
 	defer cancel()
+	return a.remoteProjectSessions(ctx, client, base, hostID, workspace)
+}
+
+// EnsureRemoteProjectSessions is the explicit-intent variant of the listing:
+// a user click on a remote group may cold-start the workspace serve (SSH
+// bootstrap included) before listing. Passive refresh paths must keep the
+// read-only RemoteProjectSessions so polls cannot starve tab bootstraps on
+// the per-host serve lock.
+func (a *App) EnsureRemoteProjectSessions(hostID, workspace string) ([]RemoteSessionView, error) {
+	client, base, done, err := a.serveClientEnsured(hostID, workspace)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	ctx, cancel := commandContext(a)
+	defer cancel()
+	return a.remoteProjectSessions(ctx, client, base, hostID, workspace)
+}
+
+// remoteProjectSessions maps the serve /sessions listing (plus live running
+// state and any pending blank) onto the frontend view rows.
+func (a *App) remoteProjectSessions(ctx context.Context, client *http.Client, base, hostID, workspace string) ([]RemoteSessionView, error) {
 	entries, err := serveSessions(ctx, client, base)
 	if err != nil {
 		return nil, err

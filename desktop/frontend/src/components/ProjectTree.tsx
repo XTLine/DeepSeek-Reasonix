@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties, DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
-import { Archive, ArrowDown, Pencil, Plus, Folder, FolderPlus, Search, BriefcaseBusiness, Copy, FolderOpen, XCircle, Check, ListCollapse, ListRestart, MessageSquare, Clock, Pin, MoreHorizontal, Minimize2, Maximize2, GitBranch, Sparkles, Server, Cloud } from "lucide-react";
+import { Archive, ArrowDown, Pencil, Plus, Folder, FolderPlus, Search, BriefcaseBusiness, Copy, FolderOpen, XCircle, Check, ListCollapse, ListRestart, MessageSquare, Clock, Pin, MoreHorizontal, Minimize2, Maximize2, GitBranch, Sparkles, Server, Cloud, RefreshCw } from "lucide-react";
 import { asArray } from "../lib/array";
 import { useToast } from "../lib/toast";
 import { app } from "../lib/bridge";
@@ -526,6 +526,30 @@ export function ProjectTree({
   // synthetic topic node whose actions route to the remote bindings.
   const [remoteSessions, setRemoteSessions] = useState<Record<string, RemoteSessionView[]>>({});
   const [remoteSessionsRevision, setRemoteSessionsRevision] = useState(0);
+  // Explicit group-click connection state: while a cold-start boot is in
+  // flight the group shows a skeleton row and a spinning refresh icon, and a
+  // failure becomes a retryable row instead of a silent empty group.
+  const [remoteGroupBusy, setRemoteGroupBusy] = useState<Record<string, boolean>>({});
+  const [remoteGroupError, setRemoteGroupError] = useState<Record<string, string>>({});
+  const remoteGroupBusyRef = useRef<Record<string, boolean>>({});
+  const ensureRemoteGroupSessions = useCallback((hostId: string, workspace: string) => {
+    const groupKey = `${hostId}\u0000${workspace}`;
+    if (remoteGroupBusyRef.current[groupKey]) return;
+    remoteGroupBusyRef.current[groupKey] = true;
+    setRemoteGroupBusy((current) => ({ ...current, [groupKey]: true }));
+    setRemoteGroupError((current) => ({ ...current, [groupKey]: "" }));
+    app.EnsureRemoteProjectSessions(hostId, workspace)
+      .then((rows) => {
+        setRemoteSessions((current) => ({ ...current, [groupKey]: rows }));
+      })
+      .catch((e) => {
+        setRemoteGroupError((current) => ({ ...current, [groupKey]: e instanceof Error ? e.message : String(e) }));
+      })
+      .finally(() => {
+        remoteGroupBusyRef.current[groupKey] = false;
+        setRemoteGroupBusy((current) => ({ ...current, [groupKey]: false }));
+      });
+  }, []);
   const bumpRemoteSessions = useCallback(() => setRemoteSessionsRevision((n) => n + 1), []);
   bumpRemoteSessionsRef.current = bumpRemoteSessions;
   // Event-driven listing refresh, mirroring how local title writes push
@@ -1968,10 +1992,23 @@ export function ProjectTree({
     const backendPage = topicPageState[key];
     const renderFolderChildren = () => {
       if (!hasChildren) {
+        // Remote groups: a cold-start boot in flight shows the same skeleton
+        // the local cold start uses; a failed boot becomes a retryable row;
+        // an idle stopped serve offers an explicit connect row. None of these
+        // may silently render an empty/"no sessions" group.
+        const remoteGroupKey = node.remote ? `${node.remote.hostId}\u0000${node.remote.workspace}` : "";
+        const remoteBusy = Boolean(remoteGroupKey && remoteGroupBusy[remoteGroupKey]);
+        const remoteError = remoteGroupKey ? remoteGroupError[remoteGroupKey] || "" : "";
+        const remoteStopped = Boolean(
+          node.remote &&
+          !remoteBusy &&
+          !remoteError &&
+          remoteServers[node.remote.hostId]?.[node.remote.workspace]?.state !== "ready",
+        );
         // While the first topic page is still loading (cold start, catalog
         // reconcile in flight), show a skeleton instead of a blank folder or
         // a premature "no topics" placeholder.
-        if (backendPage?.loading) {
+        if (backendPage?.loading || remoteBusy) {
           return (
             <div className={`project-tree__children${isExpanded ? " project-tree__children--expanded" : ""}`}>
               <div className="project-tree__children-inner">
@@ -1981,6 +2018,22 @@ export function ProjectTree({
                   <span className="project-tree__skeleton-bar" />
                   <span className="project-tree__skeleton-bar project-tree__skeleton-bar--short" />
                 </div>
+              </div>
+            </div>
+          );
+        }
+        if (node.remote && (remoteError || remoteStopped)) {
+          return (
+            <div className={`project-tree__children${isExpanded ? " project-tree__children--expanded" : ""}`}>
+              <div className="project-tree__children-inner">
+                <button
+                  type="button"
+                  className={`project-tree__remote-status${remoteError ? " project-tree__remote-status--error" : ""}`}
+                  style={{ paddingLeft: 14 + (depth + 1) * 16 }}
+                  onClick={() => ensureRemoteGroupSessions(node.remote!.hostId, node.remote!.workspace)}
+                >
+                  {remoteError ? t("projectTree.remoteConnectFailed") : t("projectTree.remoteConnect")}
+                </button>
               </div>
             </div>
           );
@@ -2075,7 +2128,22 @@ export function ProjectTree({
                 void openRemoteProject(node.remote);
                 return;
               }
-              if (folderDisclosure.canExpand) toggleExpand(key, node);
+              if (folderDisclosure.canExpand) {
+                const willExpand = !expanded.has(key);
+                toggleExpand(key, node);
+                // Expanding a remote group is explicit user intent: when the
+                // serve is not running and nothing is cached, cold-start it
+                // (SSH bootstrap included) instead of silently listing
+                // nothing. Passive refresh stays on the read-only listing.
+                if (node.remote && willExpand) {
+                  const groupKey = `${node.remote.hostId}\u0000${node.remote.workspace}`;
+                  const serveState = remoteServers[node.remote.hostId]?.[node.remote.workspace]?.state;
+                  const cached = remoteSessions[groupKey];
+                  if (serveState !== "ready" && !(cached && cached.length > 0)) {
+                    ensureRemoteGroupSessions(node.remote.hostId, node.remote.workspace);
+                  }
+                }
+              }
             }}
             onKeyDown={(event) => {
               if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
@@ -2117,6 +2185,14 @@ export function ProjectTree({
               </button>
             </Tooltip>
           )}
+          {node.remote && remoteGroupBusy[`${node.remote.hostId}\u0000${node.remote.workspace}`] ? (
+            <span
+              className={compactTopics ? "project-tree__folder-action project-tree__folder-action--busy" : "project-tree__new-topic project-tree__new-topic--busy"}
+              aria-hidden="true"
+            >
+              <RefreshCw size={compactTopics ? 15 : 12} className="ico spin" />
+            </span>
+          ) : (
           <Tooltip label={t("projectTree.newTopicTooltip")} className={compactTopics ? "project-tree__folder-action-slot" : "project-tree__action-slot"}>
             <button
               type="button"
@@ -2137,6 +2213,7 @@ export function ProjectTree({
               {compactTopics ? <Plus size={15} aria-hidden="true" /> : <Plus size={12} aria-hidden="true" />}
             </button>
           </Tooltip>
+          )}
           <ContextMenu
             open={projectMenuOpen}
             point={menuPoint}

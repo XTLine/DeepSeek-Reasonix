@@ -39701,3 +39701,32 @@ body > .mermaid-diagram--fullscreen {
 .project-tree__remote-badge--serve-idle {
   background: var(--fg-faint);
 }
+/* Remote group connect/error rows: explicit affordances replacing the silent
+   empty group while a cold-start boot is idle, in flight, or failed. */
+.project-tree__remote-status {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--fg-faint);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+.project-tree__remote-status:hover {
+  color: var(--fg);
+}
+.project-tree__remote-status--error {
+  color: var(--danger, var(--fg));
+}
+.project-tree__folder-action--busy,
+.project-tree__new-topic--busy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  cursor: progress;
+}

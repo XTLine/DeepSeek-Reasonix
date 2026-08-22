@@ -682,6 +682,7 @@ export interface AppBindings extends SessionCatalogBindings, ProjectTreeOrganiza
   ListRemoteProjects(): Promise<RemoteProjectView[]>;
   OpenRemoteProjectTab(hostId: string, workspace: string, opts: RemoteTabOpenOptions): Promise<TabMeta>;
   RemoteProjectSessions(hostId: string, workspace: string): Promise<RemoteSessionView[]>;
+  EnsureRemoteProjectSessions(hostId: string, workspace: string): Promise<RemoteSessionView[]>;
   SetRemoteSessionPinned(hostId: string, workspace: string, name: string, pinned: boolean): Promise<void>;
   SetRemoteProjectTitle(hostId: string, workspace: string, title: string): Promise<void>;
   RenameRemoteProjectSession(hostId: string, workspace: string, name: string, title: string): Promise<void>;
@@ -5896,6 +5897,11 @@ function makeMockApp(): AppBindings {
         const override = mockRemoteSessionTitles[`${hostId}\u0000${workspace}\u0000${entry.name}`];
         return { ...entry, title: override ?? entry.title };
       });
+    },
+    async EnsureRemoteProjectSessions(hostId: string, workspace: string) {
+      // Mock serves are always instantly "running": the ensure variant
+      // collapses onto the read-only listing.
+      return this.RemoteProjectSessions(hostId, workspace);
     },
     async SetRemoteSessionPinned(hostId: string, workspace: string, name: string, pinned: boolean) {
       const rows = mockRemoteSessionList[`${hostId}\u0000${workspace}`] ?? [];
