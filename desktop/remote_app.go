@@ -1500,7 +1500,7 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 			return RemoteServerView{}, "", fmt.Errorf("host %q connection was replaced", hostID)
 		}
 		if entry.CredentialProxyEnabled() {
-			m.healCredentialChannel(opCtx, c, mh, hostID, workspace, previousServer.LocalURL, res.Token, res)
+			m.finalizeCredentialChannel(opCtx, c, mh, hostID, workspace, previousServer.LocalURL, res.Token, res)
 		}
 		return previousServer, res.Token, nil
 	}
@@ -1526,8 +1526,7 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 		return RemoteServerView{}, "", fmt.Errorf("host %q connection was replaced", hostID)
 	}
 	if entry.CredentialProxyEnabled() {
-		m.healCredentialChannel(opCtx, c, mh, hostID, workspace, localURL, res.Token, res)
-		m.startCredentialWatchdog(mh, hostID, workspace)
+		m.finalizeCredentialChannel(opCtx, c, mh, hostID, workspace, localURL, res.Token, res)
 	}
 	return view, res.Token, nil
 }
@@ -1661,6 +1660,17 @@ func (m *desktopRemoteManager) healCredentialChannelWatchdog(mh *managedHost, ho
 	log.Printf("[remote] credential watchdog: channel re-healed host=%s port=%d", hostID, port)
 }
 
+// finalizeCredentialChannel is the post-ensure credential handoff for both the
+// fresh-launch and reused-serve paths: heal/reload the channel when needed,
+// then ALWAYS arm the runtime watchdog. Skipping the watchdog on reuse left
+// mid-session reverse-tunnel blips unrepaired (serve kept dialing a dead port).
+func (m *desktopRemoteManager) finalizeCredentialChannel(ctx context.Context, c desktopSSHClient, mh *managedHost, hostID, workspace, base, token string, res bootstrap.Result) {
+	if c != nil {
+		m.healCredentialChannel(ctx, c, mh, hostID, workspace, base, token, res)
+	}
+	m.startCredentialWatchdog(mh, hostID, workspace)
+}
+
 // healCredentialChannel runs at the END of a successful ensure round, when the
 // serve's forward and registration are live. The reverse forward rebinds a
 // fresh ephemeral port on every SSH reconnect, and the heal inside ensureServe
@@ -1673,6 +1683,14 @@ func (m *desktopRemoteManager) healCredentialChannel(ctx context.Context, c desk
 	if !has {
 		return
 	}
+	// Probe BEFORE reloading providers. Reloading first would point a reused
+	// serve at a dead reverse port (ensure can temporarily advertise an Up
+	// entry that no longer accepts), and every subsequent send would refuse
+	// even while the heal gate stays closed.
+	if perr := probeReverseTunnel(c, port); perr != nil {
+		log.Printf("[remote] EnsureServer: reverse probe FAILED host=%s ws=%s port=%d err=%v", hostID, workspace, port, perr)
+		return
+	}
 	reloadOK := true
 	if res.Reused && (int(mh.credPort.Load()) != port || res.CredentialConfigChanged) {
 		log.Printf("[remote] EnsureServer: cred port drift host=%s old=%d new=%d configChanged=%v -> reloading serve providers", hostID, mh.credPort.Load(), port, res.CredentialConfigChanged)
@@ -1681,9 +1699,7 @@ func (m *desktopRemoteManager) healCredentialChannel(ctx context.Context, c desk
 		// empty registry must not turn the reload into a silent no-op.
 		reloadOK = m.reloadServeProviders(ctx, hostID, workspace, base, token)
 	}
-	if perr := probeReverseTunnel(c, port); perr != nil {
-		log.Printf("[remote] EnsureServer: reverse probe FAILED host=%s ws=%s port=%d err=%v", hostID, workspace, port, perr)
-	} else if reloadOK {
+	if reloadOK {
 		m.mu.Lock()
 		if m.hosts[hostID] == mh {
 			mh.credPort.Store(int64(port))
@@ -1844,7 +1860,15 @@ func ensureCredentialProxyForward(c desktopSSHClient, hostID string, desktopPort
 	for _, f := range c.Forwards().List() {
 		if f.Spec.Name == name && f.Up {
 			if port, ok := portOfAddr(f.BoundAddr); ok {
-				return port, nil
+				// An Up flag alone is not enough after an SSH blip: Accept can
+				// still be racing out while List still advertises the dead
+				// BoundAddr. Probe when the client exposes a raw SSH dialer;
+				// if probing is unavailable (test doubles), fall back to Up.
+				perr := probeReverseTunnel(c, port)
+				if perr == nil || strings.Contains(perr.Error(), "does not expose") {
+					return port, nil
+				}
+				log.Printf("[remote] credential proxy: advertised reverse port %d is dead; replacing (%v)", port, perr)
 			}
 		}
 	}

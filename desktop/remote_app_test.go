@@ -14,6 +14,7 @@ import (
 
 	"reasonix/internal/config"
 	"reasonix/internal/remote"
+	"reasonix/internal/remote/bootstrap"
 )
 
 // fakeRemoteKernel implements remoteKernel for binding-layer tests.
@@ -599,3 +600,32 @@ func TestCredentialChannelDecision(t *testing.T) {
 		}
 	}
 }
+
+// Reused EnsureServer rounds historically healed the credential channel but
+// skipped startCredentialWatchdog. After a later reverse-tunnel blip the serve
+// kept dialing the dead port with no runtime re-heal. finalizeCredentialChannel
+// must always arm the watchdog, reuse path included.
+func TestFinalizeCredentialChannelStartsWatchdog(t *testing.T) {
+	mgr := newDesktopRemoteManager(&App{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	mh := &managedHost{
+		ctx:    ctx,
+		cancel: cancel,
+		serves: map[string]*serveEntry{},
+		status: RemoteConnectionStatusView{HostID: "box", State: "connected"},
+	}
+	mgr.mu.Lock()
+	mgr.hosts["box"] = mh
+	mgr.mu.Unlock()
+
+	mgr.finalizeCredentialChannel(context.Background(), nil, mh, "box", "/ws", "", "", bootstrap.Result{})
+
+	mgr.mu.Lock()
+	started := mh.credWatchStarted
+	mgr.mu.Unlock()
+	if !started {
+		t.Fatal("finalizeCredentialChannel left credWatchStarted=false on reuse-equivalent path")
+	}
+}
+

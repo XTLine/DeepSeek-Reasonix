@@ -270,6 +270,19 @@ func (s *Set) startRemoteLocked(r *runner, cl *ssh.Client) (string, error) {
 }
 
 func (s *Set) acceptRemote(r *runner, ln net.Listener) {
+	defer func() {
+		s.mu.Lock()
+		// Only clear state for the still-current listener. Replace/Detach may
+		// have already swapped r.remote or marked the runner down.
+		if r.remote == ln {
+			r.remote = nil
+			if r.up {
+				r.up = false
+				s.emit(Event{Spec: r.spec, Up: false})
+			}
+		}
+		s.mu.Unlock()
+	}()
 	for {
 		remote, err := ln.Accept()
 		if err != nil {
