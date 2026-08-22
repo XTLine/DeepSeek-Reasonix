@@ -38,6 +38,7 @@ import { useRemoteSession } from "./lib/useRemoteSession";
 import { localizedNoticeText, useController, type Item, type LiveStream } from "./lib/useController";
 import { app, onEvent, onProjectTreeChanged, onReady, onRemoteForwards, onRemoteServer, onRemoteStatus, onRemoteTabOpened, onRuntimeRebuilt, onSessionRecovered, openExternal } from "./lib/bridge";
 import { useConfigLoadWarnings } from "./lib/useConfigLoadWarnings";
+import { newSessionTarget } from "./lib/newSessionTarget";
 import { generativeMusic, isGenerativeMusicEnabled } from "./lib/generative-music";
 import { clearAttentionChimeKeys, playAttentionChime, playSuccessChime, shouldPlayAttentionChimeForEvent } from "./lib/sound";
 import { NoticeCard, Transcript } from "./components/Transcript";
@@ -2590,11 +2591,13 @@ export default function App() {
     return unsub;
   }, [refreshTabMetas, setControllerCollaborationMode]);
 
-  const blankSessionTarget = useCallback(() => {
-    const activeWorkspaceRoot = activeTab?.scope === "project" ? activeTab.workspaceRoot || "" : "";
-    const scope = activeWorkspaceRoot ? "project" : "global";
-    return { scope, workspaceRoot: activeWorkspaceRoot };
-  }, [activeTab?.scope, activeTab?.workspaceRoot]);
+  const newRemoteSession = useCallback(async (hostId: string, workspace: string) => {
+    try {
+      await app.OpenRemoteProjectTab(hostId, workspace, { newSession: true });
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e), "error");
+    }
+  }, [showToast]);
 
   useEffect(() => {
     let live = true;
@@ -3968,9 +3971,15 @@ export default function App() {
   const handleNewTab = useCallback(async () => {
     closeTransientOverlays();
     setSidebarImDetailConnectionId("");
-    const target = blankSessionTarget();
+    // A remote surface must not feed its workspace into the local blank
+    // pipeline — route to the remote new-session path instead.
+    const target = newSessionTarget(activeTab);
+    if (target.kind === "remote") {
+      await newRemoteSession(target.hostId, target.workspace);
+      return;
+    }
     await openBlankSession(target.scope, target.workspaceRoot);
-  }, [blankSessionTarget, closeTransientOverlays, openBlankSession]);
+  }, [activeTab, closeTransientOverlays, newRemoteSession, openBlankSession]);
 
   const handleOpenTopic = useCallback((scope: string, workspaceRoot: string, topicId: string, sessionPath?: string): Promise<void> => {
     closeTransientOverlays();
