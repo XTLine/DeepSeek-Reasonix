@@ -65,22 +65,18 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
     // deliberately not a dependency — only the mount-time snapshot matters.)
     const skipHydrate = start === "disconnected";
 
-    // Hydrate from the snapshot; retry through the connecting window so a
-    // late backend never leaves the surface empty. A forced run re-syncs
-    // after a session reset or a reconnect: the snapshot reflects whatever
-    // session the serve now holds.
-    const hydrate = (force = false) => {
-      if (force) {
-        hydratedRef.current = false;
-        setHydrated(false);
-      }
-      return hydrateLoop();
-    };
-    const hydrateLoop = async () => {
-      for (let attempt = 0; attempt < 60 && !cancelled && !hydratedRef.current; attempt++) {
+    // One logical hydrate at a time. Mount and ready can overlap; coalesce so
+    // a force during an in-flight fetch schedules exactly one follow-up instead
+    // of opening concurrent RemoteTabSnapshot calls.
+    let hydrateGen = 0;
+    let inFlight: Promise<void> | null = null;
+    let pendingForce = false;
+
+    const runHydrate = async (gen: number) => {
+      for (let attempt = 0; attempt < 60 && !cancelled && gen === hydrateGen && !hydratedRef.current; attempt++) {
         try {
-          const snap = await app.RemoteTabSnapshot(tabId);
-          if (cancelled) return;
+          const snap = await app.RemoteTabSnapshot(tabId, { members: ["/history", "/status"] });
+          if (cancelled || gen !== hydrateGen) return;
           const messages = Array.isArray(snap.history) ? (snap.history as HistoryMessage[]) : [];
           hydratedRef.current = true;
           setHydrated(true);
@@ -96,12 +92,40 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
           });
           return;
         } catch {
+          if (cancelled || gen !== hydrateGen) return;
           // Executor form: the src tsconfig lib predates Promise.withResolvers.
           await new Promise<void>((resolve) => setTimeout(resolve, 500));
         }
       }
     };
-    if (!skipHydrate) void hydrateLoop();
+
+    const hydrate = (force = false) => {
+      if (force) {
+        hydratedRef.current = false;
+        setHydrated(false);
+      }
+      if (inFlight) {
+        if (force) pendingForce = true;
+        return inFlight;
+      }
+      const gen = ++hydrateGen;
+      const owned = (async () => {
+        await runHydrate(gen);
+        while (!cancelled && pendingForce) {
+          pendingForce = false;
+          hydratedRef.current = false;
+          setHydrated(false);
+          const followGen = ++hydrateGen;
+          await runHydrate(followGen);
+        }
+      })();
+      inFlight = owned;
+      void owned.finally(() => {
+        if (inFlight === owned) inFlight = null;
+      });
+      return owned;
+    };
+    if (!skipHydrate) void hydrate(false);
 
     const offState = onRemoteTabState(tabId, (s) => {
       if (cancelled) return;
@@ -137,7 +161,7 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
     let cancelled = false;
     const reconcile = async () => {
       try {
-        const snap = await app.RemoteTabSnapshot(tabId);
+        const snap = await app.RemoteTabSnapshot(tabId, { members: ["/history", "/status"] });
         if (cancelled) return;
         setTranscript((s) => reducer(s, remoteStatusToAction(snap.status, Date.now())));
       } catch {

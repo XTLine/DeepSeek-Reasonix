@@ -36,6 +36,7 @@ import type {
   RemoteSessionView,
   RemoteTabOpenOptions,
   RemoteTabSnapshot,
+  RemoteTabSnapshotOptions,
   RemoteTabState,
   BalanceInfo,
   UsageStatsRange,
@@ -693,7 +694,7 @@ export interface AppBindings extends SessionCatalogBindings, ProjectTreeOrganiza
   RewindRemoteTab(tabId: string, checkpointId: string): Promise<void>;
   SetRemoteTabToolApprovalMode(tabId: string, mode: string): Promise<void>;
   SetRemoteTabGoal(tabId: string, goal: string): Promise<void>;
-  RemoteTabSnapshot(tabId: string): Promise<RemoteTabSnapshot>;
+  RemoteTabSnapshot(tabId: string, opts?: RemoteTabSnapshotOptions): Promise<RemoteTabSnapshot>;
   SetRemoteTabEffort(tabId: string, level: string): Promise<void>;
   SetRemoteTabPlanMode(tabId: string, on: boolean): Promise<void>;
   CompactRemoteTab(tabId: string): Promise<void>;
@@ -1071,6 +1072,26 @@ export function onRemoteTabOpened(cb: (meta: TabMeta) => void): () => void {
     return window.runtime.EventsOn("remote-tab:opened", (payload?: unknown) => cb((payload ?? {}) as TabMeta));
   }
   return registerMockRemoteListener("remote-tab-opened", cb as (v: unknown) => void);
+}
+
+// RemoteTabRuntime is the payload of remote-tab:runtime: a remote tab's
+// turn-running state changed (inferred from its SSE pump).
+export interface RemoteTabRuntime {
+  tabId: string;
+  hostId: string;
+  workspace: string;
+  /** Session file path the turn belongs to (empty on legacy serves). */
+  sessionPath?: string;
+  running: boolean;
+}
+
+// onRemoteTabRuntime fires when a remote tab's turn starts or finishes so the
+// session list can light the same live indicator local topics get.
+export function onRemoteTabRuntime(cb: (info: RemoteTabRuntime) => void): () => void {
+  if (realApp() && typeof window !== "undefined" && window.runtime) {
+    return window.runtime.EventsOn("remote-tab:runtime", (payload?: unknown) => cb((payload ?? {}) as RemoteTabRuntime));
+  }
+  return () => {};
 }
 
 // Mock fan-out for remote-tab events, keyed `${tabId}:${channel}` (browser-dev / tsx tests).
@@ -6005,7 +6026,7 @@ function makeMockApp(): AppBindings {
     async RewindRemoteTab() {},
     async SetRemoteTabToolApprovalMode() {},
     async SetRemoteTabGoal() {},
-    async RemoteTabSnapshot(tabId: string) {
+    async RemoteTabSnapshot(tabId: string, _opts?: RemoteTabSnapshotOptions) {
       const tab = mockRemoteTabs.find((item) => item.id === tabId);
       const groupKey = `${tab?.remote?.hostId ?? ""}\u0000${tab?.remote?.workspace ?? ""}`;
       const current = (mockRemoteSessionList[groupKey] ?? []).find((row) => row.current);

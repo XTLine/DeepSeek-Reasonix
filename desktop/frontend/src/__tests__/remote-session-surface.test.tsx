@@ -40,9 +40,29 @@ globalThis.cancelAnimationFrame = dom.window.cancelAnimationFrame?.bind(dom.wind
 Object.defineProperty(dom.window.HTMLElement.prototype, "detachEvent", { configurable: true, value: () => {} });
 
 const tape: string[] = [];
+let dedupeBlocked = false;
 window.go = { main: { App: {
-  async RemoteTabSnapshot(tabId: string) {
-    tape.push(`snapshot:${tabId}`);
+  async RemoteTabSnapshot(tabId: string, opts?: { members?: string[] }) {
+    tape.push(`snapshot:${tabId}${opts?.members ? `:${opts.members.join(",")}` : ""}`);
+    if (tabId === "tab-chain") {
+      return {
+        history: [{ role: "assistant", content: "chain-hello", turn: 1 }],
+        status: { label: "DeepSeek · Chain", running: false },
+      };
+    }
+    if (tabId === "tab-dedupe") {
+      if (!dedupeBlocked) {
+        dedupeBlocked = true;
+        const release = new Promise<void>((resolve) => {
+          (globalThis as typeof globalThis & { __releaseDedupeSnapshot?: () => void }).__releaseDedupeSnapshot = resolve;
+        });
+        await release;
+      }
+      return {
+        history: [{ role: "assistant", content: "dedupe-hello", turn: 1 }],
+        status: { label: "DeepSeek · Dedupe", running: false },
+      };
+    }
     return { history: [], status: { label: "DeepSeek · Mock" } };
   },
   async SubmitRemoteTab(tabId: string, text: string) {
@@ -196,6 +216,91 @@ await act(async () => {
 }
 
 await act(async () => root.unmount());
+
+// ── Bridge→surface hydrate chain: snapshot return clears spinner and paints history ──
+{
+  const chainTab: TabMeta = { ...remoteTab, id: "tab-chain", topicTitle: "chain" };
+  let chainSession: RemoteSessionApi | undefined;
+  function ChainHarness() {
+    chainSession = useRemoteSession(chainTab.id);
+    return <RemoteSessionSurface tab={chainTab} session={chainSession} />;
+  }
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const chainMount = createRoot(host);
+  await act(async () => {
+    chainMount.render(
+      <LocaleProvider>
+        <ChainHarness />
+      </LocaleProvider>,
+    );
+  });
+  await act(async () => {
+    __emitMockRemoteTab("tab-chain", "state", { state: "connecting" });
+    await flush();
+  });
+  await act(async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    await flush(40);
+  });
+  await act(async () => {
+    __emitMockRemoteTab("tab-chain", "state", { state: "ready" });
+    await flush(40);
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    await flush(40);
+  });
+  ok(tape.some((entry) => entry.startsWith("snapshot:tab-chain")), "hydrate chain calls RemoteTabSnapshot");
+  ok(chainSession?.hydrated === true, "hydrate chain marks the session hydrated");
+  ok(!host.querySelector(".remote-surface__spinner"), "hydrate chain clears the waiting spinner");
+  ok(
+    Boolean(chainSession?.transcript.items.some((item) => item.kind === "assistant" && item.text?.includes("chain-hello"))),
+    "hydrate chain paints returned history into the transcript items",
+  );
+  await act(async () => chainMount.unmount());
+  host.remove();
+}
+
+// ── Ready hydrate coalesce: overlapping ready/mount must not stampede snapshots ──
+{
+  const dedupeTab: TabMeta = { ...remoteTab, id: "tab-dedupe", topicTitle: "dedupe" };
+  let dedupeSession: RemoteSessionApi | undefined;
+  function DedupeHarness() {
+    dedupeSession = useRemoteSession(dedupeTab.id);
+    return <RemoteSessionSurface tab={dedupeTab} session={dedupeSession} />;
+  }
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const mount = createRoot(host);
+  const before = tape.filter((entry) => entry.startsWith("snapshot:tab-dedupe")).length;
+  await act(async () => {
+    mount.render(
+      <LocaleProvider>
+        <DedupeHarness />
+      </LocaleProvider>,
+    );
+  });
+  await act(async () => flush(20));
+  // Mount hydrate is in-flight (blocked). A ready force must coalesce, not open a second concurrent fetch.
+  await act(async () => {
+    __emitMockRemoteTab("tab-dedupe", "state", { state: "ready" });
+    __emitMockRemoteTab("tab-dedupe", "state", { state: "ready" });
+    await flush(20);
+  });
+  const inFlight = tape.filter((entry) => entry.startsWith("snapshot:tab-dedupe")).length - before;
+  ok(inFlight === 1, "ready/mount hydrate coalesce keeps a single in-flight snapshot");
+  await act(async () => {
+    (globalThis as typeof globalThis & { __releaseDedupeSnapshot?: () => void }).__releaseDedupeSnapshot?.();
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    await flush(40);
+  });
+  ok(dedupeSession?.hydrated === true, "coalesced hydrate still settles");
+  ok(
+    Boolean(dedupeSession?.transcript.items.some((item) => item.kind === "assistant" && item.text?.includes("dedupe-hello"))),
+    "coalesced hydrate paints history",
+  );
+  await act(async () => mount.unmount());
+  host.remove();
+}
 
 // ── Hook: optimistic user bubble + command forwarding ──
 let probe: RemoteSessionApi | undefined;

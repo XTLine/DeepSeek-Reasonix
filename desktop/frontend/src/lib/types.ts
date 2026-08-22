@@ -536,7 +536,7 @@ export interface ProjectNode {
   remote?: RemoteTabRefView;
   /** Present ⇒ a remote serve session synthesized as a topic row; actions
    *  route to the remote bindings instead of the local topic machinery. */
-  remoteSession?: { hostId: string; workspace: string; name: string };
+  remoteSession?: { hostId: string; workspace: string; name: string; path?: string; title?: string };
   runtimeOnly?: boolean;
   children?: ProjectNode[];
 }
@@ -1566,9 +1566,13 @@ export interface RemoteSessionView {
   title: string;
   turns: number;
   current?: boolean;
+  /** Session file path on the serve; runtime events key spinners by it. */
+  path?: string;
   /** Unix ms, same unit as ProjectNode.lastActivityAt. */
   lastActivityAt?: number;
   pinned?: boolean;
+  /** Mid-turn on this session (background sessions included); drives the list spinner. */
+  running?: boolean;
 }
 
 export type RemoteTabStateValue = "connecting" | "ready" | "reconnecting" | "serve_down" | "error" | "disconnected";
@@ -1581,6 +1585,9 @@ export interface RemoteTabState {
 export interface RemoteTabOpenOptions {
   newSession?: boolean;
   sessionName?: string;
+  /** Session file path from the clicked listing row; skips the serve-side name lookup. */
+  sessionPath?: string;
+  sessionTitle?: string;
 }
 
 // First-cut shape; finalize against what the remote tab surface actually
@@ -1592,6 +1599,11 @@ export interface RemoteTabSnapshot {
   checkpoints?: unknown[];
   models?: string[];
   status?: unknown;
+}
+
+export interface RemoteTabSnapshotOptions {
+  /** Serve member paths to fetch. Empty keeps the legacy full set. */
+  members?: string[];
 }
 
 export interface RemoteHostView {

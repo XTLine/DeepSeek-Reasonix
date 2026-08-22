@@ -68,25 +68,66 @@ type serveSessionEntry struct {
 // PATH (not the /sessions name), so a SessionName open resolves the name
 // against GET /sessions first. A tab must never rest in a session-less
 // ready shell.
-func enterRemoteSession(ctx context.Context, client *http.Client, base string, opts RemoteTabOpenOptions) error {
+// enterRemoteSession lands the tab inside a Serve session: POST /new for a
+// fresh session, or POST /resume for a named one, returning the session path
+// the serve now holds (for the pump's frame routing). /resume takes the
+// session PATH (not the /sessions name), so a SessionName open resolves the
+// name against GET /sessions first. A tab must never rest in a session-less
+// ready shell.
+func enterRemoteSession(ctx context.Context, client *http.Client, base string, opts RemoteTabOpenOptions) (string, error) {
 	name := strings.TrimSpace(opts.SessionName)
 	if opts.NewSession || name == "" {
-		return servePost(ctx, client, serveURL(base, "/new"), nil)
+		data, err := servePostJSON(ctx, client, serveURL(base, "/new"), nil)
+		if err != nil {
+			return "", err
+		}
+		var fresh struct {
+			SessionPath string `json:"sessionPath"`
+		}
+		if json.Unmarshal(data, &fresh) == nil && fresh.SessionPath != "" {
+			return fresh.SessionPath, nil
+		}
+		return currentSessionPathOf(ctx, client, base), nil
 	}
-	sessions, err := serveSessions(ctx, client, base)
-	if err != nil {
-		return err
-	}
-	for _, s := range sessions {
-		if s.Name == name {
-			body, err := json.Marshal(map[string]string{"path": s.Path})
-			if err != nil {
-				return err
+	path := strings.TrimSpace(opts.SessionPath)
+	if path == "" {
+		sessions, err := serveSessions(ctx, client, base)
+		if err != nil {
+			return "", err
+		}
+		for _, s := range sessions {
+			if s.Name == name {
+				path = s.Path
+				break
 			}
-			return servePost(ctx, client, serveURL(base, "/resume"), body)
+		}
+		if path == "" {
+			return "", fmt.Errorf("remote session %q not found", name)
 		}
 	}
-	return fmt.Errorf("remote session %q not found", name)
+	body, err := json.Marshal(map[string]string{"path": path})
+	if err != nil {
+		return "", err
+	}
+	if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// currentSessionPathOf resolves the serve's current session path from
+// GET /sessions (empty when the serve lists none yet).
+func currentSessionPathOf(ctx context.Context, client *http.Client, base string) string {
+	sessions, err := serveSessions(ctx, client, base)
+	if err != nil {
+		return ""
+	}
+	for _, s := range sessions {
+		if s.Current {
+			return s.Path
+		}
+	}
+	return ""
 }
 
 // attachRemoteTabServe builds the tab's Serve client and starts its event
@@ -108,6 +149,25 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token strin
 		return err
 	}
 
+	// Enter the target session BEFORE starting the pump: the entered path
+	// routes the pump's frames per session, and the subscribe-time pending
+	// prompt replay then covers the session the tab actually displays.
+	enteredPath, err := enterRemoteSession(callCtx, client, base, opts)
+	if err != nil {
+		// A pre-multi-session serve (turn in flight, typically one waiting on
+		// a tool approval) refuses /new and /resume with 409. The serve still
+		// holds a perfectly usable session — fail-soft: keep the attach on the
+		// CURRENT session (and its pending approval card, which is the only
+		// way the user can unblock the turn from the UI).
+		if strings.Contains(err.Error(), "status 409") || strings.Contains(err.Error(), "while a turn is running") {
+			log.Printf("[remote] attachRemoteTabServe: enterRemoteSession BUSY (attached to current session) tab=%s err=%v", tabID, err)
+			enteredPath = currentSessionPathOf(callCtx, client, base)
+		} else {
+			log.Printf("[remote] attachRemoteTabServe: enterRemoteSession FAILED tab=%s err=%v", tabID, err)
+			return err
+		}
+	}
+
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
 	if tab == nil {
@@ -125,27 +185,14 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token strin
 	tab.client = client
 	tab.base = base
 	tab.token = token
+	tab.currentSessionPath = enteredPath
 	gen := tab.gen
 	pumpCtx, cancelPump := context.WithCancel(ctx)
 	tab.cancel = cancelPump
 	a.remoteTabMu.Unlock()
 
 	a.goSafe("remoteTabPump", func() { a.remoteTabPump(pumpCtx, tabID, gen) })
-	err = enterRemoteSession(callCtx, client, base, opts)
-	if err != nil {
-		// A busy serve (turn in flight, typically one waiting on a tool
-		// approval) refuses /new and /resume with 409. The serve still holds a
-		// perfectly usable session — fail-soft: keep the attach so the surface
-		// renders the CURRENT session (and its pending approval card, which is
-		// the only way the user can unblock the turn from the UI).
-		if strings.Contains(err.Error(), "status 409") || strings.Contains(err.Error(), "while a turn is running") {
-			log.Printf("[remote] attachRemoteTabServe: enterRemoteSession BUSY (attached to current session) tab=%s err=%v", tabID, err)
-			return nil
-		}
-		log.Printf("[remote] attachRemoteTabServe: enterRemoteSession FAILED tab=%s err=%v", tabID, err)
-	} else {
-	}
-	return err
+	return nil
 }
 
 // remoteTabPump streams the Serve event feed for one tab generation and
@@ -165,7 +212,10 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64) {
 		return
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, serveURL(base, "/events"), nil)
+	// ?all=1 receives every session's tagged frames: background sessions
+	// keep their spinners alive, and the per-frame route below keeps the
+	// frontend transcript on the displayed session only.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, serveURL(base, "/events?all=1"), nil)
 	if err != nil {
 		a.emitRemoteTabState(tabID, "error", err.Error())
 		return
@@ -202,20 +252,32 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64) {
 			continue
 		}
 		var probe struct {
-			Kind string `json:"kind"`
+			Kind        string `json:"kind"`
+			SessionPath string `json:"sessionPath"`
 		}
 		kind := "?"
 		if json.Unmarshal([]byte(frame), &probe) == nil && probe.Kind != "" {
 			kind = probe.Kind
 		}
-		a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:event", tabID), json.RawMessage(frame))
-		if kind == "turn_done" {
-			// The serve generates the session title from the finished
-			// conversation; pick it up shortly after the turn settles.
-			a.goSafe("remoteTabTitle", func() {
-				time.Sleep(1500 * time.Millisecond)
-				a.refreshRemoteTabTitle(tabID)
-			})
+		// Per-session routing: only the displayed session's frames (or
+		// untagged frames from pre-multi-session serves) reach the frontend;
+		// background sessions' frames only feed the running map below.
+		if a.remoteTabFrameRouted(tabID, probe.SessionPath) {
+			a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:event", tabID), json.RawMessage(frame))
+		}
+		switch kind {
+		case "turn_started":
+			a.setRemoteSessionRunning(tabID, gen, probe.SessionPath, true)
+		case "turn_done":
+			a.setRemoteSessionRunning(tabID, gen, probe.SessionPath, false)
+			if a.remoteTabFrameRouted(tabID, probe.SessionPath) {
+				// The serve generates the session title from the finished
+				// conversation; pick it up shortly after the turn settles.
+				a.goSafe("remoteTabTitle", func() {
+					time.Sleep(1500 * time.Millisecond)
+					a.refreshRemoteTabTitle(tabID)
+				})
+			}
 		}
 	}
 	// The stream died without an explicit stop: only the current generation
@@ -254,14 +316,13 @@ func servePost(ctx context.Context, client *http.Client, url string, body []byte
 	return fmt.Errorf("%s: status %d", url, resp.StatusCode)
 }
 
-// serveGet fetches a JSON member of the tab snapshot, returning the raw
-// payload for verbatim passthrough.
-func serveGet(ctx context.Context, client *http.Client, url string) (json.RawMessage, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
+// servePostJSON posts body and returns the response payload on 2xx — for
+// endpoints that answer with data (POST /new carries the fresh session path).
+func servePostJSON(ctx context.Context, client *http.Client, url string, body []byte) (json.RawMessage, error) {
+	if body == nil {
+		body = []byte("{}")
 	}
-	resp, err := client.Do(req)
+	resp, err := serveDo(ctx, client, http.MethodPost, url, body)
 	if err != nil {
 		return nil, err
 	}
@@ -270,10 +331,144 @@ func serveGet(ctx context.Context, client *http.Client, url string) (json.RawMes
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: status %d", url, resp.StatusCode)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if strings.TrimSpace(string(data)) == "" {
+			return nil, nil
+		}
+		return data, nil
 	}
-	return json.RawMessage(data), nil
+	if msg := strings.TrimSpace(string(data)); msg != "" {
+		return nil, fmt.Errorf("%s: status %d: %s", url, resp.StatusCode, msg)
+	}
+	return nil, fmt.Errorf("%s: status %d", url, resp.StatusCode)
+}
+
+// serveGet fetches a JSON member of the tab snapshot, returning the raw
+// payload for verbatim passthrough.
+func serveGet(ctx context.Context, client *http.Client, url string) (json.RawMessage, error) {
+	out, err := serveGetCached(ctx, client, url, "", 1<<20)
+	return out.body, err
+}
+
+// snapshotCacheEntry is one cached snapshot member body plus its serve ETag.
+type snapshotCacheEntry struct {
+	etag string
+	body json.RawMessage
+}
+
+// serveGetCached fetches a JSON member with optional ETag revalidation. A 304
+// reports NotModified and no body — the caller reuses its cached copy. limit
+// bounds the response; a body that reaches the limit is an error (truncated
+// JSON must never reach the reducer).
+func serveGetCached(ctx context.Context, client *http.Client, url, ifNoneMatch string, limit int64) (snapshotCacheEntry, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return snapshotCacheEntry{}, err
+	}
+	if ifNoneMatch != "" {
+		req.Header.Set("If-None-Match", ifNoneMatch)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return snapshotCacheEntry{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotModified {
+		return snapshotCacheEntry{etag: ifNoneMatch}, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return snapshotCacheEntry{}, fmt.Errorf("%s: status %d", url, resp.StatusCode)
+	}
+	// Read one byte past the limit: a full buffer means truncation.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return snapshotCacheEntry{}, err
+	}
+	if int64(len(data)) > limit {
+		return snapshotCacheEntry{}, fmt.Errorf("%s: response exceeds %d bytes", url, limit)
+	}
+	return snapshotCacheEntry{etag: resp.Header.Get("ETag"), body: json.RawMessage(data)}, nil
+}
+
+// serveRuntimeInfo mirrors the session-gate-relevant fields of serve
+// GET /status. The trio matches the serve's controllerHasActiveRuntimeWork:
+// while any of them is set, session-changing operations (/new, /resume,
+// /providers/reload) are refused there.
+type serveRuntimeInfo struct {
+	Label           string `json:"label"`
+	Running         bool   `json:"running"`
+	PendingPrompt   bool   `json:"pendingPrompt"`
+	BackgroundJobs  int    `json:"backgroundJobs"`
+	CancelRequested bool   `json:"cancelRequested"`
+	Cancellable     bool   `json:"cancellable"`
+}
+
+func (r serveRuntimeInfo) busy() bool {
+	return r.Running || r.PendingPrompt || r.BackgroundJobs > 0
+}
+
+// fetchServeRuntime reads GET /status through an already-authenticated serve
+// client (one handshaked for a live tab, or the one-shot client from
+// serveClientForRef).
+func fetchServeRuntime(ctx context.Context, client *http.Client, base string) (serveRuntimeInfo, error) {
+	raw, err := serveGet(ctx, client, serveURL(base, "/status"))
+	if err != nil {
+		return serveRuntimeInfo{}, err
+	}
+	var info serveRuntimeInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return serveRuntimeInfo{}, err
+	}
+	return info, nil
+}
+
+// remoteTabFrameRouted reports whether a frame tagged with sessionPath
+// belongs to the tab's displayed session. Untagged frames (pre-multi-session
+// serves) always route — the legacy single-session behavior.
+func (a *App) remoteTabFrameRouted(tabID, sessionPath string) bool {
+	a.remoteTabMu.Lock()
+	defer a.remoteTabMu.Unlock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil {
+		return false
+	}
+	return sessionPath == "" || sessionPath == tab.currentSessionPath
+}
+
+// setRemoteSessionRunning records a session's turn-running state, inferred
+// from the SSE frame stream (background sessions included), and notifies the
+// frontend so remote session rows can show the same live indicator local
+// topics get. gen guards a superseded pump from stomping a newer generation's
+// state; untagged frames attribute to the displayed session (legacy serves).
+func (a *App) setRemoteSessionRunning(tabID string, gen uint64, sessionPath string, running bool) {
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil || tab.gen != gen {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	if sessionPath == "" {
+		sessionPath = tab.currentSessionPath
+	}
+	if sessionPath == "" {
+		tab.running = running // nowhere to attribute; keep the tab-level flag
+		a.remoteTabMu.Unlock()
+		return
+	}
+	if tab.runningSessions == nil {
+		tab.runningSessions = map[string]bool{}
+	}
+	if tab.runningSessions[sessionPath] == running {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	tab.runningSessions[sessionPath] = running
+	ref := tab.ref
+	a.remoteTabMu.Unlock()
+	a.emitRemoteEvent("remote-tab:runtime", map[string]any{
+		"tabId": tabID, "hostId": ref.HostID, "workspace": ref.Workspace,
+		"sessionPath": sessionPath, "running": running,
+	})
 }
 
 func serveSessions(ctx context.Context, client *http.Client, base string) ([]serveSessionEntry, error) {
@@ -317,7 +512,8 @@ func commandContext(a *App) (context.Context, context.CancelFunc) {
 
 // remoteTabCommandClient resolves a tabID to its live serve client. A tab
 // that has not finished bootstrap, is reconnecting, or has failed is an
-// error, not a silent no-op.
+// error, not a silent no-op. Repeated refusals during hydrate retries are
+// rate-limited so bootstrap noise does not flood the log.
 func (a *App) remoteTabCommandClient(tabID string) (*http.Client, string, error) {
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
@@ -327,9 +523,23 @@ func (a *App) remoteTabCommandClient(tabID string) (*http.Client, string, error)
 	if usable {
 		client, base = tab.client, tab.base
 	}
+	shouldLog := false
+	if !usable {
+		now := time.Now()
+		if a.remoteTabRefuseLogAt == nil {
+			a.remoteTabRefuseLogAt = map[string]time.Time{}
+		}
+		last := a.remoteTabRefuseLogAt[tabID]
+		if last.IsZero() || now.Sub(last) >= 2*time.Second {
+			a.remoteTabRefuseLogAt[tabID] = now
+			shouldLog = true
+		}
+	}
 	a.remoteTabMu.Unlock()
 	if !usable {
-		log.Printf("[remote] remoteTabCommandClient: REFUSED tab=%q (tab=%v client=%v)", tabID, tab != nil, tab != nil && tab.client != nil)
+		if shouldLog {
+			log.Printf("[remote] remoteTabCommandClient: REFUSED tab=%q (tab=%v client=%v)", tabID, tab != nil, tab != nil && tab.client != nil)
+		}
 		return nil, "", fmt.Errorf("remote tab %q is not connected", tabID)
 	}
 	return client, base, nil
@@ -477,31 +687,102 @@ type RemoteTabSnapshot struct {
 	Status      json.RawMessage `json:"status,omitempty"`
 }
 
-// RemoteTabSnapshot merges the serve's GET members in parallel. Only
-// /history is required; the optional members degrade to absent on failure.
-func (a *App) RemoteTabSnapshot(tabID string) (RemoteTabSnapshot, error) {
+// RemoteTabSnapshotOptions selects which serve members a snapshot fetch pulls.
+// Empty Members keeps the legacy full set; hydrate callers pass only the
+// members the session surface consumes (/history + /status).
+type RemoteTabSnapshotOptions struct {
+	Members []string `json:"members,omitempty"`
+}
+
+func remoteTabSnapshotMembers(opts RemoteTabSnapshotOptions) []string {
+	if len(opts.Members) == 0 {
+		return []string{"/history", "/context", "/todos", "/checkpoints", "/models", "/status"}
+	}
+	out := make([]string, 0, len(opts.Members))
+	seen := map[string]bool{}
+	for _, raw := range opts.Members {
+		path := strings.TrimSpace(raw)
+		if path == "" {
+			continue
+		}
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		out = append(out, path)
+	}
+	if len(out) == 0 {
+		return []string{"/history", "/context", "/todos", "/checkpoints", "/models", "/status"}
+	}
+	return out
+}
+
+// RemoteTabSnapshot merges the selected serve GET members in parallel. Only
+// /history is required when requested; optional members degrade to absent on failure.
+func (a *App) RemoteTabSnapshot(tabID string, opts RemoteTabSnapshotOptions) (RemoteTabSnapshot, error) {
 	client, base, err := a.remoteTabCommandClient(tabID)
 	if err != nil {
 		return RemoteTabSnapshot{}, err
 	}
 	ctx, cancel := commandContext(a)
 	defer cancel()
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	sessionPath := ""
+	cache := map[string]snapshotCacheEntry{}
+	if tab != nil {
+		sessionPath = tab.currentSessionPath
+		for k, v := range tab.snapshotCache {
+			cache[k] = v
+		}
+	}
+	a.remoteTabMu.Unlock()
+	historyLimit := int64(32 << 20) // long sessions marshal to multi-MiB JSON
 	var snap RemoteTabSnapshot
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var historyErr error
-	for path, dst := range map[string]*json.RawMessage{
+	memberDst := map[string]*json.RawMessage{
 		"/history":     &snap.History,
 		"/context":     &snap.Context,
 		"/todos":       &snap.Todos,
 		"/checkpoints": &snap.Checkpoints,
 		"/models":      &snap.Models,
 		"/status":      &snap.Status,
-	} {
+	}
+	// Hydrate/reconcile asks for runtime status without wallet Balance, matching
+	// the local ListTabs path. Keep the public member name "/status".
+	fetchPath := map[string]string{
+		"/status": "/status?runtime=1",
+	}
+	needHistory := false
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var historyErr error
+	for _, path := range remoteTabSnapshotMembers(opts) {
+		dst := memberDst[path]
+		if dst == nil {
+			continue
+		}
+		if path == "/history" {
+			needHistory = true
+		}
+		reqPath := path
+		if mapped := fetchPath[path]; mapped != "" {
+			reqPath = mapped
+		}
 		wg.Add(1)
-		go func(path string, dst *json.RawMessage) {
+		go func(path, reqPath string, dst *json.RawMessage) {
 			defer wg.Done()
-			data, err := serveGet(ctx, client, serveURL(base, path))
+			limit := int64(1 << 20)
+			if path == "/history" {
+				limit = historyLimit
+			}
+			key := sessionPath + "\x00" + path
+			mu.Lock()
+			cached := cache[key]
+			mu.Unlock()
+			got, err := serveGetCached(ctx, client, serveURL(base, reqPath), cached.etag, limit)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -510,16 +791,41 @@ func (a *App) RemoteTabSnapshot(tabID string) (RemoteTabSnapshot, error) {
 				}
 				return
 			}
-			*dst = data
-		}(path, dst)
+			if got.etag == "" || got.body == nil {
+				if got.body == nil && cached.body != nil {
+					// 304 reuse: the serve's content is unchanged.
+					*dst = cached.body
+					return
+				}
+				*dst = got.body
+				return
+			}
+			*dst = got.body
+			if got.etag != "" {
+				cache[key] = got
+			}
+		}(path, reqPath, dst)
 	}
 	wg.Wait()
 	if historyErr != nil {
 		return RemoteTabSnapshot{}, historyErr
 	}
-	if len(snap.History) == 0 {
+	if needHistory && len(snap.History) == 0 {
 		return RemoteTabSnapshot{}, fmt.Errorf("remote tab %q: empty history", tabID)
 	}
+	// Merge the call-local cache back under the tab lock. Drop the merge when
+	// the displayed session moved mid-flight so a stale snapshot cannot clobber
+	// the new session's ETags.
+	a.remoteTabMu.Lock()
+	if tab := a.remoteTabs[tabID]; tab != nil && tab.currentSessionPath == sessionPath {
+		if tab.snapshotCache == nil {
+			tab.snapshotCache = map[string]snapshotCacheEntry{}
+		}
+		for k, v := range cache {
+			tab.snapshotCache[k] = v
+		}
+	}
+	a.remoteTabMu.Unlock()
 	return snap, nil
 }
 
@@ -531,6 +837,13 @@ type RemoteSessionView struct {
 	Current        bool   `json:"current,omitempty"`
 	LastActivityAt int64  `json:"lastActivityAt,omitempty"`
 	Pinned         bool   `json:"pinned,omitempty"`
+	// Path is the session file's path on the serve; the runtime events key
+	// per-session spinner state by it.
+	Path string `json:"path,omitempty"`
+	// Running marks a session as mid-turn (or awaiting a prompt answer) —
+	// the current session from /status, background sessions from the pump's
+	// per-session tracking. Drives the session-list spinner.
+	Running bool `json:"running,omitempty"`
 }
 
 // serveClientForRef resolves an HTTP client for a host+workspace WITHOUT
@@ -575,6 +888,23 @@ func (a *App) serveClientForRef(hostID, workspace string) (*http.Client, string,
 	return client, view.LocalURL, cancel, nil
 }
 
+// remoteSessionsRunning snapshots the per-session running map of a
+// workspace's live tab (nil when no tab is attached).
+func (a *App) remoteSessionsRunning(hostID, workspace string) map[string]bool {
+	a.remoteTabMu.Lock()
+	defer a.remoteTabMu.Unlock()
+	for _, tab := range a.remoteTabs {
+		if tab.ref.HostID == hostID && tab.ref.Workspace == workspace && tab.runningSessions != nil {
+			out := make(map[string]bool, len(tab.runningSessions))
+			for k, v := range tab.runningSessions {
+				out[k] = v
+			}
+			return out
+		}
+	}
+	return nil
+}
+
 func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionView, error) {
 	client, base, done, err := a.serveClientForRef(hostID, workspace)
 	if err != nil {
@@ -587,6 +917,14 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 	if err != nil {
 		return nil, err
 	}
+	// Live running state: background sessions report through the pump's
+	// per-session map; the serve's /status covers the current session (and
+	// legacy single-session serves without tagged frames).
+	live := false
+	if info, serr := fetchServeRuntime(ctx, client, base); serr == nil {
+		live = info.Running || info.PendingPrompt
+	}
+	running := a.remoteSessionsRunning(hostID, workspace)
 	out := make([]RemoteSessionView, 0, len(entries))
 	pinned := make([]RemoteSessionView, 0, len(entries))
 	hasCurrent := false
@@ -597,11 +935,13 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 		}
 		view := RemoteSessionView{
 			Name:           e.Name,
+			Path:           e.Path,
 			Title:          title,
 			Turns:          e.Turns,
 			Current:        e.Current,
 			LastActivityAt: e.MtimeMilli,
 			Pinned:         remoteSessionPinned(hostID, workspace, e.Name),
+			Running:        running[e.Path] || (e.Current && live),
 		}
 		hasCurrent = hasCurrent || e.Current
 		if view.Pinned {
@@ -686,9 +1026,13 @@ func (a *App) RenameRemoteProjectSession(hostID, workspace, name, title string) 
 }
 
 // resumeRemoteTabSession switches a live tab to a listed session: POST
-// /resume, adopt its title, clear the blank mark, and re-emit ready so the
-// surface re-syncs its snapshot.
-func (a *App) resumeRemoteTabSession(tabID, name string) {
+// /resume, adopt its title, clear the blank mark, re-route the pump to the
+// new session's frames, and re-emit ready so the surface re-syncs its
+// snapshot. A multi-session serve accepts the switch even while the outgoing
+// session's turn is running: the old controller keeps finishing in the
+// background (writing its own file) and its frames stay tagged away from the
+// displayed transcript.
+func (a *App) resumeRemoteTabSession(tabID, name, knownPath, knownTitle string) {
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
 	if tab == nil || tab.client == nil {
@@ -700,33 +1044,44 @@ func (a *App) resumeRemoteTabSession(tabID, name string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	entries, err := serveSessions(ctx, client, base)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if entry.Name != name {
-			continue
-		}
-		body, _ := json.Marshal(map[string]string{"path": entry.Path})
-		if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
-			a.emitRemoteTabState(tabID, "error", err.Error())
+	// The listing row carries the session path; resolving the name against
+	// GET /sessions again costs a full tunnel round trip for nothing.
+	entry := serveSessionEntry{Name: name, Path: knownPath, Title: knownTitle}
+	if entry.Path == "" {
+		entries, err := serveSessions(ctx, client, base)
+		if err != nil {
 			return
 		}
-		title := strings.TrimSpace(entry.Title)
-		if title == "" {
-			title = name
+		for _, e := range entries {
+			if e.Name == name {
+				entry = e
+				break
+			}
 		}
-		a.remoteTabMu.Lock()
-		tab.topicTitle = title
-		tab.sessionReset = false
-		a.remoteTabMu.Unlock()
-		a.emitRemoteEvent("remote-tab:opened", remoteTabMeta(tab, tab.hostLabel))
-		a.saveTabsFromRemote()
-		a.emitRemoteTabState(tabID, "ready", "")
+	}
+	if entry.Path == "" {
+		a.emitRemoteTabState(tabID, "error", fmt.Sprintf("remote session %q not found", name))
 		return
 	}
-	a.emitRemoteTabState(tabID, "error", fmt.Sprintf("remote session %q not found", name))
+	body, _ := json.Marshal(map[string]string{"path": entry.Path})
+	if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
+		a.emitRemoteTabState(tabID, "error", err.Error())
+		return
+	}
+	title := strings.TrimSpace(entry.Title)
+	if title == "" {
+		title = name
+	}
+	a.remoteTabMu.Lock()
+	tab.topicTitle = title
+	tab.sessionReset = false
+	tab.currentSessionPath = entry.Path
+	a.remoteTabMu.Unlock()
+	// No SSE resubscribe: the serve replays the new session's pending
+	// prompts onto the existing stream after a resume, and the pump routes
+	// per frame anyway.
+	a.saveTabsFromRemote()
+	a.emitRemoteTabState(tabID, "ready", "")
 }
 
 // SetRemoteSessionPinned pins a remote session listing row (desktop-owned,
@@ -1021,10 +1376,24 @@ func (a *App) resetRemoteTabSession(tabID string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := servePost(ctx, client, serveURL(base, "/new"), nil); err != nil {
+	data, err := servePostJSON(ctx, client, serveURL(base, "/new"), nil)
+	if err != nil {
 		a.emitRemoteTabState(tabID, "error", err.Error())
 		return
 	}
+	freshPath := ""
+	var fresh struct {
+		SessionPath string `json:"sessionPath"`
+	}
+	if json.Unmarshal(data, &fresh) == nil {
+		freshPath = fresh.SessionPath
+	}
+	if freshPath == "" {
+		freshPath = currentSessionPathOf(ctx, client, base)
+	}
+	a.remoteTabMu.Lock()
+	tab.currentSessionPath = freshPath
+	a.remoteTabMu.Unlock()
 	a.emitRemoteTabState(tabID, "ready", "")
 }
 
@@ -1190,9 +1559,28 @@ func (a *App) reattachRemoteTab(tabID string) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	view, token, err := rt.EnsureServer(ctx, hostID, workspace)
-	if err != nil || view.State != "ready" || view.LocalURL == "" {
-		log.Printf("[remote] reattachRemoteTab: EnsureServer NOT-READY tab=%s err=%v state=%s localURL=%q", tabID, err, view.State, view.LocalURL)
+	// Bounded retries: a transient failure (SSH blip mid-reattach, forward
+	// rebind race) must not strand the tab in reconnecting forever — the
+	// pump that died will not fire again.
+	var view RemoteServerView
+	var token string
+	ready := false
+	for attempt := 1; attempt <= 3; attempt++ {
+		view, token, err = rt.EnsureServer(ctx, hostID, workspace)
+		if err == nil && view.State == "ready" && view.LocalURL != "" {
+			ready = true
+			break
+		}
+		log.Printf("[remote] reattachRemoteTab: EnsureServer NOT-READY (attempt %d/3) tab=%s err=%v state=%s", attempt, tabID, err, view.State)
+		a.remoteTabMu.Lock()
+		stillReconnecting := a.remoteTabs[tabID] != nil && a.remoteTabs[tabID].state == "reconnecting"
+		a.remoteTabMu.Unlock()
+		if !stillReconnecting || attempt == 3 {
+			return
+		}
+		time.Sleep(3 * time.Second)
+	}
+	if !ready {
 		return
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -1219,6 +1607,9 @@ func (a *App) reattachRemoteTab(tabID string) {
 	tab.client = client
 	tab.base = view.LocalURL
 	tab.token = token
+	// The serve's current session may have moved while the tunnel was down;
+	// refresh the frame-routing path from the listing.
+	tab.currentSessionPath = currentSessionPathOf(callCtx, client, view.LocalURL)
 	gen := tab.gen
 	pumpCtx, cancelPump := context.WithCancel(ctx)
 	tab.cancel = cancelPump

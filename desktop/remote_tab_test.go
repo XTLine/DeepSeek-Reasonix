@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -29,10 +31,26 @@ type fakeServe struct {
 	resumePath  string
 	cookieOnNew bool
 	sessions    []serveSessionEntry
-	calls       []string // "METHOD /path body" per command request
-	failNext    string   // non-empty ⇒ next command endpoint replies 409 with this text
-	failHistory bool     // /history replies 500 when set
-	eventsConns int      // /events connections opened
+	calls       []string                 // "METHOD /path body" per command request
+	failNext    string                   // non-empty ⇒ next command endpoint replies 409 with this text
+	failHistory bool                     // /history replies 500 when set
+	eventsConns int                      // /events connections opened
+	statusJSON  string                   // GET /status payload; default is an idle serve
+	slowHistory time.Duration            // artificial /history delay to force overlap
+	sseWriters  map[chan string]struct{} // live /events connections
+}
+
+// pushFrame writes one SSE data frame to every connected /events client,
+// mirroring a real serve's broadcaster fan-out.
+func (fs *fakeServe) pushFrame(frame string) {
+	fs.mu.Lock()
+	for ch := range fs.sseWriters {
+		select {
+		case ch <- frame:
+		default:
+		}
+	}
+	fs.mu.Unlock()
 }
 
 func (fs *fakeServe) eventsCount() int {
@@ -66,7 +84,7 @@ func (fs *fakeServe) record(method, path, body string) {
 // while the real Serve rejects it.
 func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fakeServe {
 	t.Helper()
-	fs := &fakeServe{t: t, token: token, sessions: sessions}
+	fs := &fakeServe{t: t, token: token, sessions: sessions, statusJSON: `{"state":"ready"}`}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /auth/token", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -89,7 +107,7 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 			fs.sessions[i].Current = false
 		}
 		fs.mu.Unlock()
-		w.WriteHeader(http.StatusNoContent)
+		writeTestJSON(w, map[string]string{"sessionPath": "/remote/sessions/fresh.jsonl"})
 	})
 	mux.HandleFunc("POST /resume", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -124,7 +142,28 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		fmt.Fprintf(w, "data: %s\n\n", `{"kind":"session_start"}`)
 		fmt.Fprintf(w, "data: %s\n\n", `{"kind":"ready"}`)
 		flusher.Flush()
-		<-r.Context().Done()
+		// Register a queue so tests can push frames like a real serve.
+		ch := make(chan string, 16)
+		fs.mu.Lock()
+		if fs.sseWriters == nil {
+			fs.sseWriters = map[chan string]struct{}{}
+		}
+		fs.sseWriters[ch] = struct{}{}
+		fs.mu.Unlock()
+		defer func() {
+			fs.mu.Lock()
+			delete(fs.sseWriters, ch)
+			fs.mu.Unlock()
+		}()
+		for {
+			select {
+			case frame := <-ch:
+				fmt.Fprintf(w, "data: %s\n\n", frame)
+				flusher.Flush()
+			case <-r.Context().Done():
+				return
+			}
+		}
 	})
 	command := func(path string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -150,13 +189,25 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 			if path == "/history" {
 				fs.mu.Lock()
 				fail := fs.failHistory
+				delay := fs.slowHistory
 				fs.mu.Unlock()
+				if delay > 0 {
+					time.Sleep(delay)
+				}
 				if fail {
 					http.Error(w, "gone", http.StatusInternalServerError)
 					return
 				}
 			}
+			// Mirror serve writeJSONCached: an ETag is what triggers the desktop
+			// snapshotCache write path exercised by the race probe.
+			etag := `"fake-` + path + `"`
+			if match := r.Header.Get("If-None-Match"); match == etag {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("ETag", etag)
 			_, _ = w.Write([]byte(payload))
 		})
 	}
@@ -165,7 +216,20 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 	snapshot("/todos", `[]`)
 	snapshot("/checkpoints", `[{"turn":1}]`)
 	snapshot("/models", `{"current":"remote/chat","label":"chat","models":[{"ref":"remote/chat","provider":"remote","model":"chat","active":true}]}`)
-	snapshot("/status", `{"state":"ready"}`)
+	// /status is read live so tests can flip the running state mid-flight.
+	// Query strings (e.g. ?runtime=1) still match this path.
+	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
+		path := "/status"
+		if q := r.URL.RawQuery; q != "" {
+			path += "?" + q
+		}
+		fs.record(r.Method, path, "")
+		fs.mu.Lock()
+		payload := fs.statusJSON
+		fs.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	})
 	snapshot("/branches", `{"branches":[]}`)
 	snapshot("/skills", `[]`)
 	gate := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -226,6 +290,23 @@ func (l *eventLog) recorded() []string {
 	out := make([]string, len(l.events))
 	copy(out, l.events)
 	return out
+}
+
+// waitFor blocks until an event with the given name prefix lands and returns
+// its full "name payload" record (empty on timeout).
+func (l *eventLog) waitFor(prefix string, timeout time.Duration) string {
+	deadline := time.Now().Add(timeout)
+	for {
+		for _, e := range l.recorded() {
+			if strings.HasPrefix(e, prefix) {
+				return e
+			}
+		}
+		if time.Now().After(deadline) {
+			return ""
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func (l *eventLog) count(prefix string) int {
@@ -428,7 +509,7 @@ func TestEnterRemoteSessionUnknownName(t *testing.T) {
 	if err := serveHandshake(ctx, client, fs.server.URL, "s3cret"); err != nil {
 		t.Fatal(err)
 	}
-	err = enterRemoteSession(ctx, client, fs.server.URL, RemoteTabOpenOptions{SessionName: "missing"})
+	_, err = enterRemoteSession(ctx, client, fs.server.URL, RemoteTabOpenOptions{SessionName: "missing"})
 	if err == nil || !strings.Contains(err.Error(), `"missing" not found`) {
 		t.Fatalf("err = %v, want unknown session error", err)
 	}
@@ -767,7 +848,7 @@ func TestRemoteTabSnapshotMergesServeMembers(t *testing.T) {
 	cleanupRemoteTabPumps(t, a)
 	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
 
-	snap, err := a.RemoteTabSnapshot(meta.ID)
+	snap, err := a.RemoteTabSnapshot(meta.ID, RemoteTabSnapshotOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -783,8 +864,180 @@ func TestRemoteTabSnapshotMergesServeMembers(t *testing.T) {
 	fs.mu.Lock()
 	fs.failHistory = true
 	fs.mu.Unlock()
-	if _, err := a.RemoteTabSnapshot(meta.ID); err == nil {
+	if _, err := a.RemoteTabSnapshot(meta.ID, RemoteTabSnapshotOptions{}); err == nil {
 		t.Fatal("snapshot with failing /history must error")
+	}
+}
+
+// TestRemoteTabSnapshotHydrateMembersOnly pins the session-surface hydrate
+// path: only /history and /status are fetched. Extra members are critical-path
+// waste for useRemoteSession.
+func TestRemoteTabSnapshotHydrateMembersOnly(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+
+	before := len(fs.recorded())
+	snap, err := a.RemoteTabSnapshot(meta.ID, RemoteTabSnapshotOptions{
+		Members: []string{"/history", "/status"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.History) == 0 || len(snap.Status) == 0 {
+		t.Fatalf("hydrate snapshot missing required members history=%q status=%q", snap.History, snap.Status)
+	}
+	if len(snap.Context) != 0 || len(snap.Todos) != 0 || len(snap.Checkpoints) != 0 || len(snap.Models) != 0 {
+		t.Fatalf("hydrate snapshot fetched unused members: context=%q todos=%q checkpoints=%q models=%q",
+			snap.Context, snap.Todos, snap.Checkpoints, snap.Models)
+	}
+
+	var historyHits, statusHits, otherHits int
+	for _, line := range fs.recorded()[before:] {
+		switch {
+		case strings.Contains(line, "GET /history"):
+			historyHits++
+		case strings.Contains(line, "GET /status?runtime=1"):
+			statusHits++
+		case strings.Contains(line, "GET /status "):
+			t.Fatalf("hydrate must use runtime status, got %q", line)
+		case strings.Contains(line, "GET /context"),
+			strings.Contains(line, "GET /todos"),
+			strings.Contains(line, "GET /checkpoints"),
+			strings.Contains(line, "GET /models"):
+			otherHits++
+		}
+	}
+	if historyHits != 1 || statusHits != 1 {
+		t.Fatalf("hydrate hits history=%d status=%d, want 1 each; recorded=%v", historyHits, statusHits, fs.recorded()[before:])
+	}
+	if otherHits != 0 {
+		t.Fatalf("hydrate path hit %d unused members; recorded=%v", otherHits, fs.recorded()[before:])
+	}
+}
+
+// TestRemoteTabSnapshotConcurrentCallsDoNotRace reproduces the production
+// fatal: overlapping RemoteTabSnapshot calls (ready hydrate stampede) must
+// not concurrent-write the shared per-tab snapshotCache.
+func TestRemoteTabSnapshotConcurrentCallsDoNotRace(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+	fs.slowHistory = 40 * time.Millisecond
+
+	const n = 16
+	errCh := make(chan error, n)
+	var wg sync.WaitGroup
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := a.RemoteTabSnapshot(meta.ID, RemoteTabSnapshotOptions{})
+			errCh <- err
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent RemoteTabSnapshot: %v", err)
+		}
+	}
+}
+
+// TestRemoteSessionHydrateChainFromOpenToSnapshot walks the same bindings the
+// frontend uses: OpenRemoteProjectTab → ready → RemoteTabSnapshot, then a
+// ready-hydrate overlap stampede. This is the everyday acceptance probe in
+// place of clicking through wails dev.
+func TestRemoteSessionHydrateChainFromOpenToSnapshot(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+
+	meta, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{NewSession: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForTabState(t, a, meta.ID, "ready")
+
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[meta.ID]
+	clientReady := tab != nil && tab.client != nil
+	a.remoteTabMu.Unlock()
+	if !clientReady {
+		t.Fatal("ready tab has no serve client; hydrate chain cannot start")
+	}
+
+	snap, err := a.RemoteTabSnapshot(meta.ID, RemoteTabSnapshotOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.History) == 0 {
+		t.Fatal("hydrate chain returned empty history")
+	}
+	var msgs []map[string]any
+	if err := json.Unmarshal(snap.History, &msgs); err != nil || len(msgs) == 0 {
+		t.Fatalf("history not usable by frontend: %v %s", err, snap.History)
+	}
+	if got, _ := msgs[0]["content"].(string); got != "hi" {
+		t.Fatalf("history content = %q, want seeded hi", got)
+	}
+	if len(snap.Status) == 0 {
+		t.Fatal("hydrate chain returned empty status")
+	}
+
+	fs.slowHistory = 20 * time.Millisecond
+	var wg sync.WaitGroup
+	errCh := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := a.RemoteTabSnapshot(meta.ID, RemoteTabSnapshotOptions{})
+			errCh <- err
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("overlapping hydrate chain failed: %v", err)
+		}
+	}
+
+	// Prove the chain hit the serve endpoints a human hydrate would hit.
+	recorded := fs.recorded()
+	var sawHistory, sawStatus bool
+	for _, line := range recorded {
+		if strings.Contains(line, "GET /history") {
+			sawHistory = true
+		}
+		if strings.Contains(line, "GET /status") {
+			sawStatus = true
+		}
+	}
+	if !sawHistory || !sawStatus {
+		t.Fatalf("hydrate chain missing serve hits history=%v status=%v recorded=%v", sawHistory, sawStatus, recorded)
 	}
 }
 
@@ -859,8 +1112,8 @@ func TestResolveOverlappingWorkspace(t *testing.T) {
 		want string
 		ok   bool
 	}{
-		{ws: "/srv/app", want: "/srv/app", ok: true},             // exact
-		{ws: "/srv/app/", want: "/srv/app", ok: true},            // trailing slash normalizes to exact
+		{ws: "/srv/app", want: "/srv/app", ok: true},              // exact
+		{ws: "/srv/app/", want: "/srv/app", ok: true},             // trailing slash normalizes to exact
 		{ws: "/srv/app/sub/deep", want: "/srv/app/sub", ok: true}, // nearest ancestor
 		{ws: "/srv", want: "/srv/app", ok: true},                  // ancestor request merges into shallowest descendant
 		{ws: "/srv/other", want: "", ok: false},                   // sibling never merges
@@ -1255,5 +1508,370 @@ func TestRemoteSessionPinnedOrderingAndProjectTitle(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("remote group missing from the snapshot")
+	}
+}
+
+// TestResumeRemoteTabSessionSwitchesWhileBusy pins the multi-session switch:
+// a busy serve (running turn) still receives POST /resume — the outgoing
+// session finishes in the background on multi-session serves — and the tab
+// routes its frames to the newly entered session.
+func TestResumeRemoteTabSessionSwitchesWhileBusy(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "s1", Path: "/remote/sessions/s1.jsonl", Current: true},
+		{Name: "s2", Path: "/remote/sessions/s2.jsonl"},
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionName: "s1"})
+
+	fs.mu.Lock()
+	fs.statusJSON = `{"running":true,"pendingPrompt":false,"backgroundJobs":0}`
+	fs.mu.Unlock()
+
+	a.resumeRemoteTabSession(meta.ID, "s2", "", "")
+
+	if _, resumePath, _ := fs.snapshot(); resumePath != "/remote/sessions/s2.jsonl" {
+		t.Fatalf("busy serve must receive POST /resume for s2, got resumePath=%q", resumePath)
+	}
+	a.remoteTabMu.Lock()
+	route := a.remoteTabs[meta.ID].currentSessionPath
+	a.remoteTabMu.Unlock()
+	if route != "/remote/sessions/s2.jsonl" {
+		t.Fatalf("currentSessionPath = %q, want s2's path", route)
+	}
+	waitForTabState(t, a, meta.ID, "ready")
+}
+
+// TestRemoteProjectSessionsMarksRunningRow pins the list spinner source: the
+// /status live state marks exactly the serve's Current session row.
+func TestRemoteProjectSessionsMarksRunningRow(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "s1", Path: "/remote/sessions/s1.jsonl", Current: true},
+		{Name: "s2", Path: "/remote/sessions/s2.jsonl"},
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionName: "s1"})
+
+	fs.mu.Lock()
+	fs.statusJSON = `{"running":true}`
+	fs.mu.Unlock()
+
+	sessions, err := a.RemoteProjectSessions("box", "~/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range sessions {
+		if row.Name == "s1" && !row.Running {
+			t.Fatalf("current session s1 must be marked running: %+v", row)
+		}
+		if row.Name == "s2" && row.Running {
+			t.Fatalf("non-current session s2 must not be running: %+v", row)
+		}
+	}
+}
+
+// TestRemoteTabPumpTracksRunningState pins the turn-runtime projection: the
+// pump infers running from turn_started/turn_done frames and emits
+// remote-tab:runtime so the session list can spin on the current row.
+func TestRemoteTabPumpTracksRunningState(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "s1", Path: "/remote/sessions/s1.jsonl", Current: true},
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+
+	fs.mu.Lock()
+	gen := a.remoteTabs[meta.ID].gen
+	fs.mu.Unlock()
+	const sessionPath = "/remote/sessions/s1.jsonl"
+	a.setRemoteSessionRunning(meta.ID, gen, sessionPath, true)
+
+	a.remoteTabMu.Lock()
+	running := a.remoteTabs[meta.ID].runningSessions[sessionPath]
+	a.remoteTabMu.Unlock()
+	if !running {
+		t.Fatal("pump-tracked per-session running flag not set")
+	}
+	if got := log.waitFor("remote-tab:runtime", 2*time.Second); !strings.Contains(got, `"running":true`) || !strings.Contains(got, sessionPath) {
+		t.Fatalf("remote-tab:runtime event payload = %q, want running=true with session path", got)
+	}
+
+	// A superseded generation must not stomp the newer pump's state.
+	a.setRemoteSessionRunning(meta.ID, gen+1, sessionPath, false)
+	a.remoteTabMu.Lock()
+	running = a.remoteTabs[meta.ID].runningSessions[sessionPath]
+	a.remoteTabMu.Unlock()
+	if !running {
+		t.Fatal("stale-generation update must be ignored")
+	}
+}
+
+// TestRemoteTabPumpRoutesFramesBySession pins per-session routing: frames
+// tagged with the displayed session (or untagged legacy frames) reach the
+// frontend; background sessions' frames do not, but still drive their
+// per-session spinner state.
+func TestRemoteTabPumpRoutesFramesBySession(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "s1", Path: "/remote/sessions/s1.jsonl", Current: true},
+		{Name: "s2", Path: "/remote/sessions/s2.jsonl"},
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel, remoteEventHook: func(string, any) {}}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionName: "s1"})
+
+	a.remoteTabMu.Lock()
+	route := a.remoteTabs[meta.ID].currentSessionPath
+	a.remoteTabMu.Unlock()
+	if route != "/remote/sessions/s1.jsonl" {
+		t.Fatalf("attach must route to s1's path, got %q", route)
+	}
+
+	log1 := &eventLog{}
+	a.remoteEventHook = log1.add
+	fs.pushFrame(`{"kind":"text","sessionPath":"/remote/sessions/s1.jsonl","text":"hi"}`)
+	if got := log1.waitFor("remote-tab:"+meta.ID+":event", 2*time.Second); !strings.Contains(got, `"text"`) {
+		t.Fatalf("current-session frame not forwarded: %q", got)
+	}
+
+	log2 := &eventLog{}
+	a.remoteEventHook = log2.add
+	fs.pushFrame(`{"kind":"text","sessionPath":"/remote/sessions/s2.jsonl","text":"bg"}`)
+	fs.pushFrame(`{"kind":"turn_started","sessionPath":"/remote/sessions/s2.jsonl"}`)
+	bgRunning := false
+	deadline := time.Now().Add(1 * time.Second)
+	for {
+		a.remoteTabMu.Lock()
+		bgRunning = a.remoteTabs[meta.ID].runningSessions["/remote/sessions/s2.jsonl"]
+		a.remoteTabMu.Unlock()
+		if bgRunning || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !bgRunning {
+		t.Fatal("background turn_started must drive the per-session running map")
+	}
+	for _, e := range log2.recorded() {
+		if strings.HasPrefix(e, "remote-tab:"+meta.ID+":event") {
+			t.Fatalf("background session frame leaked to the frontend: %q", e)
+		}
+	}
+
+	// Untagged legacy frames still route (pre-multi-session serves).
+	fs.pushFrame(`{"kind":"notice","text":"legacy"}`)
+	if got := log2.waitFor("remote-tab:"+meta.ID+":event", 2*time.Second); !strings.Contains(got, "legacy") {
+		t.Fatalf("untagged legacy frame not forwarded: %q", got)
+	}
+}
+
+// TestServeGetCachedETagReuse pins the switch-back fast path: a 304 reuses
+// the cached body, and a body that reaches the limit is an error instead of
+// truncated JSON.
+func TestServeGetCachedETagReuse(t *testing.T) {
+	var etag string
+	var hits int
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /big", func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		body := []byte(`{"data":"` + strings.Repeat("x", 4096) + `"}`)
+		etag = fmt.Sprintf(`"%x"`, len(body))
+		w.Header().Set("ETag", etag)
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		_, _ = w.Write(body)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	client := &http.Client{}
+
+	first, err := serveGetCached(context.Background(), client, srv.URL+"/big", "", 1<<20)
+	if err != nil || len(first.body) == 0 || first.etag == "" {
+		t.Fatalf("first fetch: body=%d etag=%q err=%v", len(first.body), first.etag, err)
+	}
+	second, err := serveGetCached(context.Background(), client, srv.URL+"/big", first.etag, 1<<20)
+	if err != nil {
+		t.Fatalf("revalidate: %v", err)
+	}
+	if second.body != nil {
+		t.Fatal("304 must not return a body")
+	}
+	if second.etag != first.etag || hits != 2 {
+		t.Fatalf("revalidate etag=%q hits=%d, want etag reuse and a server round trip", second.etag, hits)
+	}
+
+	// Truncation guard: a body at/over the limit errors out.
+	if _, err := serveGetCached(context.Background(), client, srv.URL+"/big", "", 16); err == nil {
+		t.Fatal("over-limit body must be an error, not truncated JSON")
+	}
+}
+
+// TestServeGetCachedAcceptsGzip proves snapshot GETs negotiate gzip the way
+// the serve middleware expects. The default http.Transport must advertise
+// Accept-Encoding and transparently decode the body; otherwise long /history
+// payloads cross the SSH tunnel uncompressed.
+func TestServeGetCachedAcceptsGzip(t *testing.T) {
+	var sawAcceptGzip bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /history", func(w http.ResponseWriter, r *http.Request) {
+		sawAcceptGzip = strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
+		plain := []byte(`{"data":"` + strings.Repeat("y", 4096) + `"}`)
+		if !sawAcceptGzip {
+			http.Error(w, "gzip required", http.StatusBadRequest)
+			return
+		}
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		if _, err := zw.Write(plain); err != nil {
+			t.Fatal(err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", `"gzip-history"`)
+		_, _ = w.Write(buf.Bytes())
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	got, err := serveGetCached(context.Background(), &http.Client{}, srv.URL+"/history", "", 1<<20)
+	if err != nil {
+		t.Fatalf("gzip snapshot fetch failed: %v (Accept-Encoding negotiated=%v)", err, sawAcceptGzip)
+	}
+	if !sawAcceptGzip {
+		t.Fatal("snapshot GET did not send Accept-Encoding: gzip")
+	}
+	if !bytes.Contains(got.body, []byte(`"data":"yyyy`)) {
+		t.Fatalf("gzip body not decoded transparently: %q", got.body[:min(64, len(got.body))])
+	}
+	if got.etag != `"gzip-history"` {
+		t.Fatalf("etag = %q, want preserved across gzip", got.etag)
+	}
+}
+
+// TestResumeRemoteTabSessionKnownPathSkipsListing pins the path fast path:
+// with the listing row's path in hand, the switch never re-fetches /sessions.
+func TestResumeRemoteTabSessionKnownPathSkipsListing(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "s1", Path: "/remote/sessions/s1.jsonl", Current: true},
+		{Name: "s2", Path: "/remote/sessions/s2.jsonl"},
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionName: "s1"})
+
+	listingsBefore := 0
+	for _, call := range fs.recorded() {
+		if strings.HasPrefix(call, "GET /sessions") {
+			listingsBefore++
+		}
+	}
+	a.resumeRemoteTabSession(meta.ID, "s2", "/remote/sessions/s2.jsonl", "S2 Title")
+	listingsAfter := 0
+	for _, call := range fs.recorded() {
+		if strings.HasPrefix(call, "GET /sessions") {
+			listingsAfter++
+		}
+	}
+	if listingsAfter != listingsBefore {
+		t.Fatalf("known-path resume re-fetched /sessions (%d -> %d)", listingsBefore, listingsAfter)
+	}
+	if _, resumePath, _ := fs.snapshot(); resumePath != "/remote/sessions/s2.jsonl" {
+		t.Fatalf("resumePath = %q", resumePath)
+	}
+	a.remoteTabMu.Lock()
+	title := a.remoteTabs[meta.ID].topicTitle
+	route := a.remoteTabs[meta.ID].currentSessionPath
+	a.remoteTabMu.Unlock()
+	if title != "S2 Title" || route != "/remote/sessions/s2.jsonl" {
+		t.Fatalf("title=%q route=%q", title, route)
+	}
+}
+
+// TestOpenRemoteProjectTabEmitsOpenedOnce pins the merged event: a session
+// switch through OpenRemoteProjectTab fires remote-tab:opened exactly once.
+func TestOpenRemoteProjectTabEmitsOpenedOnce(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "s1", Path: "/remote/sessions/s1.jsonl", Current: true},
+		{Name: "s2", Path: "/remote/sessions/s2.jsonl"},
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionName: "s1"})
+
+	log2 := &eventLog{}
+	a.remoteEventHook = log2.add
+	if _, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{SessionName: "s2", SessionPath: "/remote/sessions/s2.jsonl"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := log2.count("remote-tab:opened"); n != 1 {
+		t.Fatalf("remote-tab:opened emitted %d times after a switch, want 1", n)
+	}
+	_ = meta
+}
+
+// TestEnterRemoteSessionUsesNewBodyPath pins the fresh-session routing: the
+// /new response's sessionPath routes the pump immediately, without the
+// extra /sessions round trip (and without an empty-path window that would
+// forward background frames).
+func TestEnterRemoteSessionUsesNewBodyPath(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	client := fs.server.Client()
+	jar, _ := cookiejar.New(nil)
+	client.Jar = jar
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := serveHandshake(ctx, client, fs.server.URL, "s3cret"); err != nil {
+		t.Fatal(err)
+	}
+	path, err := enterRemoteSession(ctx, client, fs.server.URL, RemoteTabOpenOptions{NewSession: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/remote/sessions/fresh.jsonl" {
+		t.Fatalf("entered path = %q, want the /new body's sessionPath", path)
 	}
 }
