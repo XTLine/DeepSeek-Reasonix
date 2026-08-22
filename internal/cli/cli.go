@@ -813,6 +813,11 @@ func runServeWithOptions(args []string, opts serveRunOptions) int {
 	portFile := fs.String("port-file", "", "write the actual bound listen address (host:port) to this file after binding")
 	tokenFile := fs.String("token-file", "", "read the auth=token pre-shared token from this file (overrides --token; keeps the secret out of argv)")
 	pidFile := fs.String("pid-file", "", "write the server process id to this file")
+	// ServeCapsToken advertises the serve's capability revision in --help so
+	// the desktop's remote bootstrap can probe and replace outdated binaries
+	// (see bootstrap.LocateCommand). Bump on every serve-behavior change.
+	_ = fs.Bool("session-events", false, "tag SSE events with sessionPath and keep background sessions running across switches (reasonix-serve-caps-20260822c)")
+	_ = fs.Bool("detached-heal", false, "provider reloads retire background sessions so no controller dials a stale credential tunnel")
 	openBrowser := fs.Bool("open", opts.openBrowser, "open the Web UI in the default browser")
 	noOpen := fs.Bool("no-open", false, "do not open the Web UI in the default browser")
 	if code, ok := parseCommandFlags(fs, args); !ok {
@@ -856,6 +861,7 @@ func runServeWithOptions(args []string, opts serveRunOptions) int {
 
 	ctx := context.Background()
 	bc := serve.NewBroadcaster()
+	sessionTag := serve.NewSessionTagSink(bc)
 	cfg, _ := config.Load()
 
 	// Build serve config, merging CLI flags over config file.
@@ -931,15 +937,27 @@ func runServeWithOptions(args []string, opts serveRunOptions) int {
 	// Keep the browser reachable when the selected provider has no saved key.
 	// The loopback-only provider setup surface stores the missing credential and
 	// rebuilds this controller in place before the normal web UI is exposed.
-	ctrl, err := setupProfileWithOverrides(ctx, *model, *maxSteps, false, bc, cliBuildOverrides{
-		Preset:             deprecatedMode,
-		OnSessionRecovered: cliSessionRecoveredHandler(leases),
+	var ctrl *control.Controller
+	ctrl, err = setupProfileWithOverrides(ctx, *model, *maxSteps, false, sessionTag, cliBuildOverrides{
+		Preset: deprecatedMode,
+		OnSessionRecovered: func(info control.SessionRecoveryInfo) error {
+			if err := cliSessionRecoveredHandler(leases)(info); err != nil {
+				return err
+			}
+			if ctrl != nil {
+				if path := ctrl.SessionPath(); path != "" {
+					sessionTag.SetPath(path)
+				}
+			}
+			return nil
+		},
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 		return 1
 	}
 	defer ctrl.Close()
+	sessionTag.SetPath(ctrl.SessionPath())
 	SetTaskJobKiller(ctrlKillerAdapter{ctrl})
 
 	// Auto-save target: reuse the resumed file, else a fresh one — same as chat.
@@ -962,7 +980,9 @@ func runServeWithOptions(args []string, opts serveRunOptions) int {
 	}
 
 	srv := serve.New(ctrl, bc, serveCfg)
+	srv.RegisterSessionTag(ctrl, sessionTag)
 	_ = srv.SetSessionLeases(leases) // same live keeper was bound above
+	defer srv.CloseBackground()      // cancel any still-running background sessions on exit
 	return runServeFrontend(ctrl, srv, serveCfg, serveFrontendOptions{
 		command: opts.command, address: *addr,
 		portFile: *portFile, tokenFile: *tokenFile, pidFile: *pidFile,

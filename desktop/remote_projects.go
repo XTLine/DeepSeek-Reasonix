@@ -40,6 +40,10 @@ type RemoteProjectView struct {
 type RemoteTabOpenOptions struct {
 	NewSession  bool   `json:"newSession,omitempty"`
 	SessionName string `json:"sessionName,omitempty"`
+	// SessionPath/SessionTitle come from the clicked listing row: with the
+	// path in hand the switch skips the GET /sessions name resolution.
+	SessionPath  string `json:"sessionPath,omitempty"`
+	SessionTitle string `json:"sessionTitle,omitempty"`
 }
 
 // RemoteTabStateView is the payload on the remote-tab:{id}:state channel.
@@ -67,6 +71,21 @@ type remoteTab struct {
 	// NewSession open reuses this blank instead of resetting again — the
 	// same contract as the local reusable-blank tab.
 	sessionReset bool
+	// running tracks whether the serve's current turn is active, inferred
+	// from the tab's SSE pump (turn_started/turn_done). Feeds the session
+	// list's live indicator through remote-tab:runtime events.
+	running bool
+	// currentSessionPath routes the pump: only frames tagged with this
+	// session (or untagged frames from pre-multi-session serves) reach the
+	// frontend. Set before emitting ready after attach/resume/reset.
+	currentSessionPath string
+	// runningSessions tracks per-session turn state from tagged frames —
+	// background sessions included — driving per-row spinners.
+	runningSessions map[string]bool
+	// snapshotCache caches per-session snapshot member bodies keyed by
+	// "<sessionPath>\x00<member>"; the serve's ETags turn switch-backs into
+	// 304 reuses instead of full /history transfers.
+	snapshotCache map[string]snapshotCacheEntry
 	// model is the desktop-owned current model ref for this remote tab.
 	// Chat requests still tunnel through the credential proxy; the serve
 	// session is not rebuilt on switch. modelSeq orders concurrent writes so
@@ -277,7 +296,7 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 			a.emitRemoteTabState(reuse.id, "connecting", "")
 			a.goSafe("remoteTabServe", func() { a.bootstrapRemoteTab(reuse.id, hostID, workspace) })
 		} else if name := strings.TrimSpace(opts.SessionName); name != "" {
-			a.resumeRemoteTabSession(reuse.id, name)
+			a.resumeRemoteTabSession(reuse.id, name, strings.TrimSpace(opts.SessionPath), strings.TrimSpace(opts.SessionTitle))
 		} else {
 			a.remoteTabMu.Lock()
 			blank := reuse.sessionReset

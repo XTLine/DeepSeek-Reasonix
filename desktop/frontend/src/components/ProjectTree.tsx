@@ -16,7 +16,7 @@ import { arrangeClassicProjectTree, arrangeWorkbenchTree, classicTopicWindow, CL
 export * from "../lib/projectTreePresentation";
 import type { ProjectNode, RemoteServerView, RemoteSessionView, RemoteTabRefView, SessionCatalogStatus } from "../lib/types";
 import { useRemoteStore } from "../store/remote";
-import { onRemoteTabOpened } from "../lib/bridge";
+import { onRemoteTabOpened, onRemoteTabRuntime } from "../lib/bridge";
 import { topicActivityTime } from "../lib/session";
 import { useT, type Translator } from "../lib/i18n";
 import { PROJECT_COLOR_OPTIONS, projectColorValue } from "../lib/projectColors";
@@ -486,7 +486,7 @@ export function ProjectTree({
   // Assigned below the session-cache block; a new-session open refreshes
   // the listing once it lands.
   const bumpRemoteSessionsRef = useRef<() => void>(() => {});
-  const openRemoteProject = useCallback(async (ref: RemoteTabRefView, opts?: { newSession?: boolean; sessionName?: string; focus?: boolean }) => {
+  const openRemoteProject = useCallback(async (ref: RemoteTabRefView, opts?: { newSession?: boolean; sessionName?: string; sessionPath?: string; sessionTitle?: string; focus?: boolean }) => {
     const dedupeKey = `${ref.hostId}\u0000${ref.workspace}`;
     if (openingRemoteRef.current.has(dedupeKey)) return;
     openingRemoteRef.current.add(dedupeKey);
@@ -495,7 +495,7 @@ export function ProjectTree({
         // Activate the existing tab for this workspace; no session change.
         await app.OpenRemoteProjectTab(ref.hostId, ref.workspace, {});
       } else if (opts?.sessionName) {
-        await app.OpenRemoteProjectTab(ref.hostId, ref.workspace, { sessionName: opts.sessionName });
+        await app.OpenRemoteProjectTab(ref.hostId, ref.workspace, { sessionName: opts.sessionName, sessionPath: opts.sessionPath, sessionTitle: opts.sessionTitle });
       } else {
         await app.OpenRemoteProjectTab(ref.hostId, ref.workspace, { newSession: true });
         bumpRemoteSessionsRef.current();
@@ -530,6 +530,28 @@ export function ProjectTree({
   // project-tree:changed: every remote tab meta update (AI title adoption,
   // session materialization, resume) re-pulls the group's sessions.
   useEffect(() => onRemoteTabOpened(() => bumpRemoteSessions()), [bumpRemoteSessions]);
+  // Turn-runtime projection: the backend pump reports turn_started/turn_done
+  // per session (background sessions included). Patch the matching row in
+  // place so the spinner appears and disappears without refetching the whole
+  // listing; pre-multi-session serves emit no sessionPath, so the legacy
+  // fallback lights the Current row.
+  useEffect(() => onRemoteTabRuntime((info) => {
+    const groupKey = `${info.hostId}\u0000${info.workspace}`;
+    setRemoteSessions((current) => {
+      const rows = current[groupKey];
+      if (!rows) return current;
+      let changed = false;
+      const next = rows.map((row) => {
+        const running = info.sessionPath
+          ? row.path === info.sessionPath && info.running
+          : info.running && row.current === true;
+        if (row.running === running) return row;
+        changed = true;
+        return { ...row, running };
+      });
+      return changed ? { ...current, [groupKey]: next } : current;
+    });
+  }), []);
   const remoteGroupKeys = useMemo(() => {
     const keys: string[] = [];
     for (const node of tree) {
@@ -577,13 +599,13 @@ export function ProjectTree({
 
   // topicId → remote session identity for the synthesized rows; rebuilt
   // during render so the topic-branch action functions can route remotely.
-  const remoteTopicIndexRef = useRef(new Map<string, { hostId: string; workspace: string; name: string }>());
+  const remoteTopicIndexRef = useRef(new Map<string, { hostId: string; workspace: string; name: string; path?: string; title?: string }>());
   const remoteTopicIndex = remoteTopicIndexRef.current;
   remoteTopicIndex.clear();
   for (const [groupKey, rows] of Object.entries(remoteSessions)) {
     const [hostId, workspace] = groupKey.split("\u0000");
     for (const row of rows) {
-      remoteTopicIndex.set(`${hostId}\u0000${workspace}\u0000${row.name}`, { hostId, workspace, name: row.name });
+      remoteTopicIndex.set(`${hostId}\u0000${workspace}\u0000${row.name}`, { hostId, workspace, name: row.name, path: row.path, title: row.title || row.name });
     }
   }
   const remoteFromTopicId = (topicId: string) => remoteTopicIndex.get(topicId);
@@ -1072,8 +1094,9 @@ export function ProjectTree({
             turns: row.turns,
             lastActivityAt: row.lastActivityAt,
             pinned: row.pinned,
+            running: row.running,
             children: [] as ProjectNode[],
-            remoteSession: { hostId: node.remote!.hostId, workspace: node.remote!.workspace, name: row.name },
+            remoteSession: { hostId: node.remote!.hostId, workspace: node.remote!.workspace, name: row.name, path: row.path, title: row.title || row.name },
           })),
           ...asArray(node.children),
         ],
@@ -1418,7 +1441,7 @@ export function ProjectTree({
                 markNodeRead(node);
                 const remote = node.remoteSession ?? (openRequest ? remoteFromTopicId(openRequest.topicId) : undefined);
                 if (remote && remote.name) {
-                  void openRemoteProject({ hostId: remote.hostId, workspace: remote.workspace }, { sessionName: remote.name });
+                  void openRemoteProject({ hostId: remote.hostId, workspace: remote.workspace }, { sessionName: remote.name, sessionPath: remote.path, sessionTitle: remote.title });
                 } else if (remote) {
                   void openRemoteProject({ hostId: remote.hostId, workspace: remote.workspace }, { focus: true });
                 }
