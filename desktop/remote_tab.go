@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"reasonix/internal/agent"
 	"reasonix/internal/config"
 )
 
@@ -695,6 +696,68 @@ type RemoteTabSnapshot struct {
 	Status      json.RawMessage `json:"status,omitempty"`
 }
 
+// sanitizeRemoteHistory strips host-injected transient blocks (the
+// <reasoning-language>/<response-language> family) from the user rows of a
+// serve /history payload. The desktop must not depend on the remote serve's
+// vintage: an older serve still returns raw prefixed content and the surface
+// renders it verbatim. Untouched rows pass through byte-identical; on any
+// parse surprise the original body is returned unchanged.
+func sanitizeRemoteHistory(body []byte) []byte {
+	var rows []json.RawMessage
+	if err := json.Unmarshal(body, &rows); err != nil {
+		return body
+	}
+	changed := false
+	for i, row := range rows {
+		var probe struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}
+		if json.Unmarshal(row, &probe) != nil || probe.Role != "user" {
+			continue
+		}
+		trimmed := agent.UserPreviewText(probe.Content)
+		if trimmed == probe.Content {
+			continue
+		}
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(row, &obj) != nil {
+			continue
+		}
+		contentJSON, err := marshalJSONNoEscape(trimmed)
+		if err != nil {
+			continue
+		}
+		obj["content"] = contentJSON
+		patched, err := marshalJSONNoEscape(obj)
+		if err != nil {
+			continue
+		}
+		rows[i] = patched
+		changed = true
+	}
+	if !changed {
+		return body
+	}
+	out, err := marshalJSONNoEscape(rows)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// marshalJSONNoEscape marshals without Go's default HTML escaping, so
+// untouched rows keep their original bytes (< > & stay literal).
+func marshalJSONNoEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
 // RemoteTabSnapshotOptions selects which serve members a snapshot fetch pulls.
 // Empty Members keeps the legacy full set; hydrate callers pass only the
 // members the session surface consumes (/history + /status).
@@ -798,6 +861,11 @@ func (a *App) RemoteTabSnapshot(tabID string, opts RemoteTabSnapshotOptions) (Re
 					historyErr = err
 				}
 				return
+			}
+			if path == "/history" && got.body != nil {
+				// Strip before the body reaches the surface OR the cache:
+				// 304 reuses must hand back sanitized bytes too.
+				got.body = sanitizeRemoteHistory(got.body)
 			}
 			if got.etag == "" || got.body == nil {
 				if got.body == nil && cached.body != nil {

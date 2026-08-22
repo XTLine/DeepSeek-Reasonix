@@ -36,6 +36,7 @@ type fakeServe struct {
 	failHistory bool                     // /history replies 500 when set
 	eventsConns int                      // /events connections opened
 	statusJSON  string                   // GET /status payload; default is an idle serve
+	historyBody string                   // overrides the /history payload when set
 	slowHistory time.Duration            // artificial /history delay to force overlap
 	sseWriters  map[chan string]struct{} // live /events connections
 }
@@ -190,6 +191,9 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 				fs.mu.Lock()
 				fail := fs.failHistory
 				delay := fs.slowHistory
+				if fs.historyBody != "" {
+					payload = fs.historyBody
+				}
 				fs.mu.Unlock()
 				if delay > 0 {
 					time.Sleep(delay)

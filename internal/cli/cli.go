@@ -816,7 +816,7 @@ func runServeWithOptions(args []string, opts serveRunOptions) int {
 	// ServeCapsToken advertises the serve's capability revision in --help so
 	// the desktop's remote bootstrap can probe and replace outdated binaries
 	// (see bootstrap.LocateCommand). Bump on every serve-behavior change.
-	_ = fs.Bool("session-events", false, "tag SSE events with sessionPath and keep background sessions running across switches (reasonix-serve-caps-20260822c)")
+	_ = fs.Bool("session-events", false, "tag SSE events with sessionPath and keep background sessions running across switches (reasonix-serve-caps-20260822d)")
 	_ = fs.Bool("detached-heal", false, "provider reloads retire background sessions so no controller dials a stale credential tunnel")
 	openBrowser := fs.Bool("open", opts.openBrowser, "open the Web UI in the default browser")
 	noOpen := fs.Bool("no-open", false, "do not open the Web UI in the default browser")

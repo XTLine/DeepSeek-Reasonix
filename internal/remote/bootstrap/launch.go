@@ -132,7 +132,9 @@ const serveDetachedHealMarker = "detached-heal"
 
 // serveCapsToken is the rolling capability revision advertised in
 // `serve --help`; bumping it retires every previously deployed serve.
-const serveCapsToken = "reasonix-serve-caps-20260822c"
+// 20260822d: retires serves deployed before the /history transient-block
+// strip so remote transcripts stop leaking <reasoning-language> markup.
+const serveCapsToken = "reasonix-serve-caps-20260822d"
 
 // LocateCommand probes for a usable reasonix binary. It prints the resolved
 // path (or empty), the `--version` output, and "portfile:yes" /
