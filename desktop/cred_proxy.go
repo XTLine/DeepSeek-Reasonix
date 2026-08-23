@@ -307,11 +307,11 @@ func (a *App) registerCredentialProxyRoute(hostID, workspace string) (credential
 	if wsModel := a.desktopModelForWorkspace(hostID, workspace); wsModel != "" {
 		ref = wsModel
 	}
-	info, err := a.applyCredentialProxyModel(hostID, workspace, ref)
+	info, err := a.applyCredentialProxyModel(hostID, workspace, ref, cfg)
 	if err != nil {
 		return credentialProxyRouteInfo{}, err
 	}
-	a.applyLegacyCredentialProxyRoute(hostID)
+	a.applyLegacyCredentialProxyRoute(hostID, cfg)
 	return info, nil
 }
 
@@ -319,29 +319,25 @@ func (a *App) registerCredentialProxyRoute(hostID, workspace string) (credential
 // workspace's serve: the most recently set model among that workspace's tabs.
 // Map iteration order must never decide this.
 func (a *App) desktopModelForWorkspace(hostID, workspace string) string {
-	a.remoteTabMu.Lock()
-	defer a.remoteTabMu.Unlock()
-	best := ""
-	var bestSeq uint64
-	for _, tab := range a.remoteTabs {
-		if tab == nil || tab.ref.HostID != hostID || tab.ref.Workspace != workspace || strings.TrimSpace(tab.model) == "" {
-			continue
-		}
-		if tab.modelSeq >= bestSeq {
-			best, bestSeq = tab.model, tab.modelSeq
-		}
-	}
-	return best
+	return a.desktopModelFor(hostID, func(ws string) bool { return ws == workspace })
 }
 
 // desktopModelForHost is the host-wide variant used by the legacy token route.
 func (a *App) desktopModelForHost(hostID string) string {
+	return a.desktopModelFor(hostID, func(string) bool { return true })
+}
+
+// desktopModelFor scans the host's tabs under remoteTabMu and returns the
+// highest-stamped model among the tabs whose workspace the filter accepts.
+// Stamps come from the global remoteTabModelSeq, so no two tabs tie and the
+// result is iteration-order independent.
+func (a *App) desktopModelFor(hostID string, workspaceMatch func(string) bool) string {
 	a.remoteTabMu.Lock()
 	defer a.remoteTabMu.Unlock()
 	best := ""
 	var bestSeq uint64
 	for _, tab := range a.remoteTabs {
-		if tab == nil || tab.ref.HostID != hostID || strings.TrimSpace(tab.model) == "" {
+		if tab == nil || tab.ref.HostID != hostID || !workspaceMatch(tab.ref.Workspace) || strings.TrimSpace(tab.model) == "" {
 			continue
 		}
 		if tab.modelSeq >= bestSeq {
@@ -352,12 +348,10 @@ func (a *App) desktopModelForHost(hostID string) string {
 }
 
 // applyCredentialProxyModel resolves ref on the desktop, starts the proxy if
-// needed, and (re)binds the workspace's virtual token to that provider.
-func (a *App) applyCredentialProxyModel(hostID, workspace, ref string) (credentialProxyRouteInfo, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return credentialProxyRouteInfo{}, err
-	}
+// needed, and (re)binds the workspace's virtual token to that provider. cfg
+// comes from the caller so one registration round sees a single config
+// snapshot instead of re-reading the file at each hop.
+func (a *App) applyCredentialProxyModel(hostID, workspace, ref string, cfg *config.Config) (credentialProxyRouteInfo, error) {
 	up, err := resolveProxyProvider(cfg, ref)
 	if err != nil {
 		return credentialProxyRouteInfo{}, err
@@ -382,12 +376,9 @@ func (a *App) applyCredentialProxyModel(hostID, workspace, ref string) (credenti
 
 // applyLegacyCredentialProxyRoute re-binds the pre-split host-level token to
 // the host's effective default model. Best effort: serves already running
-// keep their in-memory route until the next ensure re-registers it.
-func (a *App) applyLegacyCredentialProxyRoute(hostID string) {
-	cfg, err := config.Load()
-	if err != nil {
-		return
-	}
+// keep their in-memory route until the next ensure re-registers it. cfg is
+// the caller's snapshot; a load failure was the caller's error to report.
+func (a *App) applyLegacyCredentialProxyRoute(hostID string, cfg *config.Config) {
 	ref := strings.TrimSpace(cfg.DefaultModel)
 	if hostModel := a.desktopModelForHost(hostID); hostModel != "" {
 		ref = hostModel

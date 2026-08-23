@@ -1365,7 +1365,7 @@ func (a *App) SetRemoteTabModel(tabID, ref string) error {
 			return fmt.Errorf("model %q is not available", ref)
 		}
 		canonical := entry.Name + "/" + entry.Model
-		if _, err := a.applyCredentialProxyModel(hostID, workspace, canonical); err != nil {
+		if _, err := a.applyCredentialProxyModel(hostID, workspace, canonical, cfg); err != nil {
 			return err
 		}
 		next = canonical
