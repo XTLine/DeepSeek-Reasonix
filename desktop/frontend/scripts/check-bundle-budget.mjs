@@ -167,8 +167,10 @@ const rawInitialBytes = [...initialJS, ...initialCSS, ...appShellCSS]
 // headroom without widening the gzip or largest-chunk exceptions.
 // The main merge's unified geometry contract and retained-transcript
 // navigation owner plus the remote project-onboard MVP sidebar groups move
-// the merged production build to 2380.0 KiB raw; keep 0.3 KiB of build-SHA
-// headroom and share the ratchet across channels.
-const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_380.3 : 2_380.3;
+// the merged production build to 2380.0 KiB raw. The serve-scaling wave
+// (multi-session detach, gzip snapshots, watchdog, snapshot-race fix) adds
+// another bounded 0.5 KiB raw on this stacked tip (2380.5); keep 0.3 KiB of
+// build-SHA headroom and share the ratchet across channels.
+const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_380.8 : 2_380.8;
 assertBudget("initial raw JavaScript and CSS", rawInitialBytes, rawInitialBudgetKiB * 1024);
 assertBudget("largest initial JavaScript chunk raw", largestInitialJSRaw, 1_000 * 1024);
