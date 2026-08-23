@@ -1987,7 +1987,7 @@ func (m *desktopRemoteManager) reloadServeProviders(ctx context.Context, hostID,
 			err = servePost(callCtx, client, serveURL(t.base, "/providers/reload"), nil)
 		}
 		cancel()
-		if err != nil && strings.Contains(err.Error(), "status 409") {
+		if err != nil && isServeStatus(err, http.StatusConflict) {
 			err = m.cancelThenReload(ctx, client, t.base, t.token)
 		}
 		if err != nil {
@@ -2043,7 +2043,7 @@ func (m *desktopRemoteManager) cancelThenReload(ctx context.Context, client *htt
 		if err == nil {
 			return nil
 		}
-		if !strings.Contains(err.Error(), "status 409") {
+		if !isServeStatus(err, http.StatusConflict) {
 			return err // a non-busy failure will not clear by retrying
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -64,11 +65,6 @@ type serveSessionEntry struct {
 	MtimeMilli int64  `json:"mtimeMilli"`
 }
 
-// enterRemoteSession lands the tab inside a Serve session: POST /new for a
-// fresh session, or POST /resume for a named one. /resume takes the session
-// PATH (not the /sessions name), so a SessionName open resolves the name
-// against GET /sessions first. A tab must never rest in a session-less
-// ready shell.
 // enterRemoteSession lands the tab inside a Serve session: POST /new for a
 // fresh session, or POST /resume for a named one, returning the session path
 // the serve now holds (for the pump's frame routing). /resume takes the
@@ -134,6 +130,21 @@ func currentSessionPathOf(ctx context.Context, client *http.Client, base string)
 	return ""
 }
 
+// handshakeServeClient builds an authenticated serve client: one cookiejar,
+// one POST /auth/token handshake. No overall client timeout — /events is
+// long-lived; per-call contexts bound everything else.
+func handshakeServeClient(ctx context.Context, base, token string) (*http.Client, error) {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Jar: jar}
+	if err := serveHandshake(ctx, client, base, token); err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
 // attachRemoteTabServe builds the tab's Serve client and starts its event
 // pump. Ordering matters: the pump subscribes to /events BEFORE the session
 // is entered, so the frames emitted by POST /new or /resume are not missed.
@@ -143,12 +154,8 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token strin
 	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	jar, err := cookiejar.New(nil)
+	client, err := handshakeServeClient(callCtx, base, token)
 	if err != nil {
-		return err
-	}
-	client := &http.Client{Jar: jar} // no overall timeout: /events is long-lived; per-call contexts bound the rest
-	if err := serveHandshake(callCtx, client, base, token); err != nil {
 		log.Printf("[remote] attachRemoteTabServe: handshake FAILED tab=%s base=%q err=%v", tabID, base, err)
 		return err
 	}
@@ -163,7 +170,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token strin
 		// holds a perfectly usable session — fail-soft: keep the attach on the
 		// CURRENT session (and its pending approval card, which is the only
 		// way the user can unblock the turn from the UI).
-		if strings.Contains(err.Error(), "status 409") || strings.Contains(err.Error(), "while a turn is running") {
+		if isServeStatus(err, http.StatusConflict) {
 			log.Printf("[remote] attachRemoteTabServe: enterRemoteSession BUSY (attached to current session) tab=%s err=%v", tabID, err)
 			enteredPath = currentSessionPathOf(callCtx, client, base)
 		} else {
@@ -301,6 +308,27 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64) {
 	}
 }
 
+// serveError carries the HTTP status of a refused serve call so callers can
+// branch on it (409 busy-attach, 404/405 legacy-capability) without parsing
+// error text.
+type serveError struct {
+	URL    string
+	Status int
+	Body   string
+}
+
+func (e *serveError) Error() string {
+	if e.Body != "" {
+		return fmt.Sprintf("%s: status %d: %s", e.URL, e.Status, e.Body)
+	}
+	return fmt.Sprintf("%s: status %d", e.URL, e.Status)
+}
+
+func isServeStatus(err error, status int) bool {
+	var se *serveError
+	return errors.As(err, &se) && se.Status == status
+}
+
 // servePost posts body and surfaces the response text in errors — the serve
 // renders "session in use" lease refusals with their close hint in the body,
 // and that hint must reach the tab surface.
@@ -317,10 +345,8 @@ func servePost(ctx context.Context, client *http.Client, url string, body []byte
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
-	if msg := strings.TrimSpace(string(data)); msg != "" {
-		return fmt.Errorf("%s: status %d: %s", url, resp.StatusCode, msg)
-	}
-	return fmt.Errorf("%s: status %d", url, resp.StatusCode)
+
+	return &serveError{URL: url, Status: resp.StatusCode, Body: strings.TrimSpace(string(data))}
 }
 
 // servePostJSON posts body and returns the response payload on 2xx — for
@@ -949,13 +975,8 @@ func (a *App) serveClientForRef(hostID, workspace string) (*http.Client, string,
 		ctx = context.Background()
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	jar, jarErr := cookiejar.New(nil)
-	if jarErr != nil {
-		cancel()
-		return nil, "", nil, jarErr
-	}
-	client := &http.Client{Jar: jar}
-	if err := serveHandshake(callCtx, client, view.LocalURL, token); err != nil {
+	client, err := handshakeServeClient(callCtx, view.LocalURL, token)
+	if err != nil {
 		cancel()
 		return nil, "", nil, err
 	}
@@ -993,13 +1014,9 @@ func (a *App) serveClientEnsured(hostID, workspace string) (*http.Client, string
 		return nil, "", nil, err
 	}
 	callCtx, cancel := context.WithTimeout(bootCtx, 30*time.Second)
-	jar, jarErr := cookiejar.New(nil)
-	if jarErr != nil {
-		cancel()
-		return nil, "", nil, jarErr
-	}
-	client := &http.Client{Jar: jar}
-	if err := serveHandshake(callCtx, client, view.LocalURL, token); err != nil {
+
+	client, err := handshakeServeClient(callCtx, view.LocalURL, token)
+	if err != nil {
 		cancel()
 		return nil, "", nil, err
 	}
@@ -1502,6 +1519,11 @@ func (a *App) refreshRemoteTabTitle(tabID string) {
 		title := strings.TrimSpace(entry.Title)
 		name := strings.TrimSpace(entry.Name)
 		a.remoteTabMu.Lock()
+		tab = a.remoteTabs[tabID]
+		if tab == nil {
+			a.remoteTabMu.Unlock()
+			return
+		}
 		// Adopt the whole Current identity, not just the title: the tree row
 		// highlight matches on session name/path, so a blank session that
 		// just materialized must hand its highlight to the named row.
@@ -1518,10 +1540,13 @@ func (a *App) refreshRemoteTabTitle(tabID string) {
 			tab.currentSessionPath = entry.Path
 		}
 		tab.sessionReset = false
-		active := a.remoteActiveTabID == tab.id
+		var meta TabMeta
+		if changed {
+			meta = remoteTabMeta(tab, tab.hostLabel, a.remoteActiveTabID == tab.id)
+		}
 		a.remoteTabMu.Unlock()
 		if changed {
-			a.emitRemoteEvent("remote-tab:opened", remoteTabMeta(tab, tab.hostLabel, active))
+			a.emitRemoteEvent("remote-tab:opened", meta)
 			a.saveTabsFromRemote()
 		}
 		return
@@ -1574,7 +1599,9 @@ func (a *App) resetRemoteTabSession(tabID string) {
 		freshPath = currentSessionPathOf(ctx, client, base)
 	}
 	a.remoteTabMu.Lock()
-	tab.currentSessionPath = freshPath
+	if cur := a.remoteTabs[tabID]; cur == tab {
+		tab.currentSessionPath = freshPath
+	}
 	a.remoteTabMu.Unlock()
 	a.emitRemoteTabState(tabID, "ready", "")
 }
@@ -1769,15 +1796,16 @@ func (a *App) reattachRemoteTab(tabID string) {
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	jar, jarErr := cookiejar.New(nil)
-	if jarErr != nil {
-		return
-	}
-	client := &http.Client{Jar: jar}
-	if err := serveHandshake(callCtx, client, view.LocalURL, token); err != nil {
+	client, err := handshakeServeClient(callCtx, view.LocalURL, token)
+	if err != nil {
 		log.Printf("[remote] reattachRemoteTab: handshake FAILED tab=%s base=%q err=%v", tabID, view.LocalURL, err)
 		return
 	}
+
+	// The serve's current session may have moved while the tunnel was down;
+	// fetch the routing path BEFORE taking the tab lock — the listing is a
+	// tunnel round trip and must never run inside the process-wide mutex.
+	freshPath := currentSessionPathOf(callCtx, client, view.LocalURL)
 
 	a.remoteTabMu.Lock()
 	if cur := a.remoteTabs[tabID]; cur != tab || tab.state != "reconnecting" {
@@ -1791,9 +1819,7 @@ func (a *App) reattachRemoteTab(tabID string) {
 	tab.client = client
 	tab.base = view.LocalURL
 	tab.token = token
-	// The serve's current session may have moved while the tunnel was down;
-	// refresh the frame-routing path from the listing.
-	tab.currentSessionPath = currentSessionPathOf(callCtx, client, view.LocalURL)
+	tab.currentSessionPath = freshPath
 	gen := tab.gen
 	pumpCtx, cancelPump := context.WithCancel(ctx)
 	tab.cancel = cancelPump
