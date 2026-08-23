@@ -312,9 +312,9 @@ const keys = (rows: TranscriptRow[]) => rows.map((row) => row.key).join(",");
 {
   const localOnly: Item[] = [
     { kind: "user", id: "u1", text: "first" },
-    { kind: "tool", id: "__reasonix_local_only__", name: "__reasonix_local_only__", args: "", status: "done", output: "partial one" },
+    { kind: "tool", id: "__reasonix_local_only__", name: "__reasonix_local_only__", args: "", readOnly: false, status: "done", output: "partial one" },
     { kind: "user", id: "u2", text: "second" },
-    { kind: "tool", id: "__reasonix_local_only__", name: "__reasonix_local_only__", args: "", status: "done", output: "partial two" },
+    { kind: "tool", id: "__reasonix_local_only__", name: "__reasonix_local_only__", args: "", readOnly: false, status: "done", output: "partial two" },
   ];
   const rows = buildTranscriptRows(buildTurnModels(localOnly), rowOptions(EMPTY_FOLDS, "expanded"));
   const rowKeys = rows.map((row) => row.key);
