@@ -3413,6 +3413,10 @@ a[href] {
      inset on the scroller; rows own --transcript-inline-pad. */
   --transcript-inline-pad: 32px;
   position: relative;
+  /* Virtuoso owns the logical anchor. Browser scroll anchoring reacts to
+     asynchronous Markdown boxes before Virtuoso receives their size and can
+     move the scroller in the opposite direction during an upward gesture. */
+  overflow-anchor: none;
   height: 100%;
   overflow-y: auto;
   overflow-y: overlay;
@@ -3427,6 +3431,48 @@ a[href] {
   flex: 1 1 auto;
   min-height: 0;
   height: 100%;
+}
+.transcript-navigation-surface {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.transcript-navigation-content {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+.transcript-navigation-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-inline-sticky);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--chat-bg, var(--bg)) 88%, transparent);
+  pointer-events: auto;
+  user-select: none;
+  cursor: progress;
+}
+.transcript-navigation-overlay__spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid color-mix(in srgb, var(--fg) 24%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: transcript-navigation-spin 0.8s linear infinite;
+}
+@keyframes transcript-navigation-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .transcript-navigation-overlay__spinner { animation: none; }
 }
 /* The active turn streams as the virtual list's in-flow Footer: inside the
    scroller, right after the last history row, but outside Virtuoso's
@@ -3561,6 +3607,19 @@ a[href] {
 .transcript__row .md > * {
   content-visibility: visible;
   contain-intrinsic-size: none;
+}
+/* A lazy Markdown source fallback is readable but does not have the final
+   block geometry. Give it the same physical box as Virtuoso's row seed so
+   the first measurement is truthful; releasing this fixed box when parsing
+   completes guarantees ResizeObserver sees any real height difference. */
+.transcript__row .msg--assistant .msg__body > .md[data-transcript-geometry-pending] {
+  box-sizing: border-box;
+  /* .msg contributes its 18px block margins (with the row's first-child
+     margin normalization this is 32px total). Reserve the full outer-row
+     inset here so the lazy fallback cannot be 16px taller than its seed and
+     later collapse while the reader is moving upward. */
+  height: max(0px, calc(var(--transcript-row-estimate) - 32px));
+  overflow: hidden;
 }
 .transcript__jump-bottom {
   --wails-draggable: no-drag;
@@ -4196,6 +4255,16 @@ a[href] {
   -webkit-user-select: text;
   content-visibility: auto;
   contain-intrinsic-size: 1px 60px;
+}
+/* Virtuoso already owns transcript virtualization. A second content-visibility
+ * viewport inside each mounted row gives the browser a 60px intrinsic box and
+ * then expands it when the row crosses the viewport, which makes Virtuoso's
+ * upward compensation write a large reverse frame during manual reading. Keep
+ * content-visibility for non-transcript message lists, but let the transcript
+ * size tree see the real row geometry from its first mount. */
+.transcript__row .msg {
+  content-visibility: visible;
+  contain-intrinsic-size: auto;
 }
 .msg--user {
   display: flex;
@@ -4839,13 +4908,119 @@ button.reasoning-summary:focus-visible {
 }
 
 .msg-search-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   margin-top: 0.75em;
+  color: var(--fg-faint);
+  font-size: var(--text-md);
 }
-.msg-search-sources .md {
+.msg-search-sources__toggle {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  min-height: 24px;
+  padding: 2px 8px 2px 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.msg-search-sources__toggle:hover,
+.msg-search-sources__toggle:focus-visible {
   color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
-.msg-search-sources .md a {
+.msg-search-sources__chevron {
+  flex: 0 0 auto;
+  transition: transform 0.2s;
+}
+.msg-search-sources__chevron--open {
+  transform: rotate(90deg);
+}
+.msg-search-sources__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0 2px 32px;
+  max-width: min(760px, 100%);
+}
+.msg-search-source {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+.msg-search-source__link {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--fg);
+  text-decoration: none;
+}
+.msg-search-source__link:hover .msg-search-source__title,
+.msg-search-source__link:focus-visible .msg-search-source__title {
   color: var(--accent);
+}
+.msg-search-source__title {
+  overflow-wrap: anywhere;
+  font-weight: 560;
+  line-height: 1.35;
+}
+.msg-search-source__url {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 5px;
+  color: var(--fg-faint);
+  font-size: var(--text-sm);
+  line-height: 1.3;
+}
+.msg-search-source__url > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-search-source__copy {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.msg-search-source__copy:hover,
+.msg-search-source__copy:focus-visible {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.tool__search-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--fg-faint);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+.tool__search-query {
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+.tool__search-count {
+  color: var(--fg-faint);
 }
 
 .msg-memory-citations {
@@ -35656,6 +35831,97 @@ body > .mermaid-diagram--fullscreen {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+}
+.diag-section__body--frontend {
+  padding-top: 12px;
+}
+.diag-frontend-recording__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.diag-frontend-recording__copy strong {
+  font-size: 14px;
+}
+.diag-frontend-recording__copy span {
+  color: var(--text-muted, #888);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.diag-page .frontend-diagnostics--embedded {
+  --wails-draggable: no-drag;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-height: 32px;
+  padding: 4px;
+  border: 1px solid var(--border, rgba(127,127,127,.25));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-elev, #fff) 94%, transparent);
+  box-shadow: var(--shadow-2);
+  color: var(--fg-dim, #777);
+  font-size: var(--font-caption, 12px);
+}
+.diag-page .frontend-diagnostics--embedded button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.diag-page .frontend-diagnostics--embedded button:hover {
+  background: var(--bg-hover, rgba(127,127,127,.12));
+  color: var(--fg, inherit);
+}
+.diag-page .frontend-diagnostics--embedded button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.diag-page .frontend-diagnostics--embedded button:disabled {
+  opacity: .55;
+  cursor: wait;
+}
+.diag-page .frontend-diagnostics--embedded .frontend-diagnostics__toggle {
+  border: 1px solid var(--border, rgba(127,127,127,.25));
+  background: var(--bg-elev, #fff);
+  color: var(--fg-dim, #777);
+  white-space: nowrap;
+}
+.diag-page .frontend-diagnostics--embedded .frontend-diagnostics__toggle--on {
+  border-color: color-mix(in srgb, var(--accent, #4af) 48%, var(--border, rgba(127,127,127,.25)));
+  background: var(--accent-soft, rgba(68,136,255,.12));
+  color: var(--accent, #4af);
+}
+.diag-page .frontend-diagnostics--embedded .scroll-diagnostics__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+.diag-page .frontend-diagnostics--embedded .scroll-diagnostics__dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--danger, #e35);
+}
+.diag-page .frontend-diagnostics--embedded.scroll-diagnostics--stopped .scroll-diagnostics__dot {
+  background: var(--success, #2a6);
+}
+.diag-page .frontend-diagnostics--embedded .scroll-diagnostics__export {
+  background: var(--accent-soft, rgba(68,136,255,.12));
+  color: var(--accent, #4af);
+  white-space: nowrap;
 }
 .diag-issue-group h4 {
   margin: 8px 0 4px;

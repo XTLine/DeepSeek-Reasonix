@@ -127,11 +127,14 @@ type Controller struct {
 	// one — sub-agents then keep whatever gate they were constructed with.
 	subagentGate *SharedHeadlessGate
 
-	label        string
-	modelRef     string
-	systemPrompt string
-	sessionDir   string
-	commands     atomic.Pointer[[]command.Command]
+	label                  string
+	modelRef               string
+	visionModel            string
+	visionProviderResolver func(string) (provider.Provider, error)
+	visionModelSelector    func(string, string) (string, bool)
+	systemPrompt           string
+	sessionDir             string
+	commands               atomic.Pointer[[]command.Command]
 	// skills owns the session's discovered skills (enabled subset, full set, and
 	// the reloadable stores) — the skills slice of the Capabilities concern. See
 	// skill.go.
@@ -454,18 +457,24 @@ type Options struct {
 	// SetToolApprovalMode and ApplyHeadlessApprovalMode call Update on it so a
 	// runtime approval-mode switch reaches sub-agents, not just the parent
 	// executor's own gate.
-	SubagentGate  *SharedHeadlessGate
-	Label         string
-	ModelRef      string
-	SystemPrompt  string
-	SessionDir    string
-	SessionPath   string
-	Host          *plugin.Host
-	Commands      []command.Command
-	Skills        []skill.Skill
-	AllSkills     []skill.Skill
-	SkillStore    *skill.Store
-	AllSkillStore *skill.Store
+	SubagentGate *SharedHeadlessGate
+	Label        string
+	ModelRef     string
+	// VisionModel is empty (off), "auto", or a canonical provider/model ref.
+	// The resolver and selector are assembled by boot so the controller remains
+	// transport-agnostic and tests can inject deterministic fake providers.
+	VisionModel            string
+	VisionProviderResolver func(string) (provider.Provider, error)
+	VisionModelSelector    func(string, string) (string, bool)
+	SystemPrompt           string
+	SessionDir             string
+	SessionPath            string
+	Host                   *plugin.Host
+	Commands               []command.Command
+	Skills                 []skill.Skill
+	AllSkills              []skill.Skill
+	SkillStore             *skill.Store
+	AllSkillStore          *skill.Store
 	// DisableImplicitSkillInvocation controls model-facing discovery only;
 	// explicit /skill commands and management remain host-side capabilities.
 	DisableImplicitSkillInvocation bool
@@ -627,6 +636,9 @@ func New(opts Options) *Controller {
 		subagentGate:                      opts.SubagentGate,
 		label:                             opts.Label,
 		modelRef:                          opts.ModelRef,
+		visionModel:                       strings.TrimSpace(opts.VisionModel),
+		visionProviderResolver:            opts.VisionProviderResolver,
+		visionModelSelector:               opts.VisionModelSelector,
 		systemPrompt:                      opts.SystemPrompt,
 		sessionDir:                        opts.SessionDir,
 		sessionPath:                       opts.SessionPath,
@@ -2008,7 +2020,12 @@ func (c *Controller) runReady(ctx context.Context, input string) (err error) {
 	}
 	marker = c.markInFlightTurn(startMessages, true)
 	ctx = c.withPlannerTurnMetadata(ctx, rawInput, false, startMessages)
-	err = c.runner.Run(ctx, c.withCapabilityRoute(ctx, input, rawInput))
+	modelInput := c.withCapabilityRoute(ctx, input, rawInput)
+	modelInput, ctx, err = c.prepareVisionTurn(ctx, modelInput, agent.SubagentImageCandidates(ctx))
+	if err != nil {
+		return err
+	}
+	err = c.runner.Run(ctx, modelInput)
 	return err
 }
 

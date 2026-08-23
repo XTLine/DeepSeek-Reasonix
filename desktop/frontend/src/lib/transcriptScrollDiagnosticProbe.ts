@@ -3,11 +3,13 @@ import type {
   TranscriptScrollEvent,
   TranscriptScrollState,
 } from "./transcriptScrollArbiter";
+import { isFrontendDiagnosticsBuild } from "./frontendDiagnosticsBuild";
 import { recordTranscriptScrollDiagnostic } from "./transcriptScrollProbe";
 
-export const CAPTURE_TRANSCRIPT_SCROLL_DIAGNOSTICS = typeof __BUILD_CHANNEL__ === "undefined"
-  || __BUILD_CHANNEL__ === "test"
-  || import.meta.env.DEV;
+export const CAPTURE_TRANSCRIPT_SCROLL_DIAGNOSTICS = isFrontendDiagnosticsBuild(
+  typeof __BUILD_CHANNEL__ === "string" ? __BUILD_CHANNEL__ : "development",
+  Boolean(import.meta.env?.DEV),
+);
 
 export type TranscriptScrollDiagnosticSource =
   | "reset"

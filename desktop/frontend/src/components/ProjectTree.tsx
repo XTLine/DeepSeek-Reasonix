@@ -28,6 +28,8 @@ import { Tooltip } from "./Tooltip";
 import { WorktreeBadge } from "./WorktreeBadge";
 import { useProjectCreation } from "./useProjectCreation";
 import { useProjectTreeRuntimeProjection } from "../lib/useProjectTreeRuntimeProjection";
+import { useProjectTreeFrontendDiagnostics, type ProjectTreeDiagnosticSnapshot } from "../lib/useProjectTreeFrontendDiagnostics";
+import { summarizeProjectTreeSessions } from "../lib/projectTreeDiagnostics";
 import { GLOBAL_PROJECT_ORDER_KEY, ProjectTreeFolderActivity, ProjectTreeGroupRows, applyProjectOrder, projectTreeProjectRoots, reorderedProjectRoots, useProjectTreeOrganization, type ProjectDropPosition } from "./ProjectTreeOrganization";
 
 interface ProjectTreeProps {
@@ -1251,6 +1253,44 @@ export function ProjectTree({
       return changed ? next : prev;
     });
   }, [activeAncestorKeys, manuallyCollapsed]);
+
+  const projectTreeDiagnosticSnapshot = useMemo<ProjectTreeDiagnosticSnapshot>(() => {
+    const sessionSummary = summarizeProjectTreeSessions({
+      tree,
+      visibleTree,
+      expanded,
+      showAllTopics,
+      classicTruncationActive,
+      queryActive: query.trim().length > 0,
+      timeFilterActive: timeFilter !== "all",
+      projectNodeKey,
+      isActive: (node) => topicIsActive(node, activeScope, activeWorkspaceRoot, activeTopicId, activeSessionPath),
+      isUnread: (node) => projectTreeTopicHasUnreadActivity(node, readActivity, activeScope, activeWorkspaceRoot, activeTopicId, activeSessionPath, readBaselineAt),
+    });
+    return {
+      ...sessionSummary,
+      directoryState: catalogStatus.state,
+      scope: activeScope === "global" ? "global" : activeScope ? "project" : "unknown",
+      variant,
+      timeFilter,
+      queryActive: query.trim().length > 0,
+      timeFilterActive: timeFilter !== "all",
+      catalogPartial: catalogStatus.state !== "ready"
+        || catalogStatus.repairPending > 0
+        || (catalogStatus.unindexedTargetCount ?? 0) > 0
+        || Boolean(catalogStatus.lastError),
+      catalogRebuilding: catalogStatus.state === "rebuilding",
+      catalogRevision: catalogStatus.revision,
+      catalogIndexed: catalogStatus.indexed,
+      catalogTotal: catalogStatus.total,
+      unloadedSessions: Math.max(0, catalogStatus.total - sessionSummary.workspaceSessions),
+      repairPending: catalogStatus.repairPending,
+      treeRevision: latestRevisionRef.current,
+      organizationRevision,
+    };
+  }, [activeScope, activeSessionPath, activeTopicId, activeWorkspaceRoot, catalogStatus, classicTruncationActive, expanded, organizationRevision, query, readActivity, readBaselineAt, showAllTopics, timeFilter, tree, variant, visibleTree]);
+
+  useProjectTreeFrontendDiagnostics(projectTreeDiagnosticSnapshot);
 
   const renderNode = (node: ProjectNode | null | undefined, depth: number, section: "pinned" | "projects" = "projects", isVisible = true) => {
     if (!node) return null;

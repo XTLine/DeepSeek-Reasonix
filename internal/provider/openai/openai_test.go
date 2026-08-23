@@ -1115,7 +1115,7 @@ func TestNewDeepSeekV4FlashForwardsLowEffort(t *testing.T) {
 }
 
 func TestDeepSeekV4EffortAliasesSerializeAsHigh(t *testing.T) {
-	for _, model := range []string{"deepseek-v4-flash", "deepseek-v4-pro"} {
+	for _, model := range []string{"deepseek-v4-flash", "deepseek-v4-pro", OfficialDeepSeekVisionModel} {
 		for _, alias := range []string{"medium", "xhigh"} {
 			p, err := New(provider.Config{Name: "deepseek", BaseURL: "https://api.deepseek.com", Model: model, APIKey: "test", Extra: map[string]any{
 				"effort": alias, "reasoning_protocol": "deepseek",

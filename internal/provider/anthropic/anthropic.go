@@ -110,10 +110,11 @@ func New(cfg provider.Config) (provider.Provider, error) {
 	effort, _ := cfg.Extra["effort"].(string)
 	effort = strings.ToLower(strings.TrimSpace(effort))
 	vision, _ := cfg.Extra["vision"].(bool)
-	// DeepSeek's official Anthropic-compatible endpoint is text-only. Enforce
-	// that wire constraint here as defense in depth, independent of config or
-	// extension capability metadata.
-	vision = vision && !officialDeepSeek
+	// Official DeepSeek image input is pinned to one SKU. Ignore Extra["vision"]
+	// so stale config cannot send image blocks to Flash/Pro.
+	if officialDeepSeek {
+		vision = openai.IsOfficialDeepSeekVisionModel(cfg.Model)
+	}
 	webSearch, _ := cfg.Extra["web_search"].(bool)
 	headers, _ := cfg.Extra["headers"].(map[string]string)
 	authHeader, _ := cfg.Extra["auth_header"].(bool)
@@ -266,7 +267,7 @@ func cleanCustomHeaders(in map[string]string) map[string]string {
 
 func reservedCustomHeader(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "content-type", "accept", "x-api-key", "authorization", "anthropic-version":
+	case "content-type", "accept", "x-api-key", "authorization", "anthropic-version", "anthropic-beta":
 		return true
 	default:
 		return false
@@ -310,6 +311,9 @@ func (c *client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 			httpReq.Header.Set("x-api-key", c.apiKey)
 		}
 		httpReq.Header.Set("anthropic-version", anthropicVersion)
+		if visionRequestUsesFileID(req) {
+			httpReq.Header.Set("anthropic-beta", "files-api-2025-04-14")
+		}
 		applyCustomHeaders(httpReq.Header, c.headers)
 		return httpReq, nil
 	}
@@ -359,9 +363,9 @@ func (c *client) buildRequest(ctx context.Context, req provider.Request) anthReq
 				appendBlocks("user", contentBlock{Type: "text", Text: m.Content})
 			}
 			if c.vision {
-				for _, url := range m.Images {
-					if mt, data, ok := provider.ParseImageDataURL(url); ok {
-						appendBlocks("user", contentBlock{Type: "image", Source: &imageSource{Type: "base64", MediaType: mt, Data: data}})
+				for _, ref := range m.Images {
+					if src := imageSourceFromRef(ref); src != nil {
+						appendBlocks("user", contentBlock{Type: "image", Source: src})
 					}
 				}
 			}
@@ -371,7 +375,7 @@ func (c *client) buildRequest(ctx context.Context, req provider.Request) anthReq
 				content = "(no output)" // tool_result content must be non-empty
 			}
 			block := contentBlock{Type: "tool_result", ToolUseID: m.ToolCallID, Content: content}
-			if c.vision {
+			if c.vision && !c.deepseek {
 				if blocks := toolResultBlocks(content, m.Images); blocks != nil {
 					block.Content = blocks
 				}
@@ -788,9 +792,11 @@ type contentBlock struct {
 }
 
 type imageSource struct {
-	Type      string `json:"type"` // "base64"
-	MediaType string `json:"media_type"`
-	Data      string `json:"data"`
+	Type      string `json:"type"` // base64 | url | file
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
+	FileID    string `json:"file_id,omitempty"`
 }
 
 // toolResultBlocks builds array content for a tool_result whose message carries

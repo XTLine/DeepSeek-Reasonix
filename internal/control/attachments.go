@@ -20,7 +20,7 @@ import (
 	"reasonix/internal/secrets"
 )
 
-const maxImageAttachmentBytes = 10 * 1024 * 1024
+const maxImageAttachmentBytes = 64 * 1024 * 1024
 const maxFileAttachmentBytes = 25 * 1024 * 1024
 const maxAttachmentCreateAttempts = 1000
 
@@ -102,7 +102,7 @@ func SaveImageBytes(declaredMime string, raw []byte) (string, error) {
 
 func SaveImageBytesInRoot(root, declaredMime string, raw []byte) (string, error) {
 	if len(raw) == 0 || len(raw) > maxImageAttachmentBytes {
-		return "", fmt.Errorf("pasted image must be between 1 byte and 10 MB")
+		return "", fmt.Errorf("pasted image must be between 1 byte and 64 MB")
 	}
 	mime := detectedImageMime(raw)
 	if mime == "" {
@@ -155,7 +155,7 @@ func SaveImageFile(path string) (string, error) {
 		return "", fmt.Errorf("pasted image path must not be a symlink")
 	}
 	if info.IsDir() || info.Size() <= 0 || info.Size() > maxImageAttachmentBytes {
-		return "", fmt.Errorf("pasted image must be between 1 byte and 10 MB")
+		return "", fmt.Errorf("pasted image must be between 1 byte and 64 MB")
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -174,7 +174,7 @@ func SaveImageFile(path string) (string, error) {
 		return "", err
 	}
 	if len(raw) == 0 || len(raw) > maxImageAttachmentBytes {
-		return "", fmt.Errorf("pasted image must be between 1 byte and 10 MB")
+		return "", fmt.Errorf("pasted image must be between 1 byte and 64 MB")
 	}
 	if after, err := f.Stat(); err != nil {
 		return "", err
@@ -398,7 +398,7 @@ func readAttachmentImage(path string) (raw []byte, mime string, err error) {
 		return nil, "", fmt.Errorf("attachment path must not be a symlink")
 	}
 	if info.IsDir() || info.Size() <= 0 || info.Size() > maxImageAttachmentBytes {
-		return nil, "", fmt.Errorf("attachment image must be between 1 byte and 10 MB")
+		return nil, "", fmt.Errorf("attachment image must be between 1 byte and 64 MB")
 	}
 	f, err := os.Open(clean)
 	if err != nil {
@@ -417,7 +417,7 @@ func readAttachmentImage(path string) (raw []byte, mime string, err error) {
 		return nil, "", err
 	}
 	if len(raw) == 0 || len(raw) > maxImageAttachmentBytes {
-		return nil, "", fmt.Errorf("attachment image must be between 1 byte and 10 MB")
+		return nil, "", fmt.Errorf("attachment image must be between 1 byte and 64 MB")
 	}
 	if after, err := f.Stat(); err != nil {
 		return nil, "", err

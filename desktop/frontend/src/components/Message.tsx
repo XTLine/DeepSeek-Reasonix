@@ -1,8 +1,7 @@
-import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, lazy, memo, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { BrainCircuit, ChevronDown, FileText, Folder, GitBranch, Image, MessageSquare, Pencil, RotateCcw, ScrollText } from "lucide-react";
 import { MemoryCitations } from "./MemoryCitations";
-import { hasSearchFootnotes, SearchFootnotes } from "./SearchFootnotes";
 import { Markdown } from "./Markdown";
 import { CopyButton } from "./CopyButton";
 import { ComposerContextCard } from "./ComposerContextCard";
@@ -24,7 +23,7 @@ import { CodeViewer } from "./CodeViewer";
 import { formatSelectionLabels, languageFor, parseSelectedTextContext, stripSelectionLabels } from "../lib/selectedTextContext";
 import { AssistantReasoningPanel } from "./AssistantReasoningPanel";
 
-type AssistantItem = Extract<Item, { kind: "assistant" }>;
+const SearchSourcesPanel = lazy(() => import("./SearchSourcesPanel").then((module) => ({ default: module.SearchSourcesPanel }))); type AssistantItem = Extract<Item, { kind: "assistant" }>;
 export type TurnActionMenu = "summary" | "rewind";
 export const InvocationMetadataContext = createContext<InvocationMetadataMap>({});
 type ImSourceMessage = {
@@ -812,7 +811,7 @@ export const AssistantMessage = memo(function AssistantMessage({
 }) {
   const reasoningDisplayMode = useReasoningDisplayMode();
   const hasText = item.streaming || item.text.trim() !== "";
-  const hasFootnotes = hasSearchFootnotes(item.searchSources);
+  const hasFootnotes = Boolean(item.searchSources?.length);
   const processOnly = Boolean(item.reasoning) && !hasText && !hasFootnotes;
   const processWithText = Boolean(item.reasoning) && (hasText || hasFootnotes);
   if (processOnly && (reasoningDisplayMode === "hidden" || reasoningDisplayMode === "pending")) return null;
@@ -835,7 +834,7 @@ export const AssistantMessage = memo(function AssistantMessage({
               entryId={historyEntryIdForItemId(item.id)}
             />
           )}
-          <SearchFootnotes sources={item.searchSources} />
+          <Suspense fallback={null}><SearchSourcesPanel sources={item.searchSources} /></Suspense>
         </div>
       )}
       <MemoryCitations citations={item.memoryCitations} />

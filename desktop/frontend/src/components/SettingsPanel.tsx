@@ -4238,6 +4238,7 @@ function ModelsSection({ s, busy, apply, backgroundApply, initialFocus }: Models
   const defaultRef = toRef(s.defaultModel, s);
   const plannerRef = toRef(s.plannerModel, s);
   const subagentRef = toRef(s.subagentModel, s);
+  const visionRef = s.visionModel === "auto" ? "auto" : toRef(s.visionModel, s);
   const plannerSelectRef = plannerRef === defaultRef ? "" : plannerRef;
   const [defaultProvider] = defaultRef.split("/");
   const defaultProviderView = s.providers.find((p) => p.name === defaultProvider);
@@ -4280,6 +4281,20 @@ function ModelsSection({ s, busy, apply, backgroundApply, initialFocus }: Models
   const parallelWriters = Number.isFinite(agent.maxParallelWriters) && agent.maxParallelWriters > 0
     ? Math.max(1, Math.min(subagentConcurrency, Math.floor(agent.maxParallelWriters)))
     : Math.min(3, subagentConcurrency);
+  const visionRefs = useMemo(() => {
+    const defaultProviderName = defaultRef.split("/")[0];
+    const candidates = refs.filter((ref) => {
+      const [provider, ...parts] = ref.split("/");
+      const model = parts.join("/");
+      const view = s.providers.find((item) => item.name === provider);
+      return Boolean(view?.visionModels?.includes(model));
+    });
+    return candidates.sort((a, b) => {
+      const aSame = a.startsWith(`${defaultProviderName}/`);
+      const bSame = b.startsWith(`${defaultProviderName}/`);
+      return aSame === bSame ? a.localeCompare(b) : aSame ? -1 : 1;
+    });
+  }, [defaultRef, refs, s.providers]);
 
   useEffect(() => {
     setCompactRatioDraft(String(compactRatioPercent));
@@ -4448,6 +4463,19 @@ function ModelsSection({ s, busy, apply, backgroundApply, initialFocus }: Models
                 disabled={busy}
                 includeSameDefault
                 onPick={(ref) => void apply(() => app.SetPlannerModel(ref))}
+              />
+            </SettingsField>
+
+            <SettingsField label={t("settings.imageUnderstandingModel")} hint={t("settings.visionModelsHint")}>
+              <ModelPicker
+                s={s}
+                refs={visionRefs}
+                value={visionRef}
+                disabled={busy}
+                ariaLabel={t("settings.imageUnderstandingModel")}
+                emptyOptionLabel={t("common.none")}
+                autoOptionLabel={t("common.auto")}
+                onPick={(ref) => void apply(() => app.SetVisionModel(ref))}
               />
             </SettingsField>
 
@@ -4660,6 +4688,8 @@ export function ModelPicker({
   ariaLabel,
   emptyOptionLabel,
   emptyOptionHint,
+  autoOptionLabel,
+  autoOptionHint,
   onPick,
 }: {
   s: SettingsView;
@@ -4670,6 +4700,8 @@ export function ModelPicker({
   ariaLabel?: string;
   emptyOptionLabel?: string;
   emptyOptionHint?: string;
+  autoOptionLabel?: string;
+  autoOptionHint?: string;
   onPick: (ref: string) => void;
 }) {
   const t = useT();
@@ -4686,16 +4718,23 @@ export function ModelPicker({
   const emptyLabel = includeSameDefault ? t("settings.plannerNone") : emptyOptionLabel;
   const emptyHint = includeSameDefault ? t("settings.plannerNoneHint") : emptyOptionHint;
   const emptyMeta = includeSameDefault ? t("settings.plannerNoneHintShort") : emptyOptionHint;
+  const autoLabel = autoOptionLabel;
+  const autoHint = autoOptionHint;
   const selected = refs.includes(value) ? modelOptionFromRef(value, s) : null;
-  const selectedLabel = value === "" && emptyLabel
+  const selectedLabel = value === "auto" && autoLabel
+    ? autoLabel
+    : value === "" && emptyLabel
     ? emptyLabel
     : selected?.model || value || t("common.none");
-  const selectedMeta = value === "" && emptyLabel
+  const selectedMeta = value === "auto" && autoLabel
+    ? autoHint || ""
+    : value === "" && emptyLabel
     ? emptyMeta || ""
     : selected
     ? modelOptionMeta(selected, t)
     : t("settings.noModelsConfigured");
   const emptyOptionVisible = Boolean(emptyLabel) && (!q || `${emptyLabel} ${emptyHint || ""}`.toLowerCase().includes(q));
+  const autoOptionVisible = Boolean(autoLabel) && (!q || `${autoLabel} ${autoHint || ""}`.toLowerCase().includes(q));
 
   const groups = useMemo(() => {
     const providerOrder: string[] = [];
@@ -4792,6 +4831,21 @@ export function ModelPicker({
               {value === "" && <Check size={14} />}
             </button>
           )}
+          {autoOptionVisible && (
+            <button
+              type="button"
+              role="option"
+              aria-selected={value === "auto"}
+              className={`settings-model-picker__option settings-model-picker__option--pinned${value === "auto" ? " settings-model-picker__option--selected" : ""}`}
+              onClick={() => pick("auto")}
+            >
+              <span>
+                <strong>{autoLabel}</strong>
+                {autoHint && <small>{autoHint}</small>}
+              </span>
+              {value === "auto" && <Check size={14} />}
+            </button>
+          )}
           {groups.map((group) => (
             <div className="settings-model-picker__group" key={group.groupID}>
               <div className="settings-model-picker__group-title">
@@ -4816,7 +4870,7 @@ export function ModelPicker({
               ))}
             </div>
           ))}
-          {!emptyOptionVisible && groups.length === 0 && <div className="settings-model-picker__empty">{t("settings.noMatchingModels")}</div>}
+          {!emptyOptionVisible && !autoOptionVisible && groups.length === 0 && <div className="settings-model-picker__empty">{t("settings.noMatchingModels")}</div>}
         </div>
       </AnchoredPopover>
     </div>
@@ -4965,7 +5019,7 @@ function ProvidersSection({ s, busy, apply }: SectionProps) {
     const selected = mergedFetchedProviderModels(p.models, fetched, { preserveCurated: true });
     const visionCapability = providerVisionCapabilityForView(p);
     const visionSource = visionCapability === "unsupported"
-      ? []
+      ? p.visionModels
       : (p.visionModelsConfigured ? p.visionModels : inferredVisionModels(candidates));
     return {
       providerName: p.name,
@@ -5124,7 +5178,7 @@ function ProvidersSection({ s, busy, apply }: SectionProps) {
       await app.SaveProvider({
         ...provider,
         models,
-        visionModels: draft.visionCapability === "unsupported" ? [] : visionModels,
+        visionModels,
         visionModelsConfigured: true,
         default: providerDefaultModel(provider.default, models),
       });
@@ -6254,7 +6308,7 @@ function ProviderModelDraftPicker({
               ) : (
                 <div className="provider-model-draft__capabilities" aria-label={t("settings.modelCapabilitiesAria", { model })}>
                   <span>{t("settings.textInput")}</span>
-                  <span>{t("settings.imageInputUnsupported")}</span>
+                  <span>{vision.has(model) ? t("settings.visionModel") : t("settings.imageInputUnsupported")}</span>
                 </div>
               )}
             </div>
@@ -6382,10 +6436,6 @@ function providerBaseHost(baseUrl: string): string {
 
 type ProviderVisionCapability = "configurable" | "unsupported";
 
-function isDeepSeekOfficialEndpoint(baseUrl: string): boolean {
-  return providerBaseHost(baseUrl).endsWith(".deepseek.com");
-}
-
 export function providerSupportsServerWebSearch(kind: string, baseUrl: string): boolean {
   try {
     const endpoint = new URL(baseUrl.trim());
@@ -6421,25 +6471,13 @@ export function providerSupportsServerWebSearchForView(
   return providerSupportsServerWebSearch(provider.kind, provider.baseUrl);
 }
 
-function providerVisionCapability(kind: string, baseUrl: string): ProviderVisionCapability {
-  if (!isDeepSeekOfficialEndpoint(baseUrl)) return "configurable";
-  switch (kind.trim().toLowerCase()) {
-    case "openai":
-    case "responses":
-    case "anthropic":
-      return "unsupported";
-    default:
-      return "configurable";
-  }
-}
-
 export function providerVisionCapabilityForView(
   provider: Pick<ProviderView, "kind" | "baseUrl" | "visionCapability">,
 ): ProviderVisionCapability {
-  if (provider.visionCapability === "unsupported" || provider.visionCapability === "configurable") {
-    return provider.visionCapability;
+  if (provider.visionCapability === "unsupported") {
+    return "unsupported";
   }
-  return providerVisionCapability(provider.kind, provider.baseUrl);
+  return "configurable";
 }
 
 function canonicalOfficialProviderName(name: string): string {
@@ -6649,7 +6687,7 @@ export const ProviderEditorModelPicker = memo(function ProviderEditorModelPicker
               ) : (
                 <div className="provider-model-draft__capabilities" aria-label={t("settings.modelCapabilitiesAria", { model })}>
                   <span>{t("settings.textInput")}</span>
-                  <span>{t("settings.imageInputUnsupported")}</span>
+                  <span>{vision.has(model) ? t("settings.visionModel") : t("settings.imageInputUnsupported")}</span>
                 </div>
               )}
               <div className="provider-model-draft__context-field">

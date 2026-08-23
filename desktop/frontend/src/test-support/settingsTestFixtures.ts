@@ -34,6 +34,7 @@ export function baseSettings(displayMode: "standard" | "compact" = "standard"): 
   return {
     defaultModel: "",
     plannerModel: "",
+    visionModel: "",
     subagentModel: "",
     subagentEffort: "",
     autoPlan: "off",

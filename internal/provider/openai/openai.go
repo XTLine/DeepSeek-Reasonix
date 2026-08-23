@@ -90,12 +90,11 @@ func New(cfg provider.Config) (provider.Provider, error) {
 	extraBody, _ := cfg.Extra["extra_body"].(map[string]any)
 	vision, _ := cfg.Extra["vision"].(bool)
 	officialDeepSeek := IsDeepSeek(cfg.BaseURL)
-	// DeepSeek's official chat API accepts string message content only. Keep
-	// this provider-boundary guard even though config capability resolution
-	// normally prevents image attachments from reaching this layer. No persisted
-	// or extension-supplied capability flag may override the endpoint's current
-	// wire contract; future native vision support needs an explicit serializer.
-	vision = vision && !officialDeepSeek
+	// Official DeepSeek image input is pinned to one SKU. Ignore Extra["vision"]
+	// so stale config or extension metadata cannot send image_url to Flash/Pro.
+	if officialDeepSeek {
+		vision = IsOfficialDeepSeekVisionModel(cfg.Model)
+	}
 	visionDetail, _ := cfg.Extra["vision_detail"].(string)
 	visionDetail = strings.ToLower(strings.TrimSpace(visionDetail))
 	if visionDetail != "low" && visionDetail != "high" {
@@ -104,7 +103,8 @@ func New(cfg provider.Config) (provider.Provider, error) {
 	deepseek := protocol == "deepseek" || (protocol == "" && officialDeepSeek)
 	maxOutputTokens, _ := cfg.Extra["max_output_tokens"].(int)
 	deepseekV4Model := strings.EqualFold(strings.TrimSpace(cfg.Model), "deepseek-v4-flash") ||
-		strings.EqualFold(strings.TrimSpace(cfg.Model), "deepseek-v4-pro")
+		strings.EqualFold(strings.TrimSpace(cfg.Model), "deepseek-v4-pro") ||
+		IsOfficialDeepSeekVisionModel(cfg.Model)
 	minimax := protocol == "" && IsMiniMax(cfg.BaseURL)
 	zhipu := protocol == "glm" || (protocol == "" && IsZhipu(cfg.BaseURL))
 	longcat := protocol == "" && IsLongCat(cfg.BaseURL)
@@ -145,7 +145,7 @@ func New(cfg provider.Config) (provider.Provider, error) {
 			switch effort {
 			case "low":
 				if !deepseekV4Model {
-					return nil, fmt.Errorf("openai: provider %q uses DeepSeek thinking; effort low requires deepseek-v4-flash, deepseek-v4-pro, or explicit supported_efforts", name)
+					return nil, fmt.Errorf("openai: provider %q uses DeepSeek thinking; effort low requires deepseek-v4-flash, deepseek-v4-pro, deepseek-v4-flash-vision-exp, or explicit supported_efforts", name)
 				}
 			case "high", "max":
 			default:
@@ -754,7 +754,7 @@ func (c *client) buildRequest(req provider.Request) chatRequest {
 			cm.Content = m.Content
 		}
 		msgs = append(msgs, cm)
-		if c.vision && m.Role == provider.RoleTool {
+		if c.vision && m.Role == provider.RoleTool && !IsDeepSeek(c.baseURL) {
 			pendingToolImages = append(pendingToolImages, m.Images...)
 		}
 	}
@@ -1249,6 +1249,7 @@ type chatContentPart struct {
 	Type     string        `json:"type"`
 	Text     string        `json:"text,omitempty"`
 	ImageURL *chatImageURL `json:"image_url,omitempty"`
+	FileID   string        `json:"file_id,omitempty"`
 }
 
 type chatImageURL struct {
@@ -1261,8 +1262,13 @@ func imageContentParts(text string, images []string, detail string) []chatConten
 	if text != "" {
 		parts = append(parts, chatContentPart{Type: "text", Text: text})
 	}
-	for _, url := range images {
-		parts = append(parts, chatContentPart{Type: "image_url", ImageURL: &chatImageURL{URL: url, Detail: detail}})
+	for _, ref := range images {
+		switch provider.ClassifyImage(ref) {
+		case provider.ImageFileID:
+			parts = append(parts, chatContentPart{Type: "file", FileID: ref})
+		case provider.ImageDataURL, provider.ImageHTTPURL:
+			parts = append(parts, chatContentPart{Type: "image_url", ImageURL: &chatImageURL{URL: ref, Detail: detail}})
+		}
 	}
 	return parts
 }

@@ -4,12 +4,15 @@ import (
 	"strings"
 
 	"reasonix/internal/provider"
+	"reasonix/internal/provider/openai"
 )
 
 func deepSeekV4EffortOverrides() map[string]ProviderModelOverride {
+	flash := ProviderModelOverride{SupportedEfforts: []string{"disabled", "low", "high", "max"}, DefaultEffort: "high"}
 	return map[string]ProviderModelOverride{
-		"deepseek-v4-flash": {SupportedEfforts: []string{"disabled", "low", "high", "max"}, DefaultEffort: "high"},
-		"deepseek-v4-pro":   {SupportedEfforts: []string{"disabled", "low", "high", "max"}, DefaultEffort: "high"},
+		"deepseek-v4-flash":                flash,
+		openai.OfficialDeepSeekVisionModel: flash,
+		"deepseek-v4-pro":                  {SupportedEfforts: []string{"disabled", "low", "high", "max"}, DefaultEffort: "high"},
 	}
 }
 
@@ -22,6 +25,7 @@ func isOfficialDeepSeekResponsesProvider(p *ProviderEntry) bool {
 // Flash-only official Responses contract. Settings drops overrides for
 // unchecked models, so any leftover ModelOverrides means the list is curated.
 func backfillOfficialDeepSeekResponsesModels(p *ProviderEntry) {
+	backfillOfficialDeepSeekVisionModel(p)
 	if !isOfficialDeepSeekResponsesProvider(p) {
 		return
 	}

@@ -19,6 +19,7 @@ export type TranscriptScrollDiagnosticEventType =
   | "items-rendered"
   | "list-height"
   | "row-measure"
+  | "geometry-contract-violation"
   | "scroll-state"
   | "blank-check"
   | "blank-reset"
@@ -62,6 +63,12 @@ export type TranscriptScrollDiagnosticEvent = {
   rowKind?: "older-history" | "user" | "process-header" | "reasoning" | "tool" | "tool-batch"
     | "tool-group" | "phase" | "process-notice" | "notice" | "compaction" | "answer" | "extension"
     | "turn-actions";
+  layoutVariant?: "reasoning-summary" | "reasoning-heading-only" | "reasoning-expanded"
+    | "tool-collapsed" | "tool-expanded" | "tool-batch-collapsed" | "tool-batch-expanded"
+    | "tool-group-collapsed" | "tool-group-expanded" | "compaction-collapsed"
+    | "compaction-expanded" | "static" | "text-flow";
+  estimateSource?: "exact" | "compact-median" | "calibrated" | "static";
+  relativeError?: number;
   foldState?: "none" | "open" | "closed" | "mixed";
   state?: "begin" | "suspend" | "retry" | "done" | "cancelled" | "expired";
   reason?: "user-takeover" | "surface-switch" | "superseded" | "viewport-blank" | "other";
@@ -129,7 +136,7 @@ type RecorderOptions = {
 
 const EVENT_TYPES = new Set<TranscriptScrollDiagnosticEventType>([
   "start", "stop", "mark", "sample", "wheel", "scroll", "scroll-write",
-  "items-rendered", "list-height", "row-measure", "scroll-state", "blank-check", "blank-reset", "recovery",
+  "items-rendered", "list-height", "row-measure", "geometry-contract-violation", "scroll-state", "blank-check", "blank-reset", "recovery",
 ]);
 const MODES = new Set(["tail-follow", "manual", "user-resize", "selection", "restoring", "unknown"]);
 const OWNERS = new Set(["tail-follow", "jump", "rewind", "jump-bottom", "custom-scrollbar", "selection-edge-scroll", "recovery", "other"]);
@@ -146,6 +153,13 @@ const ROW_KINDS = new Set([
   "older-history", "user", "process-header", "reasoning", "tool", "tool-batch", "tool-group", "phase",
   "process-notice", "notice", "compaction", "answer", "extension", "turn-actions",
 ]);
+const LAYOUT_VARIANTS = new Set([
+  "reasoning-summary", "reasoning-heading-only", "reasoning-expanded",
+  "tool-collapsed", "tool-expanded", "tool-batch-collapsed", "tool-batch-expanded",
+  "tool-group-collapsed", "tool-group-expanded", "compaction-collapsed", "compaction-expanded",
+  "static", "text-flow",
+]);
+const ESTIMATE_SOURCES = new Set(["exact", "compact-median", "calibrated", "static"]);
 const FOLD_STATES = new Set(["none", "open", "closed", "mixed"]);
 const STATES = new Set(["begin", "suspend", "retry", "done", "cancelled", "expired"]);
 const REASONS = new Set(["user-takeover", "surface-switch", "superseded", "viewport-blank", "other"]);
@@ -153,7 +167,7 @@ const NUMBER_FIELDS = [
   "scrollTop", "scrollHeight", "clientHeight", "bottomDistance", "mountedRows", "totalRows",
   "firstVisibleIndex", "firstVisibleTop", "deltaY", "targetTop", "listHeight", "rowIndex",
   "estimatedSize", "previousSize", "measuredSize", "sizeDelta", "contentRevision", "disclosureCount",
-  "settleFrame", "offBottomFrames", "stagnantFrames",
+  "settleFrame", "offBottomFrames", "stagnantFrames", "relativeError",
 ] as const;
 const BOOLEAN_FIELDS = ["atBottom", "scrollable", "blank", "readerIntent", "canClaimTail", "substantial", "tailCommand"] as const;
 
@@ -188,6 +202,12 @@ function sanitizeEvent(
   if (typeof input.source === "string") event.source = (SOURCES.has(input.source) ? input.source : "other") as TranscriptScrollDiagnosticEvent["source"];
   if (typeof input.phase === "string" && PHASES.has(input.phase)) event.phase = input.phase as TranscriptScrollDiagnosticEvent["phase"];
   if (typeof input.rowKind === "string" && ROW_KINDS.has(input.rowKind)) event.rowKind = input.rowKind as TranscriptScrollDiagnosticEvent["rowKind"];
+  if (typeof input.layoutVariant === "string" && LAYOUT_VARIANTS.has(input.layoutVariant)) {
+    event.layoutVariant = input.layoutVariant as TranscriptScrollDiagnosticEvent["layoutVariant"];
+  }
+  if (typeof input.estimateSource === "string" && ESTIMATE_SOURCES.has(input.estimateSource)) {
+    event.estimateSource = input.estimateSource as TranscriptScrollDiagnosticEvent["estimateSource"];
+  }
   if (typeof input.foldState === "string" && FOLD_STATES.has(input.foldState)) event.foldState = input.foldState as TranscriptScrollDiagnosticEvent["foldState"];
   if (typeof input.state === "string" && STATES.has(input.state)) event.state = input.state as TranscriptScrollDiagnosticEvent["state"];
   if (typeof input.reason === "string") event.reason = (REASONS.has(input.reason) ? input.reason : "other") as TranscriptScrollDiagnosticEvent["reason"];

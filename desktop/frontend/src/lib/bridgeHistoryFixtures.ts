@@ -40,7 +40,14 @@ export function mockHistorySlice(
       }
     }
   }
-  const maxEntries = Math.max(1, Math.floor(req.entries || 120));
+  // The geometry-contract fixture is deliberately a single completed turn.
+  // Serve all of it in the first slice so its first-visit traversal measures
+  // row geometry, not an unrelated history-prepend transaction. Prepend is
+  // covered by the dedicated history pagination scenario below.
+  const geometryContract = messages.some((message) => message.content?.includes("Geometry contract fixture complete."));
+  const maxEntries = geometryContract
+    ? messages.length
+    : Math.max(1, Math.floor(req.entries || 120));
   if (before - lo > maxEntries) lo = before - maxEntries;
   const entries = messages.slice(lo, before).map((message, index) => {
     const entryId = `smock-${tabID}:r0:m${lo + index}:o0`;

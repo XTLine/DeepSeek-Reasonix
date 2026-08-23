@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"reasonix/internal/provider"
+	"reasonix/internal/provider/openai"
 )
 
 // ProviderPreset is a curated, editable provider starter template. Presets are
@@ -99,9 +100,10 @@ var (
 	kimiAPIVisionModels = []string{"kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"}
 	kimiCodingModels    = []string{"kimi-for-coding"}
 
-	longCat20Models   = []string{"LongCat-2.0"}
-	deepSeekV4Models  = []string{"deepseek-v4-flash", "deepseek-v4-pro"}
-	tokenRhythmModels = []string{
+	longCat20Models              = []string{"LongCat-2.0"}
+	deepSeekOfficialModels       = []string{"deepseek-v4-flash", "deepseek-v4-pro", openai.OfficialDeepSeekVisionModel}
+	deepSeekOfficialVisionModels = []string{openai.OfficialDeepSeekVisionModel}
+	tokenRhythmModels            = []string{
 		"deepseek-v4-flash", "deepseek-v4-pro", "glm-5", "glm-5.1",
 		"minimax-m2.7", "kimi-k2.5", "kimi-k2.6", "minimax-m2.5",
 		"mimo-v2.5-pro", "qwen3.7-max", "kimi-k2.7-code", "glm-5.2",
@@ -223,8 +225,9 @@ var curatedProviderPresets = []ProviderPreset{
 			Name:           "deepseek-anthropic",
 			Kind:           "anthropic",
 			BaseURL:        deepSeekAnthropicBaseURL,
-			Models:         deepSeekV4Models,
+			Models:         deepSeekOfficialModels,
 			Default:        "deepseek-v4-flash",
+			VisionModels:   deepSeekOfficialVisionModels,
 			APIKeyEnv:      "DEEPSEEK_API_KEY",
 			BalanceURL:     "https://api.deepseek.com/user/balance",
 			Thinking:       "enabled",
@@ -574,8 +577,9 @@ var curatedProviderPresets = []ProviderPreset{
 			Name:           "deepseek-responses",
 			Kind:           "responses",
 			BaseURL:        "https://api.deepseek.com",
-			Models:         deepSeekV4Models,
+			Models:         deepSeekOfficialModels,
 			Default:        "deepseek-v4-flash",
+			VisionModels:   deepSeekOfficialVisionModels,
 			APIKeyEnv:      "DEEPSEEK_API_KEY",
 			BalanceURL:     "https://api.deepseek.com/user/balance",
 			ContextWindow:  1_000_000,

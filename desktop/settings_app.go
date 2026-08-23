@@ -313,6 +313,7 @@ type BotSettingsView struct {
 type SettingsView struct {
 	DefaultModel                 string               `json:"defaultModel"`
 	PlannerModel                 string               `json:"plannerModel"`
+	VisionModel                  string               `json:"visionModel"`
 	SubagentModel                string               `json:"subagentModel"`
 	SubagentEffort               string               `json:"subagentEffort"`
 	AutoPlan                     string               `json:"autoPlan"`
@@ -1011,6 +1012,7 @@ func (a *App) Settings() SettingsView {
 	v := SettingsView{
 		DefaultModel:      cfg.DefaultModel,
 		PlannerModel:      cfg.Agent.PlannerModel,
+		VisionModel:       cfg.Agent.VisionModel,
 		SubagentModel:     cfg.Agent.SubagentModel,
 		SubagentEffort:    cfg.Agent.SubagentEffort,
 		AutoPlan:          "off", // deprecated JSON compatibility for older frontends
@@ -1387,11 +1389,23 @@ func (a *App) applyConfigChangeWithWarning(setting string, mutate func(*config.C
 	}
 	if err := a.rebuildSetting(setting); err != nil {
 		if warning, ok := a.deferredRebuildWarning(setting, err); ok {
+			a.refreshActiveTabMetaExtras()
 			return warning, nil
 		}
 		return "", err
 	}
+	a.refreshActiveTabMetaExtras()
 	return "", nil
+}
+
+// refreshActiveTabMetaExtras invalidates the cached model capability snapshot
+// after a settings rebuild. In particular, changing Agent.VisionModel should
+// immediately suppress the text-only image warning in the composer instead of
+// waiting for the normal metadata cache TTL.
+func (a *App) refreshActiveTabMetaExtras() {
+	if tab := a.activeTab(); tab != nil {
+		a.scheduleTabMetaExtrasRefresh(tab.ID)
+	}
 }
 
 // applyGlobalProviderConfigChange persists a provider-wide setting and refreshes
@@ -2185,6 +2199,23 @@ func (a *App) SetPlannerModel(ref string) error {
 	})
 }
 
+// SetVisionModel sets (or clears) the optional image-understanding fallback.
+func (a *App) SetVisionModel(ref string) error {
+	return a.applyConfigChange(func(c *config.Config) error {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || strings.EqualFold(ref, "auto") {
+			c.Agent.VisionModel = strings.ToLower(ref)
+			return nil
+		}
+		resolved, err := selectableDesktopVisionModelRef(c, ref)
+		if err != nil {
+			return err
+		}
+		c.Agent.VisionModel = resolved
+		return nil
+	})
+}
+
 // SetSubagentModel sets (or clears) the default model used by subagent entry points.
 func (a *App) SetSubagentModel(ref string) error {
 	return a.applyConfigChange(func(c *config.Config) error {
@@ -2211,6 +2242,23 @@ func selectableDesktopModelRef(c *config.Config, ref string) (string, error) {
 	}
 	if !entry.Configured() {
 		return "", fmt.Errorf("model %q is not available because provider %q has no key", ref, entry.Name)
+	}
+	return entry.Name + "/" + entry.Model, nil
+}
+
+func selectableDesktopVisionModelRef(c *config.Config, ref string) (string, error) {
+	entry, ok := c.ResolveModel(strings.TrimSpace(ref))
+	if !ok {
+		return "", fmt.Errorf("unknown vision model %q", ref)
+	}
+	if !modelProviderAccessAllowed(c.Desktop.ProviderAccess, entry.Name) {
+		return "", fmt.Errorf("vision model %q is not available because provider %q is not added", ref, entry.Name)
+	}
+	if !entry.Configured() {
+		return "", fmt.Errorf("vision model %q is not available because provider %q has no key", ref, entry.Name)
+	}
+	if !config.EffectiveVision(entry) {
+		return "", fmt.Errorf("model %q does not support image input", ref)
 	}
 	return entry.Name + "/" + entry.Model, nil
 }

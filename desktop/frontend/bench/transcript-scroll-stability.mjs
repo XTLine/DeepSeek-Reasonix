@@ -22,7 +22,7 @@ function assert(condition, message) {
   process.stdout.write(`  PASS  ${message}\n`);
 }
 
-async function moveToOuterReaderGutter(page, transcript) {
+async function moveToOuterReaderGutter(page, transcript, announce = true) {
   const deadline = Date.now() + 5_000;
   let point = null;
   while (!point && Date.now() < deadline) {
@@ -46,7 +46,8 @@ async function moveToOuterReaderGutter(page, transcript) {
     });
     if (!point) await page.waitForTimeout(16);
   }
-  assert(point != null, "outer reader wheel target resolves to visible row padding");
+  if (announce) assert(point != null, "outer reader wheel target resolves to visible row padding");
+  else if (point == null) throw new Error("outer reader wheel target is unavailable during traversal");
   await page.mouse.move(point.x, point.y);
 }
 
@@ -92,6 +93,170 @@ async function waitForStableTranscriptGeometry(
     };
     requestAnimationFrame(sample);
   }), { timeout, frames, requireTail });
+}
+
+async function openGeometryContractFixture(page) {
+  await page.click('.project-tree__topic-main:has-text("bench:geometry-229")');
+  await page.waitForFunction(
+    () => document.querySelector(".transcript")?.textContent?.includes("Geometry contract fixture complete."),
+    undefined,
+    { timeout: 30_000 },
+  );
+  await waitForStableTranscriptGeometry(page, { timeout: 30_000, requireTail: true });
+  return page.locator(".transcript");
+}
+
+async function runGeometryContractTraversal(page, label) {
+  const transcript = page.locator(".transcript");
+  const fixtureShape = await transcript.evaluate((element) => ({
+    totalRows: Number.parseInt(element.dataset.transcriptRowCount ?? "0", 10),
+    clientHeight: element.clientHeight,
+  }));
+  assert(
+    fixtureShape.totalRows >= 220 && fixtureShape.totalRows <= 240,
+    `${label}: sanitized fixture stays near 229 rows (${fixtureShape.totalRows})`,
+  );
+  await page.evaluate(() => {
+    window.__REASONIX_TRANSCRIPT_SCROLL_WRITE__ = (write) => {
+      window.__geometryContractProbe?.writes.push(write);
+    };
+  });
+  await transcript.evaluate(() => {
+    const compact = {};
+    window.__geometryContractProbe = { active: true, frames: [], compact, allRows: {}, writes: [] };
+    window.__REASONIX_TRANSCRIPT_SCROLL_WRITE__ = (write) => window.__geometryContractProbe?.writes.push(write);
+    const sample = () => {
+      const probe = window.__geometryContractProbe;
+      const element = document.querySelector(".transcript");
+      if (!probe?.active || !(element instanceof HTMLElement)) return;
+      const viewport = element.getBoundingClientRect();
+      const mounted = [...element.querySelectorAll(".transcript__row")];
+      const visible = mounted
+        .filter((row) => {
+          const rect = row.getBoundingClientRect();
+          return rect.bottom > viewport.top && rect.top < viewport.bottom;
+        })
+        .sort((left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top);
+      const first = visible[0];
+      const firstVisibleIndex = first instanceof HTMLElement
+        ? Number.parseInt(first.dataset.logicalIndex ?? first.dataset.index ?? "", 10)
+        : Number.NaN;
+      probe.frames.push({
+        top: element.scrollTop,
+        height: element.scrollHeight,
+        estimatedTotal: element.dataset.transcriptEstimatedTotal,
+        firstVisibleIndex: Number.isFinite(firstVisibleIndex) ? firstVisibleIndex : null,
+        firstVisibleTop: first instanceof HTMLElement ? first.getBoundingClientRect().top - viewport.top : null,
+        occupied: visible.length > 0,
+        visibleRows: visible.slice(0, 8).map((row) => ({
+          index: row.dataset.logicalIndex ?? row.dataset.index,
+          key: row.dataset.rowKey,
+          kind: row.dataset.rowKind,
+          variant: row.dataset.transcriptLayoutVariant,
+          height: row.getBoundingClientRect().height,
+          top: row.getBoundingClientRect().top - viewport.top,
+        })),
+      });
+      for (const row of mounted) {
+        if (!(row instanceof HTMLElement)) continue;
+        const variant = row.dataset.transcriptLayoutVariant ?? "";
+        const index = Number.parseInt(row.dataset.logicalIndex ?? row.dataset.index ?? "", 10);
+        const estimated = Number.parseFloat(row.dataset.estimatedSize ?? row.dataset.staticEstimate ?? "");
+        const measured = Number.parseFloat(row.dataset.knownSize ?? "") || row.getBoundingClientRect().height;
+        if (!Number.isFinite(index) || !Number.isFinite(estimated) || !Number.isFinite(measured)) continue;
+        const key = `${index}:${variant}`;
+        const error = Math.abs(measured - estimated);
+        const delta = measured - estimated;
+        const rowSample = {
+          index,
+          key: row.dataset.rowKey,
+          preview: row.textContent?.slice(0, 48),
+          kind: row.dataset.rowKind,
+          variant,
+          estimated,
+          measured,
+          error,
+          delta,
+        };
+        const previousAll = probe.allRows[key];
+        if (!previousAll || error > previousAll.error) probe.allRows[key] = rowSample;
+        if (variant === "static" || variant === "text-flow" || variant.endsWith("-expanded")) continue;
+        const previous = compact[key];
+        if (!previous || error > previous.error) compact[key] = rowSample;
+      }
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  await moveToOuterReaderGutter(page, transcript);
+  let reachedTop = false;
+  for (let attempt = 0; attempt < 240 && !reachedTop; attempt += 1) {
+    // Virtuoso recycles the row under a fixed pointer coordinate. Re-resolve
+    // the outer reader target so every synthetic wheel is delivered through
+    // the same capture path as a real continuous gesture.
+    await moveToOuterReaderGutter(page, transcript, false);
+    await page.mouse.wheel(0, -80);
+    await page.waitForTimeout(60);
+    reachedTop = await transcript.evaluate((element) => element.scrollTop <= 1);
+  }
+  assert(reachedTop, `${label}: first upward traversal reaches the physical top`);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const probe = await transcript.evaluate(() => {
+    const current = window.__geometryContractProbe ?? { frames: [], compact: {}, writes: [] };
+    current.active = false;
+    window.__REASONIX_TRANSCRIPT_SCROLL_WRITE__ = undefined;
+    window.__geometryContractProbe = undefined;
+    return current;
+  });
+  const occupied = probe.frames.every((frame) => frame.occupied);
+  let maxReversePx = 0;
+  let maxReverseRows = 0;
+  let worstReversePair = null;
+  let reverseRun = 0;
+  let maxReverseRun = 0;
+  let maxHeightDrop = 0;
+  for (let index = 1; index < probe.frames.length; index += 1) {
+    const previous = probe.frames[index - 1];
+    const current = probe.frames[index];
+    maxReversePx = Math.max(maxReversePx, current.top - previous.top);
+    maxHeightDrop = Math.max(maxHeightDrop, previous.height - current.height);
+    if (previous.firstVisibleIndex != null && current.firstVisibleIndex != null) {
+      const reverseRows = current.firstVisibleIndex - previous.firstVisibleIndex;
+      if (reverseRows > maxReverseRows) {
+        maxReverseRows = reverseRows;
+        worstReversePair = { previous, current };
+      }
+      const visualReverse = current.firstVisibleIndex > previous.firstVisibleIndex
+        || (current.firstVisibleIndex === previous.firstVisibleIndex
+          && previous.firstVisibleTop != null
+          && current.firstVisibleTop != null
+          && current.firstVisibleTop < previous.firstVisibleTop - 2);
+      reverseRun = visualReverse ? reverseRun + 1 : 0;
+      maxReverseRun = Math.max(maxReverseRun, reverseRun);
+    }
+  }
+  const compactRows = Object.values(probe.compact);
+  const reasoningRows = compactRows.filter((row) => row.variant === "reasoning-summary");
+  const reasoningError = Math.max(0, ...reasoningRows.map((row) => row.error));
+  const otherCompactError = Math.max(0, ...compactRows.filter((row) => row.variant !== "reasoning-summary").map((row) => row.error));
+  const forbiddenWrites = probe.writes.filter((write) => write.owner === "recovery" || write.owner === "anchor-compensation");
+  const largestOverestimates = Object.values(probe.allRows)
+    .filter((row) => row.delta < 0)
+    .sort((left, right) => left.delta - right.delta)
+    .slice(0, 8);
+  const largestUnderestimates = Object.values(probe.allRows)
+    .filter((row) => row.delta > 0)
+    .sort((left, right) => right.delta - left.delta)
+    .slice(0, 8);
+  assert(occupied, `${label}: every sampled frame keeps a mounted row in the viewport`);
+  assert(maxReverseRows <= 1, `${label}: first visible row never flashes downward by more than one row (${maxReverseRows}; ${JSON.stringify(worstReversePair)}; reasoning error ${reasoningError.toFixed(2)}; compact error ${otherCompactError.toFixed(2)}; height drop ${maxHeightDrop.toFixed(2)}; over ${JSON.stringify(largestOverestimates)}; under ${JSON.stringify(largestUnderestimates)}; writes ${JSON.stringify(probe.writes.slice(-8))})`);
+  assert(maxReverseRun <= 1, `${label}: no visible reverse displacement persists beyond one frame (${maxReverseRun}; physical anchor adjustment ${maxReversePx.toFixed(2)}px)`);
+  assert(maxHeightDrop < fixtureShape.clientHeight / 2, `${label}: list height never contracts by half a viewport (${maxHeightDrop.toFixed(2)}px)`);
+  assert(reasoningRows.length === 31, `${label}: traversal measures all 31 folded reasoning rows (${reasoningRows.length})`);
+  assert(reasoningError <= 2, `${label}: folded reasoning estimate error stays within 2px (${reasoningError.toFixed(2)}px)`);
+  assert(otherCompactError <= 8, `${label}: other compact estimate errors stay within 8px (${otherCompactError.toFixed(2)}px)`);
+  assert(forbiddenWrites.length === 0, `${label}: normal traversal emits zero recovery/anchor-compensation writes (${forbiddenWrites.length})`);
+  return { reasoningError, otherCompactError, totalRows: fixtureShape.totalRows };
 }
 
 async function waitForServer() {
@@ -209,12 +374,24 @@ try {
     requestAnimationFrame(settle);
   }));
   await moveToOuterReaderGutter(page, hydrationTranscript);
-  for (let attempt = 0; attempt < 32; attempt += 1) {
+  // Full Markdown hydration can legitimately expand this synthetic document
+  // to ~30k CSS px. Keep driving the same outer-reader gesture until the
+  // physical tail is reached instead of assuming the old underestimated tree.
+  let previousDownwardTop = -1;
+  for (let attempt = 0; attempt < 128; attempt += 1) {
+    await moveToOuterReaderGutter(page, hydrationTranscript, false);
     await page.mouse.wheel(0, 10_000);
-    const atBottom = await hydrationTranscript.evaluate((element) =>
-      element.scrollHeight - element.scrollTop - element.clientHeight <= 1);
-    if (atBottom) break;
-    await page.waitForTimeout(16);
+    const position = await hydrationTranscript.evaluate((element) => ({
+      top: element.scrollTop,
+      atBottom: element.scrollHeight - element.scrollTop - element.clientHeight <= 1,
+    }));
+    if (position.atBottom) break;
+    // A hydration resize intentionally guards the reader's previous extent
+    // for one intent burst. Start a fresh burst after the 180ms idle lease
+    // when that boundary is reached, matching a real user's next wheel turn.
+    const stalled = Math.abs(position.top - previousDownwardTop) <= 1;
+    previousDownwardTop = position.top;
+    await page.waitForTimeout(stalled ? 220 : 16);
   }
   await page.waitForFunction(() => {
     const element = document.querySelector(".transcript");
@@ -249,6 +426,16 @@ try {
       && element.scrollHeight - element.scrollTop - element.clientHeight <= 1;
   });
   assert(true, "rapid A→B→A switching leaves the reported long-turn session at its physical bottom");
+  await openGeometryContractFixture(page);
+  await runGeometryContractTraversal(page, "DPR 1 first visit");
+  await page.click('.project-tree__topic-main:has-text("bench:small-6t")');
+  await page.waitForFunction(
+    () => document.querySelector(".project-tree__topic--active .project-tree__topic-label")?.textContent?.includes("bench:small-6t"),
+    undefined,
+    { timeout: 30_000 },
+  );
+  await openGeometryContractFixture(page);
+  await runGeometryContractTraversal(page, "DPR 1 A→B→A revisit");
   await page.click('.project-tree__topic-main:has-text("bench:tools-38t")');
   await page.waitForFunction(() => document.querySelector(".project-tree__topic--active .project-tree__topic-label")?.textContent?.includes("bench:tools-38t"));
   await page.waitForFunction(() => document.querySelector(".transcript")?.textContent?.includes("pkg-41/mod.go"), undefined, { timeout: 30_000 });

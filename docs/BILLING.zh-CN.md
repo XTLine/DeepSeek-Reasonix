@@ -49,9 +49,10 @@ billing_mode = "payg"       # payg | subscription_equivalent
 ## DeepSeek 峰谷计价
 
 从北京时间 2026-08-17 00:00 起，DeepSeek 官方 OpenAI、Responses 与
-Anthropic 端点上的 V4 Flash/Pro 按请求发生时刻计价。北京时间
-09:00–12:00、14:00–18:00 为高峰，区间左闭右开，其余为低峰。由于供应商
-不提供逐 token 计费时刻，Reasonix 使用取得 usage 的请求完成时刻，并继续把报价标记为估算。
+Anthropic 端点上的 V4 Flash、`deepseek-v4-flash-vision-exp`（价卡与 Flash 相同）
+和 V4 Pro 按请求发生时刻计价。北京时间 09:00–12:00、14:00–18:00 为高峰，区间左闭右开，
+其余为低峰。由于供应商不提供逐 token 计费时刻，Reasonix 使用取得 usage 的请求完成时刻，
+并继续把报价标记为估算。发给视觉 SKU 的图片按供应商 usage 计入输入 token。
 
 配置中保存的价格仍是高峰基准价。只有 PAYG 且完整价格精确匹配官方高峰基准价时才启用
 动态档位；自定义端点、自定义价格和未知模型仍使用静态费率。已经写入 session、ledger、

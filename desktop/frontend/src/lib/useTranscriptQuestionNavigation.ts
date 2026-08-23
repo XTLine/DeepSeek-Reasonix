@@ -109,6 +109,7 @@ export function useTranscriptQuestionJump({
   loadingOlderHistory,
   olderHistoryError,
   running,
+  suppressAutoComplete = false,
   onLoadOlderHistory,
   clearTranscriptSelection,
   invalidateAnchors,
@@ -124,6 +125,8 @@ export function useTranscriptQuestionJump({
   loadingOlderHistory: boolean;
   olderHistoryError?: string;
   running: boolean;
+  /** Avoid background history paging while a navigation surface is hidden. */
+  suppressAutoComplete?: boolean;
   onLoadOlderHistory?: (targetTurn?: number) => boolean | Promise<boolean>;
   clearTranscriptSelection: (reason?: string) => void;
   invalidateAnchors: () => void;
@@ -183,8 +186,9 @@ export function useTranscriptQuestionJump({
 
   const earlierTurnsRemaining = questions[0]?.turn ?? 0;
   useEffect(() => {
+    if (suppressAutoComplete) return;
     if (earlierTurnsRemaining > 0 && earlierTurnsRemaining < HISTORY_AUTO_COMPLETE_TURNS) void requestOlderHistory();
-  }, [earlierTurnsRemaining, requestOlderHistory]);
+  }, [earlierTurnsRemaining, requestOlderHistory, suppressAutoComplete]);
   const handleEarlierHistoryReached = useCallback(() => void requestOlderHistory(), [requestOlderHistory]);
   const retryOlderHistory = useCallback(() => {
     const targetTurn = pendingQuestion?.surfaceKey === layoutSurfaceKey ? pendingQuestion.turn + 1 : undefined;

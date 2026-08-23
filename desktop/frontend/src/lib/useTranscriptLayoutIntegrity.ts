@@ -7,9 +7,11 @@ import {
   transcriptElementViewportIsBlank,
   type TranscriptLayoutAnchor,
 } from "./transcriptVirtuosoRecovery";
-import { resolveTranscriptStateSnapshot, type TranscriptStateSnapshot } from "./transcriptStateSnapshot";
+import { createTranscriptStateGeometry, resolveTranscriptStateSnapshot, type TranscriptStateSnapshot } from "./transcriptStateSnapshot";
 import type { TranscriptScrollArbiterRecoveryApi } from "./useTranscriptScrollArbiter";
 import { recordTranscriptScrollDiagnostic } from "./transcriptScrollProbe";
+import { isFrontendDiagnosticsBuild } from "./frontendDiagnosticsBuild";
+import type { TranscriptGeometryEnvironment } from "./transcriptRowGeometry";
 
 const BLANK_RECOVERY_COOLDOWN_MS = 2_000;
 // A viewport that blanks while the user is actively scrolling is almost always
@@ -17,9 +19,10 @@ const BLANK_RECOVERY_COOLDOWN_MS = 2_000;
 // size tree. Resets wait for the scroll to go quiet; only a blank that
 // survives into idle earns a rebuild.
 const USER_SCROLL_IDLE_MS = 320;
-const CAPTURE_SCROLL_DIAGNOSTICS = typeof __BUILD_CHANNEL__ === "undefined"
-  || __BUILD_CHANNEL__ === "test"
-  || import.meta.env.DEV;
+const CAPTURE_SCROLL_DIAGNOSTICS = isFrontendDiagnosticsBuild(
+  typeof __BUILD_CHANNEL__ === "string" ? __BUILD_CHANNEL__ : "development",
+  Boolean(import.meta.env?.DEV),
+);
 
 /**
  * Detects a stale Virtuoso size tree and rebuilds it while preserving the
@@ -47,9 +50,10 @@ export function useTranscriptLayoutIntegrity({
   submitRecoveryRequest,
   retryRecoveryRequest,
   lastGoodAnchorRef,
-  captureStateSnapshot,
   layoutTransientRef,
   layoutWidth,
+  geometrySessionKey = surfaceKey,
+  geometryEnvironment = { contentWidth: layoutWidth, typographySignature: "legacy" },
 }: {
   surfaceKey: string;
   rows: readonly TranscriptRow[];
@@ -60,7 +64,9 @@ export function useTranscriptLayoutIntegrity({
   scrollToBottom: () => void;
   layoutTransientRef: RefObject<boolean>;
   layoutWidth?: number;
-} & TranscriptScrollArbiterRecoveryApi) {
+  geometrySessionKey?: string;
+  geometryEnvironment?: TranscriptGeometryEnvironment;
+} & Omit<TranscriptScrollArbiterRecoveryApi, "captureStateSnapshot">) {
   const [resetEpoch, setResetEpoch] = useState(0);
   const blankCheckFrameRef = useRef<number | null>(null);
   const pendingAnchorRef = useRef<{ surfaceKey: string; anchor: TranscriptLayoutAnchor } | null>(null);
@@ -74,6 +80,10 @@ export function useTranscriptLayoutIntegrity({
   const activeRecoveryIdRef = useRef<number | null>(null);
   const suspendedRecoveryIdRef = useRef<number | null>(null);
   const rowKeys = useMemo(() => rows.map((row) => String(row.key)), [rows]);
+  const stateGeometry = useMemo(
+    () => createTranscriptStateGeometry(geometrySessionKey, rows, geometryEnvironment),
+    [geometryEnvironment, geometrySessionKey, rows],
+  );
   const layoutGeneration = useMemo(
     () => `${surfaceKey}:${String(layoutWidth ?? "unknown")}:${rowKeys.join("\u0000")}`,
     [layoutWidth, rowKeys, surfaceKey],
@@ -87,15 +97,12 @@ export function useTranscriptLayoutIntegrity({
   const stateSnapshotRef = useRef<TranscriptStateSnapshot | null>(null);
   const appliedSnapshotRef = useRef(false);
 
-  // Render-phase surface transition: the outgoing Virtuoso is still mounted
-  // at this point (an effect cleanup would run after the keyed remount), so
-  // this is the last chance to snapshot its measured tree + scrollTop for
-  // the incoming surface to restore from.
+  // A surface transition is a product-level view reset. Measurements may be
+  // reused through the session geometry LRU, but an outgoing scrollTop never
+  // crosses the transition — even if another session happens to have the same
+  // row keys. Blank-watchdog rebuilds also reject their broken size tree.
   if (surfaceStateRef.current.surfaceKey !== surfaceKey) {
-    const snapshot = captureStateSnapshot();
-    if (snapshot && surfaceStateRef.current.rowKeys.length > 0) {
-      stateSnapshotRef.current = { keys: surfaceStateRef.current.rowKeys, snapshot };
-    }
+    stateSnapshotRef.current = null;
     surfaceStateRef.current = { surfaceKey, rowKeys };
   } else {
     surfaceStateRef.current.rowKeys = rowKeys;
@@ -160,10 +167,10 @@ export function useTranscriptLayoutIntegrity({
   // A usable snapshot outranks restoreLocation: Virtuoso pipes restoreStateFrom
   // into the same initial-location stream, so the two never apply together.
   const restoreSnapshot = useMemo(
-    () => resolveTranscriptStateSnapshot(stateSnapshotRef.current, rowKeys),
+    () => resolveTranscriptStateSnapshot(stateSnapshotRef.current, rowKeys, stateGeometry),
     // stateSnapshotRef only changes at the capture points above; every remount
     // path recomputes through one of these deps.
-    [rowKeys, surfaceKey, resetEpoch],
+    [rowKeys, stateGeometry, surfaceKey, resetEpoch],
   );
   appliedSnapshotRef.current = restoreSnapshot !== undefined;
 
