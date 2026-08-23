@@ -8,7 +8,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/http/cookiejar"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -210,6 +209,7 @@ func (a *App) remoteRT() (remoteKernel, error) {
 		return a.remoteRuntime, nil
 	}
 	mgr := newDesktopRemoteManager(a)
+	mgr.registerCredRoute = a.registerCredentialProxyRoute
 	a.remoteRuntime = mgr
 	return mgr, nil
 }
@@ -708,6 +708,10 @@ type desktopRemoteManager struct {
 	serveLogs         func(context.Context, bootstrap.Conn, string, int, *strings.Builder) error
 	localBinary       func() string
 	fetchRemoteBinary func(context.Context, string, string, string) ([]byte, error)
+	// registerCredRoute registers the workspace's virtual token route on the
+	// desktop credential proxy. Wired to App.registerCredentialProxyRoute at
+	// the composition root (remoteRT); tests inject a fake or leave it nil.
+	registerCredRoute func(hostID, workspace string) (credentialProxyRouteInfo, error)
 	promptGate        chan struct{}
 	promptSeq         uint64
 }
@@ -1828,11 +1832,10 @@ func (m *desktopRemoteManager) ServerLogs(ctx context.Context, hostID, workspace
 // remote serve will call through. The returned options are ready to hand to
 // the bootstrap (BaseURL points at the tunnel's remote loopback port).
 func (m *desktopRemoteManager) credentialProxySetup(c desktopSSHClient, hostID, workspace string) (*bootstrap.CredentialProxyOptions, error) {
-	app, ok := m.sink.(*App)
-	if !ok || app == nil {
-		return nil, fmt.Errorf("credential proxy: app unavailable")
+	if m.registerCredRoute == nil {
+		return nil, fmt.Errorf("credential proxy: route registrar not wired")
 	}
-	info, err := app.registerCredentialProxyRoute(hostID, workspace)
+	info, err := m.registerCredRoute(hostID, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -1863,7 +1866,7 @@ func ensureCredentialProxyForward(c desktopSSHClient, hostID string, desktopPort
 				// BoundAddr. Probe when the client exposes a raw SSH dialer;
 				// if probing is unavailable (test doubles), fall back to Up.
 				perr := probeReverseTunnel(c, port)
-				if perr == nil || strings.Contains(perr.Error(), "does not expose") {
+				if perr == nil || errors.Is(perr, errReverseProbeUnsupported) {
 					return port, nil
 				}
 				log.Printf("[remote] credential proxy: advertised reverse port %d is dead; replacing (%v)", port, perr)
@@ -1903,6 +1906,11 @@ func credentialForwardPort(c desktopSSHClient, hostID string) (int, bool) {
 	return 0, false
 }
 
+// errReverseProbeUnsupported reports that the SSH client cannot carry the
+// reverse-tunnel probe (no raw *ssh.Client). Callers treat it as "cannot
+// judge", not as a dead tunnel.
+var errReverseProbeUnsupported = errors.New("reverse probe: ssh client does not expose a raw connection")
+
 // probeReverseTunnel verifies the reverse credential channel end to end. The
 // desktop cannot dial the remote-side loopback listener itself, so the probe
 // rides the same SSH connection as a direct-tcpip channel — the remote sshd
@@ -1914,7 +1922,7 @@ func probeReverseTunnel(c desktopSSHClient, port int) error {
 	type sshDialer interface{ SSH() (*ssh.Client, error) }
 	d, ok := c.(sshDialer)
 	if !ok {
-		return errors.New("reverse probe: ssh client does not expose a raw connection")
+		return errReverseProbeUnsupported
 	}
 	cl, err := d.SSH()
 	if err != nil {
@@ -1975,14 +1983,8 @@ func (m *desktopRemoteManager) reloadServeProviders(ctx context.Context, hostID,
 	}
 	allOK := true
 	for ws, t := range targets {
-		jar, err := cookiejar.New(nil)
-		if err != nil {
-			allOK = false
-			continue
-		}
-		client := &http.Client{Jar: jar}
 		callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		err = serveHandshake(callCtx, client, t.base, t.token)
+		client, err := handshakeServeClient(callCtx, t.base, t.token)
 		if err == nil {
 			err = servePost(callCtx, client, serveURL(t.base, "/providers/reload"), nil)
 		}
@@ -1998,12 +2000,14 @@ func (m *desktopRemoteManager) reloadServeProviders(ctx context.Context, hostID,
 			// Not Allowed). A fresh launch reads the healed config at startup,
 			// so replace the serve — throttled, and asynchronously: EnsureServer
 			// holds serveMu here.
-			if (strings.Contains(err.Error(), "status 404") || strings.Contains(err.Error(), "status 405")) && m.markCredFallback(hostID) {
+			if (isServeStatus(err, http.StatusNotFound) || isServeStatus(err, http.StatusMethodNotAllowed)) && m.markCredFallback(hostID) {
 				log.Printf("[remote] reloadServeProviders: legacy serve -> replacing host=%s ws=%s", hostID, ws)
 				go func(hostID, ws string) {
 					if err := m.StopServer(hostID, ws); err != nil {
+						log.Printf("[remote] reloadServeProviders: legacy serve stop FAILED host=%s ws=%s err=%v", hostID, ws, err)
 					}
 					if _, _, err := m.EnsureServer(context.Background(), hostID, ws); err != nil {
+						log.Printf("[remote] reloadServeProviders: legacy serve replace FAILED host=%s ws=%s err=%v", hostID, ws, err)
 					}
 				}(hostID, ws)
 			}
