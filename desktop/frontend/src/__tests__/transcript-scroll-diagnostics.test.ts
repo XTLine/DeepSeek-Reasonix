@@ -143,16 +143,29 @@ const detailDiagnostics = createTranscriptScrollDiagnostics({
 detailDiagnostics.start();
 detailDiagnostics.record("row-measure", {
   rowIndex: 44,
-  rowKind: "answer",
-  estimatedSize: 1_800,
-  previousSize: 1_800,
-  measuredSize: 420,
-  sizeDelta: -1_380,
+  rowKind: "reasoning",
+  layoutVariant: "reasoning-summary",
+  estimateSource: "static",
+  estimatedSize: 64,
+  previousSize: 64,
+  measuredSize: 64,
+  sizeDelta: 0,
   contentRevision: 3,
   foldState: "closed",
   disclosureCount: 1,
   rowKey: "PRIVATE_ROW_KEY",
   transcriptText: "PRIVATE_TRANSCRIPT_CANARY",
+});
+detailDiagnostics.record("geometry-contract-violation", {
+  rowIndex: 45,
+  rowKind: "tool",
+  layoutVariant: "tool-collapsed",
+  estimateSource: "static",
+  estimatedSize: 37,
+  measuredSize: 55,
+  sizeDelta: 18,
+  relativeError: 18 / 37,
+  rowKey: "PRIVATE_ROW_KEY_2",
 });
 detailDiagnostics.record("scroll-state", {
   source: "jump-bottom",
@@ -184,20 +197,38 @@ assert.deepEqual(rowMeasurement, {
   t: 0,
   type: "row-measure",
   rowIndex: 44,
-  estimatedSize: 1_800,
-  previousSize: 1_800,
-  measuredSize: 420,
-  sizeDelta: -1_380,
+  estimatedSize: 64,
+  previousSize: 64,
+  measuredSize: 64,
+  sizeDelta: 0,
   contentRevision: 3,
   disclosureCount: 1,
-  rowKind: "answer",
+  rowKind: "reasoning",
+  layoutVariant: "reasoning-summary",
+  estimateSource: "static",
   foldState: "closed",
+});
+const geometryViolation = detailPayload.events.find((event) => event.type === "geometry-contract-violation");
+assert.deepEqual(geometryViolation, {
+  t: 0,
+  type: "geometry-contract-violation",
+  rowIndex: 45,
+  estimatedSize: 37,
+  measuredSize: 55,
+  sizeDelta: 18,
+  relativeError: 0.49,
+  rowKind: "tool",
+  layoutVariant: "tool-collapsed",
+  estimateSource: "static",
 });
 const detailSerialized = JSON.stringify(detailPayload);
 assert.equal(detailSerialized.includes("PRIVATE_ROW_KEY"), false, "row measurements exclude stable row keys");
 assert.equal(detailSerialized.includes("PRIVATE_TRANSCRIPT_CANARY"), false, "row measurements exclude transcript text");
+assert.equal(detailSerialized.includes("PRIVATE_ROW_KEY_2"), false, "geometry violations exclude stable row keys");
 
 assert.equal(isTranscriptScrollDiagnosticsBuild("test", false), true, "test builds expose diagnostics");
+assert.equal(isTranscriptScrollDiagnosticsBuild("preview", false), true, "preview builds expose diagnostics");
+assert.equal(isTranscriptScrollDiagnosticsBuild("canary", false), true, "canary builds expose diagnostics");
 assert.equal(isTranscriptScrollDiagnosticsBuild("stable", true), true, "development server exposes diagnostics");
 assert.equal(isTranscriptScrollDiagnosticsBuild("stable", false), false, "stable production hides diagnostics");
 

@@ -19,6 +19,7 @@ import (
 	fileencoding "reasonix/internal/fileutil/encoding"
 	"reasonix/internal/hook"
 	"reasonix/internal/provider"
+	"reasonix/internal/provider/openai"
 	"reasonix/internal/sandbox"
 )
 
@@ -113,28 +114,6 @@ func TestProviderViewFromEntry_MigratesProviderWideVision(t *testing.T) {
 	}
 	if !view.VisionModelsSet {
 		t.Fatal("ProviderView.VisionModelsSet = false, want true for provider-wide vision")
-	}
-}
-
-func TestProviderViewFromEntryReportsOfficialDeepSeekVisionUnsupported(t *testing.T) {
-	p := config.ProviderEntry{
-		Name:         "deepseek",
-		Kind:         "openai",
-		BaseURL:      "https://api.deepseek.com",
-		Models:       []string{"deepseek-v4-flash", "deepseek-v4-pro"},
-		VisionModels: []string{"deepseek-v4-flash", "deepseek-v4-pro"},
-	}
-	view := providerViewFromEntry(p, true, true)
-	if view.VisionCapability != "unsupported" {
-		t.Fatalf("VisionCapability = %q, want unsupported", view.VisionCapability)
-	}
-	if !reflect.DeepEqual(view.VisionModels, p.VisionModels) {
-		t.Fatalf("ProviderView should preserve stale metadata for a lossless settings round trip: got %v want %v", view.VisionModels, p.VisionModels)
-	}
-	resolved := p
-	resolved.Model = "deepseek-v4-pro"
-	if config.EffectiveVision(&resolved) {
-		t.Fatal("preserved stale settings metadata must not enable runtime image input")
 	}
 }
 
@@ -1904,6 +1883,9 @@ func TestOfficialDeepSeekTemplateUsesRegionalPricing(t *testing.T) {
 		}
 		if price := got.Prices["deepseek-v4-pro"]; price == nil || price.Currency != "$" || price.Output != 3.96 {
 			t.Fatalf("%s deepseek-v4-pro price = %+v, want frozen USD table", language, price)
+		}
+		if price := got.Prices[openai.OfficialDeepSeekVisionModel]; price == nil || price.Currency != "$" || price.Output != 1.32 {
+			t.Fatalf("%s vision SKU price = %+v, want Flash USD table", language, price)
 		}
 	}
 }

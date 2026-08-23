@@ -70,8 +70,10 @@ func TestDeepSeekScheduledRatesAllModelsCurrenciesAndTokenClasses(t *testing.T) 
 	}
 	sets := []priceSet{
 		{"deepseek-v4-flash", "CNY", RateCard{0.10, 3, 9, "CNY"}, RateCard{0.10, 3, 9, "CNY"}, RateCard{0.05, 1.5, 4.5, "CNY"}},
+		{"deepseek-v4-flash-vision-exp", "CNY", RateCard{0.10, 3, 9, "CNY"}, RateCard{0.10, 3, 9, "CNY"}, RateCard{0.05, 1.5, 4.5, "CNY"}},
 		{"deepseek-v4-pro", "CNY", RateCard{0.30, 9, 27, "CNY"}, RateCard{0.30, 9, 27, "CNY"}, RateCard{0.15, 4.5, 13.5, "CNY"}},
 		{"deepseek-v4-flash", "USD", RateCard{0.014, 0.44, 1.32, "USD"}, RateCard{0.014, 0.44, 1.32, "USD"}, RateCard{0.007, 0.22, 0.66, "USD"}},
+		{"deepseek-v4-flash-vision-exp", "USD", RateCard{0.014, 0.44, 1.32, "USD"}, RateCard{0.014, 0.44, 1.32, "USD"}, RateCard{0.007, 0.22, 0.66, "USD"}},
 		{"deepseek-v4-pro", "USD", RateCard{0.044, 1.32, 3.96, "USD"}, RateCard{0.044, 1.32, 3.96, "USD"}, RateCard{0.022, 0.66, 1.98, "USD"}},
 	}
 	bands := []struct {

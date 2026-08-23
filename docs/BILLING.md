@@ -53,11 +53,13 @@ pricing (`unavailable`). Legacy scalar aliases (`cost`, `costUsd`,
 
 ## DeepSeek scheduled rates
 
-For official DeepSeek OpenAI, Responses, and Anthropic endpoints, V4 Flash and
-V4 Pro use occurrence-time pricing from 2026-08-17 00:00 Beijing time. Peak
-windows are 09:00–12:00 and 14:00–18:00 Beijing time; boundaries are
-left-closed/right-open and all other times are off-peak. The request-completion
-timestamp is used because the provider does not report per-token billing time.
+For official DeepSeek OpenAI, Responses, and Anthropic endpoints, V4 Flash,
+`deepseek-v4-flash-vision-exp` (same list price as Flash), and V4 Pro use
+occurrence-time pricing from 2026-08-17 00:00 Beijing time. Peak windows are
+09:00–12:00 and 14:00–18:00 Beijing time; boundaries are left-closed/right-open
+and all other times are off-peak. The request-completion timestamp is used
+because the provider does not report per-token billing time. Images sent to the
+vision SKU are billed as input tokens from provider usage.
 
 The stored provider price remains the peak anchor. Dynamic resolution is
 enabled only for PAYG configurations whose complete rate card exactly matches

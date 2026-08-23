@@ -1727,6 +1727,42 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 			label = entry.Model + " + planner " + pe.Model
 		}
 	}
+	visionProviderResolver := func(ref string) (provider.Provider, error) {
+		ve, ok := resolveOptionalEntry(effectiveResolver, cfg, strings.TrimSpace(ref))
+		if !ok || ve == nil || strings.TrimSpace(ve.Model) == "" {
+			return nil, fmt.Errorf("unknown vision model %q", ref)
+		}
+		return resolveProvider(effectiveResolver, cfg, proxySpec, provider.Selection{Ref: modelRefFromEntry(ve)})
+	}
+	visionModelSelector := func(currentRef, _ string) (string, bool) {
+		current, ok := resolveOptionalEntry(effectiveResolver, cfg, strings.TrimSpace(currentRef))
+		if !ok || current == nil {
+			return "", false
+		}
+		for i := range cfg.Providers {
+			p := &cfg.Providers[i]
+			if p.Name != current.Name || !p.Configured() {
+				continue
+			}
+			models := p.ModelList()
+			ordered := make([]string, 0, len(models))
+			if d := p.DefaultModel(); d != "" {
+				ordered = append(ordered, d)
+			}
+			for _, model := range models {
+				if model != "" && model != p.DefaultModel() {
+					ordered = append(ordered, model)
+				}
+			}
+			for _, model := range ordered {
+				candidate, found := cfg.ResolveModel(p.Name + "/" + model)
+				if found && candidate.Configured() && config.EffectiveVision(candidate) {
+					return candidate.Name + "/" + candidate.Model, true
+				}
+			}
+		}
+		return "", false
+	}
 
 	ctrlOpts := control.Options{
 		TaskBudget:                     taskBudgetFromConfig(cfg),
@@ -1738,6 +1774,9 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 		SubagentGate:                   headlessGate,
 		Label:                          label,
 		ModelRef:                       modelRef,
+		VisionModel:                    cfg.Agent.VisionModel,
+		VisionProviderResolver:         visionProviderResolver,
+		VisionModelSelector:            visionModelSelector,
 		SystemPrompt:                   sysPrompt,
 		SessionDir:                     sessionDir,
 		Host:                           pluginHost,

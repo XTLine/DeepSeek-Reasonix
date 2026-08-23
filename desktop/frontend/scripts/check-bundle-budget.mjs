@@ -81,13 +81,25 @@ console.log("\nbundle budgets");
 // path while keeping its 1.68 KiB question rail lazy-loaded. Test diagnostics
 // plus the navigation owner add 0.7 KiB gzip (0.164%) over the merged test gate.
 // DingTalk channel status and locale wiring move the current-base production
-// build from 427.2 to 427.7 KiB and test from 428.6 to 429.1 KiB. Keep about
-// 0.1 KiB of build-SHA headroom with a 0.5 KiB (about 0.117%) ratchet per gate.
-// The remote project-onboard merge lands the sidebar remote groups (store
-// wiring, remote session rows, host-form credential mode) on top: production
-// rides 430.4 KiB. Retain the merged capacity with 0.2 KiB headroom and keep
-// the historical 1.4 KiB test-channel diagnostics delta.
-const initialJSBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 432.0 : 430.6;
+// build from 427.2 to 427.7 KiB and test from 428.6 to 429.1 KiB. The unified
+// state-aware geometry contract, session diagnostics counters, and guarded
+// native-scroll probes add 2.4 KiB gzip to the initial path. The current
+// main-v2 merge adds another 0.3 KiB of deterministic shared startup code.
+// Keep the increase explicit and bounded instead of hiding it in a broad
+// percentage ratchet.
+// The retained-transcript surface adds a small, bounded navigation owner to
+// the startup path (overlay state + stale-completion guard). Keep the increase
+// explicit and narrow; the measured build is 431.1 KiB gzip.
+// The web-search tool card now resolves the same display projection lazily so
+// its filtered count matches the assistant Sources panel. The measured build
+// is 431.509 KiB gzip; keep 0.1 KiB of explicit headroom for hash/toolchain
+// drift instead of relying on a rounded equality.
+// The remote project-onboard MVP merge lands the sidebar remote groups (store
+// wiring, remote session rows, host-form credential mode) on top of both
+// tracks; the serve-scaling wave (detach, gzip snapshots, watchdog) stays in
+// the stacked follow-up. Production rides 436.9 KiB; retain the merged
+// capacity with 0.2 KiB headroom on a shared per-channel ratchet.
+const initialJSBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 437.1 : 437.1;
 assertBudget("initial JavaScript gzip", initialJSGzip, initialJSBudgetKiB * 1024);
 assertBudget("largest initial JavaScript chunk gzip", largestInitialJS, 280 * 1024);
 // Render-blocking CSS is intentionally absent: styles.css loads deferred via
@@ -101,10 +113,13 @@ if (initialCSS.length > 0) {
 // Extension surfaces, Task Monitor, and compact decision receipts share the
 // application stylesheet loaded before React mounts. Keep their combined
 // allowance bounded even though the file is no longer render-blocking.
-// The remote project-onboard merge folds the connect-wizard, remote-surface,
-// and remote-badge styles in beside main's DingTalk and topicbar blocks:
-// the merged stylesheet rides 114.9 KiB gzip.
-assertBudget("deferred app-shell CSS gzip", appShellCSSGzip, 115.2 * 1024);
+// Navigation overlay styles add a bounded 0.1 KiB to the deferred shell.
+// The cleaned source panel adds 0.1 KiB gzip to the deferred shell on top of
+// the retained-transcript navigation allowance; keep the ratchet explicit.
+// The remote project-onboard MVP merge folds the connect-wizard, remote-surface,
+// and remote-badge styles in beside main's navigation and source-panel blocks:
+// the merged stylesheet rides 115.4 KiB gzip.
+assertBudget("deferred app-shell CSS gzip", appShellCSSGzip, 116.0 * 1024);
 if (localeChunks.length !== 2) {
   throw new Error(`expected 2 on-demand Chinese locale chunks, found ${localeChunks.length}`);
 }
@@ -132,9 +147,9 @@ for (const path of localeChunks) {
   // choices from the primary UI; keep that complete guidance with a bounded
   // 0.4–0.5 KiB locale-only ratchet. The remote credential work
   // (disconnected-shell surface + host-form credential mode, three locales)
-  // adds ~1 KiB gzip on top: the merged chunks ride 58.15 KiB (zh-TW) and
-  // 57.43 KiB (zh); keep ~0.15 KiB of CI zlib headroom above each.
-  const budget = name.startsWith("zh-TW-") ? 58.3 * 1024 : 57.6 * 1024;
+  // adds ~1 KiB gzip on top: the merged chunks ride 58.3 KiB (zh-TW) and
+  // 57.6 KiB (zh); keep ~0.15 KiB of CI zlib headroom above each.
+  const budget = name.startsWith("zh-TW-") ? 58.5 * 1024 : 57.8 * 1024;
   assertBudget(`${name} gzip`, gzipBytes(path), budget);
 }
 
@@ -150,6 +165,10 @@ const rawInitialBytes = [...initialJS, ...initialCSS, ...appShellCSS]
 // production and 2358.3 KiB in test: about 9.0 KiB (0.38%) over main-v2's
 // channel gates. Retain that attributable UI capacity with 0.1 KiB of build-SHA
 // headroom without widening the gzip or largest-chunk exceptions.
-const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_358.4 : 2_353.2;
+// The main merge's unified geometry contract and retained-transcript
+// navigation owner plus the remote project-onboard MVP sidebar groups move
+// the merged production build to 2380.0 KiB raw; keep 0.3 KiB of build-SHA
+// headroom and share the ratchet across channels.
+const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_380.3 : 2_380.3;
 assertBudget("initial raw JavaScript and CSS", rawInitialBytes, rawInitialBudgetKiB * 1024);
 assertBudget("largest initial JavaScript chunk raw", largestInitialJSRaw, 1_000 * 1024);

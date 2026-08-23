@@ -21,6 +21,7 @@ import (
 
 	"reasonix/internal/netclient"
 	"reasonix/internal/provider"
+	"reasonix/internal/provider/openai"
 )
 
 const (
@@ -140,10 +141,11 @@ func New(cfg Config) provider.Provider {
 		sessionCache = *cfg.SessionCache
 	}
 	vision, _ := cfg.Extra["vision"].(bool)
-	// DeepSeek's official Responses endpoint is currently text-only. Keep this
-	// provider-boundary guard so stale config or extension metadata cannot emit
-	// unsupported input_image items.
-	vision = vision && vendor != "deepseek"
+	// Official DeepSeek image input is pinned to one SKU. Ignore Extra["vision"]
+	// so stale config cannot emit input_image items for Flash/Pro.
+	if vendor == "deepseek" {
+		vision = openai.IsOfficialDeepSeekVisionModel(cfg.Model)
+	}
 	httpClient := &http.Client{}
 	if built, err := netclient.NewHTTPClient(cfg.Proxy, netclient.TransportOptions{
 		DialTimeout: 30 * time.Second, KeepAlive: 30 * time.Second,
@@ -322,9 +324,7 @@ func (c *client) buildRequestBody(req provider.Request) (map[string]any, bool, [
 	c.mu.Lock()
 	previousID, expectedDigest := c.lastResponseID, c.expectedPrefixDigest
 	c.mu.Unlock()
-	if c.mode == "stateful" && previousID != "" && len(messages) > 0 &&
-		messages[len(messages)-1].Role == provider.RoleUser &&
-		c.conversationDigest(messages[:len(messages)-1]) == expectedDigest {
+	if c.canUseStatefulContinuation(messages, previousID, expectedDigest) {
 		body["input"] = messages[len(messages)-1].Content
 		body["previous_response_id"] = previousID
 		return body, true, messages
@@ -332,6 +332,17 @@ func (c *client) buildRequestBody(req provider.Request) (map[string]any, bool, [
 
 	body["input"] = messagesToInput(rest, c.vision, c.webSearch, c.caps.summaryRequired)
 	return body, false, messages
+}
+
+func inputImagePart(ref string) map[string]string {
+	switch provider.ClassifyImage(ref) {
+	case provider.ImageFileID:
+		return map[string]string{"type": "input_image", "file_id": ref}
+	case provider.ImageDataURL, provider.ImageHTTPURL:
+		return map[string]string{"type": "input_image", "image_url": ref}
+	default:
+		return nil
+	}
 }
 
 func splitInstructions(messages []provider.Message) (string, []provider.Message) {
@@ -357,10 +368,16 @@ func messagesToInput(messages []provider.Message, vision, replayWebSearchItems, 
 				if message.Content != "" {
 					parts = append(parts, map[string]string{"type": "input_text", "text": message.Content})
 				}
-				for _, url := range message.Images {
-					parts = append(parts, map[string]string{"type": "input_image", "image_url": url})
+				for _, ref := range message.Images {
+					if part := inputImagePart(ref); part != nil {
+						parts = append(parts, part)
+					}
 				}
-				input = append(input, map[string]any{"role": "user", "content": parts})
+				if len(parts) == 0 || (len(parts) == 1 && parts[0]["type"] == "input_text") {
+					input = append(input, map[string]any{"role": "user", "content": message.Content})
+				} else {
+					input = append(input, map[string]any{"role": "user", "content": parts})
+				}
 			} else {
 				input = append(input, map[string]any{"role": string(message.Role), "content": message.Content})
 			}

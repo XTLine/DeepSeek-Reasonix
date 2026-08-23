@@ -175,6 +175,70 @@ const benchReportedLongTurnHistory = (): HistoryMessage[] => {
   return messages;
 };
 
+const benchGeometryContractHistory = (): HistoryMessage[] => {
+  // Sanitized WebView2 regression fixture shaped like the field report: about
+  // 229 virtual rows, exactly 31 completed reasoning bodies, mixed CJK/ASCII,
+  // code, answers, and tool cards. The hidden reasoning lengths deliberately
+  // span the old 96–3584px estimate range while every completed reasoning row
+  // initially renders as the same one-line summary.
+  const messages: HistoryMessage[] = [
+    { role: "user", content: "验证首次向上遍历未访问的折叠过程行，记录逐帧几何和滚动方向。" },
+  ];
+  for (let block = 0; block < 60; block += 1) {
+    const id = `geometry-contract-${block}`;
+    const readOnly = block % 3 !== 0;
+    // Start the reasoning tail earlier so the reduced fixture still carries
+    // the 31 folded reasoning rows required by the contract gate.
+    const reasoningOrdinal = block - 29;
+    const reasoning = reasoningOrdinal >= 0
+      ? [
+          `第 ${reasoningOrdinal + 1} 段分析：验证折叠状态不读取完整正文。`,
+          ...Array.from(
+            { length: 8 + reasoningOrdinal * 5 },
+            (_, line) => `reasoning ${reasoningOrdinal + 1}.${line + 1} 中文 English ${"x".repeat(32 + (line % 4) * 16)}`,
+          ),
+        ].join("\n")
+      : undefined;
+    messages.push({
+      role: "assistant",
+      reasoning,
+      content: [
+        `### Geometry block ${block + 1}`,
+        "",
+        `折叠布局检查 ${block + 1} 完成，answer 保持内容感知估高。`,
+        "",
+        block % 5 === 0 ? "```ts\nconst stable = layoutVariant === 'reasoning-summary';\n```" : "- 中文换行\n- English wrapping",
+      ].join("\n"),
+      toolCalls: [
+        {
+          id,
+          name: readOnly ? "read_file" : "bash",
+          arguments: JSON.stringify(readOnly
+            ? { path: `src/geometry/section-${block}.ts` }
+            : { command: `pnpm test --filter geometry-${block}` }),
+          resolvedReadOnly: readOnly,
+          subject: `geometry section ${block + 1}`,
+        },
+        ...(block >= 31 && block < 55 ? [{
+          id: `${id}-stopped`,
+          name: "bash",
+          arguments: JSON.stringify({ command: `pnpm typecheck --filter geometry-${block}` }),
+          resolvedReadOnly: false,
+          subject: `geometry stopped section ${block + 1}`,
+        }] : []),
+      ],
+    });
+    messages.push({
+      role: "tool",
+      toolCallId: id,
+      toolName: readOnly ? "read_file" : "bash",
+      content: `ok block=${block + 1}\nstatus: success\n${"measurement stable ".repeat(4)}`,
+    });
+  }
+  messages.push({ role: "assistant", content: "Geometry contract fixture complete." });
+  return messages;
+};
+
 // Ref-resolution storm fixture (#8657): the newest page of a long session
 // carries many ref-replaced fields, so opening the session fires a paced
 // stream of history_items_patch invalidations — the exact load that used to
@@ -233,6 +297,8 @@ export function benchTopicHistory(topicId: string): HistoryMessage[] | undefined
       return benchFixture("giant", benchGiantTurnHistory);
     case "topic_bench_reported_long_turn":
       return benchFixture("reported-long-turn", benchReportedLongTurnHistory);
+    case "topic_bench_geometry_contract":
+      return benchFixture("geometry-contract", benchGeometryContractHistory);
     case "topic_bench_storm":
       return benchFixture("storm", benchStormHistory);
     default:

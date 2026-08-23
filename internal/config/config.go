@@ -1287,10 +1287,13 @@ type AgentConfig struct {
 	// Deprecated compatibility fields. Old TOML and desktop clients may still
 	// send them, but config loading normalizes both to zero and rendering omits
 	// them. One-off CLI and unattended bot limits remain separate controls.
-	MaxSteps            int     `toml:"max_steps"`
-	PlannerMaxSteps     int     `toml:"planner_max_steps"`
-	Temperature         float64 `toml:"temperature"`
-	PlannerModel        string  `toml:"planner_model"`
+	MaxSteps        int     `toml:"max_steps"`
+	PlannerMaxSteps int     `toml:"planner_max_steps"`
+	Temperature     float64 `toml:"temperature"`
+	PlannerModel    string  `toml:"planner_model"`
+	// VisionModel is empty (off), "auto", or a canonical provider/model ref
+	// used to summarize images before a text-only executor turn.
+	VisionModel         string  `toml:"vision_model"`
 	GuardianModel       string  `toml:"guardian_model"`
 	GuardianTemperature float64 `toml:"guardian_temperature"`
 	// RecoveryModel optionally names a dedicated model for the independent

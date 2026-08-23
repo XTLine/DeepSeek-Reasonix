@@ -8,7 +8,7 @@ import type {
 import type { SizeFunction, VirtuosoHandle } from "react-virtuoso";
 import { isEditableTarget } from "./keyboardShortcuts";
 import { findVerticalScrollTarget, normalizeWheelDelta } from "./nestedScrollHandoff";
-import { isNativeVerticalScrollbarPointer, measureTranscriptVirtuosoItem } from "./transcriptNativeScrollbar";
+import { hasPendingTranscriptGeometry, isNativeVerticalScrollbarPointer, measureTranscriptVirtuosoItem } from "./transcriptNativeScrollbar";
 import {
   INITIAL_TRANSCRIPT_SCROLL_STATE,
   isSubstantialTranscriptDisplacement,
@@ -39,6 +39,7 @@ import {
 } from "./transcriptReaderExtentStability";
 import { hasTranscriptScrollableRange, nativeTranscriptBottomTop, nativeTranscriptDistanceFromBottom, pinTranscriptTailAfterViewportShrink, TRANSCRIPT_AT_BOTTOM_THRESHOLD_PX, type TranscriptFollowGeometry } from "./transcriptScrollGeometry";
 import type { TranscriptRow } from "./transcriptRows";
+import { isTranscriptRowLayoutVariant, type TranscriptEstimateSource, type TranscriptRowLayoutVariant } from "./transcriptRowGeometry";
 import { captureTranscriptVirtuosoState } from "./transcriptStateSnapshot";
 import { captureTranscriptLayoutAnchor, type TranscriptLayoutAnchor } from "./transcriptVirtuosoRecovery";
 import { createTranscriptAnchorCompensation, type TranscriptAnchorCompensation } from "./transcriptAnchorCompensation";
@@ -68,7 +69,16 @@ export function useTranscriptScrollArbiter({
    *  cancelled / expired); wired into session diagnostics by the caller. */
   onRecoveryTerminal?: (terminal: TranscriptRecoveryTerminal) => void;
   /** Receives real, unfrozen itemSize measurements; data-known-size is ignored. */
-  onItemMeasured?: (rowKey: string, kind: TranscriptRow["kind"], height: number, width: number, measurementVersion?: string) => void;
+  onItemMeasured?: (
+    rowKey: string,
+    kind: TranscriptRow["kind"],
+    layoutVariant: TranscriptRowLayoutVariant,
+    height: number,
+    width: number,
+    measurementVersion: string | undefined,
+    estimateSource: TranscriptEstimateSource | undefined,
+    staticEstimate: number | undefined,
+  ) => void;
 } = {}) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -81,9 +91,16 @@ export function useTranscriptScrollArbiter({
   const deliverScrollRef = useRef<((element?: HTMLDivElement) => void) | null>(null);
   const generationRef = useRef(0);
   const followFrameRef = useRef<number | null>(null);
+  // Virtuoso reuses physical row elements. A known size from the previous
+  // logical row must not be treated as the current row's geometry contract.
+  const measuredRowKeyRef = useRef(new WeakMap<HTMLElement, string>());
   const layoutTransientRef = useRef(false);
   const resizeSettleFrameRef = useRef<number | null>(null);
   const readerIntentTimerRef = useRef<number | null>(null);
+  // Last gesture direction controls whether recycled rows may update
+  // Virtuoso's size tree. This survives the short reader-intent lease so an
+  // upward wheel gesture cannot become a resize race between two deliveries.
+  const manualMeasurementFreezeRef = useRef(false);
   const followGeometryRef = useRef<TranscriptFollowGeometry>({ contentExtent: null, viewportExtent: null });
   const recoveryRef = useRef<ActiveTranscriptRecovery | null>(null);
   const nextRecoveryIdRef = useRef(0);
@@ -154,7 +171,10 @@ export function useTranscriptScrollArbiter({
     pinnedRef.current = state.mode === "tail-follow";
     // Keep jump-bottom manual-only while tail-follow repairs footer resize gaps.
     setIsAtBottom(state.atBottom || state.mode === "tail-follow");
-    if (scrollRef.current) scrollRef.current.dataset.scrollMode = state.mode;
+    if (scrollRef.current) {
+      scrollRef.current.dataset.scrollMode = state.mode;
+      scrollRef.current.dataset.transcriptReaderIntent = state.readerIntent ? "true" : "false";
+    }
   }, []);
 
   const runCommand = useCallback((command: TranscriptScrollCommand, source?: TranscriptScrollDiagnosticSource) => {
@@ -390,6 +410,7 @@ export function useTranscriptScrollArbiter({
   const reset = useCallback(() => {
     invalidateAsyncFrames();
     endReaderIntent();
+    manualMeasurementFreezeRef.current = false;
     followGeometryRef.current = { contentExtent: null, viewportExtent: null };
     dispatch({ type: "RESET" });
   }, [dispatch, endReaderIntent, invalidateAsyncFrames]);
@@ -397,7 +418,10 @@ export function useTranscriptScrollArbiter({
   const setMode = useCallback((mode: TranscriptScrollMode, _reason?: string) => {
     switch (mode) {
       case "tail-follow": reset(); break;
-      case "manual": dispatch({ type: "MANUAL_READING" }); break;
+      case "manual":
+        manualMeasurementFreezeRef.current = true;
+        dispatch({ type: "MANUAL_READING" });
+        break;
       case "user-resize": dispatch({ type: "USER_RESIZE_BEGIN" }); break;
       case "selection": dispatch({ type: "SELECTION_BEGIN" }); break;
       case "restoring": dispatch({ type: "PROGRAMMATIC_BEGIN" }); break;
@@ -457,15 +481,72 @@ export function useTranscriptScrollArbiter({
   }, [tailSettle]);
 
   const itemSize = useCallback<SizeFunction>((element, field) => {
-    const frozen = nativeScrollbarDragRef.current || nativeScrollbarDragging;
+    // During an active manual gesture, keep Virtuoso's current size tree
+    // authoritative. Measuring a newly mounted asynchronous Markdown row in
+    // the middle of the gesture would change offsets under the pointer and
+    // produce the visible reverse frame this arbiter is meant to prevent.
+    // Freeze only an active upward reader gesture. A downward gesture is an
+    // explicit tail-claiming action and must keep measuring newly mounted
+    // rows so a long hydrated transcript can reach its real physical tail.
+    // Once the short reader-intent lease expires, normal measurements resume
+    // at the next idle frame without remounting Virtuoso.
+    const upwardManualGesture = stateRef.current.mode === "manual" && manualMeasurementFreezeRef.current;
+    const frozen = nativeScrollbarDragRef.current || nativeScrollbarDragging || upwardManualGesture;
+    if (CAPTURE_TRANSCRIPT_SCROLL_DIAGNOSTICS && field === "offsetHeight" && stateRef.current.readerIntent) {
+      element.dataset.transcriptReaderFreeze = "true";
+    }
+    const pendingGeometry = field === "offsetHeight" && hasPendingTranscriptGeometry(element);
     const measured = measureTranscriptVirtuosoItem(element, field, frozen);
+    if (field === "offsetHeight" && frozen) {
+      const estimate = Number.parseFloat(element.dataset.transcriptEstimate ?? "");
+      if (Number.isFinite(estimate) && estimate > 0) {
+        // Match the physical recycled row to the same logical seed returned
+        // to Virtuoso. Without this, ResizeObserver can still see the real
+        // Markdown height after itemSize returned the seed and Virtuoso's
+        // built-in upward compensation writes the delta back to scrollTop.
+        element.style.setProperty("height", `${estimate}px`, "important");
+        element.dataset.transcriptGeometryFrozen = "true";
+      }
+    } else if (field === "offsetHeight" && element.dataset.transcriptGeometryFrozen === "true") {
+      element.style.removeProperty("height");
+      delete element.dataset.transcriptGeometryFrozen;
+    }
+    if (field === "offsetHeight") {
+      const currentRowKey = element.dataset.rowKey;
+      if (currentRowKey) {
+        const previousRowKey = measuredRowKeyRef.current.get(element);
+        if (previousRowKey !== undefined && previousRowKey !== currentRowKey) element.dataset.transcriptRecycled = "true";
+        else delete element.dataset.transcriptRecycled;
+        measuredRowKeyRef.current.set(element, currentRowKey);
+      }
+    }
     if (CAPTURE_TRANSCRIPT_SCROLL_DIAGNOSTICS) noteTranscriptRowMeasurement(element, field, measured);
-    if (!frozen && field === "offsetHeight") {
+    if (!frozen && !pendingGeometry && field === "offsetHeight") {
       const rowKey = element.dataset.rowKey;
       const kind = element.dataset.rowKind as TranscriptRow["kind"] | undefined;
-      const width = Math.round(element.getBoundingClientRect().width);
-      if (rowKey && kind && measured > 0 && width > 0) {
-        onItemMeasuredRef.current?.(rowKey, kind, measured, width, element.dataset.layoutVersion);
+      const stateElement = element.querySelector<HTMLElement>("[data-transcript-layout-variant]");
+      const rawVariant = stateElement?.dataset.transcriptLayoutVariant ?? element.dataset.transcriptLayoutVariant;
+      const width = Number.parseFloat(element.dataset.transcriptContentWidth ?? "") || element.getBoundingClientRect().width;
+      const rawSource = element.dataset.estimateSource;
+      const estimateSource = rawSource === "exact" || rawSource === "compact-median" || rawSource === "calibrated" || rawSource === "static"
+        ? rawSource
+        : undefined;
+      const staticEstimate = Number.parseFloat(element.dataset.staticEstimate ?? "");
+      const staticEstimateMatchesState = rawVariant === element.dataset.transcriptLayoutVariant;
+      if (rowKey && kind && isTranscriptRowLayoutVariant(rawVariant) && measured > 0 && width > 0) {
+        const recycled = element.dataset.transcriptRecycled === "true";
+        if (!recycled) {
+          onItemMeasuredRef.current?.(
+            rowKey,
+            kind,
+            rawVariant,
+            measured,
+            width,
+            element.dataset.layoutVersion,
+            estimateSource,
+            staticEstimateMatchesState && Number.isFinite(staticEstimate) ? staticEstimate : undefined,
+          );
+        }
       }
     }
     return measured;
@@ -492,6 +573,9 @@ export function useTranscriptScrollArbiter({
     if (element && !stateRef.current.scrollable && hasTranscriptScrollableRange(element)) {
       deliverScroll(element);
     }
+    manualMeasurementFreezeRef.current = readerDeltaY !== undefined
+      ? readerDeltaY < 0
+      : !claimPhysicalBottom;
     dispatch({ type: "USER_SCROLL_INTENT", canClaimTail: claimPhysicalBottom });
     if (
       claimPhysicalBottom

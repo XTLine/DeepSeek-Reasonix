@@ -409,7 +409,16 @@ usually needs only the provider API key: the key value is stored in Reasonix hom
 environment-variable name, context window, vision model metadata, proxy bypass
 for China-only endpoints, MiniMax `reasoning_split`, GLM/MiniMax thinking
 heuristics, Anthropic-compatible Bearer auth where needed, Ollama Cloud
-max-effort support, and OpenCode Go per-model reasoning overrides. The dedicated
+max-effort support, and OpenCode Go per-model reasoning overrides. Official DeepSeek Anthropic, Responses, and Chat Completions catalogs also
+include `deepseek-v4-flash-vision-exp`. In Settings, mark that SKU for image
+input with the same checkbox used by other providers, then select it. Composer
+and `@` user images are sent as official visual input using the three documented
+shapes: inline base64 `data:` URLs for local files, `http(s)` image URLs as-is,
+and Files API `file-api-` ids (local images over 32 MiB on official DeepSeek are
+uploaded automatically). Chat Completions uses `image_url` or `file`, Anthropic
+uses `image`+`source.base64|url|file`, and Responses uses `input_image`.
+Flash and Pro stay text-only on the wire even if checked, and tool screenshots
+are not forwarded as image parts. The vision SKU uses the Flash rate card. The dedicated
 OpenCode Go DeepSeek Anthropic and DeepSeek Responses presets expose the verified
 Flash routes and enable provider-side `web_search` by default; the Responses
 variant uses stateless context replay. The existing mixed OpenCode Go Anthropic
@@ -589,7 +598,7 @@ Composer shortcuts:
 | `Cmd+Z` on macOS, `Ctrl+Z` on Windows/Linux | Undoes the latest composer edit | Native typing stays in the WebView history; Reasonix-managed paste, cut, folded blocks, and structured tokens are restored as complete transactions. |
 | `Cmd+Shift+Z` on macOS, `Ctrl+Shift+Z` on Windows/Linux | Redoes the latest composer edit | On Windows/Linux, `Ctrl+Y` is also accepted after the YOLO shortcut has been rebound. |
 | `Cmd+Y` / `Ctrl+Y` (default) | Toggles YOLO on/off | Turning YOLO off restores the previous Ask/Auto base when known. The current binding is shown in **Settings → Shortcuts**. |
-| `Cmd+V` on macOS, `Ctrl+V` on Windows/Linux | Pastes clipboard content | Clipboard images are attached; images can also be dropped into the composer. |
+| `Cmd+V` on macOS, `Ctrl+V` on Windows/Linux | Pastes clipboard content | Clipboard images are attached; images can also be dropped into the composer. Official DeepSeek Flash/Pro stay text-only; switch to `deepseek-v4-flash-vision-exp` to send those images. |
 | Plain `Up` / `Down` at the prompt boundary | Recalls older or newer submitted prompts | Modified arrows and native text navigation stay with the textarea. |
 | `Esc` while a turn is running | Cancels the running turn | If the turn has not produced a response yet, the draft is restored. |
 
