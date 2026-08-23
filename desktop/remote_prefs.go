@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,16 @@ import (
 )
 
 var remotePrefsMu sync.Mutex
+
+// remotePrefsMem caches the parsed prefs so per-row accessors (session title
+// overrides, pins) stop re-reading desktop-remote.json on every call — the
+// session-list builder hits them once per row. The cache is keyed by the
+// prefs path: a changed MemoryUserDir (tests swap temp dirs) never serves a
+// stale snapshot. Guarded by remotePrefsMu.
+var (
+	remotePrefsMem     *remotePrefs
+	remotePrefsMemPath string
+)
 
 // remotePrefs is desktop-only remote UI state, stored beside the other desktop
 // JSON prefs (desktop-workspaces.json, desktop-tabs.json). All fields are
@@ -44,6 +55,10 @@ func loadRemotePrefs() remotePrefs {
 	var p remotePrefs
 	path := remotePrefsPath()
 	if path == "" {
+		// Keep the "maps are always initialized" contract on this early
+		// return too: writers assign into them without a nil guard.
+		p.LastWorkspaceByHost = map[string]string{}
+		p.SessionTitles = map[string]string{}
 		return p
 	}
 	data, err := os.ReadFile(path)
@@ -60,6 +75,31 @@ func loadRemotePrefs() remotePrefs {
 	return p
 }
 
+// remotePrefsLoadLocked returns the in-memory prefs, loading the file once.
+// Callers must hold remotePrefsMu. The returned value shares its maps with
+// the cache: mutate, then follow with remotePrefsSaveLocked.
+func remotePrefsLoadLocked() remotePrefs {
+	path := remotePrefsPath()
+	if remotePrefsMem == nil || remotePrefsMemPath != path {
+		p := loadRemotePrefs()
+		remotePrefsMem = &p
+		remotePrefsMemPath = path
+	}
+	return *remotePrefsMem
+}
+
+// remotePrefsSaveLocked persists p and refreshes the cache (memory stays the
+// intra-session authority even when the disk write fails). Failures are
+// logged here; callers that can act on them use the return value.
+func remotePrefsSaveLocked(p remotePrefs) error {
+	remotePrefsMem = &p
+	if err := saveRemotePrefs(p); err != nil {
+		log.Printf("[remote] prefs: save FAILED err=%v", err)
+		return err
+	}
+	return nil
+}
+
 func remoteSessionTitleKey(hostID, workspace, name string) string {
 	return hostID + "\x00" + workspace + "\x00" + name
 }
@@ -67,13 +107,13 @@ func remoteSessionTitleKey(hostID, workspace, name string) string {
 func remoteSessionTitleOverride(hostID, workspace, name string) string {
 	remotePrefsMu.Lock()
 	defer remotePrefsMu.Unlock()
-	return loadRemotePrefs().SessionTitles[remoteSessionTitleKey(hostID, workspace, name)]
+	return remotePrefsLoadLocked().SessionTitles[remoteSessionTitleKey(hostID, workspace, name)]
 }
 
 func remoteSessionPinned(hostID, workspace, name string) bool {
 	remotePrefsMu.Lock()
 	defer remotePrefsMu.Unlock()
-	for _, key := range loadRemotePrefs().PinnedSessions {
+	for _, key := range remotePrefsLoadLocked().PinnedSessions {
 		if key == remoteSessionTitleKey(hostID, workspace, name) {
 			return true
 		}
@@ -84,7 +124,7 @@ func remoteSessionPinned(hostID, workspace, name string) bool {
 func setRemoteSessionPinned(hostID, workspace, name string, pinned bool) {
 	remotePrefsMu.Lock()
 	defer remotePrefsMu.Unlock()
-	p := loadRemotePrefs()
+	p := remotePrefsLoadLocked()
 	key := remoteSessionTitleKey(hostID, workspace, name)
 	next := p.PinnedSessions[:0:0]
 	for _, existing := range p.PinnedSessions {
@@ -96,7 +136,7 @@ func setRemoteSessionPinned(hostID, workspace, name string, pinned bool) {
 		next = append(next, key)
 	}
 	p.PinnedSessions = next
-	saveRemotePrefs(p)
+	_ = remotePrefsSaveLocked(p) // failure logged by the saver
 }
 
 func remoteSessionPinnedLocked(p remotePrefs, key string) bool {
@@ -111,14 +151,14 @@ func remoteSessionPinnedLocked(p remotePrefs, key string) bool {
 func setRemoteSessionTitleOverride(hostID, workspace, name, title string) {
 	remotePrefsMu.Lock()
 	defer remotePrefsMu.Unlock()
-	p := loadRemotePrefs()
+	p := remotePrefsLoadLocked()
 	key := remoteSessionTitleKey(hostID, workspace, name)
 	if strings.TrimSpace(title) == "" {
 		delete(p.SessionTitles, key)
 	} else {
 		p.SessionTitles[key] = strings.TrimSpace(title)
 	}
-	saveRemotePrefs(p)
+	_ = remotePrefsSaveLocked(p) // failure logged by the saver
 }
 
 func saveRemotePrefs(p remotePrefs) error {
@@ -136,13 +176,13 @@ func saveRemotePrefs(p remotePrefs) error {
 func (a *App) saveLastRemoteWorkspace(hostID, workspace string) {
 	remotePrefsMu.Lock()
 	defer remotePrefsMu.Unlock()
-	p := loadRemotePrefs()
+	p := remotePrefsLoadLocked()
 	if p.LastWorkspaceByHost == nil {
 		p.LastWorkspaceByHost = map[string]string{}
 	}
 	p.LastHostID = hostID
 	p.LastWorkspaceByHost[hostID] = workspace
-	saveRemotePrefs(p)
+	_ = remotePrefsSaveLocked(p) // failure logged by the saver
 }
 
 // RemoteLastWorkspace returns the last opened workspace for hostID (bound so
@@ -150,5 +190,5 @@ func (a *App) saveLastRemoteWorkspace(hostID, workspace string) {
 func (a *App) RemoteLastWorkspace(hostID string) string {
 	remotePrefsMu.Lock()
 	defer remotePrefsMu.Unlock()
-	return loadRemotePrefs().LastWorkspaceByHost[hostID]
+	return remotePrefsLoadLocked().LastWorkspaceByHost[hostID]
 }

@@ -211,16 +211,17 @@ func (a *App) closeCredentialProxy() {
 func (a *App) credentialProxySecret() (string, error) {
 	remotePrefsMu.Lock()
 	defer remotePrefsMu.Unlock()
-	p := loadRemotePrefs()
+	p := remotePrefsLoadLocked()
 	if p.CredentialProxySecret == "" {
 		buf := make([]byte, 32)
 		if _, err := rand.Read(buf); err != nil {
 			return "", fmt.Errorf("credential proxy: generate secret: %w", err)
 		}
 		p.CredentialProxySecret = hex.EncodeToString(buf)
-		saveRemotePrefs(p)
-		if loadRemotePrefs().CredentialProxySecret == "" {
-			return "", fmt.Errorf("credential proxy: secret did not persist")
+		// A secret that fails to persist would mint tokens that stop working
+		// after the next restart — surface the write failure, not just log it.
+		if err := remotePrefsSaveLocked(p); err != nil {
+			return "", fmt.Errorf("credential proxy: persist secret: %w", err)
 		}
 	}
 	return p.CredentialProxySecret, nil
