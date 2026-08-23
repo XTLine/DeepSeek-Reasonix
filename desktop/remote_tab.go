@@ -235,7 +235,6 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64) {
 		if ctx.Err() == nil {
 			log.Printf("[remote] remoteTabPump: /events DO-FAILED tab=%s err=%v", tabID, err)
 			a.emitRemoteTabState(tabID, "error", err.Error())
-		} else {
 		}
 		return
 	}
@@ -299,7 +298,6 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64) {
 	if stillCurrent && ctx.Err() == nil {
 		a.emitRemoteTabState(tabID, "reconnecting", "")
 		a.goSafe("remoteTabReattach", func() { a.reattachRemoteTab(tabID) })
-	} else {
 	}
 }
 
@@ -1124,20 +1122,22 @@ func (a *App) RenameRemoteProjectSession(hostID, workspace, name, title string) 
 	setRemoteSessionTitleOverride(hostID, workspace, name, title)
 
 	a.remoteTabMu.Lock()
-	var live *remoteTab
-	for _, tab := range a.remoteTabs {
+	var liveID string
+	var client *http.Client
+	var base string
+	for id, tab := range a.remoteTabs {
 		if tab.ref.HostID == hostID && tab.ref.Workspace == workspace && tab.client != nil {
-			live = tab
+			liveID, client, base = id, tab.client, tab.base
 			break
 		}
 	}
 	a.remoteTabMu.Unlock()
-	if live == nil {
+	if client == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	entries, err := serveSessions(ctx, live.client, live.base)
+	entries, err := serveSessions(ctx, client, base)
 	if err != nil {
 		return nil // the override is persisted; the tab syncs on its next listing
 	}
@@ -1153,14 +1153,20 @@ func (a *App) RenameRemoteProjectSession(hostID, workspace, name, title string) 
 			next = remoteWorkspaceName(workspace)
 		}
 		a.remoteTabMu.Lock()
+		live := a.remoteTabs[liveID]
+		if live == nil {
+			a.remoteTabMu.Unlock()
+			return nil
+		}
 		changed := live.topicTitle != next
+		var meta TabMeta
 		if changed {
 			live.topicTitle = next
+			meta = remoteTabMeta(live, live.hostLabel, a.remoteActiveTabID == liveID)
 		}
-		active := a.remoteActiveTabID == live.id
 		a.remoteTabMu.Unlock()
 		if changed {
-			a.emitRemoteEvent("remote-tab:opened", remoteTabMeta(live, live.hostLabel, active))
+			a.emitRemoteEvent("remote-tab:opened", meta)
 			a.saveTabsFromRemote()
 		}
 		return nil
