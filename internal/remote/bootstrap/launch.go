@@ -160,14 +160,18 @@ func LocateCommand(uploadedBin string) string {
 
 // SupportsSessionEventsCommand probes a RUNNING serve process's binary for
 // the --session-events capability, printing "yes" or "no". The executable is
-// resolved via /proc/<pid>/exe (Linux) with a ps fallback (macOS). tryReuse
-// and stopOutdatedServe use it to replace a live serve that predates
+// resolved via /proc/<pid>/exe (Linux) with a ps fallback (macOS). The help
+// output is captured ONCE and grepped per marker — the previous shape ran
+// `serve --help` three separate times per probe. tryReuse and the
+// retire/reuse decision use it to replace a live serve that predates
 // multi-session switching.
 func SupportsSessionEventsCommand(pid int) string {
 	return fmt.Sprintf(
 		"BIN=$(readlink /proc/%d/exe 2>/dev/null); "+
 			"if [ -z \"$BIN\" ]; then BIN=$(ps -p %d -o comm= 2>/dev/null | tr -d ' '); fi; "+
-			"if [ -n \"$BIN\" ] && [ -x \"$BIN\" ] && \"$BIN\" serve --help 2>&1 | grep -q -- %s && \"$BIN\" serve --help 2>&1 | grep -q -- %s && \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo yes; else echo no; fi",
+			"if [ -n \"$BIN\" ] && [ -x \"$BIN\" ]; then H=$(\"$BIN\" serve --help 2>&1); "+
+			"if echo \"$H\" | grep -q -- %s && echo \"$H\" | grep -q -- %s && echo \"$H\" | grep -q -- %s; then echo yes; else echo no; fi; "+
+			"else echo no; fi",
 		pid, pid, shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(serveCapsToken),
 	)
 }

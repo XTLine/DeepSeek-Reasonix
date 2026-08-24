@@ -131,12 +131,18 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 	// events) is stopped and replaced, not reused: the desktop depends on
 	// session-tagged frames and background sessions across switches, and a
 	// plain relaunch would orphan the old process (still holding leases).
-	stopOutdatedServe(ctx, conn, fs, paths, workspace)
+	// The retire decision and the reuse decision consume ONE probe round:
+	// re-running the liveness and capability execs per decision doubled the
+	// reuse path's SSH traffic on every cold start.
+	recorded, token, alive, capable := probeRecordedServe(ctx, conn, fs, paths, workspace, requireLaunchArgs...)
+	if alive && !capable {
+		_, _ = conn.Exec(ctx, StopCommand(recorded.PID, paths))
+	}
 
-	// 1. Reuse a live process if the recorded pid is still running.
-	if st, tok, ok := tryReuse(ctx, conn, fs, paths, workspace, requireLaunchArgs...); ok {
-		opts.progress("reuse", st.Addr)
-		return Result{State: st, Token: tok, Reused: true, CredentialConfigChanged: credentialChanged}, nil
+	// 1. Reuse a live, capable process when the recorded pid still runs.
+	if alive && capable && token != "" {
+		opts.progress("reuse", recorded.Addr)
+		return Result{State: recorded, Token: token, Reused: true, CredentialConfigChanged: credentialChanged}, nil
 	}
 
 	// 2. Detect remote platform.
@@ -171,14 +177,14 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 	}
 
 	// 5. Generate token, write it 0600, and launch detached serve.
-	token, err := generateToken()
+	freshToken, err := generateToken()
 	if err != nil {
 		return Result{}, err
 	}
 	if err := fs.MkdirAll(ctx, paths.Dir); err != nil {
 		return Result{}, err
 	}
-	if err := fs.WriteFileAtomic(ctx, paths.TokenFile, []byte(token+"\n"), 0o600); err != nil {
+	if err := fs.WriteFileAtomic(ctx, paths.TokenFile, []byte(freshToken+"\n"), 0o600); err != nil {
 		return Result{}, fmt.Errorf("bootstrap: write token: %w", err)
 	}
 	opts.progress("launch", "")
@@ -224,7 +230,7 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("bootstrap: write state: %w", err)
 	}
 	opts.progress("ready", addr)
-	return Result{State: st, Token: token}, nil
+	return Result{State: st, Token: freshToken}, nil
 }
 
 // Status reads the recorded state and reports whether the process is alive.
@@ -306,6 +312,33 @@ func Logs(ctx context.Context, conn Conn, workspace string, n int, w io.Writer) 
 	return err
 }
 
+// probeRecordedServe runs the reuse-path probes exactly once: the recorded
+// state, its token, pid liveness (including required launch args), and the
+// --session-events capability. EnsureServe's retire decision and reuse
+// decision both consume this single round — the per-consumer probes used to
+// duplicate every exec.
+func probeRecordedServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths StatePaths, workspace string, requireArgs ...string) (st ServeState, token string, alive, capable bool) {
+	st, err := readState(ctx, fs, paths.StateJSON)
+	if err != nil || st.PID <= 0 || !validServeAddr(st.Addr) {
+		return ServeState{}, "", false, false
+	}
+	if workspace != "" && st.Workspace != workspace {
+		return ServeState{}, "", false, false
+	}
+	if !pidIsServe(ctx, conn, st.PID, paths, requireArgs...) {
+		return ServeState{}, "", false, false
+	}
+	res, err := conn.Exec(ctx, SupportsSessionEventsCommand(st.PID))
+	capable = err == nil && strings.TrimSpace(string(res.Stdout)) == "yes"
+	// The state record is informational; the workspace-derived path is the
+	// authority, so a tampered record cannot make us read an arbitrary file.
+	tok, err := readToken(ctx, fs, paths.TokenFile)
+	if err != nil {
+		tok = ""
+	}
+	return st, tok, true, capable
+}
+
 func tryReuse(ctx context.Context, conn Conn, fs *sftpfs.FS, paths StatePaths, workspace string, requireArgs ...string) (ServeState, string, bool) {
 	st, err := readState(ctx, fs, paths.StateJSON)
 	if err != nil || st.PID <= 0 || st.Addr == "" {
@@ -348,22 +381,8 @@ func stopMismatchedServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths St
 	}
 }
 
-// stopOutdatedServe TERMs a live serve whose executable lacks the
-// --session-events capability. tryReuse rejects the same condition, so
-// without this stop the old process would keep running (holding the
-// workspace's state files and session leases) beside the replacement.
-func stopOutdatedServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths StatePaths, workspace string) {
-	st, err := readState(ctx, fs, paths.StateJSON)
-	if err != nil || st.PID <= 0 || !validServeAddr(st.Addr) || st.Workspace != workspace {
-		return
-	}
-	if !pidIsServe(ctx, conn, st.PID, paths) {
-		return
-	}
-	if res, err := conn.Exec(ctx, SupportsSessionEventsCommand(st.PID)); err != nil || strings.TrimSpace(string(res.Stdout)) != "yes" {
-		_, _ = conn.Exec(ctx, StopCommand(st.PID, paths))
-	}
-}
+// stopOutdatedServe's contract moved into probeRecordedServe + EnsureServe:
+// a live-but-incapable serve is stopped off the single shared probe round.
 
 // pidIsServe reports whether pid is running AND is a reasonix serve process,
 // so PID reuse cannot make an unrelated process look like a live serve.
