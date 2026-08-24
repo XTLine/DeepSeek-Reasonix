@@ -181,6 +181,10 @@ const rawInitialBytes = [...initialJS, ...initialCSS, ...appShellCSS]
 // KiB raw; keep 0.1 KiB of build-SHA headroom.
 // The remote-fix pass (cold-start group click, quick-action remote routing,
 // switch busy feedback) measures 2382.0 KiB raw; ratchet with 0.2 KiB headroom.
-const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_382.2 : 2_382.2;
+// Optimistic remote-session listings (persisted per-group cache seeding, busy
+// serve badge, revive skeleton surface) add a bounded ~0.3 KiB raw to the
+// initial path: measured 2382.3 KiB. Ratchet to 2382.5 with the same 0.2 KiB
+// headroom; the gzip gates still pass unchanged at 437.3 / 437.5.
+const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_382.5 : 2_382.5;
 assertBudget("initial raw JavaScript and CSS", rawInitialBytes, rawInitialBudgetKiB * 1024);
 assertBudget("largest initial JavaScript chunk raw", largestInitialJSRaw, 1_000 * 1024);

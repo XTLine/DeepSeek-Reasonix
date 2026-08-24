@@ -39601,6 +39601,26 @@ body > .mermaid-diagram--fullscreen {
 .remote-surface__spinner {
   animation: remote-surface-spin 1s linear infinite;
 }
+.remote-surface__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px 24px;
+  width: 100%;
+}
+.remote-surface__skeleton-bar {
+  display: block;
+  height: 14px;
+  width: 68%;
+  border-radius: 6px;
+  background: var(--fg-faint);
+  opacity: 0.16;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.remote-surface__skeleton-bar--short {
+  width: 44%;
+  align-self: flex-end;
+}
 @keyframes remote-surface-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }

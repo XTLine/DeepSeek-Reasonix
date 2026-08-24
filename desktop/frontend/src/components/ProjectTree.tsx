@@ -69,7 +69,11 @@ function projectNodeKey(node: ProjectNode, depth: number): string {
 // The group dot reports the workspace's OWN serve: green only when that
 // serve is actually ready, amber while it boots/installs, red on error, grey
 // when it has never been woken. Host connectivity stays on the hosts surface.
-function remoteServeBadgeState(view?: RemoteServerView): string {
+// While an explicit listing round is in flight the dot stays amber even if
+// the serve already reported ready: the dot and the spinner must tell one
+// story — green means "the group's data is in", not just "the serve answered".
+function remoteServeBadgeState(view: RemoteServerView | undefined, busy: boolean): string {
+  if (busy) return "serve-busy";
   switch (view?.state) {
     case "ready":
       return "serve-ready";
@@ -92,6 +96,31 @@ type CollapseSnapshot = {
 
 const READ_ACTIVITY_KEY = "projectTree:readActivity";
 const READ_ACTIVITY_BASELINE_KEY = "projectTree:readActivityBaselineAt";
+
+// Optimistic remote session listings: the last rows a group rendered are
+// persisted per group so the second cold start onward shows them instantly
+// while the fresh listing is in flight. Best effort — quota or private mode
+// just falls back to the empty-until-fetched behavior.
+const REMOTE_SESSIONS_CACHE_PREFIX = "projectTree:remoteSessions:";
+
+function cacheRemoteSessions(groupKey: string, rows: RemoteSessionView[]) {
+  try {
+    localStorage.setItem(REMOTE_SESSIONS_CACHE_PREFIX + groupKey, JSON.stringify({ at: Date.now(), rows }));
+  } catch {
+    // Best effort only.
+  }
+}
+
+function loadCachedRemoteSessions(groupKey: string): RemoteSessionView[] {
+  try {
+    const raw = localStorage.getItem(REMOTE_SESSIONS_CACHE_PREFIX + groupKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as { rows?: RemoteSessionView[] };
+    return Array.isArray(parsed.rows) ? parsed.rows : [];
+  } catch {
+    return [];
+  }
+}
 
 function loadReadActivity(): ProjectTreeReadActivity {
   try {
@@ -547,6 +576,7 @@ export function ProjectTree({
     setRemoteGroupError((current) => ({ ...current, [groupKey]: "" }));
     app.EnsureRemoteProjectSessions(hostId, workspace)
       .then((rows) => {
+        cacheRemoteSessions(groupKey, rows);
         setRemoteSessions((current) => ({ ...current, [groupKey]: rows }));
       })
       .catch((e) => {
@@ -602,6 +632,22 @@ export function ProjectTree({
         .catch(() => {});
     }
   }, [remoteGroupKeys]);
+  // Seed each known group with its cached last listing once, before any
+  // fetch lands: expanded groups render optimistic rows immediately and the
+  // landing fetches overwrite them per group. Already-landed rows win.
+  const remoteSessionsSeededRef = useRef(false);
+  useEffect(() => {
+    if (remoteSessionsSeededRef.current) return;
+    remoteSessionsSeededRef.current = true;
+    const seeded: Record<string, RemoteSessionView[]> = {};
+    for (const groupKey of remoteGroupKeys) {
+      const rows = loadCachedRemoteSessions(groupKey);
+      if (rows.length) seeded[groupKey] = rows;
+    }
+    if (Object.keys(seeded).length) {
+      setRemoteSessions((current) => ({ ...seeded, ...current }));
+    }
+  }, [remoteGroupKeys]);
   // Layer-2 on-demand listing: a group's sessions are fetched only while the
   // group is expanded (or the tree search is active) and re-pulled on the
   // refresh signals above — never speculatively for every pinned group. The
@@ -627,6 +673,7 @@ export function ProjectTree({
       // silently empty even with the serve running.
       void app.RemoteProjectSessions(hostId, workspace)
         .then((rows) => {
+          cacheRemoteSessions(groupKey, rows);
           setRemoteSessions((current) => ({ ...current, [groupKey]: rows }));
         })
         .catch(() => {});
@@ -2192,7 +2239,7 @@ export function ProjectTree({
             <span className={`project-tree__folder-label${!hasChildren ? " project-tree__folder-label--empty" : ""}`}>
               {projectLabel}
               {node.isolatedWorktree && <WorktreeBadge size={11} />}
-              {node.remote ? <span className={`project-tree__remote-badge project-tree__remote-badge--${remoteServeBadgeState(remoteServers[node.remote.hostId]?.[node.remote.workspace])}`} aria-hidden="true" /> : null}
+              {node.remote ? <span className={`project-tree__remote-badge project-tree__remote-badge--${remoteServeBadgeState(remoteServers[node.remote.hostId]?.[node.remote.workspace], remoteGroupBusy[`${node.remote.hostId}\u0000${node.remote.workspace}`])}`} aria-hidden="true" /> : null}
             </span>
             <ProjectTreeFolderActivity folder={node} />
           </button>

@@ -615,6 +615,14 @@ func (a *App) bootstrapRemoteTab(tabID, hostID, workspace string) {
 	// Persist after attach so revived shells remember the session they landed
 	// in (path/name), not just the disconnected shell identity.
 	a.saveTabsFromRemote()
+	// Warm the snapshot cache with the history transfer while the frontend is
+	// still reacting to the ready event: the first explicit hydrate then
+	// revalidates against the ETag (304) instead of paying the full transfer
+	// after the ready → hydrate round trip. Best effort; failures fall back
+	// to the normal hydrate fetch.
+	a.goSafe("remoteTabWarm", func() {
+		_, _ = a.RemoteTabSnapshot(tabID, RemoteTabSnapshotOptions{Members: []string{"/history", "/status"}})
+	})
 	a.emitRemoteTabState(tabID, "ready", "")
 }
 

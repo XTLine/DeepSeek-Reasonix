@@ -1070,16 +1070,32 @@ func (a *App) EnsureRemoteProjectSessions(hostID, workspace string) ([]RemoteSes
 // remoteProjectSessions maps the serve /sessions listing (plus live running
 // state and any pending blank) onto the frontend view rows.
 func (a *App) remoteProjectSessions(ctx context.Context, client *http.Client, base, hostID, workspace string) ([]RemoteSessionView, error) {
-	entries, err := serveSessions(ctx, client, base)
+	// The listing and the runtime status are independent reads over the same
+	// tunnel; fetching them concurrently halves the listing latency floor on
+	// high-RTT links.
+	var (
+		entries []serveSessionEntry
+		err     error
+		live    bool
+	)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		entries, err = serveSessions(ctx, client, base)
+	}()
+	go func() {
+		defer wg.Done()
+		// Live running state: background sessions report through the pump's
+		// per-session map; the serve's /status covers the current session (and
+		// legacy single-session serves without tagged frames).
+		if info, serr := fetchServeRuntime(ctx, client, base); serr == nil {
+			live = info.Running || info.PendingPrompt
+		}
+	}()
+	wg.Wait()
 	if err != nil {
 		return nil, err
-	}
-	// Live running state: background sessions report through the pump's
-	// per-session map; the serve's /status covers the current session (and
-	// legacy single-session serves without tagged frames).
-	live := false
-	if info, serr := fetchServeRuntime(ctx, client, base); serr == nil {
-		live = info.Running || info.PendingPrompt
 	}
 	running := a.remoteSessionsRunning(hostID, workspace)
 	out := make([]RemoteSessionView, 0, len(entries))
@@ -1267,6 +1283,13 @@ func (a *App) resumeRemoteTabSession(tabID string, resumeGen uint64, name, known
 	// per frame anyway. OpenRemoteProjectTab re-emits opened after this
 	// returns with the adopted identity.
 	a.saveTabsFromRemote()
+	// Warm the switched session's snapshot before the ready flip so the
+	// surface's re-hydrate revalidates with the ETag (304) instead of paying
+	// the full history transfer after ready. Best effort, same contract as
+	// the bootstrap path.
+	a.goSafe("remoteTabWarm", func() {
+		_, _ = a.RemoteTabSnapshot(tabID, RemoteTabSnapshotOptions{Members: []string{"/history", "/status"}})
+	})
 	a.emitRemoteTabState(tabID, "ready", "")
 }
 

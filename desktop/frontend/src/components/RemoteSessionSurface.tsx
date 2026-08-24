@@ -48,6 +48,22 @@ export function RemoteSessionSurface({ tab, session }: { tab: TabMeta; session: 
     );
   }
 
+  if (!session.hydrated) {
+    // Ready but the history snapshot is still landing: skeleton rows instead
+    // of a blank transcript — the same pattern as the local hydrate
+    // placeholders and the tree's cold-start rows.
+    return (
+      <div className="remote-surface remote-surface--ready" role="status" aria-label={t("remoteSurface.connecting")}>
+        <div className="remote-surface__skeleton" aria-hidden="true">
+          <span className="remote-surface__skeleton-bar" />
+          <span className="remote-surface__skeleton-bar remote-surface__skeleton-bar--short" />
+          <span className="remote-surface__skeleton-bar remote-surface__skeleton-bar--short" />
+          <span className="remote-surface__skeleton-bar" />
+        </div>
+      </div>
+    );
+  }
+
   const approval = session.transcript.approval as RemoteApproval | undefined;
   const ask = session.transcript.ask as { id?: string; questions?: RemoteAskQuestion[] } | undefined;
 
