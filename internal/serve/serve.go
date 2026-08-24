@@ -1766,12 +1766,22 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		name := strings.TrimSuffix(e.Name(), ".jsonl")
-		entry := sessionEntry{Name: name, Path: path, Current: filepath.Clean(path) == current, MtimeMilli: agent.SessionContentModTime(path).UnixMilli()}
+		mtime := agent.SessionContentModTime(path)
+		entry := sessionEntry{Name: name, Path: path, Current: filepath.Clean(path) == current, MtimeMilli: mtime.UnixMilli()}
 		// Event-log aware: reading the .jsonl checkpoint directly would freeze
-		// turn counts and titles at the last checkpoint write.
-		if first, turns := agent.SessionPreview(path); turns > 0 {
+		// turn counts and titles at the last checkpoint write. Prefer the
+		// branch-meta sidecar (no transcript decode — the listing otherwise
+		// replays every session file); a missing or stale sidecar falls back
+		// to the full preview decode.
+		first, turns := "", 0
+		if cached, cachedTurns, ok := agent.SessionPreviewCached(path); ok {
+			first, turns = cached, cachedTurns
+		} else {
+			first, turns = agent.SessionPreview(path)
+		}
+		if turns > 0 {
 			entry.Turns = turns
-			entry.Title = s.sessionTitle(r.Context(), e.Name(), first, agent.SessionContentModTime(path).UnixNano())
+			entry.Title = s.sessionTitle(r.Context(), e.Name(), first, mtime.UnixNano())
 		}
 		out = append(out, entry)
 	}
