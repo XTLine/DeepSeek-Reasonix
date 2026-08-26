@@ -333,7 +333,7 @@ func TestAttachRemoteTabServeAdvancesProvisionalAndCommitRevisions(t *testing.T)
 			routing: remoteTabSessionRouting{currentPath: "/sessions/old.jsonl", running: map[string]bool{}},
 		},
 	}}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	entered, err := a.attachRemoteTabServe(ctx, "remote-1", fs.server.URL, "s3cret", "serve-1", RemoteTabOpenOptions{
 		SessionName: "target", SessionPath: targetPath, SessionTitle: "Target",
