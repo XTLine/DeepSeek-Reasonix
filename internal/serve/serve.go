@@ -124,6 +124,10 @@ func (s *Server) ctl() control.SessionAPI {
 // the interleaving bindMu exists to prevent; production never sets it.
 var resumeBindHookForTest func()
 
+// registerDetachedHookForTest pauses after recovery callback installation but
+// before the registry publication. Production never sets it.
+var registerDetachedHookForTest func()
+
 // sessionInUseError renders a lease refusal for HTTP clients using the shared
 // CLI wording, without the session file path.
 func sessionInUseError(err error) string {

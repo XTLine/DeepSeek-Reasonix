@@ -189,10 +189,6 @@ func (s *Server) registerDetached(ctrl control.SessionAPI, keeper *control.Sessi
 	if ctrl == nil {
 		return nil, fmt.Errorf("cannot detach a nil controller")
 	}
-	path := agent.CanonicalSessionPath(ctrl.SessionPath())
-	if path == "" {
-		return nil, fmt.Errorf("cannot detach a session without a path")
-	}
 	if tag == nil {
 		if concrete, ok := ctrl.(*control.Controller); ok {
 			tag = s.tagFor(concrete)
@@ -206,11 +202,20 @@ func (s *Server) registerDetached(ctrl control.SessionAPI, keeper *control.Sessi
 			concrete.SetOnSessionRecovered(s.sessionRecoveryHandler(concrete, keeper))
 		}
 	}
+	if registerDetachedHookForTest != nil {
+		registerDetachedHookForTest()
+	}
 	d := &detachedSession{
-		path: path, ctrl: ctrl, keeper: keeper, tag: tag,
+		ctrl: ctrl, keeper: keeper, tag: tag,
 		force: make(chan struct{}), reattach: make(chan struct{}), done: make(chan struct{}),
 	}
 	s.detachedMu.Lock()
+	path := agent.CanonicalSessionPath(ctrl.SessionPath())
+	if path == "" {
+		s.detachedMu.Unlock()
+		return nil, fmt.Errorf("cannot detach a session without a path")
+	}
+	d.path = path
 	if s.detached == nil {
 		s.detached = map[string]*detachedSession{}
 	}

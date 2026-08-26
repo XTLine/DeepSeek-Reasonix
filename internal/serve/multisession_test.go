@@ -349,6 +349,43 @@ func TestDetachedRecoveryMovesRegistryKey(t *testing.T) {
 	}
 }
 
+func TestRegisterDetachedRevalidatesPathAtPublication(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.jsonl")
+	newPath := filepath.Join(dir, "recovery.jsonl")
+	saveServeTestSession(t, oldPath)
+	saveServeTestSession(t, newPath)
+	ctrl := control.New(control.Options{Runner: blockingRunner{}, SessionDir: dir, SessionPath: oldPath})
+	server := New(ctrl, NewBroadcaster(), config.ServeConfig{})
+	tag := NewSessionTagSink(server.bc)
+	server.RegisterSessionTag(ctrl, tag)
+	started, release := make(chan struct{}), make(chan struct{})
+	registerDetachedHookForTest = func() { close(started); <-release }
+	t.Cleanup(func() { registerDetachedHookForTest = nil })
+	result := make(chan *detachedSession, 1)
+	go func() { detached, _ := server.registerDetached(ctrl, nil, tag); result <- detached }()
+	<-started
+	loaded, err := agent.LoadSession(newPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctrl.Resume(loaded, newPath)
+	ctrl.Submit("keep running")
+	waitRunning(t, ctrl)
+	close(release)
+	detached := <-result
+	canonical := agent.CanonicalSessionPath(newPath)
+	server.detachedMu.Lock()
+	registered := server.detached[canonical]
+	server.detachedMu.Unlock()
+	if detached == nil || detached.path != canonical || registered != detached {
+		t.Fatalf("detached publication path = %q entry=%v, want %q", detached.path, registered == detached, canonical)
+	}
+	ctrl.Cancel()
+	waitNotRunning(t, ctrl)
+	server.CloseBackground()
+}
+
 func TestBusyResumeDetachesAndReattachesRunningController(t *testing.T) {
 	dir := t.TempDir()
 	aPath := filepath.Join(dir, "a.jsonl")

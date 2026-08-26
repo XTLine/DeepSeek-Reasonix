@@ -107,9 +107,6 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if err := stopOutdatedServe(ctx, conn, fs, paths, workspace); err != nil {
-		return Result{}, err
-	}
 
 	// 1. Reuse a live process if the recorded pid is still running.
 	if st, tok, ok := tryReuse(ctx, conn, fs, paths, workspace, requireLaunchArgs...); ok {
@@ -158,6 +155,11 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 	}
 	if err := fs.WriteFileAtomic(ctx, paths.TokenFile, []byte(token+"\n"), 0o600); err != nil {
 		return Result{}, fmt.Errorf("bootstrap: write token: %w", err)
+	}
+	// Retire an incompatible Serve only after its replacement is ready to launch
+	// inside the lock, so preparation failures do not interrupt existing work.
+	if err := retireIncompatibleServe(ctx, conn, fs, paths, workspace, requireLaunchArgs); err != nil {
+		return Result{}, err
 	}
 	opts.progress("launch", "")
 	launchRes, err := conn.Exec(ctx, LaunchCommand(bin, workspace, paths, opts.CredentialProxy))
@@ -215,9 +217,6 @@ func prepareCredentialProxy(ctx context.Context, conn Conn, fs *sftpfs.FS, opts 
 		return nil, false, err
 	}
 	required := []string{"--model " + opts.CredentialProxy.Provider}
-	if err := stopMismatchedServe(ctx, conn, fs, paths, workspace, required); err != nil {
-		return nil, false, err
-	}
 	return required, changed, nil
 }
 
@@ -311,6 +310,9 @@ func tryReuse(ctx context.Context, conn Conn, fs *sftpfs.FS, paths StatePaths, w
 	if !validServeAddr(st.Addr) || !pidIsServe(ctx, conn, st.PID, paths, requireArgs...) {
 		return ServeState{}, "", false
 	}
+	if !supportsRequiredServeCapabilities(ctx, conn, st.PID) {
+		return ServeState{}, "", false
+	}
 	// The state record is informational; the workspace-derived path is the
 	// authority, so a tampered record cannot make us read an arbitrary file.
 	tok, err := readToken(ctx, fs, paths.TokenFile)
@@ -339,6 +341,13 @@ func stopMismatchedServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths St
 	return nil
 }
 
+func retireIncompatibleServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths StatePaths, workspace string, requireArgs []string) error {
+	if err := stopMismatchedServe(ctx, conn, fs, paths, workspace, requireArgs); err != nil {
+		return err
+	}
+	return stopOutdatedServe(ctx, conn, fs, paths, workspace)
+}
+
 // stopOutdatedServe retires a live process whose binary lacks the wire and
 // healing contracts required by the desktop. Leaving it alive would retain the
 // workspace lease and race the replacement process.
@@ -350,14 +359,18 @@ func stopOutdatedServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths Stat
 	if !pidIsServe(ctx, conn, st.PID, paths) {
 		return nil
 	}
-	res, probeErr := conn.Exec(ctx, SupportsRequiredServeCapabilitiesCommand(st.PID))
-	if probeErr == nil && strings.TrimSpace(string(res.Stdout)) == "yes" {
+	if supportsRequiredServeCapabilities(ctx, conn, st.PID) {
 		return nil
 	}
 	if _, stopErr := conn.Exec(ctx, StopCommand(st.PID, paths)); stopErr != nil {
 		return fmt.Errorf("bootstrap: stop outdated serve: %w", stopErr)
 	}
 	return nil
+}
+
+func supportsRequiredServeCapabilities(ctx context.Context, conn Conn, pid int) bool {
+	res, err := conn.Exec(ctx, SupportsRequiredServeCapabilitiesCommand(pid))
+	return err == nil && strings.TrimSpace(string(res.Stdout)) == "yes"
 }
 
 // pidIsServe reports whether pid is running AND is a reasonix serve process,

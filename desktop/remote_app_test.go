@@ -72,13 +72,32 @@ func TestReloadServeProvidersCancelsBusyTurn(t *testing.T) {
 	}}
 	mgr.mu.Unlock()
 
-	if ok := mgr.reloadServeProviders(context.Background(), "box", "ws", srv.URL+"/", "tok"); !ok {
+	if ok := mgr.reloadServeProviders(context.Background(), mgr.hosts["box"], "box", "ws", srv.URL+"/", "tok"); !ok {
 		t.Fatal("reloadServeProviders = false, want true after cancel + retry")
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if !canceled || !jobsCanceled || reloadCalls < 2 {
 		t.Fatalf("canceled=%v jobsCanceled=%v reloadCalls=%d, want turn/jobs cancellation and retry", canceled, jobsCanceled, reloadCalls)
+	}
+}
+
+func TestReloadServeProvidersRejectsReplacedHostGeneration(t *testing.T) {
+	var reloadCalls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /auth/token", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux.HandleFunc("POST /providers/reload", func(w http.ResponseWriter, _ *http.Request) { reloadCalls++; w.WriteHeader(http.StatusNoContent) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mgr := newDesktopRemoteManager(&App{})
+	old := &managedHost{serves: map[string]*serveEntry{"ws": {view: RemoteServerView{LocalURL: srv.URL}, token: "old"}}}
+	mgr.hosts["box"] = old
+	mgr.hosts["box"] = &managedHost{serves: map[string]*serveEntry{"ws": {view: RemoteServerView{LocalURL: srv.URL}, token: "new"}}}
+	if mgr.reloadServeProviders(context.Background(), old, "box", "ws", "", "") {
+		t.Fatal("obsolete host generation reloaded replacement serves")
+	}
+	if reloadCalls != 0 {
+		t.Fatalf("replacement serve received %d reloads from obsolete watchdog", reloadCalls)
 	}
 }
 

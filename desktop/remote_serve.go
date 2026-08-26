@@ -296,7 +296,7 @@ func (m *desktopRemoteManager) healCredentialChannel(ctx context.Context, c desk
 		// base+token is the serve this round just ensured: the registry may
 		// not hold it yet (it is published moments before this call), and an
 		// empty registry must not turn the reload into a silent no-op.
-		if !m.reloadServeProviders(ctx, hostID, workspace, base, token) {
+		if !m.reloadServeProviders(ctx, mh, hostID, workspace, base, token) {
 			return fmt.Errorf("credential proxy: serve providers could not reload")
 		}
 	}
@@ -569,11 +569,11 @@ func probeReverseTunnel(c desktopSSHClient, port int) error {
 // host's other workspaces, which share the same healed config. Returns false
 // when any serve could not reload (busy turn, or a serve too old to know the
 // endpoint): callers keep their heal gate closed so the next ensure retries.
-func (m *desktopRemoteManager) reloadServeProviders(ctx context.Context, hostID, workspace, extraBase, extraToken string) bool {
+func (m *desktopRemoteManager) reloadServeProviders(ctx context.Context, generation *managedHost, hostID, workspace, extraBase, extraToken string) bool {
 	type target struct{ base, token string }
 	m.mu.Lock()
 	mh := m.hosts[hostID]
-	if mh == nil {
+	if mh == nil || mh != generation {
 		m.mu.Unlock()
 		return false
 	}

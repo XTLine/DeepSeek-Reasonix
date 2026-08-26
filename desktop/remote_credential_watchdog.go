@@ -130,6 +130,8 @@ func (m *desktopRemoteManager) healCredentialChannelWatchdog(mh *managedHost, ho
 	if !m.isCurrent(hostID, mh) || mh.client == nil {
 		return
 	}
+	opCtx, opCancel := managedOperationContext(context.Background(), mh)
+	defer opCancel()
 	c := mh.client
 	log.Printf("[remote] credential watchdog: channel broken, re-healing host=%s ws=%s", hostID, workspace)
 	_ = c.Forwards().Remove("cred-proxy:" + hostID)
@@ -138,7 +140,7 @@ func (m *desktopRemoteManager) healCredentialChannelWatchdog(mh *managedHost, ho
 		log.Printf("[remote] credential watchdog: setup FAILED host=%s err=%v", hostID, err)
 		return
 	}
-	healCtx, healCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	healCtx, healCancel := context.WithTimeout(opCtx, 30*time.Second)
 	_, err = bootstrap.HealCredentialProvider(healCtx, c, opts)
 	healCancel()
 	if err != nil {
@@ -154,8 +156,11 @@ func (m *desktopRemoteManager) healCredentialChannelWatchdog(mh *managedHost, ho
 		log.Printf("[remote] credential watchdog: probe still FAILED host=%s port=%d err=%v", hostID, port, err)
 		return
 	}
-	reloadCtx, reloadCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	reloadOK := m.reloadServeProviders(reloadCtx, hostID, workspace, "", "")
+	if !m.isCurrent(hostID, mh) {
+		return
+	}
+	reloadCtx, reloadCancel := context.WithTimeout(opCtx, 60*time.Second)
+	reloadOK := m.reloadServeProviders(reloadCtx, mh, hostID, workspace, "", "")
 	reloadCancel()
 	if !reloadOK {
 		log.Printf("[remote] credential watchdog: provider reload FAILED host=%s", hostID)
