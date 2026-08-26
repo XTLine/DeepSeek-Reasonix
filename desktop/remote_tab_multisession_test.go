@@ -278,7 +278,7 @@ func TestKnownBackgroundPathAdoptsFrameForegroundMarker(t *testing.T) {
 			},
 		},
 	}}
-	a.adoptRemoteTabFrameCurrent("remote-1", 7, resumedPath)
+	a.adoptRemoteTabFrameCurrent("remote-1", 7, resumedPath, false)
 	if !a.routeRemoteTabFrameReconciled("remote-1", 7, resumedPath, "text") {
 		t.Fatal("publication-time foreground marker did not reclassify a cached background path")
 	}
@@ -305,7 +305,7 @@ func TestForegroundMarkerPublishesRehydrateBeforeForwardedFrame(t *testing.T) {
 			routing: remoteTabSessionRouting{currentPath: currentPath, running: map[string]bool{}},
 		},
 	}}
-	if !a.routeRemoteTabWireFrame("remote-1", 7, resumedPath, "text", true) {
+	if !a.routeRemoteTabWireFrame("remote-1", 7, resumedPath, "text", true, false) {
 		t.Fatal("new foreground frame was not routed")
 	}
 	a.emitRemoteEvent("remote-tab:remote-1:event", map[string]any{"kind": "text", "sessionPath": resumedPath})
@@ -572,6 +572,54 @@ func TestRemoteProjectSessionsAdoptsAuthoritativeCurrentRoute(t *testing.T) {
 	}
 	if got := log.count(readyPrefix); got != 1 {
 		t.Fatalf("listing adoption emitted %d ready barriers, want 1", got)
+	}
+}
+
+func TestExternalSessionResetPreservesBlankIdentity(t *testing.T) {
+	const oldPath = "/sessions/old.jsonl"
+	const freshPath = "/sessions/fresh.jsonl"
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "old", Path: oldPath}})
+	seedBridgeTestHost(t, "box")
+	client, _ := remoteSessionTestClient(t, fs)
+	log := &eventLog{}
+	tab := &remoteTab{
+		id: "remote-1", ref: RemoteTabRef{HostID: "box", Workspace: "~/app"}, state: "ready",
+		client: client, base: fs.server.URL, gen: 7,
+		topicTitle: "Old title",
+		session:    remoteTabSessionState{name: "old", path: oldPath},
+		routing:    remoteTabSessionRouting{currentPath: oldPath, running: map[string]bool{}},
+		pendingEvents: map[string]json.RawMessage{
+			"approval_request:old": json.RawMessage(`{"kind":"approval_request"}`),
+		},
+		runtime: remoteTabRuntimeState{running: true, pendingPrompt: true, cancellable: true},
+	}
+	a := &App{remoteEventHook: log.add, remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	if !a.routeRemoteTabWireFrame(tab.id, tab.gen, freshPath, "session_changed", true, true) {
+		t.Fatal("fresh external session barrier was not routed")
+	}
+	a.remoteTabMu.Lock()
+	name, path, route, title := tab.session.name, tab.session.path, tab.routing.currentPath, tab.topicTitle
+	reset, newSession := tab.session.reset, tab.session.newSession
+	pending := len(tab.pendingEvents)
+	running, pendingPrompt := tab.runtime.running, tab.runtime.pendingPrompt
+	a.remoteTabMu.Unlock()
+	if name != "" || path != freshPath || route != freshPath || title != a.localizedDefaultTopicTitle() || !reset || !newSession {
+		t.Fatalf("external reset identity = %q/%q/%q/%q reset=%v new=%v", name, path, route, title, reset, newSession)
+	}
+	if pending != 0 || running || pendingPrompt {
+		t.Fatalf("external reset retained old runtime: pending=%d running=%v prompt=%v", pending, running, pendingPrompt)
+	}
+	if got := log.count("remote-tab:" + tab.id + ":state"); got != 1 {
+		t.Fatalf("external reset emitted %d ready barriers, want 1", got)
+	}
+	sessions, err := a.RemoteProjectSessions("box", "~/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 || !slices.ContainsFunc(sessions, func(session RemoteSessionView) bool {
+		return session.Name == "" && session.Path == freshPath && session.Current
+	}) {
+		t.Fatalf("external blank session missing from listing: %+v", sessions)
 	}
 }
 

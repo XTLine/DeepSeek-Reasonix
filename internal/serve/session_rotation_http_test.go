@@ -4,12 +4,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"reasonix/internal/agent"
 	"reasonix/internal/config"
 	"reasonix/internal/control"
+	"reasonix/internal/event"
 	"reasonix/internal/eventwire"
 )
 
@@ -60,10 +64,60 @@ func TestServeSilentRotationsPublishSessionChanged(t *testing.T) {
 			default:
 				t.Fatalf("%s emitted no routing barrier", endpoint)
 			}
-			if frame.Kind != "session_changed" || !frame.SessionCurrent || frame.SessionPath == "" || frame.SessionPath == oldPath {
+			if frame.Kind != "session_changed" || !frame.SessionCurrent || !frame.SessionReset || frame.SessionPath == "" || frame.SessionPath == oldPath {
 				t.Fatalf("%s routing frame = %+v, old path %q", endpoint, frame, oldPath)
 			}
 		})
+	}
+}
+
+func TestServeResumeBuffersSynchronousEventsUntilRoutePublication(t *testing.T) {
+	dir := t.TempDir()
+	active := filepath.Join(dir, "active.jsonl")
+	target := filepath.Join(dir, "target.jsonl")
+	saveServeTestSession(t, active)
+	saveServeTestSession(t, target)
+
+	bc := NewBroadcaster()
+	tag := NewSessionTagSink(bc)
+	tag.SetPath(active)
+	ctrl := control.New(control.Options{Sink: tag, SessionDir: dir, SessionPath: active})
+	defer ctrl.Close()
+	server := New(ctrl, bc, config.ServeConfig{})
+	server.RegisterSessionTag(ctrl, tag)
+	all, stop := bc.SubscribeAll()
+	defer stop()
+	resumeBindHookForTest = func() {
+		tag.Emit(event.Event{Kind: event.Notice, Text: "synchronous resume warning"})
+	}
+	defer func() { resumeBindHookForTest = nil }()
+
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+	payload := `{"path":` + strconv.Quote(target) + `}`
+	resp, err := http.Post(httpServer.URL+"/resume", "application/json", strings.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("resume status = %d, want 204", resp.StatusCode)
+	}
+
+	canonicalTarget := agent.CanonicalSessionPath(target)
+	for _, wantKind := range []string{"notice", "session_changed"} {
+		select {
+		case data := <-all:
+			var frame eventwire.Event
+			if err := json.Unmarshal(data, &frame); err != nil {
+				t.Fatal(err)
+			}
+			if frame.Kind != wantKind || frame.SessionPath != canonicalTarget || !frame.SessionCurrent {
+				t.Fatalf("resumed %s frame = %+v, want target-tagged foreground frame", wantKind, frame)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("resume emitted no %s frame", wantKind)
+		}
 	}
 }
 

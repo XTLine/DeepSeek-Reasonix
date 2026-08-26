@@ -245,6 +245,64 @@ func TestRemoteTabServeDownCanRetry(t *testing.T) {
 	waitForTabState(t, a, meta.ID, "ready")
 }
 
+func TestRemoteTabServeDownNewSessionClearsPendingBeforeDelayedMarker(t *testing.T) {
+	const oldPath = "/sessions/old.jsonl"
+	const freshPath = "/sessions/fresh.jsonl"
+	feed := make(chan string, 1)
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[meta.ID]
+	if tab.cancel != nil {
+		tab.cancel()
+	}
+	tab.gen++
+	tab.cancel, tab.client, tab.base, tab.token = nil, nil, "", ""
+	tab.state = "serve_down"
+	tab.session = remoteTabSessionState{name: "old", path: oldPath}
+	tab.routing.currentPath = oldPath
+	tab.pendingEvents = map[string]json.RawMessage{
+		"approval_request:old": json.RawMessage(`{"kind":"approval_request","approval":{"id":"old"}}`),
+	}
+	tab.runtime = remoteTabRuntimeState{pendingPrompt: true, cancellable: true}
+	a.remoteTabMu.Unlock()
+	fs.mu.Lock()
+	fs.newSessionPath = freshPath
+	fs.eventFeed = feed
+	fs.mu.Unlock()
+
+	if _, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{NewSession: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitForTabState(t, a, meta.ID, "ready")
+	a.remoteTabMu.Lock()
+	path, pending, prompt := tab.routing.currentPath, len(tab.pendingEvents), tab.runtime.pendingPrompt
+	a.remoteTabMu.Unlock()
+	if path != freshPath || pending != 0 || prompt {
+		t.Fatalf("fresh attach route/pending/prompt = %q/%d/%v, want %q/0/false", path, pending, prompt, freshPath)
+	}
+
+	eventPrefix := "remote-tab:" + meta.ID + ":event"
+	before := log.count(eventPrefix)
+	feed <- `{"kind":"session_changed","sessionPath":"/sessions/fresh.jsonl","sessionCurrent":true,"sessionReset":true}`
+	waitForRemoteEventCount(t, log, eventPrefix, before+1)
+	a.remoteTabMu.Lock()
+	pending, prompt = len(tab.pendingEvents), tab.runtime.pendingPrompt
+	a.remoteTabMu.Unlock()
+	if pending != 0 || prompt {
+		t.Fatalf("delayed reset marker restored stale prompt: pending=%d prompt=%v", pending, prompt)
+	}
+}
+
 func TestRemoteTabFocusOnlyAttachPreservesCurrentServeSession(t *testing.T) {
 	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "current", Path: "/current.jsonl", Title: "Current", Current: true}})
 	kernel := &fakeRemoteKernel{statuses: []RemoteConnectionStatusView{{HostID: "box", State: "connected"}}, ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret"}
@@ -433,10 +491,10 @@ func TestRemoteResumeRejectedRestoresForegroundRoute(t *testing.T) {
 	}
 }
 
-func TestRemoteResumeRoutesTargetFramesBeforePostReturns(t *testing.T) {
+func TestRemoteResumeBuffersTargetFramesUntilPostCommit(t *testing.T) {
 	const oldPath = "/old.jsonl"
 	const targetPath = "/target.jsonl"
-	feed := make(chan string, 1)
+	feed := make(chan string, 4)
 	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
 		{Name: "old", Path: oldPath, Current: true},
 		{Name: "target", Path: targetPath, Running: true},
@@ -464,6 +522,9 @@ func TestRemoteResumeRoutesTargetFramesBeforePostReturns(t *testing.T) {
 	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
 	cleanupRemoteTabPumps(t, a)
 	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{})
+	eventPrefix := "remote-tab:" + meta.ID + ":event"
+	readyPrefix := "remote-tab:" + meta.ID + ":state"
+	eventsBefore, readyBefore := log.count(eventPrefix), log.count(readyPrefix)
 	done := make(chan struct{})
 	go func() {
 		a.resumeRemoteTabSessionPath(meta.ID, "target", targetPath, "Target")
@@ -474,24 +535,62 @@ func TestRemoteResumeRoutesTargetFramesBeforePostReturns(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("resume request did not start")
 	}
-	feed <- `{"kind":"notice","text":"reattached output","sessionPath":"/target.jsonl"}`
+	feed <- `{"kind":"approval_request","approval":{"id":"target-approval"},"sessionPath":"/target.jsonl","sessionCurrent":true}`
+	feed <- `{"kind":"text","text":"first retained delta","sessionPath":"/target.jsonl","sessionCurrent":true}`
+	feed <- `{"kind":"notice","text":"second retained notice","sessionPath":"/target.jsonl","sessionCurrent":true}`
 	deadline := time.Now().Add(time.Second)
-	for log.count("remote-tab:"+meta.ID+":event") < 2 {
+	for {
+		a.remoteTabMu.Lock()
+		pending := len(a.remoteTabs[meta.ID].pendingEvents)
+		buffered := len(a.remoteTabs[meta.ID].routing.rehydratingFrames)
+		a.remoteTabMu.Unlock()
+		if pending == 1 && buffered == 2 {
+			break
+		}
 		select {
 		case <-done:
 			t.Fatal("resume returned before the test released its response")
 		default:
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("target frame was dropped while /resume was pending: %v", log.recorded())
+			t.Fatalf("target frames were not retained while /resume was pending: pending=%d buffered=%d log=%v", pending, buffered, log.recorded())
 		}
 		time.Sleep(time.Millisecond)
+	}
+	if got := log.count(eventPrefix); got != eventsBefore {
+		t.Fatalf("provisional target frame reached the old transcript: events %d -> %d, log=%v", eventsBefore, got, log.recorded())
 	}
 	close(release)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("resume did not finish")
+	}
+	if got := log.count(readyPrefix); got != readyBefore+1 {
+		t.Fatalf("committed resume emitted %d ready barriers, want %d: %v", got, readyBefore+1, log.recorded())
+	}
+	events := log.recorded()
+	readyIndex, firstIndex, secondIndex := -1, -1, -1
+	for i, got := range events {
+		if strings.HasPrefix(got, readyPrefix+" ") {
+			readyIndex = i
+		}
+		if strings.Contains(got, `"text":"first retained delta"`) {
+			firstIndex = i
+		}
+		if strings.Contains(got, `"text":"second retained notice"`) {
+			secondIndex = i
+		}
+	}
+	if readyIndex < 0 || firstIndex <= readyIndex || secondIndex <= firstIndex {
+		t.Fatalf("buffered target frames were not replayed in order after ready: %v", events)
+	}
+	a.remoteTabMu.Lock()
+	pending := len(a.remoteTabs[meta.ID].pendingEvents)
+	rehydrating := a.remoteTabs[meta.ID].routing.rehydratingPath
+	a.remoteTabMu.Unlock()
+	if pending != 1 || rehydrating != "" {
+		t.Fatalf("committed target pending/rehydrating = %d/%q, want 1/empty", pending, rehydrating)
 	}
 }
 

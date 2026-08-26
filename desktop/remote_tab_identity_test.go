@@ -66,7 +66,8 @@ func TestRemoteTabAdoptsMaterializedSessionIdentity(t *testing.T) {
 		ensureToken: "s3cret",
 	}
 	seedBridgeTestHost(t, "box")
-	a := &App{remoteRuntime: kernel}
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
 	cleanupRemoteTabPumps(t, a)
 
 	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
@@ -81,6 +82,7 @@ func TestRemoteTabAdoptsMaterializedSessionIdentity(t *testing.T) {
 	})
 	fs.mu.Unlock()
 
+	updatesBefore := log.count("remote-tab:updated")
 	a.refreshRemoteTabTitle(meta.ID)
 
 	wantTopic := "box\x00~/app\x00fresh-123"
@@ -96,6 +98,9 @@ func TestRemoteTabAdoptsMaterializedSessionIdentity(t *testing.T) {
 	}
 	if tab.session.reset {
 		t.Fatal("sessionReset must clear once the materialized session is adopted")
+	}
+	if got := log.count("remote-tab:updated"); got != updatesBefore+1 {
+		t.Fatalf("materialized identity emitted %d updates after refresh, want 1", got-updatesBefore)
 	}
 	cleanupRemoteTabPumps(t, a)
 }

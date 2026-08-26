@@ -83,11 +83,13 @@ type Server struct {
 	// window, another CLI). Wired by the serve CLI command with the keeper that
 	// already holds the startup session's lease; nil (tests, embedded use)
 	// disables lease gating.
-	leases     *control.SessionLeaseKeeper
-	detachedMu sync.Mutex
-	detached   map[string]*detachedSession
-	tagsMu     sync.Mutex
-	tags       map[*control.Controller]*sessionTagSink
+	leases        *control.SessionLeaseKeeper
+	leaseOwnersMu sync.Mutex
+	leaseOwners   map[*control.Controller]*control.SessionLeaseKeeper
+	detachedMu    sync.Mutex
+	detached      map[string]*detachedSession
+	tagsMu        sync.Mutex
+	tags          map[*control.Controller]*sessionTagSink
 }
 
 // SetControllerBuildOptions records the process-local options used to build
@@ -106,12 +108,13 @@ func New(ctrl control.SessionAPI, bc *Broadcaster, serveCfg config.ServeConfig) 
 		bc = NewBroadcaster()
 	}
 	s := &Server{
-		ctrl:     ctrl,
-		bc:       bc,
-		titles:   newTitleCache(ctrl.SessionDir()),
-		auth:     newAuthGate(serveCfg),
-		detached: map[string]*detachedSession{},
-		tags:     map[*control.Controller]*sessionTagSink{},
+		ctrl:        ctrl,
+		bc:          bc,
+		titles:      newTitleCache(ctrl.SessionDir()),
+		auth:        newAuthGate(serveCfg),
+		detached:    map[string]*detachedSession{},
+		tags:        map[*control.Controller]*sessionTagSink{},
+		leaseOwners: map[*control.Controller]*control.SessionLeaseKeeper{},
 	}
 	bc.SetCurrentSession(agent.CanonicalSessionPath(ctrl.SessionPath()))
 	if cfg, err := config.Load(); err == nil {
@@ -1153,21 +1156,11 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "load session: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if hook := resumeBindHookForTest; hook != nil {
-		hook()
-	}
-	cur.Resume(loaded, realPath)
-	if ctrl, ok := cur.(*control.Controller); ok {
-		if s.leases != nil {
-			if err := s.leases.BindControllerAuthority(ctrl); err != nil {
-				http.Error(w, "session authority: unable to bind resumed session", http.StatusInternalServerError)
-				return
-			}
-		}
-		s.setControllerPath(ctrl, realPath)
+	if !s.commitLoadedResume(w, cur, loaded, realPath) {
+		return
 	}
 	s.bc.ResetSessionPath(realPath)
-	s.announceSessionChanged(realPath)
+	s.announceSessionChanged(realPath, false)
 	w.WriteHeader(http.StatusNoContent)
 	s.replayPendingPromptsBroadcast()
 }

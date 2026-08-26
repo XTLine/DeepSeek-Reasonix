@@ -50,8 +50,11 @@ type Event struct {
 	// SessionCurrent is set by Serve at publication time for frames belonging
 	// to its foreground controller. It lets all-session clients adopt an
 	// externally selected/recovered foreground without polling on every token.
-	SessionCurrent bool              `json:"sessionCurrent,omitempty"`
-	Workspace      *WorkspaceChanged `json:"workspace,omitempty"`
+	SessionCurrent bool `json:"sessionCurrent,omitempty"`
+	// SessionReset distinguishes a fresh /new or /clear target from a resumed
+	// durable session when a different client rotates the foreground.
+	SessionReset bool              `json:"sessionReset,omitempty"`
+	Workspace    *WorkspaceChanged `json:"workspace,omitempty"`
 	// Phase is set on turn_phase events: working | checking | verifying | reviewing.
 	Phase string `json:"phase,omitempty"`
 	// Completion is set on completion_summary events (content-free quality summary).
@@ -106,7 +109,7 @@ type StreamAttempt struct {
 
 // ToWire converts a typed runtime event into the shared frontend JSON contract.
 func ToWire(e event.Event) Event {
-	w := Event{Kind: kindNames[e.Kind], TurnID: e.TurnID, Sequence: e.Sequence, Status: string(e.Status), Text: e.Text, Detail: e.Detail, Reasoning: e.Reasoning, ItemID: e.ItemID, SessionPath: e.SessionPath}
+	w := Event{Kind: kindNames[e.Kind], TurnID: e.TurnID, Sequence: e.Sequence, Status: string(e.Status), Text: e.Text, Detail: e.Detail, Reasoning: e.Reasoning, ItemID: e.ItemID, SessionPath: e.SessionPath, SessionReset: e.SessionReset}
 	if len(e.MemoryCitations) > 0 {
 		w.MemoryCitations = ToWireMemoryCitations(e.MemoryCitations)
 	}

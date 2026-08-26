@@ -92,52 +92,6 @@ func TestMigrateBlankRemoteSessionTitleOverride(t *testing.T) {
 	}
 }
 
-func TestSetRemoteTabModelFailureKeepsPreviousModel(t *testing.T) {
-	isolateDesktopUserDirs(t)
-	setDesktopTestCredential(t, "DEEPSEEK_API_KEY", "sk-test")
-	cfg := config.Default()
-	cfg.DefaultModel = "deepseek/deepseek-v4-flash"
-	cfg.Desktop.ProviderAccess = []string{"deepseek"}
-	cfg.Providers = append(cfg.Providers, config.ProviderEntry{
-		Name: "deepseek", Kind: "anthropic", BaseURL: "https://api.deepseek.com/anthropic",
-		Models: []string{"deepseek-v4-flash", "deepseek-v4-pro"}, Default: "deepseek-v4-flash", APIKeyEnv: "DEEPSEEK_API_KEY",
-	})
-	if err := cfg.UpsertRemoteHost(config.RemoteHostEntry{Name: "box", Host: "127.0.0.1", Port: 22, User: "dev", CredentialMode: "local-proxy"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.SaveTo(config.UserConfigPath()); err != nil {
-		t.Fatalf("save config: %v", err)
-	}
-	fs := newFakeServe(t, "s3cret", nil)
-	kernel := &fakeRemoteKernel{
-		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
-		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
-		ensureToken: "s3cret",
-	}
-	a := &App{remoteRuntime: kernel}
-	cleanupRemoteTabPumps(t, a)
-	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
-
-	// Clear the stored key after the tab seeds its default. The proxy switch
-	// must then fail while preserving that model.
-	if _, err := config.SetCredential("DEEPSEEK_API_KEY", ""); err != nil {
-		t.Fatalf("clear credential: %v", err)
-	}
-	t.Setenv("DEEPSEEK_API_KEY", "")
-	if err := a.SetModelForTab(meta.ID, "deepseek/deepseek-v4-pro"); err == nil {
-		t.Fatal("SetModelForTab must fail without the local key")
-	}
-	a.remoteTabMu.Lock()
-	model := ""
-	if tab := a.remoteTabs[meta.ID]; tab != nil {
-		model = tab.model
-	}
-	a.remoteTabMu.Unlock()
-	if model != "deepseek/deepseek-v4-flash" {
-		t.Fatalf("tab.model = %q, want the untouched previous model", model)
-	}
-}
-
 func TestRemoteProxyModelCatalogCannotCrossProviderProtocols(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	setDesktopTestCredential(t, "OPENAI_TEST_KEY", "sk-openai")

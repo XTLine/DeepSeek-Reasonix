@@ -190,6 +190,7 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 		Addr:      addr,
 		Workspace: workspace,
 		Version:   version,
+		ServeCaps: ServeCapsToken,
 		TokenFile: paths.TokenFile,
 		LogFile:   paths.LogFile,
 		StartedAt: nowUnix(opts.clock()),
@@ -310,7 +311,7 @@ func tryReuse(ctx context.Context, conn Conn, fs *sftpfs.FS, paths StatePaths, w
 	if !validServeAddr(st.Addr) || !pidIsServe(ctx, conn, st.PID, paths, requireArgs...) {
 		return ServeState{}, "", false
 	}
-	if !supportsRequiredServeCapabilities(ctx, conn, st.PID) {
+	if st.ServeCaps != ServeCapsToken && !supportsRequiredServeCapabilities(ctx, conn, st.PID) {
 		return ServeState{}, "", false
 	}
 	// The state record is informational; the workspace-derived path is the
@@ -359,7 +360,7 @@ func stopOutdatedServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths Stat
 	if !pidIsServe(ctx, conn, st.PID, paths) {
 		return nil
 	}
-	if supportsRequiredServeCapabilities(ctx, conn, st.PID) {
+	if st.ServeCaps == ServeCapsToken || supportsRequiredServeCapabilities(ctx, conn, st.PID) {
 		return nil
 	}
 	if _, stopErr := conn.Exec(ctx, StopCommand(st.PID, paths)); stopErr != nil {

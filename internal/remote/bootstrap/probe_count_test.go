@@ -11,8 +11,8 @@ import (
 )
 
 // probeCounts tallies EnsureServe's remote exec traffic by category. The
-// capability probe's command embeds a `ps -p` macOS fallback, so it must be
-// classified before the liveness shape.
+// Capability commands include their own liveness-shaped shell fragments, so
+// classify them before the general process-liveness shape.
 type probeCounts struct {
 	mu         sync.Mutex
 	pidAlive   int // kill -0 / ps -p pid liveness probes

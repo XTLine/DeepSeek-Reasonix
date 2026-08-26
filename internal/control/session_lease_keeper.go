@@ -65,14 +65,31 @@ func (k *SessionLeaseKeeper) Rebind(path string) error {
 // recovery path before releasing the original lease, so a failed handoff keeps
 // the previous session protected.
 func (k *SessionLeaseKeeper) HandleSessionRecovered(info SessionRecoveryInfo) error {
+	_, err := k.handleSessionRecovered(nil, false, info)
+	return err
+}
+
+// HandleSessionRecoveredFor applies a recovery only while this keeper still
+// owns c. Multi-session frontends use the boolean to retry against the
+// controller's newly published keeper when a captured callback races an
+// ownership transfer.
+func (k *SessionLeaseKeeper) HandleSessionRecoveredFor(c *Controller, info SessionRecoveryInfo) (bool, error) {
+	return k.handleSessionRecovered(c, true, info)
+}
+
+func (k *SessionLeaseKeeper) handleSessionRecovered(c *Controller, requireOwner bool, info SessionRecoveryInfo) (bool, error) {
 	recoveryPath := strings.TrimSpace(info.RecoveryPath)
 	if k == nil || recoveryPath == "" {
-		return nil
+		return true, nil
 	}
 	k.mu.Lock()
+	if requireOwner && k.controller != c {
+		k.mu.Unlock()
+		return false, nil
+	}
 	if k.lease != nil && k.lease.Path() == agent.CanonicalSessionPath(recoveryPath) {
 		k.mu.Unlock()
-		return nil
+		return true, nil
 	}
 	lease, err := agent.TryAcquireSessionLease(recoveryPath)
 	if err == nil && k.controller != nil {
@@ -84,13 +101,13 @@ func (k *SessionLeaseKeeper) HandleSessionRecovered(info SessionRecoveryInfo) er
 		}
 		k.mu.Unlock()
 		if errors.Is(err, agent.ErrSessionLeaseHeld) {
-			return fmt.Errorf("bind recovery session: %s; %s",
+			return true, fmt.Errorf("bind recovery session: %s; %s",
 				SessionInUseMessage(err), SessionLeaseCloseHint)
 		}
 		// The detailed error can contain a machine-local path. Keep it in
 		// diagnostics and return path-free text to every frontend.
 		slog.Error("control: bind recovery session lease", "err", err)
-		return fmt.Errorf("bind recovery session: unable to secure recovered transcript")
+		return true, fmt.Errorf("bind recovery session: unable to secure recovered transcript")
 	}
 	old := k.lease
 	k.lease = lease
@@ -109,7 +126,7 @@ func (k *SessionLeaseKeeper) HandleSessionRecovered(info SessionRecoveryInfo) er
 			close(retired)
 		}()
 	}
-	return nil
+	return true, nil
 }
 
 // HandleSessionTransition acquires and binds an intentional path-change target

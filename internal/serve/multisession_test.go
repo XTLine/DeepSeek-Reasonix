@@ -154,6 +154,42 @@ func TestStaleRecoveryCannotOverwritePublishedForegroundRoute(t *testing.T) {
 	}
 }
 
+func TestCapturedRecoveryCallbackFollowsDetachedKeeper(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.jsonl")
+	targetPath := filepath.Join(dir, "target.jsonl")
+	recoveryPath := filepath.Join(dir, "old-recovery.jsonl")
+	old := control.New(control.Options{SessionPath: oldPath})
+	server := New(old, NewBroadcaster(), config.ServeConfig{})
+	leases := control.NewSessionLeaseKeeper()
+	defer leases.Release()
+	if err := leases.Rebind(oldPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.SetSessionLeases(leases); err != nil {
+		t.Fatal(err)
+	}
+	captured := server.sessionRecoveryHandler(old, leases)
+	detached, err := leases.RebindDetaching(targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer detached.Release()
+	replacement := control.New(control.Options{SessionPath: targetPath})
+	if err := leases.BindControllerAuthority(replacement); err != nil {
+		t.Fatal(err)
+	}
+	if err := captured(control.SessionRecoveryInfo{RecoveryPath: recoveryPath}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := detached.HeldPath(), agent.CanonicalSessionPath(recoveryPath); got != want {
+		t.Fatalf("captured recovery moved detached keeper to %q, want %q", got, want)
+	}
+	if got, want := leases.HeldPath(), agent.CanonicalSessionPath(targetPath); got != want {
+		t.Fatalf("captured recovery corrupted foreground keeper: got %q, want %q", got, want)
+	}
+}
+
 func TestResumeActiveSessionTreatsSymlinkAliasAsCurrent(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink alias identity is exercised on POSIX CI")

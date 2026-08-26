@@ -296,6 +296,7 @@ func (a *App) remoteProjectSessions(ctx context.Context, client *http.Client, ba
 		return nil, err
 	}
 	authoritativeCurrent := singleCurrentServeSession(entries)
+	authoritativeTitle := remoteAuthoritativeSessionTitle(hostID, workspace, authoritativeCurrent)
 	a.remoteTabMu.Lock()
 	liveRunning := map[string]bool{}
 	liveCurrentPath := ""
@@ -320,6 +321,7 @@ func (a *App) remoteProjectSessions(ctx context.Context, client *http.Client, ba
 				pathChanged := adoptRemoteTabSessionPathLocked(tab, path)
 				tab.session.name = strings.TrimSpace(authoritativeCurrent.Name)
 				if pathChanged {
+					tab.topicTitle = authoritativeTitle
 					meta := remoteTabMetaLocked(tab)
 					routeUpdate = &meta
 					routeReadyBarrier = remoteTabReadyBarrier(tab, true)
@@ -385,4 +387,18 @@ func (a *App) remoteProjectSessions(ctx context.Context, client *http.Client, ba
 		}
 	}
 	return append(pinned, out...), nil
+}
+
+func remoteAuthoritativeSessionTitle(hostID, workspace string, current *serveSessionEntry) string {
+	if current == nil {
+		return ""
+	}
+	title := strings.TrimSpace(current.Title)
+	if override := remoteSessionTitleOverride(hostID, workspace, current.Name); override != "" {
+		title = override
+	}
+	if title == "" {
+		title = remoteWorkspaceName(workspace)
+	}
+	return title
 }

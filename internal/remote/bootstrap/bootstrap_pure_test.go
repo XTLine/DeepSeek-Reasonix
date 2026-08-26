@@ -193,12 +193,12 @@ func TestLocateNPMGlobalCommandBypassesPathCandidates(t *testing.T) {
 
 func TestSupportsRequiredServeCapabilitiesCommand(t *testing.T) {
 	cmd := SupportsRequiredServeCapabilitiesCommand(42)
-	for _, want := range []string{"/proc/42/exe", "ps -p 42", "session-events", "detached-heal", ServeCapsToken} {
+	for _, want := range []string{"/proc/42/exe", "session-events", "detached-heal", ServeCapsToken} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("capability probe missing %q:\n%s", want, cmd)
 		}
 	}
-	if strings.Contains(cmd, "tr -d ' '") || !strings.Contains(cmd, "sed 's/^[[:space:]]*//;s/[[:space:]]*$//'") {
-		t.Fatalf("capability probe must trim only pathname padding and preserve internal spaces:\n%s", cmd)
+	if strings.Contains(cmd, "ps -p 42") {
+		t.Fatalf("capability probe must not execute a replaced pathname reported by ps:\n%s", cmd)
 	}
 }

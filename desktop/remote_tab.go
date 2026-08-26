@@ -26,7 +26,8 @@ func remoteSessionTransitionBusy(err error) bool {
 	}
 	message := err.Error()
 	return strings.Contains(message, "while a turn is running") ||
-		strings.Contains(message, "while another session change is in progress")
+		strings.Contains(message, "while another session change is in progress") ||
+		strings.Contains(message, "session is finishing background teardown")
 }
 
 // attachRemoteTabServe starts the event pump before entering the session so
@@ -80,7 +81,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	tab.base = base
 	tab.token = token
 	if !opts.NewSession {
-		installRemoteTabAttachRoute(tab, target.Path)
+		commitRemoteTabAttachRoute(tab, target.Path, false)
 	}
 	gen := tab.gen
 	pumpCtx, cancelPump := context.WithCancel(ctx)
@@ -123,7 +124,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	}
 	a.remoteTabMu.Lock()
 	if current := a.remoteTabs[tabID]; current == tab && current.gen == gen {
-		installRemoteTabAttachRoute(current, target.Path)
+		commitRemoteTabAttachRoute(current, target.Path, opts.NewSession)
 		if name := strings.TrimSpace(target.Name); name != "" {
 			current.session.name = name
 		}
@@ -341,48 +342,14 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64, opene
 		if !a.remoteTabGenerationCurrent(tabID, gen) {
 			return
 		}
-		var probe struct {
-			Kind           string `json:"kind"`
-			SessionPath    string `json:"sessionPath"`
-			SessionCurrent bool   `json:"sessionCurrent"`
-		}
-		kind := "?"
-		if json.Unmarshal([]byte(frame), &probe) == nil && probe.Kind != "" {
-			kind = probe.Kind
-		}
-		framePath := strings.TrimSpace(probe.SessionPath)
-		if !a.routeRemoteTabWireFrame(tabID, gen, framePath, kind, probe.SessionCurrent) {
+		kind, framePath, current, reset := probeRemoteTabFrame(frame)
+		if !a.routeRemoteTabWireFrame(tabID, gen, framePath, kind, current, reset) {
 			continue
 		}
-		refreshRuntime := false
-		switch kind {
-		case "turn_started":
-			a.recordRemoteTabTurnStarted(tabID, gen, json.RawMessage(frame))
-			refreshRuntime = true
-		case "approval_request", "ask_request":
-			a.cacheRemotePendingEvent(tabID, gen, kind, json.RawMessage(frame))
-			refreshRuntime = true
-		case "extension_surface":
-			refreshRuntime = a.cacheRemotePendingExtensionForm(tabID, gen, json.RawMessage(frame))
-		case "turn_done":
-			a.completeRemoteTabTurn(tabID, gen)
+		if a.bufferRemoteTabResumeFrame(tabID, gen, framePath, kind, json.RawMessage(frame)) {
+			continue
 		}
-		a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:event", tabID), json.RawMessage(frame))
-		if refreshRuntime {
-			a.goSafe("remoteTabRuntimeStatus", func() { _, _ = a.RemoteTabStatus(tabID) })
-		}
-		if kind == "turn_done" {
-			// Capture the durable session name immediately, closing the window
-			// where a replacement Serve could otherwise lose a just-finished
-			// conversation before the slower generated-title refresh runs.
-			a.goSafe("remoteTabTitle", func() {
-				_, _ = a.RemoteTabStatus(tabID)
-				// The serve generates the session title from the finished
-				// conversation; pick it up shortly after the turn settles.
-				time.Sleep(1500 * time.Millisecond)
-				a.refreshRemoteTabTitle(tabID)
-			})
-		}
+		a.publishRemoteTabFrame(tabID, gen, kind, json.RawMessage(frame))
 	}
 	if err := scanner.Err(); err != nil {
 		log.Printf("[remote] remoteTabPump: READ-EXIT tab=%s gen=%d err=%v ctxErr=%v", tabID, gen, err, ctx.Err())
@@ -393,6 +360,41 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64, opene
 		if startRetry := a.reconnectRemoteTabGeneration(tabID, gen); startRetry {
 			a.goSafe("remoteTabReattach", func() { a.reattachRemoteTab(tabID) })
 		}
+	}
+}
+
+func (a *App) publishRemoteTabFrame(tabID string, gen uint64, kind string, frame json.RawMessage) {
+	if !a.remoteTabGenerationCurrent(tabID, gen) {
+		return
+	}
+	refreshRuntime := false
+	switch kind {
+	case "turn_started":
+		a.recordRemoteTabTurnStarted(tabID, gen, frame)
+		refreshRuntime = true
+	case "approval_request", "ask_request":
+		a.cacheRemotePendingEvent(tabID, gen, kind, frame)
+		refreshRuntime = true
+	case "extension_surface":
+		refreshRuntime = a.cacheRemotePendingExtensionForm(tabID, gen, frame)
+	case "turn_done":
+		a.completeRemoteTabTurn(tabID, gen)
+	}
+	a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:event", tabID), frame)
+	if refreshRuntime {
+		a.goSafe("remoteTabRuntimeStatus", func() { _, _ = a.RemoteTabStatus(tabID) })
+	}
+	if kind == "turn_done" {
+		// Capture the durable session name immediately, closing the window
+		// where a replacement Serve could otherwise lose a just-finished
+		// conversation before the slower generated-title refresh runs.
+		a.goSafe("remoteTabTitle", func() {
+			_, _ = a.RemoteTabStatus(tabID)
+			// The serve generates the session title from the finished
+			// conversation; pick it up shortly after the turn settles.
+			time.Sleep(1500 * time.Millisecond)
+			a.refreshRemoteTabTitle(tabID)
+		})
 	}
 }
 
@@ -445,22 +447,7 @@ func (a *App) recordRemoteTabTurnStarted(tabID string, gen uint64, frame json.Ra
 }
 
 func (a *App) cacheRemotePendingEvent(tabID string, gen uint64, kind string, frame json.RawMessage) {
-	var probe struct {
-		Approval *struct {
-			ID string `json:"id"`
-		} `json:"approval"`
-		Ask *struct {
-			ID string `json:"id"`
-		} `json:"ask"`
-	}
-	_ = json.Unmarshal(frame, &probe)
-	id := ""
-	if probe.Approval != nil {
-		id = probe.Approval.ID
-	} else if probe.Ask != nil {
-		id = probe.Ask.ID
-	}
-	key := kind + ":" + strings.TrimSpace(id)
+	key := remotePendingEventKey(kind, frame)
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
 	if tab == nil || tab.gen != gen {

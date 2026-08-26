@@ -55,6 +55,16 @@ func (s *sessionTagSink) PrimePath(path string) {
 	s.mu.Unlock()
 }
 
+// BufferPath retags synchronous in-place Resume events but withholds them until
+// Serve publishes the matching foreground route. Unlike PrimePath, it also
+// pauses a sink that was already active for the previous session.
+func (s *sessionTagSink) BufferPath(path string) {
+	s.mu.Lock()
+	s.path = canonicalSessionPath(path)
+	s.active = false
+	s.mu.Unlock()
+}
+
 func canonicalSessionPath(path string) string {
 	if path != "" {
 		return agent.CanonicalSessionPath(path)
@@ -142,6 +152,7 @@ func (s *Server) forgetSessionTag(ctrl *control.Controller) {
 	s.tagsMu.Lock()
 	delete(s.tags, ctrl)
 	s.tagsMu.Unlock()
+	s.setControllerLeaseOwner(ctrl, nil)
 }
 
 func (s *Server) closeTaggedController(ctrl *control.Controller) {
@@ -434,8 +445,8 @@ func (s *Server) busyDetach(ctx context.Context, cur *control.Controller, target
 	return nil
 }
 
-func (s *Server) announceSessionChanged(path string) {
-	s.bc.Emit(event.Event{Kind: event.SessionChanged, SessionPath: path})
+func (s *Server) announceSessionChanged(path string, reset bool) {
+	s.bc.Emit(event.Event{Kind: event.SessionChanged, SessionPath: path, SessionReset: reset})
 }
 
 var errReplacedDuringBind = &replacedDuringBindError{}
@@ -457,7 +468,7 @@ func (s *Server) rollbackDetach(demoted *control.SessionLeaseKeeper, ctrl *contr
 func (s *Server) resumeActiveSession(w http.ResponseWriter, r *http.Request, cur control.SessionAPI, realPath string) bool {
 	if agent.CanonicalSessionPath(cur.SessionPath()) == agent.CanonicalSessionPath(realPath) {
 		s.bc.SetCurrentSession(realPath)
-		s.announceSessionChanged(realPath)
+		s.announceSessionChanged(realPath, false)
 		w.WriteHeader(http.StatusNoContent)
 		return true
 	}
@@ -466,7 +477,7 @@ func (s *Server) resumeActiveSession(w http.ResponseWriter, r *http.Request, cur
 			s.renderBindError(w, err)
 			return true
 		}
-		s.announceSessionChanged(realPath)
+		s.announceSessionChanged(realPath, false)
 		w.WriteHeader(http.StatusNoContent)
 		s.replayPendingPromptsBroadcast()
 		return true
@@ -494,7 +505,7 @@ func (s *Server) resumeActiveSession(w http.ResponseWriter, r *http.Request, cur
 		s.renderBindError(w, err)
 		return true
 	}
-	s.announceSessionChanged(realPath)
+	s.announceSessionChanged(realPath, false)
 	w.WriteHeader(http.StatusNoContent)
 	s.replayPendingPromptsBroadcast()
 	return true

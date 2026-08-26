@@ -163,7 +163,7 @@ func (b *Broadcaster) Emit(e event.Event) {
 		if !sub.all && e.SessionPath != "" && e.SessionPath != b.current {
 			continue
 		}
-		enqueueSubscriberFrame(ch, data, eventIsPriority(e.Kind))
+		enqueueSubscriberFrame(ch, data, e.Kind)
 	}
 }
 
@@ -200,7 +200,7 @@ func (b *Broadcaster) EmitTo(target <-chan []byte, e event.Event) {
 		if !sub.all && e.SessionPath != "" && e.SessionPath != b.current {
 			return
 		}
-		enqueueSubscriberFrame(ch, data, eventIsPriority(e.Kind))
+		enqueueSubscriberFrame(ch, data, e.Kind)
 		return
 	}
 }
@@ -217,14 +217,86 @@ func eventIsPriority(kind event.Kind) bool {
 	}
 }
 
-func enqueueSubscriberFrame(ch chan []byte, data []byte, priority bool) {
+// eventMustReachSubscriber identifies lifecycle truth that cannot be recovered
+// by refetching history. The reserved queue budget protects these frames from
+// deltas; if other priority traffic also exhausts that budget, the newest
+// terminal/routing frame evicts a recoverable queued frame instead of vanishing.
+func eventMustReachSubscriber(kind event.Kind) bool {
+	switch kind {
+	case event.TurnDone, event.SessionChanged:
+		return true
+	default:
+		return false
+	}
+}
+
+func enqueueSubscriberFrame(ch chan []byte, data []byte, kind event.Kind) {
+	priority := eventIsPriority(kind)
 	if !priority && len(ch) >= cap(ch)-subscriberPriorityReserve {
 		return
 	}
 	select {
 	case ch <- data:
-	default: // subscriber exhausted even the priority reserve; never block Serve.
+		return
+	default:
+		// A slow subscriber exhausted even the priority reserve. Ordinary
+		// priority events remain lossy, but lifecycle truth gets one slot by
+		// evicting an older frame while Broadcaster.mu serializes producers.
+		if !eventMustReachSubscriber(kind) || !evictRecoverableSubscriberFrame(ch) {
+			return
+		}
 	}
+	// Broadcaster.mu excludes every producer, and eviction leaves at least one
+	// slot. A concurrent consumer can only create more capacity, so this send is
+	// bounded while guaranteeing the terminal frame is retained.
+	ch <- data
+}
+
+func evictRecoverableSubscriberFrame(ch chan []byte) bool {
+	queued := len(ch)
+	if queued < cap(ch) {
+		return true
+	}
+	frames := make([][]byte, 0, queued)
+drain:
+	for range queued {
+		select {
+		case frame := <-ch:
+			frames = append(frames, frame)
+		default:
+			break drain
+		}
+	}
+	if len(frames) == 0 {
+		return true
+	}
+	evict := -1
+	for i, frame := range frames {
+		if !wireFrameMustReachSubscriber(frame) {
+			evict = i
+			break
+		}
+	}
+	if evict < 0 {
+		// A bounded queue cannot retain an unbounded run of terminal frames.
+		// Prefer the latest lifecycle truth over an older one in that degenerate
+		// case; normal saturation always finds a recoverable delta/status frame.
+		evict = 0
+	}
+	for i, frame := range frames {
+		if i != evict {
+			ch <- frame
+		}
+	}
+	return true
+}
+
+func wireFrameMustReachSubscriber(data []byte) bool {
+	var frame eventwire.Event
+	if json.Unmarshal(data, &frame) != nil {
+		return false
+	}
+	return frame.Kind == "turn_done" || frame.Kind == "session_changed"
 }
 
 // Subscribe registers a new SSE client and returns its channel plus an
