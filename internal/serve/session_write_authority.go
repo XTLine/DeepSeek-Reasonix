@@ -37,10 +37,12 @@ func (s *Server) sessionTransitionHandler(ctrl *control.Controller, k *control.S
 			}
 		}
 		path := agent.CanonicalSessionPath(info.TargetPath)
-		if tag := s.tagFor(ctrl); tag != nil {
-			tag.PrimePath(path)
-		}
-		s.publishControllerPathIfCurrent(ctrl, path)
+		info.OnCommit(func() {
+			if tag := s.tagFor(ctrl); tag != nil {
+				tag.PrimePath(path)
+			}
+			s.publishControllerPathIfCurrent(ctrl, path)
+		})
 		return nil
 	}
 }
