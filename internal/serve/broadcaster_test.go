@@ -40,6 +40,30 @@ func TestBroadcasterFiltersSessions(t *testing.T) {
 	}
 }
 
+func TestBroadcasterMarksForegroundFramesAtPublication(t *testing.T) {
+	b := NewBroadcaster()
+	b.SetCurrentSession("/sessions/current.jsonl")
+	all, stop := b.SubscribeAll()
+	defer stop()
+
+	b.Emit(event.Event{Kind: event.Text, Text: "current", SessionPath: "/sessions/current.jsonl"})
+	b.Emit(event.Event{Kind: event.Text, Text: "background", SessionPath: "/sessions/background.jsonl"})
+
+	var current, background eventwire.Event
+	if err := json.Unmarshal(<-all, &current); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(<-all, &background); err != nil {
+		t.Fatal(err)
+	}
+	if !current.SessionCurrent {
+		t.Fatalf("foreground frame was not marked current: %+v", current)
+	}
+	if background.SessionCurrent {
+		t.Fatalf("background frame was marked current: %+v", background)
+	}
+}
+
 func TestBroadcasterFanOut(t *testing.T) {
 	b := NewBroadcaster()
 	a, ca := b.Subscribe()

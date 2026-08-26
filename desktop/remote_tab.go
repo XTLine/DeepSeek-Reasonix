@@ -344,15 +344,16 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64, opene
 			return
 		}
 		var probe struct {
-			Kind        string `json:"kind"`
-			SessionPath string `json:"sessionPath"`
+			Kind           string `json:"kind"`
+			SessionPath    string `json:"sessionPath"`
+			SessionCurrent bool   `json:"sessionCurrent"`
 		}
 		kind := "?"
 		if json.Unmarshal([]byte(frame), &probe) == nil && probe.Kind != "" {
 			kind = probe.Kind
 		}
 		framePath := strings.TrimSpace(probe.SessionPath)
-		if !a.routeRemoteTabFrameReconciled(tabID, gen, framePath, kind) {
+		if !a.routeRemoteTabWireFrame(tabID, gen, framePath, kind, probe.SessionCurrent) {
 			continue
 		}
 		refreshRuntime := false

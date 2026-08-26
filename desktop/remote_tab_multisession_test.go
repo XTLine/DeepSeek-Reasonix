@@ -263,6 +263,167 @@ func TestUnknownBackgroundPathReconcilesStatusOnlyOnce(t *testing.T) {
 	}
 }
 
+func TestKnownBackgroundPathAdoptsFrameForegroundMarker(t *testing.T) {
+	const currentPath = "/sessions/current.jsonl"
+	const resumedPath = "/sessions/background.jsonl"
+	log := &eventLog{}
+	a := &App{remoteEventHook: log.add, remoteTabs: map[string]*remoteTab{
+		"remote-1": {
+			id: "remote-1", gen: 7,
+			session: remoteTabSessionState{path: currentPath},
+			routing: remoteTabSessionRouting{
+				currentPath: currentPath,
+				running:     map[string]bool{resumedPath: true},
+			},
+		},
+	}}
+	a.adoptRemoteTabFrameCurrent("remote-1", 7, resumedPath)
+	if !a.routeRemoteTabFrameReconciled("remote-1", 7, resumedPath, "text") {
+		t.Fatal("publication-time foreground marker did not reclassify a cached background path")
+	}
+	a.remoteTabMu.Lock()
+	path := a.remoteTabs["remote-1"].routing.currentPath
+	revision := a.remoteTabs["remote-1"].routing.revision
+	a.remoteTabMu.Unlock()
+	if path != resumedPath || revision != 1 {
+		t.Fatalf("adopted route = %q revision %d, want %q revision 1", path, revision, resumedPath)
+	}
+	if got := log.count("remote-tab:updated"); got != 1 {
+		t.Fatalf("foreground adoption emitted %d row refreshes, want 1", got)
+	}
+}
+
+func TestKnownBackgroundPromptReconcilesLegacyServeStatus(t *testing.T) {
+	const currentPath = "/sessions/current.jsonl"
+	const resumedPath = "/sessions/background.jsonl"
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "current", Path: currentPath, Current: true}})
+	fs.mu.Lock()
+	fs.statusPayload = `{"running":true,"sessionName":"background","sessionPath":"/sessions/background.jsonl"}`
+	fs.mu.Unlock()
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionPath: currentPath})
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[meta.ID]
+	tab.routing.running[resumedPath] = true
+	gen := tab.gen
+	a.remoteTabMu.Unlock()
+	if !a.routeRemoteTabFrameReconciled(meta.ID, gen, resumedPath, "approval_request") {
+		t.Fatal("legacy foreground prompt from a cached background path was discarded")
+	}
+	a.remoteTabMu.Lock()
+	got := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if got != resumedPath {
+		t.Fatalf("legacy status reconciliation route = %q, want %q", got, resumedPath)
+	}
+}
+
+func TestProvisionalResumeRouteFencesStaleSessionListing(t *testing.T) {
+	const currentPath = "/sessions/current.jsonl"
+	const targetPath = "/sessions/target.jsonl"
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "current", Path: currentPath, Current: true},
+		{Name: "target", Path: targetPath},
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionPath: currentPath})
+
+	fs.mu.Lock()
+	fs.sessionsStarted = make(chan struct{}, 1)
+	fs.sessionsRelease = make(chan struct{})
+	sessionsStarted, sessionsRelease := fs.sessionsStarted, fs.sessionsRelease
+	fs.resumeStarted = make(chan struct{}, 1)
+	fs.resumeRelease = make(chan struct{})
+	resumeStarted, resumeRelease := fs.resumeStarted, fs.resumeRelease
+	fs.mu.Unlock()
+	t.Cleanup(func() {
+		for _, ch := range []chan struct{}{sessionsRelease, resumeRelease} {
+			select {
+			case <-ch:
+			default:
+				close(ch)
+			}
+		}
+	})
+
+	listingDone := make(chan error, 1)
+	go func() {
+		_, err := a.RemoteProjectSessions("box", "~/app")
+		listingDone <- err
+	}()
+	select {
+	case <-sessionsStarted:
+	case <-time.After(time.Second):
+		t.Fatal("session listing did not start")
+	}
+	resumeDone := make(chan struct{})
+	go func() {
+		a.resumeRemoteTabSessionPath(meta.ID, "target", targetPath, "Target")
+		close(resumeDone)
+	}()
+	select {
+	case <-resumeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("resume request did not start")
+	}
+	close(sessionsRelease)
+	if err := <-listingDone; err != nil {
+		t.Fatal(err)
+	}
+	a.remoteTabMu.Lock()
+	got := a.remoteTabs[meta.ID].routing.currentPath
+	a.remoteTabMu.Unlock()
+	if got != targetPath {
+		t.Fatalf("stale /sessions response replaced provisional route with %q, want %q", got, targetPath)
+	}
+	close(resumeRelease)
+	select {
+	case <-resumeDone:
+	case <-time.After(time.Second):
+		t.Fatal("resume did not finish after release")
+	}
+}
+
+func TestFailedProvisionalResumeRestoresRouteWithNewRevision(t *testing.T) {
+	const currentPath = "/sessions/current.jsonl"
+	const targetPath = "/sessions/target.jsonl"
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "current", Path: currentPath, Current: true}})
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionPath: currentPath})
+	a.remoteTabMu.Lock()
+	before := a.remoteTabs[meta.ID].routing.revision
+	a.remoteTabMu.Unlock()
+	fs.mu.Lock()
+	fs.failEnter = "resume rejected"
+	fs.mu.Unlock()
+	a.resumeRemoteTabSessionPath(meta.ID, "target", targetPath, "Target")
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[meta.ID]
+	path, revision := tab.routing.currentPath, tab.routing.revision
+	a.remoteTabMu.Unlock()
+	if path != currentPath || revision != before+2 {
+		t.Fatalf("failed resume route = %q revision %d, want %q revision %d", path, revision, currentPath, before+2)
+	}
+}
+
 func TestRemoteProjectSessionsAdoptsAuthoritativeCurrentRoute(t *testing.T) {
 	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "a", Path: "/a.jsonl"}, {Name: "b", Path: "/b.jsonl", Current: true}})
 	kernel := &fakeRemoteKernel{

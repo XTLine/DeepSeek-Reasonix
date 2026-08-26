@@ -188,3 +188,30 @@ func TestUploadInstallProbesFreshBinaryBeforeStalePathCandidate(t *testing.T) {
 		t.Fatalf("fresh upload result = bin:%q probed:%v, want %q/true", bin, probedUpload, uploaded)
 	}
 }
+
+func TestNPMInstallProbesFreshGlobalBinaryBeforeStalePathCandidate(t *testing.T) {
+	skipOnWindows(t)
+	root := t.TempDir()
+	const installed = "/opt/npm/bin/reasonix"
+	probedGlobal := false
+	conn := newFakeConn(t, root, func(cmd string) (remote.ExecResult, error) {
+		switch {
+		case strings.Contains(cmd, "command -v reasonix"):
+			return ok("/usr/bin/reasonix\nreasonix v1.0.0\nportfile:yes\nsessionevents:no\ndetachedheal:no\ncaps:no\n")
+		case strings.Contains(cmd, "npm i -g reasonix"):
+			return ok("installed\n")
+		case strings.Contains(cmd, `BIN=; P="$(npm prefix -g 2>/dev/null)"`):
+			probedGlobal = true
+			return ok(installed + "\nreasonix v9.9.0\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
+		default:
+			return ok("")
+		}
+	})
+	bin, _, err := ensureBinary(context.Background(), conn, conn.fs, Options{Install: InstallNPM}, root, "linux", "amd64", pathsFor(root, root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !probedGlobal || bin != installed {
+		t.Fatalf("fresh npm result = bin:%q probed:%v, want %q/true", bin, probedGlobal, installed)
+	}
+}

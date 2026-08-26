@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -69,6 +70,61 @@ func TestServerCloseClosesPublishedForegroundReplacement(t *testing.T) {
 	server.Close()
 	if !replacement.closed.Load() {
 		t.Fatal("server shutdown left the published foreground controller open")
+	}
+}
+
+func TestStaleRecoveryCannotOverwritePublishedForegroundRoute(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.jsonl")
+	newPath := filepath.Join(dir, "new.jsonl")
+	recoveryPath := filepath.Join(dir, "old-recovery.jsonl")
+	bc := NewBroadcaster()
+	old := control.New(control.Options{SessionPath: oldPath})
+	next := control.New(control.Options{SessionPath: newPath})
+	server := New(old, bc, config.ServeConfig{})
+	tag := NewSessionTagSink(bc)
+	server.RegisterSessionTag(old, tag)
+	recoverOld := server.sessionRecoveryHandler(old, nil)
+	if !server.publishControllerSwap(old, next, newPath) {
+		t.Fatal("foreground replacement publication failed")
+	}
+	if err := recoverOld(control.SessionRecoveryInfo{RecoveryPath: recoveryPath}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := bc.CurrentSession(), agent.CanonicalSessionPath(newPath); got != want {
+		t.Fatalf("stale recovery changed foreground route to %q, want %q", got, want)
+	}
+}
+
+func TestResumeActiveSessionTreatsSymlinkAliasAsCurrent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink alias identity is exercised on POSIX CI")
+	}
+	dir := t.TempDir()
+	realPath := filepath.Join(dir, "real.jsonl")
+	aliasPath := filepath.Join(dir, "alias.jsonl")
+	saveServeTestSession(t, realPath)
+	if err := os.Symlink(realPath, aliasPath); err != nil {
+		t.Fatal(err)
+	}
+	ctrl := control.New(control.Options{Runner: blockingRunner{}, SessionDir: dir, SessionPath: aliasPath})
+	server := New(ctrl, NewBroadcaster(), config.ServeConfig{})
+	ctrl.Submit("keep running")
+	waitRunning(t, ctrl)
+	defer func() {
+		ctrl.Cancel()
+		waitNotRunning(t, ctrl)
+	}()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/resume", nil)
+	if !server.resumeActiveSession(rec, req, ctrl, realPath) {
+		t.Fatal("active current-session alias was not handled")
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("resume through current-session symlink alias = %d, want 204", rec.Code)
+	}
+	if server.ctl() != control.SessionAPI(ctrl) || !ctrl.Running() {
+		t.Fatal("current-session alias detached or replaced the active controller")
 	}
 }
 

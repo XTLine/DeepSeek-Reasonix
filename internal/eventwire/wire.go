@@ -46,8 +46,12 @@ type Event struct {
 	ItemID string `json:"itemId,omitempty"`
 	// SessionPath routes frames emitted by detached Serve controllers. Older
 	// clients ignore the omitted/unknown field and keep single-session behavior.
-	SessionPath string            `json:"sessionPath,omitempty"`
-	Workspace   *WorkspaceChanged `json:"workspace,omitempty"`
+	SessionPath string `json:"sessionPath,omitempty"`
+	// SessionCurrent is set by Serve at publication time for frames belonging
+	// to its foreground controller. It lets all-session clients adopt an
+	// externally selected/recovered foreground without polling on every token.
+	SessionCurrent bool              `json:"sessionCurrent,omitempty"`
+	Workspace      *WorkspaceChanged `json:"workspace,omitempty"`
 	// Phase is set on turn_phase events: working | checking | verifying | reviewing.
 	Phase string `json:"phase,omitempty"`
 	// Completion is set on completion_summary events (content-free quality summary).

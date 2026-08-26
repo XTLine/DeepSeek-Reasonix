@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -398,7 +397,7 @@ func (s *Server) rollbackDetach(demoted *control.SessionLeaseKeeper, ctrl *contr
 }
 
 func (s *Server) resumeActiveSession(w http.ResponseWriter, r *http.Request, cur control.SessionAPI, realPath string) bool {
-	if filepath.Clean(cur.SessionPath()) == filepath.Clean(realPath) {
+	if agent.CanonicalSessionPath(cur.SessionPath()) == agent.CanonicalSessionPath(realPath) {
 		s.bc.SetCurrentSession(realPath)
 		w.WriteHeader(http.StatusNoContent)
 		return true

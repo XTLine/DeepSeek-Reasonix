@@ -79,6 +79,10 @@ func locateUploaded(ctx context.Context, conn Conn, uploaded, minVersion string)
 	return locateWithCommand(ctx, conn, LocateUploadedCommand(uploaded), minVersion)
 }
 
+func locateNPMGlobal(ctx context.Context, conn Conn, minVersion string) (bin, version string) {
+	return locateWithCommand(ctx, conn, LocateNPMGlobalCommand(), minVersion)
+}
+
 func locateWithCommand(ctx context.Context, conn Conn, command, minVersion string) (bin, version string) {
 	_ = minVersion
 	res, err := conn.Exec(ctx, command)
@@ -129,7 +133,7 @@ func installViaNPM(ctx context.Context, conn Conn, minVersion string) (bin, vers
 		return "", "", fmt.Errorf("bootstrap: npm install failed: %s", tail(res.Stdout, 400))
 	}
 	// npm may install outside the login PATH; probe npm prefix explicitly.
-	loc, ver := locate(ctx, conn, "", minVersion)
+	loc, ver := locateNPMGlobal(ctx, conn, minVersion)
 	if loc == "" {
 		return "", "", fmt.Errorf("bootstrap: reasonix not found after npm install (check remote PATH / npm prefix)")
 	}

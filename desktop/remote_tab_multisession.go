@@ -142,9 +142,32 @@ func (a *App) routeRemoteTabFrame(tabID string, gen uint64, sessionPath, kind st
 	return foreground
 }
 
+// adoptRemoteTabFrameCurrent consumes Serve's publication-time foreground
+// marker. Unlike the running cache, this marker follows switches initiated by
+// other HTTP clients and slash/recovery path changes while a tab stays open.
+func (a *App) adoptRemoteTabFrameCurrent(tabID string, gen uint64, sessionPath string) {
+	if sessionPath == "" {
+		return
+	}
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil || tab.gen != gen || tab.routing.currentPath == sessionPath {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	tab.routing.currentPath = sessionPath
+	tab.routing.revision++
+	tab.session.path = sessionPath
+	tab.session.newSession = false
+	tab.session.reset = false
+	meta := remoteTabMetaLocked(tab)
+	a.remoteTabMu.Unlock()
+	a.emitRemoteEvent("remote-tab:updated", meta)
+}
+
 // remoteTabFramePathUnknown distinguishes a possible foreground recovery or
 // slash-command rotation from a path already observed as background work.
-func (a *App) remoteTabFramePathUnknown(tabID string, gen uint64, sessionPath string) bool {
+func (a *App) remoteTabFramePathUnknown(tabID string, gen uint64, sessionPath, kind string) bool {
 	if sessionPath == "" {
 		return false
 	}
@@ -155,7 +178,18 @@ func (a *App) remoteTabFramePathUnknown(tabID string, gen uint64, sessionPath st
 		return false
 	}
 	_, knownBackground := tab.routing.running[sessionPath]
-	return !knownBackground
+	if !knownBackground {
+		return true
+	}
+	// Transitional frames are sparse and must remain compatible with a Serve
+	// that did not attach sessionCurrent. Revalidate them after a background
+	// cache hit; ordinary output is covered by the per-frame marker above.
+	switch kind {
+	case "turn_started", "approval_request", "ask_request":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *App) reconcileRemoteTabFramePath(tabID string, gen uint64, sessionPath string) bool {
@@ -193,10 +227,17 @@ func (a *App) reconcileRemoteTabFramePath(tabID string, gen uint64, sessionPath 
 }
 
 func (a *App) routeRemoteTabFrameReconciled(tabID string, gen uint64, sessionPath, kind string) bool {
-	pathUnknown := a.remoteTabFramePathUnknown(tabID, gen, sessionPath)
+	pathUnknown := a.remoteTabFramePathUnknown(tabID, gen, sessionPath, kind)
 	if a.routeRemoteTabFrame(tabID, gen, sessionPath, kind) {
 		return true
 	}
 	return pathUnknown && a.reconcileRemoteTabFramePath(tabID, gen, sessionPath) &&
 		a.routeRemoteTabFrame(tabID, gen, sessionPath, kind)
+}
+
+func (a *App) routeRemoteTabWireFrame(tabID string, gen uint64, sessionPath, kind string, current bool) bool {
+	if current {
+		a.adoptRemoteTabFrameCurrent(tabID, gen, sessionPath)
+	}
+	return a.routeRemoteTabFrameReconciled(tabID, gen, sessionPath, kind)
 }

@@ -128,12 +128,24 @@ func (b *Broadcaster) Emit(e event.Event) {
 	if e.SessionPath != "" {
 		e.SessionPath = agent.CanonicalSessionPath(e.SessionPath)
 	}
-	data, err := json.Marshal(eventwire.ToWire(e))
+	wired := eventwire.ToWire(e)
+	b.mu.Lock()
+	observedCurrent := b.current
+	b.mu.Unlock()
+	wired.SessionCurrent = e.SessionPath != "" && e.SessionPath == observedCurrent
+	data, err := json.Marshal(wired)
 	if err != nil {
 		return
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.current != observedCurrent {
+		wired.SessionCurrent = e.SessionPath != "" && e.SessionPath == b.current
+		data, err = json.Marshal(wired)
+		if err != nil {
+			return
+		}
+	}
 	if e.Kind == event.Usage && e.Usage != nil && e.CostQuote != nil {
 		b.ledgerLocked(e.SessionPath).Add(*e.CostQuote, billing.UsageTokens{
 			PromptTokens: e.Usage.PromptTokens, CompletionTokens: e.Usage.CompletionTokens,
@@ -161,12 +173,24 @@ func (b *Broadcaster) EmitTo(target <-chan []byte, e event.Event) {
 	if e.SessionPath != "" {
 		e.SessionPath = agent.CanonicalSessionPath(e.SessionPath)
 	}
-	data, err := json.Marshal(eventwire.ToWire(e))
+	wired := eventwire.ToWire(e)
+	b.mu.Lock()
+	observedCurrent := b.current
+	b.mu.Unlock()
+	wired.SessionCurrent = e.SessionPath != "" && e.SessionPath == observedCurrent
+	data, err := json.Marshal(wired)
 	if err != nil {
 		return
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.current != observedCurrent {
+		wired.SessionCurrent = e.SessionPath != "" && e.SessionPath == b.current
+		data, err = json.Marshal(wired)
+		if err != nil {
+			return
+		}
+	}
 	for ch, sub := range b.subs {
 		if (<-chan []byte)(ch) != target {
 			continue

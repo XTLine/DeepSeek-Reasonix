@@ -118,7 +118,7 @@ const serveDetachedHealMarker = "detached-heal"
 
 // serveCapsToken is the rolling capability revision advertised in serve help.
 // Bump this when the desktop requires a newer wire/runtime contract.
-const serveCapsToken = "reasonix-serve-caps-20260822c"
+const serveCapsToken = "reasonix-serve-caps-20260826a"
 
 // LocateCommand probes for a usable reasonix binary and the exact Serve
 // capabilities required by the desktop. Capability probes are authoritative:
@@ -134,6 +134,14 @@ func LocateUploadedCommand(uploadedBin string) string {
 	return locateCommand(uploadedBin, true)
 }
 
+// LocateNPMGlobalCommand probes exactly the binary installed under npm's
+// current global prefix. A stale login-PATH binary must not shadow a package
+// that was just installed to repair missing Serve capabilities.
+func LocateNPMGlobalCommand() string {
+	resolve := "BIN=; P=\"$(npm prefix -g 2>/dev/null)\"; if [ -n \"$P\" ] && [ -x \"$P/bin/reasonix\" ]; then BIN=\"$P/bin/reasonix\"; fi; "
+	return locateResolvedCommand(resolve)
+}
+
 func locateCommand(uploadedBin string, preferUploaded bool) string {
 	resolve := fmt.Sprintf(
 		"BIN=\"$(command -v reasonix 2>/dev/null)\"; if [ -z \"$BIN\" ] && [ -x %s ]; then BIN=%s; fi; ",
@@ -144,9 +152,12 @@ func locateCommand(uploadedBin string, preferUploaded bool) string {
 		resolve = fmt.Sprintf("BIN=; if [ -x %s ]; then BIN=%s; fi; ", shellQuote(uploadedBin), shellQuote(uploadedBin))
 		fallback = ""
 	}
+	return locateResolvedCommand(resolve + fallback)
+}
+
+func locateResolvedCommand(resolve string) string {
 	return fmt.Sprintf(
 		resolve+
-			fallback+
 			"echo \"$BIN\"; "+
 			"if [ -n \"$BIN\" ]; then \"$BIN\" --version 2>/dev/null; "+
 			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo portfile:yes; else echo portfile:no; fi; "+

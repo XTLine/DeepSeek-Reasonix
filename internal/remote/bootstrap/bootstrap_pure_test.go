@@ -182,6 +182,15 @@ func TestLocateUploadedCommandBypassesPathCandidates(t *testing.T) {
 	}
 }
 
+func TestLocateNPMGlobalCommandBypassesPathCandidates(t *testing.T) {
+	cmd := LocateNPMGlobalCommand()
+	if !strings.Contains(cmd, `P="$(npm prefix -g 2>/dev/null)"`) ||
+		!strings.Contains(cmd, `BIN="$P/bin/reasonix"`) ||
+		strings.Contains(cmd, "command -v reasonix") {
+		t.Fatalf("npm-global probe did not target only npm's installed binary:\n%s", cmd)
+	}
+}
+
 func TestSupportsRequiredServeCapabilitiesCommand(t *testing.T) {
 	cmd := SupportsRequiredServeCapabilitiesCommand(42)
 	for _, want := range []string{"/proc/42/exe", "ps -p 42", "session-events", "detached-heal", serveCapsToken} {

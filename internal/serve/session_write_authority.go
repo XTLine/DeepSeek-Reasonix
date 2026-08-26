@@ -39,9 +39,7 @@ func (s *Server) sessionTransitionHandler(ctrl *control.Controller, k *control.S
 		if tag := s.tagFor(ctrl); tag != nil {
 			tag.SetPath(path)
 		}
-		if s.ctl() == control.SessionAPI(ctrl) {
-			s.bc.SetCurrentSession(path)
-		}
+		s.publishControllerPathIfCurrent(ctrl, path)
 		return nil
 	}
 }
@@ -62,11 +60,23 @@ func (s *Server) sessionRecoveryHandler(ctrl *control.Controller, k *control.Ses
 		if tag := s.tagFor(ctrl); tag != nil {
 			tag.SetPath(info.RecoveryPath)
 		}
-		if s.ctl() == control.SessionAPI(ctrl) {
-			s.bc.SetCurrentSession(info.RecoveryPath)
-		}
+		s.publishControllerPathIfCurrent(ctrl, info.RecoveryPath)
 		return nil
 	}
+}
+
+// publishControllerPathIfCurrent keeps the controller identity check and its
+// broadcaster route update in the same publication critical section. A
+// recovery/transition callback from a just-demoted controller therefore
+// cannot overwrite the newly published foreground route.
+func (s *Server) publishControllerPathIfCurrent(ctrl *control.Controller, path string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ctrl != control.SessionAPI(ctrl) {
+		return false
+	}
+	s.bc.SetCurrentSession(path)
+	return true
 }
 
 // moveDetachedRecovery keeps the registry key aligned when a background

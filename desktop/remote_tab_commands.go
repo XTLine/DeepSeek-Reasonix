@@ -145,6 +145,7 @@ func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle 
 			previousPath = current.routing.currentPath
 			if target.Path != previousPath {
 				current.routing.currentPath = target.Path
+				current.routing.revision++
 				provisionalRoute = true
 			}
 		}
@@ -157,6 +158,7 @@ func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle 
 			current := a.remoteTabs[tabID]
 			if current == tab && current.client == client && current.gen == gen && current.routing.currentPath == target.Path {
 				current.routing.currentPath = previousPath
+				current.routing.revision++
 			}
 			a.remoteTabMu.Unlock()
 		}
@@ -188,6 +190,9 @@ func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle 
 		current.session.name = strings.TrimSpace(target.Name)
 		current.session.path = target.Path
 		current.routing.currentPath = target.Path
+		// Close the provisional routing epoch so a listing that began while
+		// /resume was in flight cannot publish its pre-switch snapshot afterward.
+		current.routing.revision++
 		current.pendingEvents = nil
 		current.runtime.revision++
 		current.runtime.running = target.Running || current.routing.running[target.Path]
