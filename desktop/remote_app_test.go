@@ -14,10 +14,14 @@ import (
 	"time"
 
 	"reasonix/internal/config"
+	"reasonix/internal/jobs"
 	"reasonix/internal/remote"
 )
 
 func TestReloadServeProvidersCancelsBusyTurn(t *testing.T) {
+	if remoteProviderReloadTimeout <= jobs.DefaultTeardownGrace {
+		t.Fatalf("provider reload timeout = %s, want more than teardown grace", remoteProviderReloadTimeout)
+	}
 	var mu sync.Mutex
 	canceled := false
 	jobsCanceled := false
@@ -68,13 +72,41 @@ func TestReloadServeProvidersCancelsBusyTurn(t *testing.T) {
 	}}
 	mgr.mu.Unlock()
 
-	if ok := mgr.reloadServeProviders(context.Background(), "box", "ws", srv.URL+"/", "tok"); !ok {
+	if ok := mgr.reloadServeProviders(context.Background(), mgr.hosts["box"], "box", "ws", srv.URL+"/", "tok"); !ok {
 		t.Fatal("reloadServeProviders = false, want true after cancel + retry")
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if !canceled || !jobsCanceled || reloadCalls < 2 {
 		t.Fatalf("canceled=%v jobsCanceled=%v reloadCalls=%d, want turn/jobs cancellation and retry", canceled, jobsCanceled, reloadCalls)
+	}
+}
+
+func TestCredentialProviderReloadBudgetScalesWithTrackedServes(t *testing.T) {
+	if got, want := credentialProviderReloadBudget(4), 4*remoteProviderReloadTimeout; got != want {
+		t.Fatalf("four-target reload budget = %s, want %s", got, want)
+	}
+	if got := credentialProviderReloadBudget(0); got != remoteProviderReloadTimeout {
+		t.Fatalf("empty-target reload budget = %s, want one-target floor %s", got, remoteProviderReloadTimeout)
+	}
+}
+
+func TestReloadServeProvidersRejectsReplacedHostGeneration(t *testing.T) {
+	var reloadCalls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /auth/token", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux.HandleFunc("POST /providers/reload", func(w http.ResponseWriter, _ *http.Request) { reloadCalls++; w.WriteHeader(http.StatusNoContent) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mgr := newDesktopRemoteManager(&App{})
+	old := &managedHost{serves: map[string]*serveEntry{"ws": {view: RemoteServerView{LocalURL: srv.URL}, token: "old"}}}
+	mgr.hosts["box"] = old
+	mgr.hosts["box"] = &managedHost{serves: map[string]*serveEntry{"ws": {view: RemoteServerView{LocalURL: srv.URL}, token: "new"}}}
+	if mgr.reloadServeProviders(context.Background(), old, "box", "ws", "", "") {
+		t.Fatal("obsolete host generation reloaded replacement serves")
+	}
+	if reloadCalls != 0 {
+		t.Fatalf("replacement serve received %d reloads from obsolete watchdog", reloadCalls)
 	}
 }
 
@@ -96,6 +128,11 @@ func TestCredentialChannelDecision(t *testing.T) {
 				t.Fatalf("needsHeal=%v, want %v", got, tc.want)
 			}
 		})
+	}
+	for state, want := range map[string]bool{"connected": true, "degraded": true, "connecting": false, "error": false} {
+		if got := credentialWatchdogEligibleState(state); got != want {
+			t.Fatalf("credentialWatchdogEligibleState(%q)=%v, want %v", state, got, want)
+		}
 	}
 }
 
@@ -367,6 +404,42 @@ func TestUpdateHostPreservesHiddenFields(t *testing.T) {
 	}
 	if len(h.Forwards) != 1 || h.Forwards[0].Bind != "127.0.0.1:8080" {
 		t.Fatalf("edit wiped persisted forwards: %+v", h.Forwards)
+	}
+}
+
+func TestUpdateHostStopsCredentialWatchdogWhenLocalProxyDisabled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("REASONIX_HOME", home)
+	t.Setenv("HOME", home)
+	if err := editUserConfig(func(c *config.Config) error {
+		return c.UpsertRemoteHost(config.RemoteHostEntry{
+			Name: "box", Host: "10.0.0.9", Port: 22, User: "dev", CredentialMode: "remote",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	watchCtx, cancel := context.WithCancel(context.Background())
+	mgr := newDesktopRemoteManager(&App{})
+	mh := &managedHost{}
+	mh.credWatch.cancel = cancel
+	mh.credWatch.workspace = "/srv/app"
+	mgr.hosts["box"] = mh
+
+	if _, err := mgr.UpdateHost("box", RemoteHostInput{
+		Label: "box", Host: "10.0.0.9", Port: 22, User: "dev", ServeInstall: "auto",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-watchCtx.Done():
+	default:
+		t.Fatal("credential watchdog remained active after local-proxy was disabled")
+	}
+	mh.credWatch.mu.Lock()
+	defer mh.credWatch.mu.Unlock()
+	if mh.credWatch.cancel != nil || mh.credWatch.workspace != "" {
+		t.Fatalf("credential watchdog state = cancel:%v workspace:%q, want stopped", mh.credWatch.cancel != nil, mh.credWatch.workspace)
 	}
 }
 

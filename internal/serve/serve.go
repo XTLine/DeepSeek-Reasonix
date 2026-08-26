@@ -63,6 +63,9 @@ type Server struct {
 	// uses boot.Build; the legacy builder above stays source-compatible with
 	// existing switch-model tests.
 	buildControllerWithOptions func(ctx context.Context, ref string, opts boot.Options) (*control.Controller, error)
+	// buildOptions preserves process-local CLI knobs when multi-session Serve
+	// creates a foreground replacement after detaching a busy controller.
+	buildOptions boot.Options
 	// rebuildController rebuilds the same model/runtime generation for an
 	// extension reload. Tests inject it to exercise publication and failure
 	// paths without starting real providers or sidecars.
@@ -85,6 +88,13 @@ type Server struct {
 	detached   map[string]*detachedSession
 	tagsMu     sync.Mutex
 	tags       map[*control.Controller]*sessionTagSink
+}
+
+// SetControllerBuildOptions records the process-local options used to build
+// Serve's initial controller. Replacement controllers override only fields
+// that necessarily change with their session tag and active model.
+func (s *Server) SetControllerBuildOptions(opts boot.Options) {
+	s.buildOptions = opts
 }
 
 const sessionPathHeader = "X-Reasonix-Session-Path"
@@ -123,6 +133,10 @@ func (s *Server) ctl() control.SessionAPI {
 // between the lease rebind and the controller Resume. Tests use it to force
 // the interleaving bindMu exists to prevent; production never sets it.
 var resumeBindHookForTest func()
+
+// registerDetachedHookForTest pauses after recovery callback installation but
+// before the registry publication. Production never sets it.
+var registerDetachedHookForTest func()
 
 // sessionInUseError renders a lease refusal for HTTP clients using the shared
 // CLI wording, without the session file path.
@@ -243,7 +257,7 @@ func (s *Server) switchModelLocked(ctx context.Context, ref string) error {
 		}
 	}
 	newCtrl.AdoptHistory(carried, newPath)
-	tag.SetPath(newCtrl.SessionPath())
+	tag.PrimePath(newCtrl.SessionPath())
 	newCtrl.SetOnSessionRecovered(s.sessionRecoveryHandler(newCtrl, s.leases))
 	// A rebuild must not force the user to re-approve tools already granted
 	// this session, or re-trust Plan-mode read-only commands already trusted
@@ -272,7 +286,7 @@ func (s *Server) switchModelLocked(ctx context.Context, ref string) error {
 		}
 	}
 	activePath := newCtrl.SessionPath()
-	tag.SetPath(activePath)
+	tag.PrimePath(activePath)
 	if err := s.rebindSessionLeaseFor(activePath, newCtrl); err != nil {
 		s.closeTaggedController(newCtrl)
 		if errors.Is(err, agent.ErrSessionLeaseHeld) {
@@ -297,6 +311,7 @@ func (s *Server) switchModelLocked(ctx context.Context, ref string) error {
 		s.closeTaggedController(newCtrl)
 		return fmt.Errorf("switch model: session changed during switch")
 	}
+	tag.Activate()
 	s.refreshProviderSetup(currentModelRef(newCtrl))
 
 	// Off-lock: tear down the old controller. Close can block up to 15s.
@@ -365,6 +380,9 @@ func (s *Server) reloadExtensions(ctx context.Context) error {
 		s.closeTaggedController(newCtrl)
 		return fmt.Errorf("reload extensions: session changed during reload")
 	}
+	if tag := s.tagFor(newCtrl); tag != nil {
+		tag.Activate()
+	}
 	s.refreshProviderSetup(currentModelRef(newCtrl))
 
 	cur.Close()
@@ -374,7 +392,7 @@ func (s *Server) reloadExtensions(ctx context.Context) error {
 
 func (s *Server) rebuild(ctx context.Context, old *control.Controller, ref string) (*control.Controller, error) {
 	tag := newSessionTagSink(s.bc)
-	tag.SetPath(old.SessionPath())
+	tag.PrimePath(old.SessionPath())
 	opts := boot.Options{
 		Model:         ref,
 		Sink:          tag,
@@ -687,6 +705,17 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.TrimSpace(body.Input)
 	if strings.HasPrefix(trimmed, "!") {
 		http.Error(w, "shell commands are unavailable over HTTP", http.StatusForbidden)
+		return
+	}
+	// Session rotations must complete while bindMu is held. Controller.Submit
+	// dispatches these verbs asynchronously, which would let a following model,
+	// resume, or extension command cross the rotation generation boundary.
+	switch trimmed {
+	case "/new":
+		s.newSessionFromSubmit(w, r)
+		return
+	case "/clear":
+		s.clearSessionFromSubmit(w, r)
 		return
 	}
 	// Intercept /model <ref> for runtime model switching (the controller's
@@ -1138,6 +1167,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		s.setControllerPath(ctrl, realPath)
 	}
 	s.bc.ResetSessionPath(realPath)
+	s.announceSessionChanged(realPath)
 	w.WriteHeader(http.StatusNoContent)
 	s.replayPendingPromptsBroadcast()
 }
@@ -1282,33 +1312,35 @@ func currentModelRef(c control.SessionAPI) string {
 // skips provider balance IO while retaining all reconciliation fields.
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	runtimeOnly := r.URL.Query().Get("runtime") == "1" || r.URL.Query().Get("lite") == "1"
-	used, window := s.ctl().ContextSnapshot()
-	hit, miss := s.ctl().SessionCache()
-	rs := s.ctl().RuntimeStatus()
+	ctrl := s.ctl()
+	used, window := ctrl.ContextSnapshot()
+	hit, miss := ctrl.SessionCache()
+	rs := ctrl.RuntimeStatus()
 	sess := map[string]any{
-		"label":            s.ctl().Label(),
+		"label":            ctrl.Label(),
 		"running":          rs.Running,
-		"plan":             s.ctl().PlanMode(),
-		"autoApproveTools": s.ctl().AutoApproveTools(),
-		"bypass":           s.ctl().AutoApproveTools(),
-		"toolApprovalMode": s.ctl().ToolApprovalMode(),
-		"goal":             s.ctl().Goal(),
-		"goalStatus":       s.ctl().GoalStatus(),
-		"qualityFloor":     s.ctl().QualityFloor(),
-		"cwd":              s.ctl().SessionDir(),
+		"plan":             ctrl.PlanMode(),
+		"autoApproveTools": ctrl.AutoApproveTools(),
+		"bypass":           ctrl.AutoApproveTools(),
+		"toolApprovalMode": ctrl.ToolApprovalMode(),
+		"goal":             ctrl.Goal(),
+		"goalStatus":       ctrl.GoalStatus(),
+		"qualityFloor":     ctrl.QualityFloor(),
+		"cwd":              ctrl.SessionDir(),
 		"used":             used,
 		"window":           window,
 		"cacheHit":         hit,
 		"cacheMiss":        miss,
 	}
-	if s.ctl().Goal() != "" {
-		sess["goalRuntime"] = s.ctl().GoalRuntime()
+	if ctrl.Goal() != "" {
+		sess["goalRuntime"] = ctrl.GoalRuntime()
 	}
-	if path := strings.TrimSpace(s.ctl().SessionPath()); path != "" && store.IsSessionTranscriptName(filepath.Base(path)) {
+	if path := strings.TrimSpace(ctrl.SessionPath()); path != "" && store.IsSessionTranscriptName(filepath.Base(path)) {
 		sess["sessionName"] = strings.TrimSuffix(filepath.Base(path), ".jsonl")
+		sess["sessionPath"] = agent.CanonicalSessionPath(path)
 	}
 	if cfg, err := config.Load(); err == nil {
-		if entry, ok := cfg.ResolveModel(currentModelRef(s.ctl())); ok {
+		if entry, ok := cfg.ResolveModel(currentModelRef(ctrl)); ok {
 			capability := config.EffortCapabilityForEntry(entry)
 			levels := capability.Levels
 			if levels == nil {
@@ -1329,11 +1361,11 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	sess["backgroundJobs"] = rs.BackgroundJobs
 	sess["cancelRequested"] = rs.CancelRequested
 	sess["cancellable"] = rs.Cancellable
-	if u := s.ctl().LastUsage(); u != nil {
+	if u := ctrl.LastUsage(); u != nil {
 		sess["lastUsage"] = u
 	}
 	if !runtimeOnly {
-		if b, err := s.ctl().Balance(r.Context()); err == nil && b != nil {
+		if b, err := ctrl.Balance(r.Context()); err == nil && b != nil {
 			if cfg, loadErr := config.Load(); loadErr == nil && cfg.DisplayCurrencyPref() == "" {
 				// Runtime-only hint: a single wallet currency may select an existing
 				// valuation, but is never persisted as configuration or history.
@@ -1348,8 +1380,8 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("serve: balance fetch failed", "err", err)
 		}
 	}
-	sess["sessionCostQuote"] = s.bc.SessionCostQuoteFor(agent.CanonicalSessionPath(s.ctl().SessionPath()))
-	if j := s.ctl().Jobs(); len(j) > 0 {
+	sess["sessionCostQuote"] = s.bc.SessionCostQuoteFor(agent.CanonicalSessionPath(ctrl.SessionPath()))
+	if j := ctrl.Jobs(); len(j) > 0 {
 		sess["jobs"] = j
 	}
 	writeJSON(w, sess)
@@ -1419,6 +1451,8 @@ func (s *Server) generateTitle(ctx context.Context, firstMsg string) string {
 	return strings.TrimSpace(title)
 }
 
+var deleteSessionBeforeOwnershipLockHookForTest func()
+
 // deleteSession removes a saved session by the session name returned from /sessions.
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -1437,6 +1471,15 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid session name", http.StatusBadRequest)
 		return
 	}
+	// Serialize active/detached ownership checks with session promotion. A
+	// detached controller is removed from the background registry while it is
+	// being promoted; without bindMu a concurrent delete can pass both checks
+	// in that transfer window and remove the live controller's transcript.
+	if deleteSessionBeforeOwnershipLockHookForTest != nil {
+		deleteSessionBeforeOwnershipLockHookForTest()
+	}
+	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
 	dir := s.ctl().SessionDir()
 	if dir == "" {
 		http.Error(w, "sessions disabled", http.StatusBadRequest)

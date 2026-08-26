@@ -21,6 +21,30 @@ func enterRemoteSession(ctx context.Context, client *http.Client, base string, o
 	return err
 }
 
+// preflightRemoteSessionTarget resolves the foreground identity without
+// mutating Serve. Attach uses it to publish routing before the event pump can
+// observe an immediate replay from a detached controller.
+func preflightRemoteSessionTarget(ctx context.Context, client *http.Client, base string, opts RemoteTabOpenOptions) (serveSessionEntry, error) {
+	name := strings.TrimSpace(opts.SessionName)
+	if path := strings.TrimSpace(opts.SessionPath); path != "" {
+		return serveSessionEntry{Name: name, Path: path, Title: strings.TrimSpace(opts.SessionTitle), Current: true}, nil
+	}
+	if name == "" {
+		return serveCurrentSession(ctx, client, base)
+	}
+	sessions, err := serveSessions(ctx, client, base)
+	if err != nil {
+		return serveSessionEntry{}, err
+	}
+	for _, session := range sessions {
+		if session.Name == name {
+			session.Current = true
+			return session, nil
+		}
+	}
+	return serveSessionEntry{}, fmt.Errorf("remote session %q not found", name)
+}
+
 func enterRemoteSessionTarget(ctx context.Context, client *http.Client, base string, opts RemoteTabOpenOptions) (serveSessionEntry, error) {
 	name := strings.TrimSpace(opts.SessionName)
 	if opts.NewSession {
@@ -80,6 +104,15 @@ func serveCurrentSession(ctx context.Context, client *http.Client, base string) 
 	return serveSessionEntry{}, nil
 }
 
+// installRemoteTabAttachRoute fences listings both before a target is installed
+// and after Serve commits it, preventing either stale epoch from restoring the
+// former current session.
+func installRemoteTabAttachRoute(tab *remoteTab, path string) {
+	tab.routing.currentPath = strings.TrimSpace(path)
+	tab.session.path = tab.routing.currentPath
+	tab.routing.revision++
+}
+
 // routeRemoteTabFrame tracks background runtime without leaking its frames
 // into the foreground reducer. Untagged frames remain legacy-compatible.
 func (a *App) routeRemoteTabFrame(tabID string, gen uint64, sessionPath, kind string) bool {
@@ -106,11 +139,135 @@ func (a *App) routeRemoteTabFrame(tabID string, gen uint64, sessionPath, kind st
 		}
 	}
 	foreground := sessionPath == "" || tab.routing.currentPath != "" && sessionPath == tab.routing.currentPath
-	backgroundChanged := changed && !foreground
+	_, knownBackground := tab.routing.running[sessionPath]
+	// A detached turn can finish while background jobs remain. Its later notice
+	// makes /sessions authoritative again, so refresh project-tree rows without
+	// forwarding that background notice to the foreground reducer.
+	backgroundChanged := !foreground && (changed || kind == "notice" && knownBackground)
 	meta := remoteTabMetaLocked(tab)
 	a.remoteTabMu.Unlock()
 	if backgroundChanged {
 		a.emitRemoteEvent("remote-tab:updated", meta)
 	}
 	return foreground
+}
+
+// adoptRemoteTabFrameCurrent consumes Serve's publication-time foreground
+// marker. Unlike the running cache, this marker follows switches initiated by
+// other HTTP clients and slash/recovery path changes while a tab stays open.
+func (a *App) adoptRemoteTabFrameCurrent(tabID string, gen uint64, sessionPath string) {
+	if sessionPath == "" {
+		return
+	}
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil || tab.gen != gen || !adoptRemoteTabSessionPathLocked(tab, sessionPath) {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	meta := remoteTabMetaLocked(tab)
+	ready := tab.state == "ready"
+	a.remoteTabMu.Unlock()
+	a.emitRemoteEvent("remote-tab:updated", meta)
+	if ready {
+		// The frontend treats ready -> ready as a new surface generation. Emit it
+		// before the triggering frame is forwarded so that frame is buffered until
+		// the newly current session snapshot replaces the old transcript.
+		a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:state", tabID), RemoteTabStateView{State: "ready"})
+	}
+}
+
+// adoptRemoteTabSessionPathLocked moves foreground-only state to a new session.
+// Actionable events belong to the previous controller and must never be replayed
+// into the newly hydrated surface. Caller holds remoteTabMu.
+func adoptRemoteTabSessionPathLocked(tab *remoteTab, sessionPath string) bool {
+	sessionPath = strings.TrimSpace(sessionPath)
+	if tab == nil || sessionPath == "" || tab.routing.currentPath == sessionPath {
+		return false
+	}
+	tab.routing.currentPath = sessionPath
+	tab.routing.revision++
+	tab.session.path = sessionPath
+	tab.session.newSession = false
+	tab.session.reset = false
+	tab.pendingEvents = nil
+	tab.runtime.pendingPrompt = false
+	return true
+}
+
+// remoteTabFramePathUnknown distinguishes a possible foreground recovery or
+// slash-command rotation from a path already observed as background work.
+func (a *App) remoteTabFramePathUnknown(tabID string, gen uint64, sessionPath, kind string) bool {
+	if sessionPath == "" {
+		return false
+	}
+	a.remoteTabMu.Lock()
+	defer a.remoteTabMu.Unlock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil || tab.gen != gen || sessionPath == tab.routing.currentPath {
+		return false
+	}
+	_, knownBackground := tab.routing.running[sessionPath]
+	if !knownBackground {
+		return true
+	}
+	// Transitional frames are sparse and must remain compatible with a Serve
+	// that did not attach sessionCurrent. Revalidate them after a background
+	// cache hit; ordinary output is covered by the per-frame marker above.
+	switch kind {
+	case "turn_started", "approval_request", "ask_request":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *App) reconcileRemoteTabFramePath(tabID string, gen uint64, sessionPath string) bool {
+	if _, err := a.RemoteTabStatus(tabID); err != nil {
+		return false
+	}
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil || tab.gen != gen {
+		a.remoteTabMu.Unlock()
+		return false
+	}
+	if tab.routing.currentPath == sessionPath {
+		a.remoteTabMu.Unlock()
+		return true
+	}
+	// The authoritative status confirmed another foreground path. Remember
+	// this tag as background so a lossy detached stream does not synchronously
+	// fetch /status for every later token or notice from the same session.
+	if tab.routing.running == nil {
+		tab.routing.running = map[string]bool{}
+	}
+	var refresh *TabMeta
+	if _, known := tab.routing.running[sessionPath]; !known {
+		tab.routing.running[sessionPath] = false
+		tab.routing.revision++
+		meta := remoteTabMetaLocked(tab)
+		refresh = &meta
+	}
+	a.remoteTabMu.Unlock()
+	if refresh != nil {
+		a.emitRemoteEvent("remote-tab:updated", *refresh)
+	}
+	return false
+}
+
+func (a *App) routeRemoteTabFrameReconciled(tabID string, gen uint64, sessionPath, kind string) bool {
+	pathUnknown := a.remoteTabFramePathUnknown(tabID, gen, sessionPath, kind)
+	if a.routeRemoteTabFrame(tabID, gen, sessionPath, kind) {
+		return true
+	}
+	return pathUnknown && a.reconcileRemoteTabFramePath(tabID, gen, sessionPath) &&
+		a.routeRemoteTabFrame(tabID, gen, sessionPath, kind)
+}
+
+func (a *App) routeRemoteTabWireFrame(tabID string, gen uint64, sessionPath, kind string, current bool) bool {
+	if current {
+		a.adoptRemoteTabFrameCurrent(tabID, gen, sessionPath)
+	}
+	return a.routeRemoteTabFrameReconciled(tabID, gen, sessionPath, kind)
 }

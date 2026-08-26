@@ -19,10 +19,13 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"reasonix/internal/config"
+	"reasonix/internal/jobs"
 	"reasonix/internal/remote/bootstrap"
 	"reasonix/internal/remote/forward"
 	"reasonix/internal/store"
 )
+
+const remoteProviderReloadTimeout = jobs.DefaultTeardownGrace + 15*time.Second
 
 // SwitchCredentialProxyModel stages an immutable desktop proxy route and a
 // matching remote provider credential, then asks Serve to perform its ordinary
@@ -276,25 +279,30 @@ func (m *desktopRemoteManager) readyServeReusable(ctx context.Context, c desktop
 	return true
 }
 
-// healCredentialChannel runs at the END of a successful ensure round, when the
-// serve's forward and registration are live. The reverse forward rebinds a
-// fresh ephemeral port on every SSH reconnect, and the heal inside ensureServe
-// only rewrites the CONFIG — a reused serve's in-memory providers still dial
-// the old port. When the port moved (or the heal rewrote anything), tell the
-// serve(s) on this host to rebuild their providers, then verify the channel
-// end to end before recording the port as healed.
+// healCredentialChannel runs after ensure when the forward is live. A reconnect
+// can move its remote port, so heal every tracked workspace config before any
+// Serve reloads providers, then verify the channel before recording the port.
 func (m *desktopRemoteManager) healCredentialChannel(ctx context.Context, c desktopSSHClient, mh *managedHost, hostID, workspace, base, token string, res bootstrap.Result) error {
 	port, has := credentialForwardPort(c, hostID)
 	if !has {
 		return fmt.Errorf("credential proxy: reverse tunnel is not available")
 	}
-	if res.Reused && (int(mh.credPort.Load()) != port || res.CredentialConfigChanged) {
+	if int(mh.credPort.Load()) != port || res.CredentialConfigChanged {
 		log.Printf("[remote] EnsureServer: cred port drift host=%s old=%d new=%d configChanged=%v -> reloading serve providers", hostID, mh.credPort.Load(), port, res.CredentialConfigChanged)
-		// base+token is the serve this round just ensured: the registry may
-		// not hold it yet (it is published moments before this call), and an
-		// empty registry must not turn the reload into a silent no-op.
-		if !m.reloadServeProviders(ctx, hostID, workspace, base, token) {
-			return fmt.Errorf("credential proxy: serve providers could not reload")
+		workspaces := m.trackedCredentialWorkspaces(hostID, workspace)
+		// base+token covers the Serve ensured by this round even if it has not
+		// reached the registry yet; tracked peers are reloaded alongside it.
+		if err := healCredentialConfigsBeforeReload(ctx, workspaces,
+			func(workspace string) (*bootstrap.CredentialProxyOptions, error) {
+				return m.credentialProxySetup(c, hostID, workspace)
+			},
+			func(ctx context.Context, opts *bootstrap.CredentialProxyOptions) error {
+				_, err := bootstrap.HealCredentialProvider(ctx, c, opts)
+				return err
+			},
+			func() bool { return m.reloadServeProviders(ctx, mh, hostID, workspace, base, token) },
+		); err != nil {
+			return err
 		}
 	}
 	if perr := probeReverseTunnel(c, port); perr != nil {
@@ -450,6 +458,21 @@ func (m *desktopRemoteManager) credentialProxySetup(c desktopSSHClient, hostID, 
 }
 
 func (m *desktopRemoteManager) registerTrackedCredentialRoutes(app *App, hostID, workspace string) (credentialProxyRouteInfo, error) {
+	workspaces := m.trackedCredentialWorkspaces(hostID, workspace)
+	var info credentialProxyRouteInfo
+	for index, trackedWorkspace := range workspaces {
+		registered, err := app.registerCredentialProxyRoute(hostID, trackedWorkspace)
+		if err != nil {
+			return credentialProxyRouteInfo{}, err
+		}
+		if index == 0 {
+			info = registered
+		}
+	}
+	return info, nil
+}
+
+func (m *desktopRemoteManager) trackedCredentialWorkspaces(hostID, workspace string) []string {
 	workspaces := []string{workspace}
 	m.mu.Lock()
 	if managed := m.hosts[hostID]; managed != nil {
@@ -463,17 +486,7 @@ func (m *desktopRemoteManager) registerTrackedCredentialRoutes(app *App, hostID,
 		workspaces = append(workspaces, peers...)
 	}
 	m.mu.Unlock()
-	var info credentialProxyRouteInfo
-	for index, trackedWorkspace := range workspaces {
-		registered, err := app.registerCredentialProxyRoute(hostID, trackedWorkspace)
-		if err != nil {
-			return credentialProxyRouteInfo{}, err
-		}
-		if index == 0 {
-			info = registered
-		}
-	}
-	return info, nil
+	return workspaces
 }
 
 // ensureCredentialProxyForward opens (idempotently) the reverse tunnel: the
@@ -566,11 +579,11 @@ func probeReverseTunnel(c desktopSSHClient, port int) error {
 // host's other workspaces, which share the same healed config. Returns false
 // when any serve could not reload (busy turn, or a serve too old to know the
 // endpoint): callers keep their heal gate closed so the next ensure retries.
-func (m *desktopRemoteManager) reloadServeProviders(ctx context.Context, hostID, workspace, extraBase, extraToken string) bool {
+func (m *desktopRemoteManager) reloadServeProviders(ctx context.Context, generation *managedHost, hostID, workspace, extraBase, extraToken string) bool {
 	type target struct{ base, token string }
 	m.mu.Lock()
 	mh := m.hosts[hostID]
-	if mh == nil {
+	if mh == nil || mh != generation {
 		m.mu.Unlock()
 		return false
 	}
@@ -600,7 +613,7 @@ func (m *desktopRemoteManager) reloadServeProviders(ctx context.Context, hostID,
 			continue
 		}
 		client := &http.Client{Jar: jar}
-		callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		callCtx, cancel := context.WithTimeout(ctx, remoteProviderReloadTimeout)
 		err = serveHandshake(callCtx, client, t.base, t.token)
 		if err == nil {
 			err = servePost(callCtx, client, serveURL(t.base, "/providers/reload"), nil)
@@ -661,7 +674,7 @@ func (m *desktopRemoteManager) cancelThenReload(ctx context.Context, client *htt
 			return ctx.Err()
 		case <-timer.C:
 		}
-		callCtx, callCancel := context.WithTimeout(ctx, 15*time.Second)
+		callCtx, callCancel := context.WithTimeout(ctx, remoteProviderReloadTimeout)
 		err = serveHandshake(callCtx, client, base, token)
 		if err == nil {
 			err = servePost(callCtx, client, serveURL(base, "/providers/reload"), nil)

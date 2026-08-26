@@ -11,13 +11,37 @@ import (
 // active session file. Call it before serving; a nil keeper leaves gating off.
 func (s *Server) SetSessionLeases(k *control.SessionLeaseKeeper) error {
 	s.leases = k
+	if k != nil {
+		k.SetControllerOwnershipBinder(func(ctrl *control.Controller, owner *control.SessionLeaseKeeper) {
+			ctrl.SetOnSessionRecovered(s.sessionRecoveryHandler(ctrl, owner))
+			ctrl.SetOnSessionTransition(s.sessionTransitionHandler(ctrl, owner))
+		})
+	}
 	if ctrl, ok := s.ctl().(*control.Controller); ok {
-		ctrl.SetOnSessionRecovered(s.sessionRecoveryHandler(ctrl, k))
 		if k != nil {
 			return k.BindControllerAuthority(ctrl)
 		}
 	}
 	return nil
+}
+
+func (s *Server) sessionTransitionHandler(ctrl *control.Controller, k *control.SessionLeaseKeeper) func(control.SessionTransitionInfo) error {
+	if k == nil && s.tagFor(ctrl) == nil {
+		return nil
+	}
+	return func(info control.SessionTransitionInfo) error {
+		if k != nil {
+			if err := k.HandleSessionTransition(info); err != nil {
+				return err
+			}
+		}
+		path := agent.CanonicalSessionPath(info.TargetPath)
+		if tag := s.tagFor(ctrl); tag != nil {
+			tag.PrimePath(path)
+		}
+		s.publishControllerPathIfCurrent(ctrl, path)
+		return nil
+	}
 }
 
 func (s *Server) sessionRecoveryHandler(ctrl *control.Controller, k *control.SessionLeaseKeeper) func(control.SessionRecoveryInfo) error {
@@ -34,13 +58,25 @@ func (s *Server) sessionRecoveryHandler(ctrl *control.Controller, k *control.Ses
 			return err
 		}
 		if tag := s.tagFor(ctrl); tag != nil {
-			tag.SetPath(info.RecoveryPath)
+			tag.PrimePath(info.RecoveryPath)
 		}
-		if s.ctl() == control.SessionAPI(ctrl) {
-			s.bc.SetCurrentSession(info.RecoveryPath)
-		}
+		s.publishControllerPathIfCurrent(ctrl, info.RecoveryPath)
 		return nil
 	}
+}
+
+// publishControllerPathIfCurrent keeps the controller identity check and its
+// broadcaster route update in the same publication critical section. A
+// recovery/transition callback from a just-demoted controller therefore
+// cannot overwrite the newly published foreground route.
+func (s *Server) publishControllerPathIfCurrent(ctrl *control.Controller, path string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ctrl != control.SessionAPI(ctrl) {
+		return false
+	}
+	s.bc.SetCurrentSession(path)
+	return true
 }
 
 // moveDetachedRecovery keeps the registry key aligned when a background

@@ -19,10 +19,11 @@ import (
 //
 // The zero value is not ready for use; construct with NewSessionLeaseKeeper.
 type SessionLeaseKeeper struct {
-	mu         sync.Mutex
-	lease      *agent.SessionLease
-	controller *Controller
-	retired    []<-chan struct{}
+	mu              sync.Mutex
+	lease           *agent.SessionLease
+	controller      *Controller
+	retired         []<-chan struct{}
+	ownershipBinder func(*Controller, *SessionLeaseKeeper)
 }
 
 func NewSessionLeaseKeeper() *SessionLeaseKeeper {
@@ -219,7 +220,38 @@ func (k *SessionLeaseKeeper) BindControllerAuthority(c *Controller) error {
 	}
 	k.controller = c
 	c.SetOnSessionTransition(k.HandleSessionTransition)
+	if k.ownershipBinder != nil {
+		k.ownershipBinder(c, k)
+	}
 	return nil
+}
+
+// SetControllerOwnershipBinder lets an owning frontend compose its routing
+// callbacks with lease handoff. The binder follows a controller through
+// Split, RebindDetaching, and Adopt instead of those transfers replacing the
+// frontend callback with the keeper-only default.
+func (k *SessionLeaseKeeper) SetControllerOwnershipBinder(bind func(*Controller, *SessionLeaseKeeper)) {
+	if k == nil {
+		return
+	}
+	k.mu.Lock()
+	k.ownershipBinder = bind
+	if k.controller != nil && bind != nil {
+		bind(k.controller, k)
+	}
+	k.mu.Unlock()
+}
+
+func (k *SessionLeaseKeeper) bindTransferredController(c *Controller) {
+	if c == nil {
+		return
+	}
+	c.SetOnSessionTransition(k.HandleSessionTransition)
+	if k.ownershipBinder != nil {
+		k.ownershipBinder(c, k)
+	} else {
+		c.SetOnSessionRecovered(k.HandleSessionRecovered)
+	}
 }
 
 // Split moves the held lease and controller binding into a new keeper without
@@ -234,10 +266,9 @@ func (k *SessionLeaseKeeper) Split() *SessionLeaseKeeper {
 	if k.lease == nil && k.controller == nil && len(k.retired) == 0 {
 		return nil
 	}
-	dst := &SessionLeaseKeeper{lease: k.lease, controller: k.controller, retired: k.retired}
+	dst := &SessionLeaseKeeper{lease: k.lease, controller: k.controller, retired: k.retired, ownershipBinder: k.ownershipBinder}
 	if dst.controller != nil {
-		dst.controller.SetOnSessionTransition(dst.HandleSessionTransition)
-		dst.controller.SetOnSessionRecovered(dst.HandleSessionRecovered)
+		dst.bindTransferredController(dst.controller)
 	}
 	k.lease, k.controller, k.retired = nil, nil, nil
 	return dst
@@ -265,11 +296,10 @@ func (k *SessionLeaseKeeper) RebindDetaching(path string) (*SessionLeaseKeeper, 
 	}
 	var dst *SessionLeaseKeeper
 	if k.lease != nil || k.controller != nil || len(k.retired) > 0 {
-		dst = &SessionLeaseKeeper{lease: k.lease, controller: k.controller, retired: k.retired}
+		dst = &SessionLeaseKeeper{lease: k.lease, controller: k.controller, retired: k.retired, ownershipBinder: k.ownershipBinder}
 	}
 	if dst.controller != nil {
-		dst.controller.SetOnSessionTransition(dst.HandleSessionTransition)
-		dst.controller.SetOnSessionRecovered(dst.HandleSessionRecovered)
+		dst.bindTransferredController(dst.controller)
 	}
 	k.lease, k.controller, k.retired = lease, nil, nil
 	k.mu.Unlock()
@@ -283,16 +313,18 @@ func (k *SessionLeaseKeeper) Adopt(other *SessionLeaseKeeper) {
 		return
 	}
 	other.mu.Lock()
-	inLease, inCtrl, inRetired := other.lease, other.controller, other.retired
+	inLease, inCtrl, inRetired, inBinder := other.lease, other.controller, other.retired, other.ownershipBinder
 	other.lease, other.controller, other.retired = nil, nil, nil
 	other.mu.Unlock()
-	if inCtrl != nil {
-		inCtrl.SetOnSessionTransition(k.HandleSessionTransition)
-		inCtrl.SetOnSessionRecovered(k.HandleSessionRecovered)
-	}
 	k.mu.Lock()
 	k.releaseLocked()
+	if k.ownershipBinder == nil {
+		k.ownershipBinder = inBinder
+	}
 	k.lease, k.controller, k.retired = inLease, inCtrl, inRetired
+	if inCtrl != nil {
+		k.bindTransferredController(inCtrl)
+	}
 	k.mu.Unlock()
 }
 

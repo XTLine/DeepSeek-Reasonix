@@ -197,11 +197,13 @@ func runtimeSwitchErrorStatus(err error) int {
 // providersReload rebuilds the current model after an on-disk provider or
 // credential-tunnel endpoint change. Busy serves return a retryable 409.
 func (s *Server) providersReload(w http.ResponseWriter, r *http.Request) {
+	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
 	ref := s.ctl().ModelRef()
-	if err := s.switchModel(r.Context(), ref); err != nil {
+	if err := s.switchModelLocked(r.Context(), ref); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	s.cancelDetachedForProviderHeal()
+	s.retireDetachedForProviderHeal()
 	writeJSON(w, map[string]string{"model": ref})
 }

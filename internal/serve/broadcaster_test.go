@@ -40,6 +40,30 @@ func TestBroadcasterFiltersSessions(t *testing.T) {
 	}
 }
 
+func TestBroadcasterMarksForegroundFramesAtPublication(t *testing.T) {
+	b := NewBroadcaster()
+	b.SetCurrentSession("/sessions/current.jsonl")
+	all, stop := b.SubscribeAll()
+	defer stop()
+
+	b.Emit(event.Event{Kind: event.Text, Text: "current", SessionPath: "/sessions/current.jsonl"})
+	b.Emit(event.Event{Kind: event.Text, Text: "background", SessionPath: "/sessions/background.jsonl"})
+
+	var current, background eventwire.Event
+	if err := json.Unmarshal(<-all, &current); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(<-all, &background); err != nil {
+		t.Fatal(err)
+	}
+	if !current.SessionCurrent {
+		t.Fatalf("foreground frame was not marked current: %+v", current)
+	}
+	if background.SessionCurrent {
+		t.Fatalf("background frame was marked current: %+v", background)
+	}
+}
+
 func TestBroadcasterFanOut(t *testing.T) {
 	b := NewBroadcaster()
 	a, ca := b.Subscribe()
@@ -61,6 +85,27 @@ func TestBroadcasterFanOut(t *testing.T) {
 		if w.Kind != "text" || w.Text != "hi" {
 			t.Errorf("subscriber %d got %+v", i, w)
 		}
+	}
+}
+
+func TestBroadcasterEmitToHonorsCurrentSession(t *testing.T) {
+	b := NewBroadcaster()
+	b.SetCurrentSession("/sessions/b.jsonl")
+	current, stopCurrent := b.Subscribe()
+	all, stopAll := b.SubscribeAll()
+	defer stopCurrent()
+	defer stopAll()
+	b.EmitTo(current, event.Event{Kind: event.ApprovalRequest, SessionPath: "/sessions/a.jsonl"})
+	b.EmitTo(all, event.Event{Kind: event.ApprovalRequest, SessionPath: "/sessions/a.jsonl"})
+	if len(current) != 0 {
+		t.Fatal("current-only subscriber received a stale session replay")
+	}
+	if len(all) != 1 {
+		t.Fatal("all-session subscriber lost a tagged background replay")
+	}
+	b.EmitTo(current, event.Event{Kind: event.ApprovalRequest, SessionPath: "/sessions/b.jsonl"})
+	if len(current) != 1 {
+		t.Fatal("current-only subscriber lost the current session replay")
 	}
 }
 
@@ -97,11 +142,35 @@ func TestBroadcasterDropsSlowSubscriber(t *testing.T) {
 	b := NewBroadcaster()
 	ch, cancel := b.Subscribe()
 	defer cancel()
-	// Overfill far past the 64-slot buffer without reading; Emit must not block.
+	// Overfill far past the subscriber buffer without reading; Emit must not block.
 	for range 1000 {
 		b.Emit(event.Event{Kind: event.Text, Text: "x"})
 	}
 	if len(ch) == 0 {
 		t.Error("expected some buffered frames")
+	}
+}
+
+func TestBroadcasterReservesCapacityForTerminalFrames(t *testing.T) {
+	b := NewBroadcaster()
+	ch, cancel := b.SubscribeAll()
+	defer cancel()
+	for range subscriberBufferSize * 10 {
+		b.Emit(event.Event{Kind: event.Text, Text: "delta"})
+	}
+	b.Emit(event.Event{Kind: event.TurnDone})
+
+	found := false
+	for len(ch) > 0 {
+		var frame eventwire.Event
+		if err := json.Unmarshal(<-ch, &frame); err != nil {
+			t.Fatal(err)
+		}
+		if frame.Kind == "turn_done" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("slow subscriber lost the terminal frame after a delta flood")
 	}
 }

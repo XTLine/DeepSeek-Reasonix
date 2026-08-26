@@ -17,7 +17,7 @@ export type EventKind =
   | "tool_result"
   | "tool_result_preview"
   | "turn_status"
-  | "prompt_answered"
+  | "prompt_answered" | "session_changed"
   | "tool_progress"
   | "usage"
   | "notice"

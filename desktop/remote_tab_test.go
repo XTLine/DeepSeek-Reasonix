@@ -34,7 +34,7 @@ type fakeServe struct {
 	failEnter                      string   // non-empty ⇒ next /new or /resume replies 409
 	enterDelay                     time.Duration
 	resumeStarted                  chan string
-	resumeRelease                  <-chan struct{}
+	resumeRelease                  chan struct{}
 	failHistory                    bool // /history replies 500 when set
 	historyBody                    string
 	historyStarted, historyRelease chan struct{}
@@ -44,10 +44,30 @@ type fakeServe struct {
 	eventsConns                    int // /events connections opened
 	eventsQuery                    string
 	eventFrames                    []string
+	eventFeed                      <-chan string
 	eventsStatus                   int  // non-zero makes /events fail before opening
 	eventsCloseEarly               bool // return immediately after the initial 200 frames
 	statusPayload                  string
 	statusAfterCancel              string
+}
+
+func TestRegisterRemoteTabOpenReviveCarriesSelectedTitle(t *testing.T) {
+	ref := RemoteTabRef{HostID: "box", Workspace: "~/app"}
+	existing := &remoteTab{
+		id: "remote-1", ref: ref, state: "disconnected", topicTitle: "Old title",
+		session: remoteTabSessionState{name: "old", path: "/sessions/old.jsonl"},
+		routing: remoteTabSessionRouting{currentPath: "/sessions/old.jsonl", running: map[string]bool{}},
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{existing.id: existing}}
+	registration := a.registerRemoteTabOpen(&remoteTab{id: "unused", ref: ref}, "Box", RemoteTabOpenOptions{
+		SessionName: "selected", SessionPath: "/sessions/selected.jsonl", SessionTitle: "Selected title",
+	})
+	if registration.reuseID != existing.id || !registration.revive {
+		t.Fatalf("registration = %+v, want revived %q", registration, existing.id)
+	}
+	if existing.topicTitle != "Selected title" {
+		t.Fatalf("revived title = %q, want selected title", existing.topicTitle)
+	}
 }
 
 func (fs *fakeServe) eventsCount() int { fs.mu.Lock(); defer fs.mu.Unlock(); return fs.eventsConns }
@@ -164,6 +184,7 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		fs.mu.Lock()
 		fail := fs.failSessions
 		started, release := fs.sessionsStarted, fs.sessionsRelease
+		sessions := append([]serveSessionEntry(nil), fs.sessions...)
 		fs.mu.Unlock()
 		if started != nil {
 			select {
@@ -182,7 +203,7 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 			http.Error(w, "sessions unavailable", http.StatusInternalServerError)
 			return
 		}
-		writeTestJSON(w, fs.sessions)
+		writeTestJSON(w, sessions)
 	})
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
 		fs.mu.Lock()
@@ -191,6 +212,7 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		eventsStatus := fs.eventsStatus
 		closeEarly := fs.eventsCloseEarly
 		frames := append([]string(nil), fs.eventFrames...)
+		feed := fs.eventFeed
 		fs.mu.Unlock()
 		if eventsStatus != 0 {
 			http.Error(w, "event stream unavailable", eventsStatus)
@@ -212,7 +234,19 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		if closeEarly {
 			return
 		}
-		<-r.Context().Done()
+		if feed == nil {
+			<-r.Context().Done()
+			return
+		}
+		for {
+			select {
+			case frame := <-feed:
+				fmt.Fprintf(w, "data: %s\n\n", frame)
+				flusher.Flush()
+			case <-r.Context().Done():
+				return
+			}
+		}
 	})
 	command := func(path string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -329,37 +363,18 @@ func seedBridgeTestHost(t *testing.T, hostID string) {
 	}
 }
 
-// eventLog records every emitRemoteEvent call from any goroutine.
-type eventLog struct {
-	mu     sync.Mutex
-	events []string // "name payload"
-}
-
-func (l *eventLog) add(name string, payload any) {
-	text, _ := json.Marshal(payload)
-	l.mu.Lock()
-	l.events = append(l.events, name+" "+string(text))
-	l.mu.Unlock()
-}
-
-func (l *eventLog) recorded() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	out := make([]string, len(l.events))
-	copy(out, l.events)
-	return out
-}
-
-func (l *eventLog) count(prefix string) int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	n := 0
-	for _, e := range l.events {
-		if strings.HasPrefix(e, prefix) {
-			n++
+func waitForRemoteEventCount(t *testing.T, log *eventLog, prefix string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if got := log.count(prefix); got >= want {
+			return
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("event count for %q = %d, want >= %d (events: %v)", prefix, log.count(prefix), want, log.recorded())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	return n
 }
 
 // cleanupRemoteTabPumps cancels every open tab's SSE pump when the test
@@ -420,9 +435,9 @@ func TestRemoteTabBridgeEntersNewSessionAndStreams(t *testing.T) {
 	if currentPath != "/sessions/fresh.jsonl" {
 		t.Fatalf("current session path = %q, want response header path", currentPath)
 	}
-	if log.count("remote-tab:"+meta.ID+":state") < 2 {
-		t.Fatalf("expected connecting + ready state events, got %v", log.events)
-	}
+	// State becomes observable immediately before its event is emitted. Wait for
+	// the event too so a slow runner cannot sample that intentional handoff gap.
+	waitForRemoteEventCount(t, log, "remote-tab:"+meta.ID+":state", 2)
 
 	// Cancelling the pump (close/reconnect) must exit silently: no error
 	// state is emitted for a deliberate stop.

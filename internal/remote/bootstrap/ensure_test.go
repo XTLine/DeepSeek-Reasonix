@@ -266,6 +266,37 @@ func TestEnsureServeInstallNeverErrorsWhenAbsent(t *testing.T) {
 	}
 }
 
+func TestEnsureServeUpgradeFailurePreservesOutdatedProcess(t *testing.T) {
+	skipOnWindows(t)
+	root := t.TempDir()
+	paths := pathsFor(root, root)
+	if err := os.MkdirAll(paths.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := MarshalState(ServeState{PID: 777, Addr: "127.0.0.1:5000", Workspace: root, TokenFile: paths.TokenFile})
+	_ = os.WriteFile(paths.StateJSON, state, 0o600)
+	_ = os.WriteFile(paths.TokenFile, []byte("existing-token\n"), 0o600)
+	conn := newFakeConn(t, root, func(cmd string) (remote.ExecResult, error) {
+		switch {
+		case strings.Contains(cmd, "kill -TERM 777"):
+			t.Fatal("outdated Serve was stopped before a replacement was available")
+		case strings.Contains(cmd, "ps -p 777"):
+			return ok("1\n")
+		case strings.Contains(cmd, "readlink /proc/777/exe"):
+			return ok("no\n")
+		case strings.Contains(cmd, "uname"):
+			return ok("Linux x86_64\n")
+		case strings.Contains(cmd, "command -v reasonix"):
+			return ok("\n")
+		}
+		return ok("")
+	})
+	_, err := EnsureServe(context.Background(), conn, Options{Workspace: "~", Install: InstallNever})
+	if err == nil || !strings.Contains(err.Error(), "serve_install = never") {
+		t.Fatalf("upgrade error = %v, want install-never failure", err)
+	}
+}
+
 func TestStopRemovesStateFiles(t *testing.T) {
 	skipOnWindows(t)
 	root := t.TempDir()

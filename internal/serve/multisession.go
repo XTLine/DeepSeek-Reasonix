@@ -7,8 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"reasonix/internal/agent"
@@ -22,8 +21,11 @@ import (
 // turns alive without sending a background session's frames to the foreground
 // browser.
 type sessionTagSink struct {
-	bc   *Broadcaster
-	path atomic.Pointer[string]
+	bc      *Broadcaster
+	mu      sync.Mutex
+	path    string
+	active  bool
+	pending []event.Event
 }
 
 func newSessionTagSink(bc *Broadcaster) *sessionTagSink {
@@ -39,22 +41,62 @@ func NewSessionTagSink(bc *Broadcaster) *SessionTagSink {
 }
 
 func (s *sessionTagSink) SetPath(path string) {
-	if path != "" {
-		path = agent.CanonicalSessionPath(path)
-	}
-	s.path.Store(&path)
+	s.mu.Lock()
+	s.path = canonicalSessionPath(path)
+	s.activateLocked()
+	s.mu.Unlock()
 }
 
-func (s *sessionTagSink) Path() string {
-	if p := s.path.Load(); p != nil {
-		return *p
+// PrimePath assigns a replacement controller's route without publishing boot
+// events. Activate is called only after the controller swap fully commits.
+func (s *sessionTagSink) PrimePath(path string) {
+	s.mu.Lock()
+	s.path = canonicalSessionPath(path)
+	s.mu.Unlock()
+}
+
+func canonicalSessionPath(path string) string {
+	if path != "" {
+		return agent.CanonicalSessionPath(path)
 	}
 	return ""
 }
 
+func (s *sessionTagSink) Activate() {
+	s.mu.Lock()
+	s.activateLocked()
+	s.mu.Unlock()
+}
+
+func (s *sessionTagSink) activateLocked() {
+	if s.active {
+		return
+	}
+	s.active = true
+	for _, e := range s.pending {
+		if s.path != "" {
+			e.SessionPath = s.path
+		}
+		s.bc.Emit(e)
+	}
+	s.pending = nil
+}
+
+func (s *sessionTagSink) Path() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.path
+}
+
 func (s *sessionTagSink) Emit(e event.Event) {
-	if path := s.Path(); path != "" {
-		e.SessionPath = path
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active {
+		s.pending = append(s.pending, e)
+		return
+	}
+	if s.path != "" {
+		e.SessionPath = s.path
 	}
 	s.bc.Emit(e)
 }
@@ -64,6 +106,7 @@ type detachedSession struct {
 	ctrl     control.SessionAPI
 	keeper   *control.SessionLeaseKeeper
 	tag      *sessionTagSink
+	retiring bool // guarded by Server.detachedMu; blocks reattach during Close
 	force    chan struct{}
 	reattach chan struct{}
 	done     chan struct{}
@@ -124,12 +167,13 @@ func (s *Server) setControllerPath(ctrl *control.Controller, path string) {
 // complete boot contract can inject buildControllerWithOptions.
 func (s *Server) buildTagged(ctx context.Context, ref string, inheritTemp bool) (*control.Controller, *sessionTagSink, error) {
 	tag := newSessionTagSink(s.bc)
-	opts := boot.Options{
-		Model:       ref,
-		Sink:        tag,
-		Stderr:      os.Stderr,
-		StatsSource: "serve",
+	opts := s.buildOptions
+	opts.Model = ref
+	opts.Sink = tag
+	if opts.Stderr == nil {
+		opts.Stderr = os.Stderr
 	}
+	opts.StatsSource = "serve"
 	if cur, ok := s.ctl().(*control.Controller); ok && cur != nil {
 		opts.SessionDir = cur.SessionDir()
 		opts.WorkspaceRoot = cur.WorkspaceRoot()
@@ -173,8 +217,10 @@ func (s *Server) takeDetached(path string) *detachedSession {
 	path = agent.CanonicalSessionPath(path)
 	s.detachedMu.Lock()
 	d := s.detached[path]
-	if d != nil {
+	if d != nil && !d.retiring {
 		delete(s.detached, path)
+	} else {
+		d = nil
 	}
 	s.detachedMu.Unlock()
 	if d == nil {
@@ -189,10 +235,6 @@ func (s *Server) registerDetached(ctrl control.SessionAPI, keeper *control.Sessi
 	if ctrl == nil {
 		return nil, fmt.Errorf("cannot detach a nil controller")
 	}
-	path := agent.CanonicalSessionPath(ctrl.SessionPath())
-	if path == "" {
-		return nil, fmt.Errorf("cannot detach a session without a path")
-	}
 	if tag == nil {
 		if concrete, ok := ctrl.(*control.Controller); ok {
 			tag = s.tagFor(concrete)
@@ -206,11 +248,20 @@ func (s *Server) registerDetached(ctrl control.SessionAPI, keeper *control.Sessi
 			concrete.SetOnSessionRecovered(s.sessionRecoveryHandler(concrete, keeper))
 		}
 	}
+	if registerDetachedHookForTest != nil {
+		registerDetachedHookForTest()
+	}
 	d := &detachedSession{
-		path: path, ctrl: ctrl, keeper: keeper, tag: tag,
+		ctrl: ctrl, keeper: keeper, tag: tag,
 		force: make(chan struct{}), reattach: make(chan struct{}), done: make(chan struct{}),
 	}
 	s.detachedMu.Lock()
+	path := agent.CanonicalSessionPath(ctrl.SessionPath())
+	if path == "" {
+		s.detachedMu.Unlock()
+		return nil, fmt.Errorf("cannot detach a session without a path")
+	}
+	d.path = path
 	if s.detached == nil {
 		s.detached = map[string]*detachedSession{}
 	}
@@ -249,12 +300,13 @@ func (s *Server) watchDetached(d *detachedSession) {
 		}
 	}
 
-	// Claim close ownership only while the registry still points at d. A
-	// concurrent takeDetached removes it first and receives the live controller.
+	// Claim close ownership only while the registry still points at d. Keep the
+	// retiring entry visible until Close and lease release finish so deletion
+	// cannot race final controller writes. takeDetached refuses retiring entries.
 	s.detachedMu.Lock()
 	owns := s.detached[d.path] == d
 	if owns {
-		delete(s.detached, d.path)
+		d.retiring = true
 	}
 	s.detachedMu.Unlock()
 	if !owns {
@@ -268,7 +320,13 @@ func (s *Server) watchDetached(d *detachedSession) {
 	if concrete, ok := d.ctrl.(*control.Controller); ok {
 		s.forgetSessionTag(concrete)
 	}
-	slog.Info("serve: background session closed", "session", d.path, "forced", forced)
+	s.detachedMu.Lock()
+	closedPath := d.path
+	if s.detached[d.path] == d {
+		delete(s.detached, d.path)
+	}
+	s.detachedMu.Unlock()
+	slog.Info("serve: background session closed", "session", closedPath, "forced", forced)
 	close(d.done)
 }
 
@@ -346,7 +404,7 @@ func (s *Server) busyDetach(ctx context.Context, cur *control.Controller, target
 			return err
 		}
 	}
-	tag.SetPath(targetPath)
+	tag.PrimePath(targetPath)
 	newCtrl.EnableInteractiveApproval()
 	newCtrl.SetOnSessionRecovered(s.sessionRecoveryHandler(newCtrl, s.leases))
 	if s.leases != nil {
@@ -371,8 +429,13 @@ func (s *Server) busyDetach(ctx context.Context, cur *control.Controller, target
 		s.rollbackDetach(demoted, cur)
 		return err
 	}
+	tag.Activate()
 	s.bc.ResetSessionPath(targetPath)
 	return nil
+}
+
+func (s *Server) announceSessionChanged(path string) {
+	s.bc.Emit(event.Event{Kind: event.SessionChanged, SessionPath: path})
 }
 
 var errReplacedDuringBind = &replacedDuringBindError{}
@@ -392,8 +455,9 @@ func (s *Server) rollbackDetach(demoted *control.SessionLeaseKeeper, ctrl *contr
 }
 
 func (s *Server) resumeActiveSession(w http.ResponseWriter, r *http.Request, cur control.SessionAPI, realPath string) bool {
-	if filepath.Clean(cur.SessionPath()) == filepath.Clean(realPath) {
+	if agent.CanonicalSessionPath(cur.SessionPath()) == agent.CanonicalSessionPath(realPath) {
 		s.bc.SetCurrentSession(realPath)
+		s.announceSessionChanged(realPath)
 		w.WriteHeader(http.StatusNoContent)
 		return true
 	}
@@ -402,8 +466,13 @@ func (s *Server) resumeActiveSession(w http.ResponseWriter, r *http.Request, cur
 			s.renderBindError(w, err)
 			return true
 		}
+		s.announceSessionChanged(realPath)
 		w.WriteHeader(http.StatusNoContent)
 		s.replayPendingPromptsBroadcast()
+		return true
+	}
+	if s.detachedBusy(realPath) {
+		http.Error(w, "session is finishing background teardown; retry shortly", http.StatusConflict)
 		return true
 	}
 	if !controllerHasActiveRuntimeWork(cur) {
@@ -425,6 +494,7 @@ func (s *Server) resumeActiveSession(w http.ResponseWriter, r *http.Request, cur
 		s.renderBindError(w, err)
 		return true
 	}
+	s.announceSessionChanged(realPath)
 	w.WriteHeader(http.StatusNoContent)
 	s.replayPendingPromptsBroadcast()
 	return true
@@ -523,15 +593,23 @@ func (s *Server) renderBindError(w http.ResponseWriter, err error) {
 	}
 }
 
-func (s *Server) cancelDetachedForProviderHeal() {
+// retireDetachedForProviderHeal is called with bindMu held. It makes every
+// detached controller unreattachable and waits for its provider generation to
+// close before credential reload is acknowledged.
+func (s *Server) retireDetachedForProviderHeal() {
 	s.detachedMu.Lock()
 	detached := make([]*detachedSession, 0, len(s.detached))
 	for _, d := range s.detached {
 		detached = append(detached, d)
+		select {
+		case <-d.force:
+		default:
+			close(d.force)
+		}
 	}
 	s.detachedMu.Unlock()
 	for _, d := range detached {
-		slog.Info("serve: provider heal cancels background session", "session", d.path)
-		d.ctrl.Cancel()
+		slog.Info("serve: provider heal retires background session", "session", d.path)
+		<-d.done
 	}
 }

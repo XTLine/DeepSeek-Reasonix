@@ -15,6 +15,11 @@ type subscription struct {
 	all bool
 }
 
+const (
+	subscriberBufferSize      = 128
+	subscriberPriorityReserve = 32
+)
+
 // Broadcaster is the event.Sink the controllers emit to in server mode. It
 // marshals each event once and fans it out to every connected SSE subscriber.
 // A slow subscriber's buffer is allowed to drop rather than back-pressure the
@@ -128,12 +133,24 @@ func (b *Broadcaster) Emit(e event.Event) {
 	if e.SessionPath != "" {
 		e.SessionPath = agent.CanonicalSessionPath(e.SessionPath)
 	}
-	data, err := json.Marshal(eventwire.ToWire(e))
+	wired := eventwire.ToWire(e)
+	b.mu.Lock()
+	observedCurrent := b.current
+	b.mu.Unlock()
+	wired.SessionCurrent = e.SessionPath != "" && e.SessionPath == observedCurrent
+	data, err := json.Marshal(wired)
 	if err != nil {
 		return
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.current != observedCurrent {
+		wired.SessionCurrent = e.SessionPath != "" && e.SessionPath == b.current
+		data, err = json.Marshal(wired)
+		if err != nil {
+			return
+		}
+	}
 	if e.Kind == event.Usage && e.Usage != nil && e.CostQuote != nil {
 		b.ledgerLocked(e.SessionPath).Add(*e.CostQuote, billing.UsageTokens{
 			PromptTokens: e.Usage.PromptTokens, CompletionTokens: e.Usage.CompletionTokens,
@@ -146,10 +163,7 @@ func (b *Broadcaster) Emit(e event.Event) {
 		if !sub.all && e.SessionPath != "" && e.SessionPath != b.current {
 			continue
 		}
-		select {
-		case ch <- data:
-		default: // subscriber is behind; drop this frame for it
-		}
+		enqueueSubscriberFrame(ch, data, eventIsPriority(e.Kind))
 	}
 }
 
@@ -158,21 +172,58 @@ func (b *Broadcaster) Emit(e event.Event) {
 // that attached after the original event was emitted. Normal runtime events
 // should continue to use Emit so every subscriber receives them.
 func (b *Broadcaster) EmitTo(target <-chan []byte, e event.Event) {
-	data, err := json.Marshal(eventwire.ToWire(e))
+	if e.SessionPath != "" {
+		e.SessionPath = agent.CanonicalSessionPath(e.SessionPath)
+	}
+	wired := eventwire.ToWire(e)
+	b.mu.Lock()
+	observedCurrent := b.current
+	b.mu.Unlock()
+	wired.SessionCurrent = e.SessionPath != "" && e.SessionPath == observedCurrent
+	data, err := json.Marshal(wired)
 	if err != nil {
 		return
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for ch := range b.subs {
+	if b.current != observedCurrent {
+		wired.SessionCurrent = e.SessionPath != "" && e.SessionPath == b.current
+		data, err = json.Marshal(wired)
+		if err != nil {
+			return
+		}
+	}
+	for ch, sub := range b.subs {
 		if (<-chan []byte)(ch) != target {
 			continue
 		}
-		select {
-		case ch <- data:
-		default: // subscriber is behind; drop this frame rather than blocking.
+		if !sub.all && e.SessionPath != "" && e.SessionPath != b.current {
+			return
 		}
+		enqueueSubscriberFrame(ch, data, eventIsPriority(e.Kind))
 		return
+	}
+}
+
+// eventIsPriority keeps lifecycle and terminal frames out of the high-volume
+// delta budget. Slow subscribers may recover text/history over HTTP, but they
+// must still learn that a turn, prompt, or foreground-session transition ended.
+func eventIsPriority(kind event.Kind) bool {
+	switch kind {
+	case event.Reasoning, event.Text, event.ToolProgress, event.StreamAttempt:
+		return false
+	default:
+		return true
+	}
+}
+
+func enqueueSubscriberFrame(ch chan []byte, data []byte, priority bool) {
+	if !priority && len(ch) >= cap(ch)-subscriberPriorityReserve {
+		return
+	}
+	select {
+	case ch <- data:
+	default: // subscriber exhausted even the priority reserve; never block Serve.
 	}
 }
 
@@ -190,7 +241,7 @@ func (b *Broadcaster) SubscribeAll() (<-chan []byte, func()) {
 }
 
 func (b *Broadcaster) subscribe(all bool) (<-chan []byte, func()) {
-	ch := make(chan []byte, 64)
+	ch := make(chan []byte, subscriberBufferSize)
 	b.mu.Lock()
 	b.subs[ch] = subscription{all: all}
 	b.mu.Unlock()

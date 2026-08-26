@@ -107,17 +107,11 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	recorded, token, alive, capable := probeRecordedServe(ctx, conn, fs, paths, workspace, requireLaunchArgs...)
-	if alive && !capable {
-		if _, err := conn.Exec(ctx, StopCommand(recorded.PID, paths)); err != nil {
-			return Result{}, fmt.Errorf("bootstrap: stop outdated serve: %w", err)
-		}
-	}
-
-	// 1. Reuse a live, capable process when the recorded pid still runs.
-	if alive && capable && token != "" {
-		opts.progress("reuse", recorded.Addr)
-		return Result{State: recorded, Token: token, Reused: true, CredentialConfigChanged: credentialChanged}, nil
+	// 1. Reuse a live process if the recorded pid is still running and exposes
+	// every Serve contract required by this desktop.
+	if st, tok, ok := tryReuse(ctx, conn, fs, paths, workspace, requireLaunchArgs...); ok {
+		opts.progress("reuse", st.Addr)
+		return Result{State: st, Token: tok, Reused: true, CredentialConfigChanged: credentialChanged}, nil
 	}
 
 	// 2. Detect remote platform.
@@ -161,6 +155,11 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 	}
 	if err := fs.WriteFileAtomic(ctx, paths.TokenFile, []byte(freshToken+"\n"), 0o600); err != nil {
 		return Result{}, fmt.Errorf("bootstrap: write token: %w", err)
+	}
+	// Retire an incompatible Serve only after its replacement is ready to launch
+	// inside the lock, so preparation failures do not interrupt existing work.
+	if err := retireIncompatibleServe(ctx, conn, fs, paths, workspace, requireLaunchArgs); err != nil {
+		return Result{}, err
 	}
 	opts.progress("launch", "")
 	launchRes, err := conn.Exec(ctx, LaunchCommand(bin, workspace, paths, opts.CredentialProxy))
@@ -218,9 +217,6 @@ func prepareCredentialProxy(ctx context.Context, conn Conn, fs *sftpfs.FS, opts 
 		return nil, false, err
 	}
 	required := []string{"--model " + opts.CredentialProxy.Provider}
-	if err := stopMismatchedServe(ctx, conn, fs, paths, workspace, required); err != nil {
-		return nil, false, err
-	}
 	return required, changed, nil
 }
 
@@ -303,33 +299,6 @@ func Logs(ctx context.Context, conn Conn, workspace string, n int, w io.Writer) 
 	return err
 }
 
-// probeRecordedServe runs the reuse-path probes exactly once: the recorded
-// state, its token, pid liveness (including required launch args), and the
-// --session-events capability. EnsureServe's retire decision and reuse
-// decision both consume this single round — the per-consumer probes used to
-// duplicate every exec.
-func probeRecordedServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths StatePaths, workspace string, requireArgs ...string) (st ServeState, token string, alive, capable bool) {
-	st, err := readState(ctx, fs, paths.StateJSON)
-	if err != nil || st.PID <= 0 || !validServeAddr(st.Addr) {
-		return ServeState{}, "", false, false
-	}
-	if workspace != "" && st.Workspace != workspace {
-		return ServeState{}, "", false, false
-	}
-	if !pidIsServe(ctx, conn, st.PID, paths, requireArgs...) {
-		return ServeState{}, "", false, false
-	}
-	res, err := conn.Exec(ctx, SupportsRequiredServeCapabilitiesCommand(st.PID))
-	capable = err == nil && strings.TrimSpace(string(res.Stdout)) == "yes"
-	// The state record is informational; the workspace-derived path is the
-	// authority, so a tampered record cannot make us read an arbitrary file.
-	tok, err := readToken(ctx, fs, paths.TokenFile)
-	if err != nil {
-		tok = ""
-	}
-	return st, tok, true, capable
-}
-
 func tryReuse(ctx context.Context, conn Conn, fs *sftpfs.FS, paths StatePaths, workspace string, requireArgs ...string) (ServeState, string, bool) {
 	st, err := readState(ctx, fs, paths.StateJSON)
 	if err != nil || st.PID <= 0 || st.Addr == "" {
@@ -341,8 +310,7 @@ func tryReuse(ctx context.Context, conn Conn, fs *sftpfs.FS, paths StatePaths, w
 	if !validServeAddr(st.Addr) || !pidIsServe(ctx, conn, st.PID, paths, requireArgs...) {
 		return ServeState{}, "", false
 	}
-	res, err := conn.Exec(ctx, SupportsRequiredServeCapabilitiesCommand(st.PID))
-	if err != nil || strings.TrimSpace(string(res.Stdout)) != "yes" {
+	if !supportsRequiredServeCapabilities(ctx, conn, st.PID) {
 		return ServeState{}, "", false
 	}
 	// The state record is informational; the workspace-derived path is the
@@ -373,6 +341,13 @@ func stopMismatchedServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths St
 	return nil
 }
 
+func retireIncompatibleServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths StatePaths, workspace string, requireArgs []string) error {
+	if err := stopMismatchedServe(ctx, conn, fs, paths, workspace, requireArgs); err != nil {
+		return err
+	}
+	return stopOutdatedServe(ctx, conn, fs, paths, workspace)
+}
+
 // stopOutdatedServe retires a live process whose binary lacks the wire and
 // healing contracts required by the desktop. Leaving it alive would retain the
 // workspace lease and race the replacement process.
@@ -384,14 +359,18 @@ func stopOutdatedServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths Stat
 	if !pidIsServe(ctx, conn, st.PID, paths) {
 		return nil
 	}
-	res, probeErr := conn.Exec(ctx, SupportsRequiredServeCapabilitiesCommand(st.PID))
-	if probeErr == nil && strings.TrimSpace(string(res.Stdout)) == "yes" {
+	if supportsRequiredServeCapabilities(ctx, conn, st.PID) {
 		return nil
 	}
 	if _, stopErr := conn.Exec(ctx, StopCommand(st.PID, paths)); stopErr != nil {
 		return fmt.Errorf("bootstrap: stop outdated serve: %w", stopErr)
 	}
 	return nil
+}
+
+func supportsRequiredServeCapabilities(ctx context.Context, conn Conn, pid int) bool {
+	res, err := conn.Exec(ctx, SupportsRequiredServeCapabilitiesCommand(pid))
+	return err == nil && strings.TrimSpace(string(res.Stdout)) == "yes"
 }
 
 // pidIsServe reports whether pid is running AND is a reasonix serve process,

@@ -116,25 +116,56 @@ const serveSessionEventsMarker = "session-events"
 // retire background controllers instead of leaving them on a stale tunnel.
 const serveDetachedHealMarker = "detached-heal"
 
-// serveCapsToken is the rolling capability revision advertised in serve help.
-// Bump this when the desktop requires a newer wire/runtime contract.
-const serveCapsToken = "reasonix-serve-caps-20260822c"
+// ServeCapsToken is the rolling capability revision advertised in serve help.
+// Bump this when the desktop requires a newer wire/runtime contract. The CLI
+// imports this value so the advertised token cannot drift from the probe.
+const ServeCapsToken = "reasonix-serve-caps-20260826a"
 
 // LocateCommand probes for a usable reasonix binary and the exact Serve
 // capabilities required by the desktop. Capability probes are authoritative:
 // an old binary can have an otherwise acceptable product version.
 func LocateCommand(uploadedBin string) string {
+	return locateCommand(uploadedBin, false)
+}
+
+// LocateUploadedCommand probes exactly the freshly written managed binary.
+// A stale PATH candidate must not shadow an upload performed to repair missing
+// Serve capabilities.
+func LocateUploadedCommand(uploadedBin string) string {
+	return locateCommand(uploadedBin, true)
+}
+
+// LocateNPMGlobalCommand probes exactly the binary installed under npm's
+// current global prefix. A stale login-PATH binary must not shadow a package
+// that was just installed to repair missing Serve capabilities.
+func LocateNPMGlobalCommand() string {
+	resolve := "BIN=; P=\"$(npm prefix -g 2>/dev/null)\"; if [ -n \"$P\" ] && [ -x \"$P/bin/reasonix\" ]; then BIN=\"$P/bin/reasonix\"; fi; "
+	return locateResolvedCommand(resolve)
+}
+
+func locateCommand(uploadedBin string, preferUploaded bool) string {
+	resolve := fmt.Sprintf(
+		"BIN=\"$(command -v reasonix 2>/dev/null)\"; if [ -z \"$BIN\" ] && [ -x %s ]; then BIN=%s; fi; ",
+		shellQuote(uploadedBin), shellQuote(uploadedBin),
+	)
+	fallback := "if [ -z \"$BIN\" ]; then P=\"$(npm prefix -g 2>/dev/null)\"; if [ -n \"$P\" ] && [ -x \"$P/bin/reasonix\" ]; then BIN=\"$P/bin/reasonix\"; fi; fi; "
+	if preferUploaded {
+		resolve = fmt.Sprintf("BIN=; if [ -x %s ]; then BIN=%s; fi; ", shellQuote(uploadedBin), shellQuote(uploadedBin))
+		fallback = ""
+	}
+	return locateResolvedCommand(resolve + fallback)
+}
+
+func locateResolvedCommand(resolve string) string {
 	return fmt.Sprintf(
-		"BIN=\"$(command -v reasonix 2>/dev/null)\"; "+
-			"if [ -z \"$BIN\" ] && [ -x %s ]; then BIN=%s; fi; "+
-			"if [ -z \"$BIN\" ]; then P=\"$(npm prefix -g 2>/dev/null)\"; if [ -n \"$P\" ] && [ -x \"$P/bin/reasonix\" ]; then BIN=\"$P/bin/reasonix\"; fi; fi; "+
+		resolve+
 			"echo \"$BIN\"; "+
 			"if [ -n \"$BIN\" ]; then \"$BIN\" --version 2>/dev/null; "+
 			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo portfile:yes; else echo portfile:no; fi; "+
 			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo sessionevents:yes; else echo sessionevents:no; fi; "+
 			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo detachedheal:yes; else echo detachedheal:no; fi; "+
 			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo caps:yes; else echo caps:no; fi; fi",
-		shellQuote(uploadedBin), shellQuote(uploadedBin), shellQuote(servePortFileMarker), shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(serveCapsToken),
+		shellQuote(servePortFileMarker), shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(ServeCapsToken),
 	)
 }
 
@@ -143,10 +174,10 @@ func LocateCommand(uploadedBin string) string {
 func SupportsRequiredServeCapabilitiesCommand(pid int) string {
 	return fmt.Sprintf(
 		"BIN=$(readlink /proc/%d/exe 2>/dev/null); "+
-			"if [ -z \"$BIN\" ]; then BIN=$(ps -p %d -o comm= 2>/dev/null | tr -d ' '); fi; "+
+			"if [ -z \"$BIN\" ]; then BIN=$(ps -p %d -o comm= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); fi; "+
 			"if [ -n \"$BIN\" ] && [ -x \"$BIN\" ]; then H=$(\"$BIN\" serve --help 2>&1); "+
 			"if echo \"$H\" | grep -q -- %s && echo \"$H\" | grep -q -- %s && echo \"$H\" | grep -q -- %s; then echo yes; else echo no; fi; "+
 			"else echo no; fi",
-		pid, pid, shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(serveCapsToken),
+		pid, pid, shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(ServeCapsToken),
 	)
 }

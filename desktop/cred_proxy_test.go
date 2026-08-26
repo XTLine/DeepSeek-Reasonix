@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -248,6 +249,64 @@ func TestCredentialProxyReconnectRegistersTrackedWorkspaces(t *testing.T) {
 	defer app.credProxy.mu.Unlock()
 	if info.token == "" || app.credProxy.routes[info.token] == nil || app.credProxy.routes[otherToken] == nil {
 		t.Fatalf("tracked routes were not registered together: current=%q count=%d", info.token, len(app.credProxy.routes))
+	}
+}
+
+func TestCredentialWatchdogHealsEveryTrackedWorkspace(t *testing.T) {
+	mgr := newDesktopRemoteManager(nil)
+	mgr.hosts["box"] = &managedHost{serves: map[string]*serveEntry{
+		"~/alpha": {},
+		"~/beta":  {},
+		"~/gamma": {},
+	}}
+	workspaces := mgr.trackedCredentialWorkspaces("box", "~/beta")
+	want := []string{"~/beta", "~/alpha", "~/gamma"}
+	if !slices.Equal(workspaces, want) {
+		t.Fatalf("tracked credential workspaces = %v, want %v", workspaces, want)
+	}
+
+	var setupCalls, healCalls []string
+	err := healTrackedCredentialProviders(context.Background(), workspaces,
+		func(workspace string) (*bootstrap.CredentialProxyOptions, error) {
+			setupCalls = append(setupCalls, workspace)
+			return &bootstrap.CredentialProxyOptions{Provider: workspace}, nil
+		},
+		func(_ context.Context, opts *bootstrap.CredentialProxyOptions) error {
+			healCalls = append(healCalls, opts.Provider)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(setupCalls, want) || !slices.Equal(healCalls, want) {
+		t.Fatalf("credential heals = setup:%v heal:%v, want every workspace %v", setupCalls, healCalls, want)
+	}
+}
+
+func TestCredentialEnsureHealsEveryConfigBeforeReload(t *testing.T) {
+	workspaces := []string{"~/current", "~/peer"}
+	var calls []string
+	err := healCredentialConfigsBeforeReload(t.Context(), workspaces,
+		func(workspace string) (*bootstrap.CredentialProxyOptions, error) {
+			calls = append(calls, "setup:"+workspace)
+			return &bootstrap.CredentialProxyOptions{Provider: workspace}, nil
+		},
+		func(_ context.Context, opts *bootstrap.CredentialProxyOptions) error {
+			calls = append(calls, "heal:"+opts.Provider)
+			return nil
+		},
+		func() bool {
+			calls = append(calls, "reload")
+			return true
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"setup:~/current", "heal:~/current", "setup:~/peer", "heal:~/peer", "reload"}
+	if !slices.Equal(calls, want) {
+		t.Fatalf("ensure heal order = %v, want %v", calls, want)
 	}
 }
 

@@ -106,6 +106,11 @@ func (a *App) RemoteTabSnapshot(tabID string) (RemoteTabSnapshot, error) {
 		return RemoteTabSnapshot{}, fmt.Errorf("remote tab %q: empty history", tabID)
 	}
 	snap.History = sanitizeRemoteHistory(snap.History)
+	if len(snap.Status) > 0 && !a.recordRemoteTabSessionStatus(tabID, client, gen, statusSeq, snap.Status) {
+		// Do not hand a status member captured before a newer request/event to
+		// the frontend aggregate snapshot; it will fetch /status explicitly.
+		snap.Status = nil
+	}
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
 	if tab == nil || tab.client != client || tab.gen != gen || tab.state != "ready" {
@@ -121,11 +126,6 @@ func (a *App) RemoteTabSnapshot(tabID string) (RemoteTabSnapshot, error) {
 		snap.PendingEvents = append(snap.PendingEvents, append(json.RawMessage(nil), tab.pendingEvents[key]...))
 	}
 	a.remoteTabMu.Unlock()
-	if len(snap.Status) > 0 && !a.recordRemoteTabSessionStatus(tabID, client, gen, statusSeq, snap.Status) {
-		// Do not hand a status member captured before a newer request/event to
-		// the frontend aggregate snapshot; it will fetch /status explicitly.
-		snap.Status = nil
-	}
 	a.recordRemoteTabModelCatalog(tabID, client, gen, snap.Models)
 	return snap, nil
 }
@@ -176,6 +176,7 @@ func (a *App) reserveRemoteTabStatusSequence(tabID string, client *http.Client, 
 func (a *App) recordRemoteTabSessionStatus(tabID string, client *http.Client, gen, statusSeq uint64, status json.RawMessage) bool {
 	var payload struct {
 		SessionName     string `json:"sessionName"`
+		SessionPath     string `json:"sessionPath"`
 		Running         *bool  `json:"running"`
 		PendingPrompt   *bool  `json:"pendingPrompt"`
 		BackgroundJobs  *int   `json:"backgroundJobs"`
@@ -192,6 +193,7 @@ func (a *App) recordRemoteTabSessionStatus(tabID string, client *http.Client, ge
 		return false
 	}
 	before := remoteTabMetaLocked(tab)
+	pathChanged := adoptRemoteTabSessionPathLocked(tab, payload.SessionPath)
 	if name := strings.TrimSpace(payload.SessionName); name != "" {
 		tab.session.name = name
 		tab.session.newSession = false
@@ -225,13 +227,22 @@ func (a *App) recordRemoteTabSessionStatus(tabID string, client *http.Client, ge
 		tab.runtime.turnStartedAt = 0
 	}
 	after := remoteTabMetaLocked(tab)
+	readyBarrier := remoteTabReadyBarrier(tab, pathChanged)
 	a.remoteTabMu.Unlock()
-	if before.Running != after.Running || before.TurnStartedAt != after.TurnStartedAt ||
+	if before.SessionPath != after.SessionPath || before.TopicID != after.TopicID ||
+		before.Running != after.Running || before.TurnStartedAt != after.TurnStartedAt ||
 		before.PendingPrompt != after.PendingPrompt || before.BackgroundJobs != after.BackgroundJobs ||
 		before.CancelRequested != after.CancelRequested || before.Cancellable != after.Cancellable {
 		a.emitRemoteEvent("remote-tab:updated", after)
 	}
+	if readyBarrier {
+		a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:state", tabID), RemoteTabStateView{State: "ready"})
+	}
 	return true
+}
+
+func remoteTabReadyBarrier(tab *remoteTab, pathChanged bool) bool {
+	return pathChanged && tab != nil && tab.state == "ready"
 }
 
 func (a *App) recordRemoteTabModelCatalog(tabID string, client *http.Client, gen uint64, models json.RawMessage) {

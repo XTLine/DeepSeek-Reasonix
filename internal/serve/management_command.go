@@ -8,7 +8,7 @@ func isServeManagementCommand(input string) bool {
 		return false
 	}
 	switch strings.ToLower(fields[0]) {
-	case "/compact", "/context", "/goal", "/memory", "/remember",
+	case "/compact", "/context", "/new", "/clear", "/goal", "/memory", "/remember",
 		"/migrate", "/migration", "/skill", "/skills", "/plugin", "/plugins",
 		"/reload-cmd", "/hooks", "/mcp", "/provider", "/tree", "/branch",
 		"/switch", "/rewind":

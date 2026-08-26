@@ -22,7 +22,8 @@ type sessionListEntry struct {
 
 // sessions lists saved sessions with event-log-aware titles and turn counts.
 func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
-	dir := s.ctl().SessionDir()
+	ctrl := s.ctl()
+	dir := ctrl.SessionDir()
 	if dir == "" {
 		writeJSON(w, []any{})
 		return
@@ -32,7 +33,7 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []any{})
 		return
 	}
-	current := agent.CanonicalSessionPath(s.ctl().SessionPath())
+	current := agent.CanonicalSessionPath(ctrl.SessionPath())
 	running := map[string]bool{}
 	s.detachedMu.Lock()
 	for path, detached := range s.detached {
@@ -52,7 +53,7 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 		cleanPath := agent.CanonicalSessionPath(path)
 		row := sessionListEntry{Name: strings.TrimSuffix(entry.Name(), ".jsonl"), Path: path, Current: cleanPath == current, Running: running[cleanPath], MtimeMilli: mtime.UnixMilli()}
 		if row.Current {
-			row.Running = s.ctl().RuntimeStatus().Running
+			row.Running = controllerHasActiveRuntimeWork(ctrl)
 		}
 		if first, turns := agent.SessionPreview(path); turns > 0 {
 			row.Turns = turns

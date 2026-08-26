@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -37,10 +38,18 @@ func (d credentialChannelDecision) needsHeal() bool {
 	return !d.HasForward || !d.ProbeOK || d.HealedPort <= 0 || d.ForwardPort != d.HealedPort
 }
 
+func credentialWatchdogEligibleState(state string) bool {
+	return state == "connected" || state == "degraded"
+}
+
 func (m *desktopRemoteManager) startCredentialWatchdogIfEnabled(mh *managedHost, hostID, workspace string) {
 	entry, err := configuredRemoteHost(hostID)
 	if err == nil && entry.CredentialProxyEnabled() {
 		m.startCredentialWatchdog(mh, hostID, workspace)
+		return
+	}
+	if mh != nil {
+		mh.credWatch.stop()
 	}
 }
 
@@ -87,31 +96,39 @@ func (m *desktopRemoteManager) startCredentialWatchdog(mh *managedHost, hostID, 
 			if !m.isCurrent(hostID, mh) {
 				return
 			}
-			m.checkCredentialChannel(mh, hostID)
+			m.checkCredentialChannel(ctx, mh, hostID)
 		}
 	}()
 }
 
-func (m *desktopRemoteManager) checkCredentialChannel(mh *managedHost, hostID string) {
+func (m *desktopRemoteManager) checkCredentialChannel(ctx context.Context, mh *managedHost, hostID string) {
+	entry, err := configuredRemoteHost(hostID)
+	if err != nil || !entry.CredentialProxyEnabled() {
+		mh.credWatch.stop()
+		return
+	}
 	m.mu.Lock()
 	state := ""
 	if m.hosts[hostID] == mh {
 		state = mh.status.State
 	}
 	m.mu.Unlock()
-	if state != "connected" || mh.client == nil {
+	// A reconnect with one failed forward is deliberately published as
+	// degraded while retaining the live SSH client. That is exactly when the
+	// credential reverse tunnel may need this watchdog's repair path.
+	if !credentialWatchdogEligibleState(state) || mh.client == nil {
 		return
 	}
 	port, has := credentialForwardPort(mh.client, hostID)
 	decision := credentialChannelDecision{HasForward: has, ForwardPort: port, HealedPort: int(mh.credPort.Load()), ProbeOK: has && probeReverseTunnel(mh.client, port) == nil}
 	if decision.needsHeal() {
-		m.healCredentialChannelWatchdog(mh, hostID)
+		m.healCredentialChannelWatchdog(ctx, mh, hostID)
 	}
 }
 
 // healCredentialChannelWatchdog reopens the fast-reuse gate only after the
 // forward, remote provider, live Serve providers, and end-to-end probe agree.
-func (m *desktopRemoteManager) healCredentialChannelWatchdog(mh *managedHost, hostID string) {
+func (m *desktopRemoteManager) healCredentialChannelWatchdog(watchCtx context.Context, mh *managedHost, hostID string) {
 	mh.credWatch.mu.Lock()
 	workspace := mh.credWatch.workspace
 	mh.credWatch.mu.Unlock()
@@ -123,16 +140,26 @@ func (m *desktopRemoteManager) healCredentialChannelWatchdog(mh *managedHost, ho
 	if !m.isCurrent(hostID, mh) || mh.client == nil {
 		return
 	}
-	c := mh.client
-	log.Printf("[remote] credential watchdog: channel broken, re-healing host=%s ws=%s", hostID, workspace)
-	_ = c.Forwards().Remove("cred-proxy:" + hostID)
-	opts, err := m.credentialProxySetup(c, hostID, workspace)
-	if err != nil {
-		log.Printf("[remote] credential watchdog: setup FAILED host=%s err=%v", hostID, err)
+	entry, err := configuredRemoteHost(hostID)
+	if err != nil || !entry.CredentialProxyEnabled() {
 		return
 	}
-	healCtx, healCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	_, err = bootstrap.HealCredentialProvider(healCtx, c, opts)
+	opCtx, opCancel := managedOperationContext(watchCtx, mh)
+	defer opCancel()
+	c := mh.client
+	workspaces := m.trackedCredentialWorkspaces(hostID, workspace)
+	log.Printf("[remote] credential watchdog: channel broken, re-healing host=%s workspaces=%d", hostID, len(workspaces))
+	_ = c.Forwards().Remove("cred-proxy:" + hostID)
+	healCtx, healCancel := context.WithTimeout(opCtx, 30*time.Second)
+	err = healTrackedCredentialProviders(healCtx, workspaces,
+		func(workspace string) (*bootstrap.CredentialProxyOptions, error) {
+			return m.credentialProxySetup(c, hostID, workspace)
+		},
+		func(ctx context.Context, opts *bootstrap.CredentialProxyOptions) error {
+			_, healErr := bootstrap.HealCredentialProvider(ctx, c, opts)
+			return healErr
+		},
+	)
 	healCancel()
 	if err != nil {
 		log.Printf("[remote] credential watchdog: config heal FAILED host=%s err=%v", hostID, err)
@@ -147,8 +174,11 @@ func (m *desktopRemoteManager) healCredentialChannelWatchdog(mh *managedHost, ho
 		log.Printf("[remote] credential watchdog: probe still FAILED host=%s port=%d err=%v", hostID, port, err)
 		return
 	}
-	reloadCtx, reloadCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	reloadOK := m.reloadServeProviders(reloadCtx, hostID, workspace, "", "")
+	if !m.isCurrent(hostID, mh) {
+		return
+	}
+	reloadCtx, reloadCancel := context.WithTimeout(opCtx, credentialProviderReloadBudget(len(workspaces)))
+	reloadOK := m.reloadServeProviders(reloadCtx, mh, hostID, workspace, "", "")
 	reloadCancel()
 	if !reloadOK {
 		log.Printf("[remote] credential watchdog: provider reload FAILED host=%s", hostID)
@@ -159,4 +189,34 @@ func (m *desktopRemoteManager) healCredentialChannelWatchdog(mh *managedHost, ho
 	}
 	mh.credPort.Store(int64(port))
 	log.Printf("[remote] credential watchdog: channel re-healed host=%s port=%d", hostID, port)
+}
+
+func credentialProviderReloadBudget(targets int) time.Duration {
+	if targets < 1 {
+		targets = 1
+	}
+	return time.Duration(targets) * remoteProviderReloadTimeout
+}
+
+func healTrackedCredentialProviders(ctx context.Context, workspaces []string, setup func(string) (*bootstrap.CredentialProxyOptions, error), heal func(context.Context, *bootstrap.CredentialProxyOptions) error) error {
+	for _, workspace := range workspaces {
+		opts, err := setup(workspace)
+		if err != nil {
+			return fmt.Errorf("workspace %q setup: %w", workspace, err)
+		}
+		if err := heal(ctx, opts); err != nil {
+			return fmt.Errorf("workspace %q heal: %w", workspace, err)
+		}
+	}
+	return nil
+}
+
+func healCredentialConfigsBeforeReload(ctx context.Context, workspaces []string, setup func(string) (*bootstrap.CredentialProxyOptions, error), heal func(context.Context, *bootstrap.CredentialProxyOptions) error, reload func() bool) error {
+	if err := healTrackedCredentialProviders(ctx, workspaces, setup, heal); err != nil {
+		return fmt.Errorf("credential proxy: heal tracked provider configs: %w", err)
+	}
+	if reload == nil || !reload() {
+		return fmt.Errorf("credential proxy: serve providers could not reload")
+	}
+	return nil
 }

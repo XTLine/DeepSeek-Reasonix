@@ -310,6 +310,12 @@ func (a *App) registerRemoteTabOpen(tab *remoteTab, hostLabel string, opts Remot
 			existing.session.newSession = opts.NewSession
 			existing.session.name = strings.TrimSpace(opts.SessionName)
 			existing.session.path = strings.TrimSpace(opts.SessionPath)
+			if title := strings.TrimSpace(opts.SessionTitle); title != "" {
+				existing.topicTitle = title
+			}
+			if existing.session.path != "" {
+				existing.routing.currentPath = existing.session.path
+			}
 		}
 		if result.revive {
 			existing.state = "connecting"

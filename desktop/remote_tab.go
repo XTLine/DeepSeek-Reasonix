@@ -44,7 +44,6 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 		log.Printf("[remote] attachRemoteTabServe: handshake FAILED tab=%s base=%q err=%v", tabID, base, err)
 		return false, err
 	}
-
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
 	a.remoteTabMu.Unlock()
@@ -54,14 +53,13 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	tab.sessionMu.Lock()
 	defer tab.sessionMu.Unlock()
 
-	// A focus-only attach has no transition endpoint that can reveal its path
-	// after the stream opens. Resolve it first so the Serve's immediate pending-
-	// prompt replay is routed to the foreground instead of being discarded as an
-	// unknown tagged session.
+	// Resolve every non-new target before opening the all-session pump. A
+	// detached controller may replay pending prompts as soon as /resume starts;
+	// publishing its route first keeps those frames on the foreground surface.
+	focusOnly := !opts.NewSession && strings.TrimSpace(opts.SessionName) == "" && strings.TrimSpace(opts.SessionPath) == ""
 	var target serveSessionEntry
-	focusResolved := !opts.NewSession && strings.TrimSpace(opts.SessionName) == "" && strings.TrimSpace(opts.SessionPath) == ""
-	if focusResolved {
-		target, err = serveCurrentSession(callCtx, client, base)
+	if !opts.NewSession {
+		target, err = preflightRemoteSessionTarget(callCtx, client, base, opts)
 		if err != nil {
 			return false, err
 		}
@@ -81,9 +79,8 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	tab.client = client
 	tab.base = base
 	tab.token = token
-	if focusResolved {
-		tab.routing.currentPath = strings.TrimSpace(target.Path)
-		tab.session.path = tab.routing.currentPath
+	if !opts.NewSession {
+		installRemoteTabAttachRoute(tab, target.Path)
 	}
 	gen := tab.gen
 	pumpCtx, cancelPump := context.WithCancel(ctx)
@@ -103,8 +100,12 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 		return false, callCtx.Err()
 	}
 	entered := true
-	if !focusResolved {
-		target, err = enterRemoteSessionTarget(callCtx, client, base, opts)
+	if !focusOnly {
+		enterOpts := opts
+		if !opts.NewSession {
+			enterOpts.SessionName, enterOpts.SessionPath, enterOpts.SessionTitle = target.Name, target.Path, target.Title
+		}
+		target, err = enterRemoteSessionTarget(callCtx, client, base, enterOpts)
 		entered = err == nil
 	}
 	if err != nil {
@@ -122,8 +123,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	}
 	a.remoteTabMu.Lock()
 	if current := a.remoteTabs[tabID]; current == tab && current.gen == gen {
-		current.routing.currentPath = strings.TrimSpace(target.Path)
-		current.session.path = current.routing.currentPath
+		installRemoteTabAttachRoute(current, target.Path)
 		if name := strings.TrimSpace(target.Name); name != "" {
 			current.session.name = name
 		}
@@ -342,14 +342,16 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64, opene
 			return
 		}
 		var probe struct {
-			Kind        string `json:"kind"`
-			SessionPath string `json:"sessionPath"`
+			Kind           string `json:"kind"`
+			SessionPath    string `json:"sessionPath"`
+			SessionCurrent bool   `json:"sessionCurrent"`
 		}
 		kind := "?"
 		if json.Unmarshal([]byte(frame), &probe) == nil && probe.Kind != "" {
 			kind = probe.Kind
 		}
-		if !a.routeRemoteTabFrame(tabID, gen, strings.TrimSpace(probe.SessionPath), kind) {
+		framePath := strings.TrimSpace(probe.SessionPath)
+		if !a.routeRemoteTabWireFrame(tabID, gen, framePath, kind, probe.SessionCurrent) {
 			continue
 		}
 		refreshRuntime := false

@@ -22,8 +22,13 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	var ch <-chan []byte
 	var unsubscribe func()
-	currentPath := s.ctl().SessionPath()
-	s.ctl().ReplayPendingPromptsWith(func() event.Sink {
+	// Session switches also hold bindMu. Capture, subscribe, and replay in that
+	// epoch so a promoted controller cannot broadcast its prompt before this
+	// current-only subscriber exists.
+	s.bindMu.Lock()
+	ctrl := s.ctl()
+	currentPath := ctrl.SessionPath()
+	ctrl.ReplayPendingPromptsWith(func() event.Sink {
 		if r.URL.Query().Get("all") == "1" {
 			ch, unsubscribe = s.bc.SubscribeAll()
 		} else {
@@ -36,6 +41,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			s.bc.EmitTo(ch, e)
 		})
 	})
+	s.bindMu.Unlock()
 	defer unsubscribe()
 	fmt.Fprint(w, ": connected\n\n")
 	flusher.Flush()
