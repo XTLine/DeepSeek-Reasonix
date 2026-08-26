@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +16,20 @@ import (
 	"reasonix/internal/control"
 	"reasonix/internal/jobs"
 )
+
+type blockingRequestBody struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingRequestBody) Read([]byte) (int, error) {
+	b.once.Do(func() { close(b.started) })
+	<-b.release
+	return 0, io.EOF
+}
+
+func (*blockingRequestBody) Close() error { return nil }
 
 // lockProbeController wraps a real controller but intercepts the two blocking
 // steps of a model switch — Snapshot (may touch disk) and Close (jobs grace wait
@@ -208,6 +223,61 @@ func TestForegroundMutationRejectsStaleSessionPath(t *testing.T) {
 		t.Fatalf("current cancel status = %d, want %d", rec.Code, http.StatusNoContent)
 	}
 	waitNotRunning(t, ctrl)
+}
+
+func TestForegroundMutationReadsBodyBeforeBindingLock(t *testing.T) {
+	s := New(control.New(control.Options{}), NewBroadcaster(), config.ServeConfig{})
+	blockedBody := &blockingRequestBody{started: make(chan struct{}), release: make(chan struct{})}
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		req := httptest.NewRequest(http.MethodPost, "/slow", blockedBody)
+		s.foregroundMutation(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusNoContent)
+		})(httptest.NewRecorder(), req)
+	}()
+	select {
+	case <-blockedBody.started:
+	case <-time.After(time.Second):
+		t.Fatal("slow request body was never read")
+	}
+
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		req := httptest.NewRequest(http.MethodPost, "/fast", http.NoBody)
+		s.foregroundMutation(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})(httptest.NewRecorder(), req)
+	}()
+	select {
+	case <-secondDone:
+	case <-time.After(500 * time.Millisecond):
+		close(blockedBody.release)
+		<-firstDone
+		t.Fatal("slow body held the session binding lock")
+	}
+	close(blockedBody.release)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("slow request did not finish after its body was released")
+	}
+}
+
+func TestForegroundMutationRejectsOversizedBodyBeforeHandler(t *testing.T) {
+	s := New(control.New(control.Options{}), NewBroadcaster(), config.ServeConfig{})
+	called := false
+	req := httptest.NewRequest(http.MethodPost, "/oversized", strings.NewReader(strings.Repeat("x", foregroundMutationMaxBody+1)))
+	rec := httptest.NewRecorder()
+	s.foregroundMutation(func(http.ResponseWriter, *http.Request) { called = true })(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized body status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+	if called {
+		t.Fatal("oversized body reached the foreground handler")
+	}
 }
 
 func TestSwitchModelRejectsWhileBackgroundJobRunning(t *testing.T) {

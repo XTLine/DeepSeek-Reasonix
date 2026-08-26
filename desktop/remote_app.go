@@ -177,7 +177,7 @@ type remoteKernel interface {
 	RemoveForward(hostID, forwardID string) error
 
 	EnsureServer(ctx context.Context, hostID, workspace string) (RemoteServerView, string, error)
-	SwitchCredentialProxyModel(ctx context.Context, hostID, workspace, currentRef, nextRef string) error
+	SwitchCredentialProxyModel(ctx context.Context, hostID, workspace, currentRef, nextRef, expectedPath string) error
 	StopServer(hostID, workspace string) error
 	ServerStatus(hostID, workspace string) RemoteServerView
 	// ServeSnapshot is the read-only lookup for already-running serves; it

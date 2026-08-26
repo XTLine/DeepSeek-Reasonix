@@ -267,6 +267,7 @@ func (a *App) SetRemoteTabModel(tabID, ref string) error {
 	hostID := tab.ref.HostID
 	workspace := tab.ref.Workspace
 	currentModel := tab.model
+	expectedPath := tab.routing.currentPath
 	a.remoteTabMu.Unlock()
 	localProxy := a.remoteTabLocalProxy(tabID)
 
@@ -308,7 +309,7 @@ func (a *App) SetRemoteTabModel(tabID, ref string) error {
 		}
 		ctx, cancel := commandContext(a)
 		defer cancel()
-		if err := rt.SwitchCredentialProxyModel(ctx, hostID, workspace, currentModel, canonical); err != nil {
+		if err := rt.SwitchCredentialProxyModel(ctx, hostID, workspace, currentModel, canonical, expectedPath); err != nil {
 			return err
 		}
 		next = canonical

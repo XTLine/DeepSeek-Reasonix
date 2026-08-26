@@ -739,6 +739,7 @@ func TestSetModelForTabRemoteOwnsModelOnDesktop(t *testing.T) {
 	}
 
 	fs := newFakeServe(t, "s3cret", nil)
+	fs.newSessionPath = "/remote/sessions/model-switch.jsonl"
 	kernel := &fakeRemoteKernel{
 		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
 		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
@@ -751,7 +752,7 @@ func TestSetModelForTabRemoteOwnsModelOnDesktop(t *testing.T) {
 	if err := a.SetModelForTab(meta.ID, "deepseek/deepseek-v4-pro"); err != nil {
 		t.Fatalf("SetModelForTab: %v", err)
 	}
-	if len(kernel.switchProxyCalls) != 1 || kernel.switchProxyCalls[0] != [4]string{"box", "~/app", "deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"} {
+	if len(kernel.switchProxyCalls) != 1 || kernel.switchProxyCalls[0] != [5]string{"box", "~/app", "deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro", fs.newSessionPath} {
 		t.Fatalf("credential proxy switch calls = %+v", kernel.switchProxyCalls)
 	}
 	for _, c := range fs.recorded() {

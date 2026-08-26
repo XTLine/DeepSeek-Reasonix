@@ -1,7 +1,9 @@
 package serve
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -11,6 +13,7 @@ import (
 const (
 	sessionPathHeader         = "X-Reasonix-Session-Path"
 	expectedSessionPathHeader = "X-Reasonix-Expected-Session-Path"
+	foregroundMutationMaxBody = 8 << 20
 )
 
 var errExpectedSessionChanged = errors.New("active session changed; retry on the current session")
@@ -45,6 +48,9 @@ func (s *Server) validateExpectedSessionLocked(w http.ResponseWriter, r *http.Re
 
 func (s *Server) foregroundMutation(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !bufferForegroundMutationBody(w, r) {
+			return
+		}
 		s.bindMu.Lock()
 		defer s.bindMu.Unlock()
 		if !s.validateExpectedSessionLocked(w, r) {
@@ -52,4 +58,28 @@ func (s *Server) foregroundMutation(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// bufferForegroundMutationBody drains the bounded JSON body before acquiring
+// bindMu. An authenticated client that uploads slowly can occupy its own
+// handler, but cannot freeze every foreground command and session transition.
+func bufferForegroundMutationBody(w http.ResponseWriter, r *http.Request) bool {
+	if r.Body == nil || r.Body == http.NoBody {
+		return true
+	}
+	limited := http.MaxBytesReader(w, r.Body, foregroundMutationMaxBody)
+	body, err := io.ReadAll(limited)
+	_ = limited.Close()
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "failed to read request body", http.StatusBadRequest)
+		}
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.ContentLength = int64(len(body))
+	return true
 }

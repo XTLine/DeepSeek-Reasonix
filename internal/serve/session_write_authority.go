@@ -41,9 +41,20 @@ func (s *Server) sessionTransitionHandler(ctrl *control.Controller, k *control.S
 			if tag := s.tagFor(ctrl); tag != nil {
 				tag.PrimePath(path)
 			}
-			s.publishControllerPathIfCurrent(ctrl, path)
+			if s.publishControllerPathIfCurrent(ctrl, path) && branchTransitionNeedsRouteEvent(info.Reason) {
+				s.announceSessionChanged(path, false)
+			}
 		})
 		return nil
+	}
+}
+
+func branchTransitionNeedsRouteEvent(reason string) bool {
+	switch reason {
+	case "fork", "branch", "switch":
+		return true
+	default:
+		return false
 	}
 }
 

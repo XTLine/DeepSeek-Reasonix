@@ -32,7 +32,7 @@ const remoteProviderReloadTimeout = jobs.DefaultTeardownGrace + 15*time.Second
 // active-work-gated controller switch. The outgoing controller keeps its old
 // virtual token and route throughout; if Serve refuses or cannot rebuild, the
 // on-disk provider is rolled back and the live controller remains coherent.
-func (m *desktopRemoteManager) SwitchCredentialProxyModel(ctx context.Context, hostID, workspace, currentRef, nextRef string) error {
+func (m *desktopRemoteManager) SwitchCredentialProxyModel(ctx context.Context, hostID, workspace, currentRef, nextRef, expectedPath string) error {
 	hostID, workspace = strings.TrimSpace(hostID), strings.TrimSpace(workspace)
 	currentRef, nextRef = strings.TrimSpace(currentRef), strings.TrimSpace(nextRef)
 	if hostID == "" || workspace == "" || currentRef == "" || nextRef == "" {
@@ -94,7 +94,7 @@ func (m *desktopRemoteManager) SwitchCredentialProxyModel(ctx context.Context, h
 		return rollback(err)
 	}
 	body, _ := json.Marshal(map[string]string{"ref": newOptions.Provider + "/" + newOptions.Model})
-	if err := servePost(ctx, client, serveURL(serve.view.LocalURL, "/model"), body); err != nil {
+	if err := servePostForSession(ctx, client, serveURL(serve.view.LocalURL, "/model"), body, expectedPath); err != nil {
 		return rollback(err)
 	}
 	return nil
