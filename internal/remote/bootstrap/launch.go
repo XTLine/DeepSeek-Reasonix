@@ -170,12 +170,13 @@ func locateResolvedCommand(resolve string) string {
 }
 
 // SupportsRequiredServeCapabilitiesCommand probes the executable backing a
-// running Serve. Reuse is rejected when it predates any required contract.
+// running Serve on Linux, where /proc exposes the still-mapped executable even
+// after its pathname is replaced. Platforms without that live-image handle
+// fail closed and rely on the capability token recorded at managed launch.
 func SupportsRequiredServeCapabilitiesCommand(pid int) string {
 	return fmt.Sprintf(
 		"BIN=$(readlink /proc/%d/exe 2>/dev/null); "+
-			"if [ -z \"$BIN\" ]; then BIN=$(ps -p %d -o comm= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); fi; "+
 			"if [ -n \"$BIN\" ] && [ -x \"$BIN\" ] && \"$BIN\" serve --help 2>&1 | grep -q -- %s && \"$BIN\" serve --help 2>&1 | grep -q -- %s && \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo yes; else echo no; fi",
-		pid, pid, shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(ServeCapsToken),
+		pid, shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(ServeCapsToken),
 	)
 }

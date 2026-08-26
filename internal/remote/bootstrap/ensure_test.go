@@ -165,7 +165,7 @@ func TestEnsureServeReusesLiveProcess(t *testing.T) {
 	if err := os.MkdirAll(paths.Dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	st := ServeState{PID: 777, Addr: "127.0.0.1:5000", Workspace: root, TokenFile: paths.TokenFile}
+	st := ServeState{PID: 777, Addr: "127.0.0.1:5000", Workspace: root, ServeCaps: ServeCapsToken, TokenFile: paths.TokenFile}
 	data, _ := MarshalState(st)
 	if err := os.WriteFile(paths.StateJSON, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func TestEnsureServeReusesLiveProcess(t *testing.T) {
 			return ok("1\n") // alive
 		}
 		if strings.Contains(cmd, "readlink /proc/777/exe") {
-			return ok("yes\n") // required Serve capabilities are present
+			t.Fatal("managed capability token should avoid re-executing the live image")
 		}
 		if strings.Contains(cmd, "uname") || strings.Contains(cmd, "nohup") {
 			t.Errorf("reuse path should not detect/launch; ran: %s", cmd)
@@ -294,6 +294,70 @@ func TestEnsureServeUpgradeFailurePreservesOutdatedProcess(t *testing.T) {
 	_, err := EnsureServe(context.Background(), conn, Options{Workspace: "~", Install: InstallNever})
 	if err == nil || !strings.Contains(err.Error(), "serve_install = never") {
 		t.Fatalf("upgrade error = %v, want install-never failure", err)
+	}
+}
+
+func TestEnsureServeDarwinRetiresOldPIDAfterBinaryReplacement(t *testing.T) {
+	skipOnWindows(t)
+	root := t.TempDir()
+	paths := pathsFor(root, root)
+	if err := os.MkdirAll(paths.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := MarshalState(ServeState{PID: 777, Addr: "127.0.0.1:5000", Workspace: root, TokenFile: paths.TokenFile})
+	if err := os.WriteFile(paths.StateJSON, state, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.TokenFile, []byte("existing-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	local := filepath.Join(root, "local-reasonix")
+	if err := os.WriteFile(local, []byte("fresh-darwin-cli"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	uploaded := uploadedBinPath(root)
+	stopped := false
+	capabilityProbes := 0
+	conn := newFakeConn(t, root, func(cmd string) (remote.ExecResult, error) {
+		switch {
+		case strings.Contains(cmd, "kill -TERM 777"):
+			stopped = true
+			return ok("")
+		case strings.Contains(cmd, "kill -0 777"):
+			return ok("1\n")
+		case strings.Contains(cmd, "readlink /proc/777/exe"):
+			capabilityProbes++
+			if strings.Contains(cmd, "ps -p 777") {
+				t.Fatal("Darwin capability probe fell back to the replaced pathname")
+			}
+			return ok("no\n")
+		case strings.Contains(cmd, "uname"):
+			return ok("Darwin arm64\n")
+		case strings.Contains(cmd, "BIN=; if [ -x "+shellQuote(uploaded)):
+			return ok(uploaded + "\nreasonix v9.9.0\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
+		case strings.Contains(cmd, "command -v reasonix"):
+			return ok(uploaded + "\nreasonix v1.0.0\nportfile:yes\nsessionevents:no\ndetachedheal:no\ncaps:no\n")
+		case strings.Contains(cmd, "nohup"):
+			_ = os.WriteFile(paths.PortFile, []byte("127.0.0.1:6002\n"), 0o600)
+			return ok("999\n")
+		case strings.Contains(cmd, "kill -0 999"):
+			return ok("1\n")
+		default:
+			return ok("")
+		}
+	})
+
+	res, err := EnsureServe(context.Background(), conn, Options{
+		Workspace: "~", Install: InstallUpload, LocalBinary: local, LocalGOOS: "darwin", LocalGOARCH: "arm64",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Reused || !stopped || capabilityProbes < 2 || res.State.PID != 999 {
+		t.Fatalf("darwin replacement result = reused:%v stopped:%v probes:%d state:%+v", res.Reused, stopped, capabilityProbes, res.State)
+	}
+	if res.State.ServeCaps != ServeCapsToken {
+		t.Fatalf("launched state caps = %q, want %q", res.State.ServeCaps, ServeCapsToken)
 	}
 }
 

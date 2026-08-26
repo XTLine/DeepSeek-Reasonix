@@ -123,7 +123,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	}
 	a.remoteTabMu.Lock()
 	if current := a.remoteTabs[tabID]; current == tab && current.gen == gen {
-		installRemoteTabAttachRoute(current, target.Path)
+		commitRemoteTabAttachRoute(current, target.Path, opts.NewSession)
 		if name := strings.TrimSpace(target.Name); name != "" {
 			current.session.name = name
 		}

@@ -245,6 +245,64 @@ func TestRemoteTabServeDownCanRetry(t *testing.T) {
 	waitForTabState(t, a, meta.ID, "ready")
 }
 
+func TestRemoteTabServeDownNewSessionClearsPendingBeforeDelayedMarker(t *testing.T) {
+	const oldPath = "/sessions/old.jsonl"
+	const freshPath = "/sessions/fresh.jsonl"
+	feed := make(chan string, 1)
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[meta.ID]
+	if tab.cancel != nil {
+		tab.cancel()
+	}
+	tab.gen++
+	tab.cancel, tab.client, tab.base, tab.token = nil, nil, "", ""
+	tab.state = "serve_down"
+	tab.session = remoteTabSessionState{name: "old", path: oldPath}
+	tab.routing.currentPath = oldPath
+	tab.pendingEvents = map[string]json.RawMessage{
+		"approval_request:old": json.RawMessage(`{"kind":"approval_request","approval":{"id":"old"}}`),
+	}
+	tab.runtime = remoteTabRuntimeState{pendingPrompt: true, cancellable: true}
+	a.remoteTabMu.Unlock()
+	fs.mu.Lock()
+	fs.newSessionPath = freshPath
+	fs.eventFeed = feed
+	fs.mu.Unlock()
+
+	if _, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{NewSession: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitForTabState(t, a, meta.ID, "ready")
+	a.remoteTabMu.Lock()
+	path, pending, prompt := tab.routing.currentPath, len(tab.pendingEvents), tab.runtime.pendingPrompt
+	a.remoteTabMu.Unlock()
+	if path != freshPath || pending != 0 || prompt {
+		t.Fatalf("fresh attach route/pending/prompt = %q/%d/%v, want %q/0/false", path, pending, prompt, freshPath)
+	}
+
+	eventPrefix := "remote-tab:" + meta.ID + ":event"
+	before := log.count(eventPrefix)
+	feed <- `{"kind":"session_changed","sessionPath":"/sessions/fresh.jsonl","sessionCurrent":true,"sessionReset":true}`
+	waitForRemoteEventCount(t, log, eventPrefix, before+1)
+	a.remoteTabMu.Lock()
+	pending, prompt = len(tab.pendingEvents), tab.runtime.pendingPrompt
+	a.remoteTabMu.Unlock()
+	if pending != 0 || prompt {
+		t.Fatalf("delayed reset marker restored stale prompt: pending=%d prompt=%v", pending, prompt)
+	}
+}
+
 func TestRemoteTabFocusOnlyAttachPreservesCurrentServeSession(t *testing.T) {
 	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "current", Path: "/current.jsonl", Title: "Current", Current: true}})
 	kernel := &fakeRemoteKernel{statuses: []RemoteConnectionStatusView{{HostID: "box", State: "connected"}}, ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret"}

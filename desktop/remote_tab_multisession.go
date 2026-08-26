@@ -114,6 +114,13 @@ func installRemoteTabAttachRoute(tab *remoteTab, path string) {
 	tab.routing.revision++
 }
 
+func commitRemoteTabAttachRoute(tab *remoteTab, path string, reset bool) {
+	if reset {
+		resetRemoteTabForegroundRuntimeLocked(tab)
+	}
+	installRemoteTabAttachRoute(tab, path)
+}
+
 // routeRemoteTabFrame tracks background runtime without leaking its frames
 // into the foreground reducer. Untagged frames remain legacy-compatible.
 func (a *App) routeRemoteTabFrame(tabID string, gen uint64, sessionPath, kind string) bool {
@@ -175,12 +182,7 @@ func (a *App) adoptRemoteTabFrameCurrent(tabID string, gen uint64, sessionPath s
 		tab.session.newSession = true
 		tab.session.reset = true
 		tab.topicTitle = resetTitle
-		tab.runtime.revision++
-		tab.runtime.running = false
-		tab.runtime.turnStartedAt = 0
-		tab.runtime.backgroundJobs = 0
-		tab.runtime.cancelRequested = false
-		tab.runtime.cancellable = false
+		resetRemoteTabForegroundRuntimeLocked(tab)
 	}
 	meta := remoteTabMetaLocked(tab)
 	ready := tab.state == "ready"
@@ -192,6 +194,20 @@ func (a *App) adoptRemoteTabFrameCurrent(tabID string, gen uint64, sessionPath s
 		// the newly current session snapshot replaces the old transcript.
 		a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:state", tabID), RemoteTabStateView{State: "ready"})
 	}
+}
+
+// resetRemoteTabForegroundRuntimeLocked drops controller-local prompts and
+// runtime state before a fresh session becomes visible. Caller holds
+// remoteTabMu.
+func resetRemoteTabForegroundRuntimeLocked(tab *remoteTab) {
+	tab.pendingEvents = nil
+	tab.runtime.revision++
+	tab.runtime.running = false
+	tab.runtime.turnStartedAt = 0
+	tab.runtime.backgroundJobs = 0
+	tab.runtime.pendingPrompt = false
+	tab.runtime.cancelRequested = false
+	tab.runtime.cancellable = false
 }
 
 // adoptRemoteTabSessionPathLocked moves foreground-only state to a new session.
