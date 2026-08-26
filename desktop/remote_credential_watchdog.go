@@ -203,3 +203,13 @@ func healTrackedCredentialProviders(ctx context.Context, workspaces []string, se
 	}
 	return nil
 }
+
+func healCredentialConfigsBeforeReload(ctx context.Context, workspaces []string, setup func(string) (*bootstrap.CredentialProxyOptions, error), heal func(context.Context, *bootstrap.CredentialProxyOptions) error, reload func() bool) error {
+	if err := healTrackedCredentialProviders(ctx, workspaces, setup, heal); err != nil {
+		return fmt.Errorf("credential proxy: heal tracked provider configs: %w", err)
+	}
+	if reload == nil || !reload() {
+		return fmt.Errorf("credential proxy: serve providers could not reload")
+	}
+	return nil
+}

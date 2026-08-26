@@ -77,6 +77,42 @@ func TestRemoteTabSnapshotReplaysAndClearsPendingPrompt(t *testing.T) {
 	}
 }
 
+func TestRemoteTabSnapshotRehydratesAndDropsPriorSessionPromptOnStatusAdoption(t *testing.T) {
+	const firstPath = "/sessions/first.jsonl"
+	const nextPath = "/sessions/next.jsonl"
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "first", Path: firstPath, Current: true}})
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionName: "first", SessionPath: firstPath})
+	a.remoteTabMu.Lock()
+	gen := a.remoteTabs[meta.ID].gen
+	a.remoteTabMu.Unlock()
+	a.cacheRemotePendingEvent(meta.ID, gen, "approval_request", json.RawMessage(`{"kind":"approval_request","approval":{"id":"old-approval"}}`))
+	readyBefore := log.count("remote-tab:" + meta.ID + ":state ")
+	fs.mu.Lock()
+	fs.statusPayload = `{"sessionName":"next","sessionPath":"` + nextPath + `","pendingPrompt":false}`
+	fs.mu.Unlock()
+	snap, err := a.RemoteTabSnapshot(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.PendingEvents) != 0 {
+		t.Fatalf("new session snapshot replayed prior prompt: %s", snap.PendingEvents)
+	}
+	a.remoteTabMu.Lock()
+	path := a.remoteTabs[meta.ID].routing.currentPath
+	a.remoteTabMu.Unlock()
+	if path != nextPath || log.count("remote-tab:"+meta.ID+":state ") != readyBefore+1 {
+		t.Fatalf("status adoption path/ready barrier = %q/%v", path, log.recorded())
+	}
+}
+
 func TestRemoteTabDoesNotPublishReadyWithoutEventStream(t *testing.T) {
 	fs := newFakeServe(t, "s3cret", nil)
 	fs.mu.Lock()

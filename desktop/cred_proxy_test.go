@@ -284,6 +284,32 @@ func TestCredentialWatchdogHealsEveryTrackedWorkspace(t *testing.T) {
 	}
 }
 
+func TestCredentialEnsureHealsEveryConfigBeforeReload(t *testing.T) {
+	workspaces := []string{"~/current", "~/peer"}
+	var calls []string
+	err := healCredentialConfigsBeforeReload(t.Context(), workspaces,
+		func(workspace string) (*bootstrap.CredentialProxyOptions, error) {
+			calls = append(calls, "setup:"+workspace)
+			return &bootstrap.CredentialProxyOptions{Provider: workspace}, nil
+		},
+		func(_ context.Context, opts *bootstrap.CredentialProxyOptions) error {
+			calls = append(calls, "heal:"+opts.Provider)
+			return nil
+		},
+		func() bool {
+			calls = append(calls, "reload")
+			return true
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"setup:~/current", "heal:~/current", "setup:~/peer", "heal:~/peer", "reload"}
+	if !slices.Equal(calls, want) {
+		t.Fatalf("ensure heal order = %v, want %v", calls, want)
+	}
+}
+
 func TestEnsureServerRejectsRemovedHost(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("REASONIX_HOME", home)

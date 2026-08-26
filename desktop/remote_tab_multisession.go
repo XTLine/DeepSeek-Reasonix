@@ -160,15 +160,10 @@ func (a *App) adoptRemoteTabFrameCurrent(tabID string, gen uint64, sessionPath s
 	}
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
-	if tab == nil || tab.gen != gen || tab.routing.currentPath == sessionPath {
+	if tab == nil || tab.gen != gen || !adoptRemoteTabSessionPathLocked(tab, sessionPath) {
 		a.remoteTabMu.Unlock()
 		return
 	}
-	tab.routing.currentPath = sessionPath
-	tab.routing.revision++
-	tab.session.path = sessionPath
-	tab.session.newSession = false
-	tab.session.reset = false
 	meta := remoteTabMetaLocked(tab)
 	ready := tab.state == "ready"
 	a.remoteTabMu.Unlock()
@@ -179,6 +174,24 @@ func (a *App) adoptRemoteTabFrameCurrent(tabID string, gen uint64, sessionPath s
 		// the newly current session snapshot replaces the old transcript.
 		a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:state", tabID), RemoteTabStateView{State: "ready"})
 	}
+}
+
+// adoptRemoteTabSessionPathLocked moves foreground-only state to a new session.
+// Actionable events belong to the previous controller and must never be replayed
+// into the newly hydrated surface. Caller holds remoteTabMu.
+func adoptRemoteTabSessionPathLocked(tab *remoteTab, sessionPath string) bool {
+	sessionPath = strings.TrimSpace(sessionPath)
+	if tab == nil || sessionPath == "" || tab.routing.currentPath == sessionPath {
+		return false
+	}
+	tab.routing.currentPath = sessionPath
+	tab.routing.revision++
+	tab.session.path = sessionPath
+	tab.session.newSession = false
+	tab.session.reset = false
+	tab.pendingEvents = nil
+	tab.runtime.pendingPrompt = false
+	return true
 }
 
 // remoteTabFramePathUnknown distinguishes a possible foreground recovery or

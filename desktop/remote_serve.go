@@ -279,25 +279,30 @@ func (m *desktopRemoteManager) readyServeReusable(ctx context.Context, c desktop
 	return true
 }
 
-// healCredentialChannel runs at the END of a successful ensure round, when the
-// serve's forward and registration are live. The reverse forward rebinds a
-// fresh ephemeral port on every SSH reconnect, and the heal inside ensureServe
-// only rewrites the CONFIG — a reused serve's in-memory providers still dial
-// the old port. When the port moved (or the heal rewrote anything), tell the
-// serve(s) on this host to rebuild their providers, then verify the channel
-// end to end before recording the port as healed.
+// healCredentialChannel runs after ensure when the forward is live. A reconnect
+// can move its remote port, so heal every tracked workspace config before any
+// Serve reloads providers, then verify the channel before recording the port.
 func (m *desktopRemoteManager) healCredentialChannel(ctx context.Context, c desktopSSHClient, mh *managedHost, hostID, workspace, base, token string, res bootstrap.Result) error {
 	port, has := credentialForwardPort(c, hostID)
 	if !has {
 		return fmt.Errorf("credential proxy: reverse tunnel is not available")
 	}
-	if res.Reused && (int(mh.credPort.Load()) != port || res.CredentialConfigChanged) {
+	if int(mh.credPort.Load()) != port || res.CredentialConfigChanged {
 		log.Printf("[remote] EnsureServer: cred port drift host=%s old=%d new=%d configChanged=%v -> reloading serve providers", hostID, mh.credPort.Load(), port, res.CredentialConfigChanged)
-		// base+token is the serve this round just ensured: the registry may
-		// not hold it yet (it is published moments before this call), and an
-		// empty registry must not turn the reload into a silent no-op.
-		if !m.reloadServeProviders(ctx, mh, hostID, workspace, base, token) {
-			return fmt.Errorf("credential proxy: serve providers could not reload")
+		workspaces := m.trackedCredentialWorkspaces(hostID, workspace)
+		// base+token covers the Serve ensured by this round even if it has not
+		// reached the registry yet; tracked peers are reloaded alongside it.
+		if err := healCredentialConfigsBeforeReload(ctx, workspaces,
+			func(workspace string) (*bootstrap.CredentialProxyOptions, error) {
+				return m.credentialProxySetup(c, hostID, workspace)
+			},
+			func(ctx context.Context, opts *bootstrap.CredentialProxyOptions) error {
+				_, err := bootstrap.HealCredentialProvider(ctx, c, opts)
+				return err
+			},
+			func() bool { return m.reloadServeProviders(ctx, mh, hostID, workspace, base, token) },
+		); err != nil {
+			return err
 		}
 	}
 	if perr := probeReverseTunnel(c, port); perr != nil {
