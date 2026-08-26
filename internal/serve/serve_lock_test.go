@@ -335,8 +335,8 @@ func TestSubmitNewHoldsBindingLockUntilRotationCompletes(t *testing.T) {
 	lockAcquired := make(chan struct{})
 	go func() {
 		s.bindMu.Lock()
-		s.bindMu.Unlock()
 		close(lockAcquired)
+		s.bindMu.Unlock()
 	}()
 	select {
 	case <-lockAcquired:
