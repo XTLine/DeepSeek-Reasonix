@@ -30,6 +30,8 @@ func probeRemoteTabFrame(frame string) (kind, path string, current, reset bool) 
 
 func (a *App) beginRemoteTabProvisionalResume(tabID string, tab *remoteTab, client *http.Client, gen uint64, targetPath string) remoteTabProvisionalResume {
 	route := remoteTabProvisionalResume{targetPath: strings.TrimSpace(targetPath)}
+	tab.routeEventMu.Lock()
+	defer tab.routeEventMu.Unlock()
 	a.remoteTabMu.Lock()
 	defer a.remoteTabMu.Unlock()
 	current := a.remoteTabs[tabID]
@@ -62,6 +64,8 @@ func (a *App) rollbackRemoteTabProvisionalResume(tabID string, tab *remoteTab, c
 	if !route.active {
 		return
 	}
+	tab.routeEventMu.Lock()
+	defer tab.routeEventMu.Unlock()
 	a.remoteTabMu.Lock()
 	defer a.remoteTabMu.Unlock()
 	current := a.remoteTabs[tabID]
@@ -91,6 +95,8 @@ func (a *App) reconcileRemoteTabRejectedResume(tabID string, tab *remoteTab, cli
 		a.transitionRemoteTabState(tabID, gen, "ready", "ready", resumeErr.Error())
 		return
 	}
+	tab.routeEventMu.Lock()
+	defer tab.routeEventMu.Unlock()
 	a.remoteTabMu.Lock()
 	current := a.remoteTabs[tabID]
 	if current != tab || current.client != client || current.gen != gen || current.state != "ready" {

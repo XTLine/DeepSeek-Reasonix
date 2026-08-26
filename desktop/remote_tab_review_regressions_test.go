@@ -415,6 +415,73 @@ func TestRemoteStatusAdoptionWaitsForFramePublication(t *testing.T) {
 	}
 }
 
+func TestRemoteRejectedResumeReconciliationWaitsForFramePublication(t *testing.T) {
+	const previousPath = "/sessions/previous.jsonl"
+	const targetPath = "/sessions/target.jsonl"
+	const authoritativePath = "/sessions/authoritative.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		session: remoteTabSessionState{path: targetPath},
+		routing: remoteTabSessionRouting{
+			currentPath: targetPath, rehydratingPath: targetPath, running: map[string]bool{},
+		},
+	}
+	frameEntered := make(chan struct{})
+	releaseFrame := make(chan struct{})
+	log := &eventLog{}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	a.remoteEventHook = func(name string, payload any) {
+		log.add(name, payload)
+		if name == "remote-tab:"+tab.id+":event" {
+			close(frameEntered)
+			<-releaseFrame
+		}
+	}
+	frameDone := make(chan bool, 1)
+	go func() {
+		frame := json.RawMessage(`{"kind":"text","text":"target-frame","sessionPath":"/sessions/target.jsonl"}`)
+		frameDone <- a.publishRemoteTabFrameForRoute(tab.id, tab, client, tab.gen, targetPath, true, "text", frame)
+	}()
+	select {
+	case <-frameEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("target frame did not reach publication")
+	}
+	reconcileDone := make(chan struct{})
+	go func() {
+		route := remoteTabProvisionalResume{targetPath: targetPath, previousPath: previousPath, active: true}
+		a.reconcileRemoteTabRejectedResume(tab.id, tab, client, tab.gen, route, serveSessionEntry{Path: authoritativePath}, errors.New("resume response lost"))
+		close(reconcileDone)
+	}()
+	select {
+	case <-reconcileDone:
+		t.Fatal("ambiguous-resume reconciliation overtook an in-flight frame")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFrame)
+	if !<-frameDone {
+		t.Fatal("target frame was rejected before authoritative reconciliation")
+	}
+	select {
+	case <-reconcileDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ambiguous-resume reconciliation did not complete")
+	}
+	events := strings.Join(log.recorded(), "\n")
+	frameIndex := strings.Index(events, "target-frame")
+	readyIndex := strings.LastIndex(events, "remote-tab:"+tab.id+":state")
+	if frameIndex < 0 || readyIndex < frameIndex {
+		t.Fatalf("authoritative ready barrier overtook the target frame: %s", events)
+	}
+	a.remoteTabMu.Lock()
+	currentPath := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if currentPath != authoritativePath {
+		t.Fatalf("reconciled route = %q, want %q", currentPath, authoritativePath)
+	}
+}
+
 func TestExternalSessionAdoptionResetsAndSeedsForegroundRuntime(t *testing.T) {
 	const oldPath = "/sessions/old.jsonl"
 	const targetPath = "/sessions/target.jsonl"
