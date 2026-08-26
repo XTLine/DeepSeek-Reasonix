@@ -27,6 +27,7 @@ type fakeServe struct {
 
 	mu                             sync.Mutex
 	newCalled                      int
+	newSessionPath                 string
 	resumePath                     string
 	cookieOnNew                    bool
 	sessions                       []serveSessionEntry
@@ -39,7 +40,9 @@ type fakeServe struct {
 	failSessions                   bool // /sessions replies 500 when set
 	sessionsStarted                chan struct{}
 	sessionsRelease                chan struct{}
-	eventsConns                    int  // /events connections opened
+	eventsConns                    int // /events connections opened
+	eventsQuery                    string
+	eventFrames                    []string
 	eventsStatus                   int  // non-zero makes /events fail before opening
 	eventsCloseEarly               bool // return immediately after the initial 200 frames
 	statusPayload                  string
@@ -94,6 +97,7 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		fail := fs.failEnter
 		fs.failEnter = ""
 		enterDelay := fs.enterDelay
+		newSessionPath := fs.newSessionPath
 		if fail != "" {
 			fs.mu.Unlock()
 			http.Error(w, fail, http.StatusConflict)
@@ -106,6 +110,9 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		fs.mu.Unlock()
 		if enterDelay > 0 {
 			time.Sleep(enterDelay)
+		}
+		if newSessionPath != "" {
+			w.Header().Set("X-Reasonix-Session-Path", newSessionPath)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -164,8 +171,10 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
 		fs.mu.Lock()
 		fs.eventsConns++
+		fs.eventsQuery = r.URL.RawQuery
 		eventsStatus := fs.eventsStatus
 		closeEarly := fs.eventsCloseEarly
+		frames := append([]string(nil), fs.eventFrames...)
 		fs.mu.Unlock()
 		if eventsStatus != 0 {
 			http.Error(w, "event stream unavailable", eventsStatus)
@@ -177,8 +186,12 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 			http.Error(w, "no flusher", http.StatusInternalServerError)
 			return
 		}
-		fmt.Fprintf(w, "data: %s\n\n", `{"kind":"session_start"}`)
-		fmt.Fprintf(w, "data: %s\n\n", `{"kind":"ready"}`)
+		if len(frames) == 0 {
+			frames = []string{`{"kind":"session_start"}`, `{"kind":"ready"}`}
+		}
+		for _, frame := range frames {
+			fmt.Fprintf(w, "data: %s\n\n", frame)
+		}
 		flusher.Flush()
 		if closeEarly {
 			return
@@ -372,6 +385,7 @@ func cleanupRemoteTabPumps(t *testing.T, a *App) {
 // the tab's event channel and the session cookie riding the jar.
 func TestRemoteTabBridgeEntersNewSessionAndStreams(t *testing.T) {
 	fs := newFakeServe(t, "s3cret", nil)
+	fs.newSessionPath = "/sessions/fresh.jsonl"
 	kernel := &fakeRemoteKernel{
 		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
 		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
@@ -396,6 +410,18 @@ func TestRemoteTabBridgeEntersNewSessionAndStreams(t *testing.T) {
 	if got := log.count("remote-tab:" + meta.ID + ":event"); got < 2 {
 		t.Fatalf("pump forwarded %d frames, want ≥2 (events: %v)", got, log.events)
 	}
+	fs.mu.Lock()
+	eventsQuery := fs.eventsQuery
+	fs.mu.Unlock()
+	if eventsQuery != "all=1" {
+		t.Fatalf("event stream query = %q, want all=1", eventsQuery)
+	}
+	a.remoteTabMu.Lock()
+	currentPath := a.remoteTabs[meta.ID].currentSessionPath
+	a.remoteTabMu.Unlock()
+	if currentPath != "/sessions/fresh.jsonl" {
+		t.Fatalf("current session path = %q, want response header path", currentPath)
+	}
 	if log.count("remote-tab:"+meta.ID+":state") < 2 {
 		t.Fatalf("expected connecting + ready state events, got %v", log.events)
 	}
@@ -414,6 +440,59 @@ func TestRemoteTabBridgeEntersNewSessionAndStreams(t *testing.T) {
 	a.remoteTabMu.Unlock()
 	if state != "ready" {
 		t.Fatalf("state after pump cancel = %q, want ready (silent exit)", state)
+	}
+}
+
+func TestRemoteTabAllSessionEventsRouteOnlyCurrentFrames(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "current", Path: "/sessions/current.jsonl", Current: true},
+		{Name: "background", Path: "/sessions/background.jsonl"},
+	})
+	fs.mu.Lock()
+	fs.eventFrames = []string{
+		`{"kind":"turn_started","sessionPath":"/sessions/background.jsonl"}`,
+		`{"kind":"turn_started","sessionPath":"/sessions/current.jsonl"}`,
+		`{"kind":"ready","sessionPath":"/sessions/current.jsonl"}`,
+	}
+	fs.mu.Unlock()
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{
+		SessionName: "current", SessionPath: "/sessions/current.jsonl", SessionTitle: "Current",
+	})
+
+	events := log.recorded()
+	for _, event := range events {
+		if strings.HasPrefix(event, "remote-tab:"+meta.ID+":event") && strings.Contains(event, "/sessions/background.jsonl") {
+			t.Fatalf("background frame leaked to foreground reducer: %v", events)
+		}
+	}
+	if !slices.ContainsFunc(events, func(event string) bool {
+		return strings.HasPrefix(event, "remote-tab:"+meta.ID+":event") && strings.Contains(event, "/sessions/current.jsonl")
+	}) {
+		t.Fatalf("current-session frame was not forwarded: %v", events)
+	}
+	a.remoteTabMu.Lock()
+	backgroundRunning := a.remoteTabs[meta.ID].runningSessions["/sessions/background.jsonl"]
+	a.remoteTabMu.Unlock()
+	if !backgroundRunning {
+		t.Fatal("background running state was not retained for the project tree")
+	}
+	sessions, err := a.RemoteProjectSessions("box", "~/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(sessions, func(session RemoteSessionView) bool {
+		return session.Path == "/sessions/background.jsonl" && session.Running
+	}) {
+		t.Fatalf("background session is not marked running: %+v", sessions)
 	}
 }
 
@@ -570,6 +649,34 @@ func TestRemoteTabBridgeResumeResolvesSessionPath(t *testing.T) {
 	}
 	if resumePath != "/remote/sessions/s1.jsonl" {
 		t.Fatalf("POST /resume path = %q, want the /sessions entry path", resumePath)
+	}
+}
+
+func TestEnterRemoteSessionPathSkipsSessionCatalog(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := serveHandshake(ctx, client, fs.server.URL, "s3cret"); err != nil {
+		t.Fatal(err)
+	}
+	target, err := enterRemoteSessionTarget(ctx, client, fs.server.URL, RemoteTabOpenOptions{
+		SessionName: "known", SessionPath: "/remote/sessions/known.jsonl", SessionTitle: "Known",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Path != "/remote/sessions/known.jsonl" || target.Title != "Known" {
+		t.Fatalf("target = %+v", target)
+	}
+	for _, call := range fs.recorded() {
+		if strings.HasPrefix(call, "GET /sessions") {
+			t.Fatalf("explicit path unnecessarily fetched the session catalog: %v", fs.recorded())
+		}
 	}
 }
 

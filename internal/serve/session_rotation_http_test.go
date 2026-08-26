@@ -28,7 +28,7 @@ func TestServePlanDecisionValidatesRequest(t *testing.T) {
 
 func TestServeClearSessionEndpoint(t *testing.T) {
 	bc := NewBroadcaster()
-	ctrl := control.New(control.Options{Sink: bc})
+	ctrl := control.New(control.Options{Sink: bc, SessionDir: t.TempDir()})
 	srv := httptest.NewServer(New(ctrl, bc, config.ServeConfig{}).Handler())
 	defer srv.Close()
 
@@ -39,6 +39,9 @@ func TestServeClearSessionEndpoint(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("clear session = %d, want 204", resp.StatusCode)
+	}
+	if got := resp.Header.Get(sessionPathHeader); got == "" || got != ctrl.SessionPath() {
+		t.Errorf("clear session path header = %q, controller path %q", got, ctrl.SessionPath())
 	}
 }
 

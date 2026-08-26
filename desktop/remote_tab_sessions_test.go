@@ -521,6 +521,9 @@ func TestRemoteTabTitleAdoptsServeSession(t *testing.T) {
 	log.mu.Lock()
 	log.events = nil
 	log.mu.Unlock()
+	a.remoteTabMu.Lock()
+	a.remoteTabs[meta.ID].topicTitle = remoteWorkspaceName("~/app")
+	a.remoteTabMu.Unlock()
 
 	a.refreshRemoteTabTitle(meta.ID)
 

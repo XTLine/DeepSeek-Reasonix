@@ -102,7 +102,7 @@ func (a *App) RemoteTabStatus(tabID string) (json.RawMessage, error) {
 	statusSeq := a.reserveRemoteTabStatusSequence(tabID, client, gen)
 	ctx, cancel := commandContext(a)
 	defer cancel()
-	status, err := serveGet(ctx, client, serveURL(base, "/status"))
+	status, err := serveGet(ctx, client, serveURL(base, "/status?runtime=1"))
 	if err == nil {
 		if !a.recordRemoteTabSessionStatus(tabID, client, gen, statusSeq, status) {
 			return nil, fmt.Errorf("remote tab %q status was superseded by newer runtime state", tabID)
@@ -160,6 +160,12 @@ func (a *App) recordRemoteTabSessionStatus(tabID string, client *http.Client, ge
 	}
 	if payload.Running != nil {
 		tab.runtime.running = *payload.Running
+		if tab.currentSessionPath != "" {
+			if tab.runningSessions == nil {
+				tab.runningSessions = map[string]bool{}
+			}
+			tab.runningSessions[tab.currentSessionPath] = *payload.Running
+		}
 	}
 	if payload.PendingPrompt != nil {
 		tab.runtime.pendingPrompt = *payload.PendingPrompt

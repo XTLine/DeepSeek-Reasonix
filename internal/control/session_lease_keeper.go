@@ -222,6 +222,77 @@ func (k *SessionLeaseKeeper) BindControllerAuthority(c *Controller) error {
 	return nil
 }
 
+// Split moves the held lease and controller binding into a new keeper without
+// releasing either. Multi-session Serve uses this when a busy controller moves
+// to the background and must keep saving its own transcript to completion.
+func (k *SessionLeaseKeeper) Split() *SessionLeaseKeeper {
+	if k == nil {
+		return nil
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.lease == nil && k.controller == nil && len(k.retired) == 0 {
+		return nil
+	}
+	dst := &SessionLeaseKeeper{lease: k.lease, controller: k.controller, retired: k.retired}
+	if dst.controller != nil {
+		dst.controller.SetOnSessionTransition(dst.HandleSessionTransition)
+	}
+	k.lease, k.controller, k.retired = nil, nil, nil
+	return dst
+}
+
+// RebindDetaching acquires path and returns the previous binding in a separate
+// keeper. Acquisition is failure-atomic: on error the receiver is unchanged.
+func (k *SessionLeaseKeeper) RebindDetaching(path string) (*SessionLeaseKeeper, error) {
+	if k == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(path) == "" {
+		return k.Split(), nil
+	}
+	k.mu.Lock()
+	canonical := agent.CanonicalSessionPath(path)
+	if k.lease != nil && k.lease.Path() == canonical {
+		k.mu.Unlock()
+		return nil, nil
+	}
+	lease, err := agent.TryAcquireSessionLease(path)
+	if err != nil {
+		k.mu.Unlock()
+		return nil, err
+	}
+	var dst *SessionLeaseKeeper
+	if k.lease != nil || k.controller != nil || len(k.retired) > 0 {
+		dst = &SessionLeaseKeeper{lease: k.lease, controller: k.controller, retired: k.retired}
+	}
+	if dst.controller != nil {
+		dst.controller.SetOnSessionTransition(dst.HandleSessionTransition)
+	}
+	k.lease, k.controller, k.retired = lease, nil, nil
+	k.mu.Unlock()
+	return dst, nil
+}
+
+// Adopt transfers another keeper's lease and controller binding into the
+// receiver. The source is emptied; any receiver binding is released first.
+func (k *SessionLeaseKeeper) Adopt(other *SessionLeaseKeeper) {
+	if k == nil || other == nil || k == other {
+		return
+	}
+	other.mu.Lock()
+	inLease, inCtrl, inRetired := other.lease, other.controller, other.retired
+	other.lease, other.controller, other.retired = nil, nil, nil
+	other.mu.Unlock()
+	if inCtrl != nil {
+		inCtrl.SetOnSessionTransition(k.HandleSessionTransition)
+	}
+	k.mu.Lock()
+	k.releaseLocked()
+	k.lease, k.controller, k.retired = inLease, inCtrl, inRetired
+	k.mu.Unlock()
+}
+
 func (k *SessionLeaseKeeper) releaseLocked() {
 	if k.lease != nil {
 		k.lease.Release()

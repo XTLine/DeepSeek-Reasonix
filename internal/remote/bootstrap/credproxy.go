@@ -123,6 +123,13 @@ func EnsureCredentialProvider(ctx context.Context, conn Conn, opts *CredentialPr
 	return ensureCredentialProvider(ctx, fs, home, opts)
 }
 
+// HealCredentialProvider refreshes the managed provider outside a full Serve
+// bootstrap round. The desktop watchdog uses it after an SSH reverse-forward
+// rebind, before asking running Serve processes to reload providers.
+func HealCredentialProvider(ctx context.Context, conn Conn, opts *CredentialProxyOptions) (bool, error) {
+	return EnsureCredentialProvider(ctx, conn, opts)
+}
+
 // ensureCredentialProvider installs or heals the proxy provider and virtual
 // token. The result reports whether a running serve must reload its config.
 func ensureCredentialProvider(ctx context.Context, fs *sftpfs.FS, home string, opts *CredentialProxyOptions) (bool, error) {

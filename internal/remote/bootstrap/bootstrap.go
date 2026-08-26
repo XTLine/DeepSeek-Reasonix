@@ -107,6 +107,9 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if err := stopOutdatedServe(ctx, conn, fs, paths, workspace); err != nil {
+		return Result{}, err
+	}
 
 	// 1. Reuse a live process if the recorded pid is still running.
 	if st, tok, ok := tryReuse(ctx, conn, fs, paths, workspace, requireLaunchArgs...); ok {
@@ -332,6 +335,27 @@ func stopMismatchedServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths St
 		if _, err := conn.Exec(ctx, StopCommand(st.PID, paths)); err != nil {
 			return fmt.Errorf("bootstrap: stop mismatched serve: %w", err)
 		}
+	}
+	return nil
+}
+
+// stopOutdatedServe retires a live process whose binary lacks the wire and
+// healing contracts required by the desktop. Leaving it alive would retain the
+// workspace lease and race the replacement process.
+func stopOutdatedServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths StatePaths, workspace string) error {
+	st, err := readState(ctx, fs, paths.StateJSON)
+	if err != nil || st.PID <= 0 || !validServeAddr(st.Addr) || st.Workspace != workspace {
+		return nil
+	}
+	if !pidIsServe(ctx, conn, st.PID, paths) {
+		return nil
+	}
+	res, probeErr := conn.Exec(ctx, SupportsRequiredServeCapabilitiesCommand(st.PID))
+	if probeErr == nil && strings.TrimSpace(string(res.Stdout)) == "yes" {
+		return nil
+	}
+	if _, stopErr := conn.Exec(ctx, StopCommand(st.PID, paths)); stopErr != nil {
+		return fmt.Errorf("bootstrap: stop outdated serve: %w", stopErr)
 	}
 	return nil
 }

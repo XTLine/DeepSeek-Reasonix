@@ -9,6 +9,37 @@ import (
 	"reasonix/internal/eventwire"
 )
 
+func TestBroadcasterFiltersSessions(t *testing.T) {
+	b := NewBroadcaster()
+	b.SetCurrentSession("/sessions/current.jsonl")
+	current, stopCurrent := b.Subscribe()
+	all, stopAll := b.SubscribeAll()
+	defer stopCurrent()
+	defer stopAll()
+
+	b.Emit(event.Event{Kind: event.Text, Text: "current", SessionPath: "/sessions/current.jsonl"})
+	b.Emit(event.Event{Kind: event.Text, Text: "background", SessionPath: "/sessions/background.jsonl"})
+	b.Emit(event.Event{Kind: event.Text, Text: "legacy"})
+
+	drain := func(ch <-chan []byte) []string {
+		var frames []string
+		for {
+			select {
+			case frame := <-ch:
+				frames = append(frames, string(frame))
+			default:
+				return frames
+			}
+		}
+	}
+	if got := len(drain(current)); got != 2 {
+		t.Fatalf("current subscription received %d frames, want 2", got)
+	}
+	if got := len(drain(all)); got != 3 {
+		t.Fatalf("all-session subscription received %d frames, want 3", got)
+	}
+}
+
 func TestBroadcasterFanOut(t *testing.T) {
 	b := NewBroadcaster()
 	a, ca := b.Subscribe()

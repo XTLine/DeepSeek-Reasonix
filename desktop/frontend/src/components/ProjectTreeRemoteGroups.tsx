@@ -33,9 +33,10 @@ export function mergeRemoteSessionsIntoTree(
       label: row.title || row.name || t("projectTree.newTopic"),
       topicId: `${node.remote!.hostId}\u0000${node.remote!.workspace}\u0000${row.name}`,
       turns: row.turns,
+      running: row.running,
       lastActivityAt: row.lastActivityAt,
       pinned: row.pinned,
-      remoteSession: { hostId: node.remote!.hostId, workspace: node.remote!.workspace, name: row.name },
+      remoteSession: { hostId: node.remote!.hostId, workspace: node.remote!.workspace, name: row.name, path: row.path, title: row.title },
       children: [],
     }));
     return { ...node, children: [...remoteChildren, ...(node.children ?? [])] };
@@ -82,11 +83,13 @@ export function useRemoteSessionActions(
 }
 
 export function openRemoteSessionNode(
-  remote: { hostId: string; workspace: string; name: string } | undefined,
-  open: (ref: RemoteTabRefView, opts?: { sessionName?: string; focus?: boolean }) => Promise<void>,
+  remote: { hostId: string; workspace: string; name: string; path?: string; title?: string } | undefined,
+  open: (ref: RemoteTabRefView, opts?: { sessionName?: string; sessionPath?: string; sessionTitle?: string; focus?: boolean }) => Promise<void>,
 ): boolean {
   if (!remote) return false;
-  void open(remote, remote.name ? { sessionName: remote.name } : { focus: true });
+  void open(remote, remote.name || remote.path
+    ? { sessionName: remote.name, sessionPath: remote.path, sessionTitle: remote.title }
+    : { focus: true });
   return true;
 }
 
@@ -120,14 +123,16 @@ export function useRemoteProjectGroups(
 
   const openRemoteProject = useCallback(async (
     ref: RemoteTabRefView,
-    opts?: { newSession?: boolean; sessionName?: string; focus?: boolean },
+    opts?: { newSession?: boolean; sessionName?: string; sessionPath?: string; sessionTitle?: string; focus?: boolean },
   ) => {
     const key = remoteProjectKey(ref);
     if (opening.current.has(key)) return;
     opening.current.add(key);
     try {
       await app.OpenRemoteProjectTab(ref.hostId, ref.workspace,
-        opts?.focus ? {} : opts?.sessionName ? { sessionName: opts.sessionName } : { newSession: true });
+        opts?.focus ? {} : opts?.sessionName || opts?.sessionPath
+          ? { sessionName: opts.sessionName, sessionPath: opts.sessionPath, sessionTitle: opts.sessionTitle }
+          : { newSession: true });
       if (!opts?.focus) setRevision((current) => current + 1);
     } catch (error) {
       showToast(error instanceof Error ? error.message : String(error), "error");
@@ -241,7 +246,7 @@ interface RemoteMenuOptions {
   ref: RemoteTabRefView;
   t: Translator;
   closeMenu: () => void;
-  openRemoteProject: (ref: RemoteTabRefView, opts?: { newSession?: boolean; sessionName?: string; focus?: boolean }) => Promise<void>;
+  openRemoteProject: (ref: RemoteTabRefView, opts?: { newSession?: boolean; sessionName?: string; sessionPath?: string; sessionTitle?: string; focus?: boolean }) => Promise<void>;
   openRemoteWindow: (ref: RemoteTabRefView) => Promise<void>;
   setRemoteSessions: Dispatch<SetStateAction<Record<string, RemoteSessionView[]>>>;
   refresh: () => Promise<void>;

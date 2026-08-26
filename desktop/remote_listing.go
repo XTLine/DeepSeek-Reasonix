@@ -30,15 +30,18 @@ type serveSessionEntry struct {
 	Title      string `json:"title"`
 	Turns      int    `json:"turns"`
 	Current    bool   `json:"current"`
+	Running    bool   `json:"running"`
 	MtimeMilli int64  `json:"mtimeMilli"`
 }
 
 // RemoteSessionView mirrors one serve /sessions entry on the frontend side.
 type RemoteSessionView struct {
 	Name           string `json:"name"`
+	Path           string `json:"path,omitempty"`
 	Title          string `json:"title,omitempty"`
 	Turns          int    `json:"turns,omitempty"`
 	Current        bool   `json:"current,omitempty"`
+	Running        bool   `json:"running,omitempty"`
 	LastActivityAt int64  `json:"lastActivityAt,omitempty"`
 	Pinned         bool   `json:"pinned,omitempty"`
 }
@@ -75,22 +78,30 @@ func newServeHTTPClient(base string) (*http.Client, error) {
 // servePost keeps the bounded response text in failures so remote lease and
 // busy-state hints reach the desktop surface.
 func servePost(ctx context.Context, client *http.Client, url string, body []byte) error {
+	_, err := servePostSessionPath(ctx, client, url, body)
+	return err
+}
+
+// servePostSessionPath preserves the ordinary 2xx contract while reading the
+// optional path header returned by session-rotation endpoints. Older Serve
+// binaries omit it and keep their legacy untagged single-session behavior.
+func servePostSessionPath(ctx context.Context, client *http.Client, url string, body []byte) (string, error) {
 	if body == nil {
 		body = []byte("{}")
 	}
 	resp, err := serveDo(ctx, client, http.MethodPost, url, body)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
+		return strings.TrimSpace(resp.Header.Get("X-Reasonix-Session-Path")), nil
 	}
 	if message := strings.TrimSpace(string(data)); message != "" {
-		return fmt.Errorf("%s: status %d: %s", url, resp.StatusCode, message)
+		return "", fmt.Errorf("%s: status %d: %s", url, resp.StatusCode, message)
 	}
-	return fmt.Errorf("%s: status %d", url, resp.StatusCode)
+	return "", fmt.Errorf("%s: status %d", url, resp.StatusCode)
 }
 
 // serveDo issues a JSON request; the csrf guard rejects non-JSON POSTs.
@@ -205,6 +216,20 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 	if err != nil {
 		return nil, err
 	}
+	a.remoteTabMu.Lock()
+	liveRunning := map[string]bool{}
+	liveCurrentPath := ""
+	for _, tab := range a.remoteTabs {
+		if tab.ref.HostID != hostID || tab.ref.Workspace != workspace {
+			continue
+		}
+		liveCurrentPath = tab.currentSessionPath
+		for path, running := range tab.runningSessions {
+			liveRunning[path] = running
+		}
+		break
+	}
+	a.remoteTabMu.Unlock()
 	out := make([]RemoteSessionView, 0, len(entries))
 	pinned := make([]RemoteSessionView, 0, len(entries))
 	hasCurrent := false
@@ -215,13 +240,15 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 		}
 		view := RemoteSessionView{
 			Name:           e.Name,
+			Path:           e.Path,
 			Title:          title,
 			Turns:          e.Turns,
-			Current:        e.Current,
+			Current:        e.Current || (liveCurrentPath != "" && e.Path == liveCurrentPath),
+			Running:        e.Running || liveRunning[e.Path],
 			LastActivityAt: e.MtimeMilli,
 			Pinned:         remoteSessionPinned(hostID, workspace, e.Name),
 		}
-		hasCurrent = hasCurrent || e.Current
+		hasCurrent = hasCurrent || view.Current
 		if view.Pinned {
 			pinned = append(pinned, view)
 		} else {
@@ -233,7 +260,7 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 		var blank *RemoteSessionView
 		for _, tab := range a.remoteTabs {
 			if tab.ref.HostID == hostID && tab.ref.Workspace == workspace && tab.session.reset {
-				blank = &RemoteSessionView{Name: "", Title: tab.topicTitle, Current: true, LastActivityAt: time.Now().UnixMilli()}
+				blank = &RemoteSessionView{Name: "", Path: tab.currentSessionPath, Title: tab.topicTitle, Current: true, Running: tab.runtime.running, LastActivityAt: time.Now().UnixMilli()}
 				break
 			}
 		}

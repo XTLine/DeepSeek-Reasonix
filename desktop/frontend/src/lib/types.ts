@@ -377,6 +377,8 @@ export interface WireEvent {
   streamAttempt?: WireStreamAttempt;
   /** Durable session-inbox item id for steer / TurnDone correlation. */
   itemId?: string;
+  /** Serve multi-session routing tag; absent on local and legacy events. */
+  sessionPath?: string;
   workspace?: WireWorkspaceChanged;
   /** turn_phase: working | checking | verifying | reviewing */
   phase?: string;

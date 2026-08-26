@@ -20,33 +20,70 @@ import (
 
 const remoteTabStreamOpenStability = 50 * time.Millisecond
 
-// enterRemoteSession enters a fresh or named Serve session. Since /resume
-// takes a path rather than a name, named sessions resolve through /sessions.
+// enterRemoteSession enters a fresh or named Serve session. Kept as the
+// compatibility wrapper used by focused bridge tests.
 func enterRemoteSession(ctx context.Context, client *http.Client, base string, opts RemoteTabOpenOptions) error {
+	_, err := enterRemoteSessionTarget(ctx, client, base, opts)
+	return err
+}
+
+func enterRemoteSessionTarget(ctx context.Context, client *http.Client, base string, opts RemoteTabOpenOptions) (serveSessionEntry, error) {
 	name := strings.TrimSpace(opts.SessionName)
 	if opts.NewSession {
-		return servePost(ctx, client, serveURL(base, "/new"), nil)
+		path, err := servePostSessionPath(ctx, client, serveURL(base, "/new"), nil)
+		if err != nil {
+			return serveSessionEntry{}, err
+		}
+		return serveSessionEntry{Path: path, Current: true}, nil
+	}
+	if sessionPath := strings.TrimSpace(opts.SessionPath); sessionPath != "" {
+		body, err := json.Marshal(map[string]string{"path": sessionPath})
+		if err != nil {
+			return serveSessionEntry{}, err
+		}
+		if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
+			return serveSessionEntry{}, err
+		}
+		return serveSessionEntry{Name: name, Path: sessionPath, Title: strings.TrimSpace(opts.SessionTitle), Current: true}, nil
 	}
 	// An empty target is a focus-only attach. The managed Serve may already
 	// own an idle conversation shared with another client; attaching must not
 	// abandon it. Only an explicit NewSession request is allowed to POST /new.
 	if name == "" {
-		return nil
+		current, _ := serveCurrentSession(ctx, client, base)
+		return current, nil
 	}
 	sessions, err := serveSessions(ctx, client, base)
 	if err != nil {
-		return err
+		return serveSessionEntry{}, err
 	}
 	for _, s := range sessions {
 		if s.Name == name {
 			body, err := json.Marshal(map[string]string{"path": s.Path})
 			if err != nil {
-				return err
+				return serveSessionEntry{}, err
 			}
-			return servePost(ctx, client, serveURL(base, "/resume"), body)
+			if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
+				return serveSessionEntry{}, err
+			}
+			s.Current = true
+			return s, nil
 		}
 	}
-	return fmt.Errorf("remote session %q not found", name)
+	return serveSessionEntry{}, fmt.Errorf("remote session %q not found", name)
+}
+
+func serveCurrentSession(ctx context.Context, client *http.Client, base string) (serveSessionEntry, error) {
+	sessions, err := serveSessions(ctx, client, base)
+	if err != nil {
+		return serveSessionEntry{}, err
+	}
+	for _, session := range sessions {
+		if session.Current {
+			return session, nil
+		}
+	}
+	return serveSessionEntry{}, nil
 }
 
 func remoteSessionTransitionBusy(err error) bool {
@@ -114,7 +151,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 		a.retireRemoteTabGeneration(tabID, gen)
 		return false, callCtx.Err()
 	}
-	err = enterRemoteSession(callCtx, client, base, opts)
+	target, err := enterRemoteSessionTarget(callCtx, client, base, opts)
 	entered := err == nil
 	if err != nil {
 		// A busy serve refuses session transitions with 409 but retains its
@@ -122,12 +159,28 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 		if remoteSessionTransitionBusy(err) {
 			log.Printf("[remote] attachRemoteTabServe: enterRemoteSession BUSY (attached to current session) tab=%s err=%v", tabID, err)
 			entered = false
+			target, _ = serveCurrentSession(callCtx, client, base)
 		} else {
 			log.Printf("[remote] attachRemoteTabServe: enterRemoteSession FAILED tab=%s err=%v", tabID, err)
 			a.retireRemoteTabGeneration(tabID, gen)
 			return false, err
 		}
 	}
+	a.remoteTabMu.Lock()
+	if current := a.remoteTabs[tabID]; current == tab && current.gen == gen {
+		current.currentSessionPath = strings.TrimSpace(target.Path)
+		current.session.path = current.currentSessionPath
+		if name := strings.TrimSpace(target.Name); name != "" {
+			current.session.name = name
+		}
+		if title := strings.TrimSpace(target.Title); title != "" {
+			current.topicTitle = title
+		}
+		if current.runningSessions == nil {
+			current.runningSessions = map[string]bool{}
+		}
+	}
+	a.remoteTabMu.Unlock()
 	if !a.waitRemoteTabStreamStable(callCtx, tabID, gen) {
 		return false, fmt.Errorf("remote tab %q event stream closed during session attach", tabID)
 	}
@@ -294,7 +347,7 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64, opene
 		return
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, serveURL(base, "/events"), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, serveURL(base, "/events?all=1"), nil)
 	if err != nil {
 		signalOpened(err)
 		a.emitRemoteTabStateForGeneration(tabID, gen, "error", err.Error())
@@ -335,11 +388,15 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64, opene
 			return
 		}
 		var probe struct {
-			Kind string `json:"kind"`
+			Kind        string `json:"kind"`
+			SessionPath string `json:"sessionPath"`
 		}
 		kind := "?"
 		if json.Unmarshal([]byte(frame), &probe) == nil && probe.Kind != "" {
 			kind = probe.Kind
+		}
+		if !a.routeRemoteTabFrame(tabID, gen, strings.TrimSpace(probe.SessionPath), kind) {
+			continue
 		}
 		refreshRuntime := false
 		switch kind {
@@ -381,6 +438,42 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64, opene
 			a.goSafe("remoteTabReattach", func() { a.reattachRemoteTab(tabID) })
 		}
 	}
+}
+
+// routeRemoteTabFrame records background runtime without leaking its frames
+// into the foreground reducer. Untagged frames remain compatible with older
+// Serve binaries.
+func (a *App) routeRemoteTabFrame(tabID string, gen uint64, sessionPath, kind string) bool {
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil || tab.gen != gen {
+		a.remoteTabMu.Unlock()
+		return false
+	}
+	if tab.runningSessions == nil {
+		tab.runningSessions = map[string]bool{}
+	}
+	changed := false
+	if sessionPath != "" {
+		switch kind {
+		case "turn_started":
+			changed = !tab.runningSessions[sessionPath]
+			tab.runningSessions[sessionPath] = true
+		case "turn_done":
+			changed = tab.runningSessions[sessionPath]
+			tab.runningSessions[sessionPath] = false
+		}
+	}
+	foreground := sessionPath == "" || (tab.currentSessionPath != "" && sessionPath == tab.currentSessionPath)
+	backgroundChanged := changed && !foreground
+	meta := remoteTabMetaLocked(tab)
+	a.remoteTabMu.Unlock()
+	if backgroundChanged {
+		// ProjectTreeRemoteGroups uses this signal to refresh /sessions; its
+		// immediate overlay also reads runningSessions through the Go binding.
+		a.emitRemoteEvent("remote-tab:updated", meta)
+	}
+	return foreground
 }
 
 func (a *App) completeRemoteTabTurn(tabID string, gen uint64) {

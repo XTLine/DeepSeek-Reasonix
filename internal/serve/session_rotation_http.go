@@ -51,10 +51,15 @@ func (s *Server) clearSession(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.bc.ResetSession()
+	if ctrl, ok := s.ctl().(*control.Controller); ok {
+		ctrl.EnsureSessionPath()
+		s.setControllerPath(ctrl, ctrl.SessionPath())
+	}
+	s.bc.ResetSessionPath(s.ctl().SessionPath())
 	if err := s.rebindSessionLease(s.ctl().SessionPath()); err != nil {
 		http.Error(w, sessionInUseError(err), http.StatusConflict)
 		return
 	}
+	w.Header().Set(sessionPathHeader, s.ctl().SessionPath())
 	w.WriteHeader(http.StatusNoContent)
 }

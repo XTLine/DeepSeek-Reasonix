@@ -101,7 +101,7 @@ func TestEnsureServeLaunchesWhenAbsent(t *testing.T) {
 			return ok("Linux x86_64\n")
 		case strings.Contains(cmd, "command -v reasonix"):
 			// LocateCommand: report a path and a fresh version.
-			return ok("/usr/bin/reasonix\nreasonix v9.9.0\nportfile:yes\n")
+			return ok("/usr/bin/reasonix\nreasonix v9.9.0\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
 		case strings.Contains(cmd, "nohup"):
 			// Simulate serve writing the port file, then echo the pid.
 			if portFile != "" {
@@ -220,7 +220,7 @@ func TestEnsureServeRelaunchesDeadProcess(t *testing.T) {
 		case strings.Contains(cmd, "uname"):
 			return ok("Linux aarch64\n")
 		case strings.Contains(cmd, "command -v reasonix"):
-			return ok("/usr/bin/reasonix\nreasonix v9.9.0\nportfile:yes\n")
+			return ok("/usr/bin/reasonix\nreasonix v9.9.0\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
 		case strings.Contains(cmd, "nohup"):
 			_ = os.WriteFile(paths.PortFile, []byte("127.0.0.1:6001\n"), 0o600)
 			return ok("999\n")

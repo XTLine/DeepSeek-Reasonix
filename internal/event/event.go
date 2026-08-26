@@ -576,8 +576,12 @@ type Event struct {
 	StreamAttempt   StreamAttemptInfo         // StreamAttempt lifecycle
 	// ItemID correlates Steer / unapplied-steer / TurnDone with a durable
 	// session-inbox entry. Empty for legacy callers that still use text only.
-	ItemID    string
-	Workspace *WorkspaceChangedPayload // WorkspaceChanged (host-local)
+	ItemID string
+	// SessionPath tags the session file this event belongs to. Empty on
+	// single-session surfaces; multi-session Serve stamps it at the sink so
+	// subscribers can route frames without changing older clients.
+	SessionPath string
+	Workspace   *WorkspaceChangedPayload // WorkspaceChanged (host-local)
 	// PhaseName is set on TurnPhase events (working|checking|verifying|reviewing).
 	PhaseName TurnPhaseName
 	// Completion is set on CompletionSummary events.

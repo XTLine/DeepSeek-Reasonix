@@ -94,6 +94,10 @@ func (a *App) RenameRemoteProjectSession(hostID, workspace, name, title string) 
 }
 
 func (a *App) resumeRemoteTabSession(tabID, name string) {
+	a.resumeRemoteTabSessionPath(tabID, name, "", "")
+}
+
+func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle string) {
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
 	a.remoteTabMu.Unlock()
@@ -112,16 +116,24 @@ func (a *App) resumeRemoteTabSession(tabID, name string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	entries, err := serveSessions(ctx, client, base)
-	if err != nil {
-		a.transitionRemoteTabState(tabID, gen, "ready", "ready", fmt.Sprintf("Could not open remote session %q: %v", name, err))
-		return
-	}
-	for _, entry := range entries {
-		if entry.Name != name {
-			continue
+	var target serveSessionEntry
+	if sessionPath != "" {
+		target = serveSessionEntry{Name: strings.TrimSpace(name), Path: strings.TrimSpace(sessionPath), Title: strings.TrimSpace(sessionTitle)}
+	} else {
+		entries, err := serveSessions(ctx, client, base)
+		if err != nil {
+			a.transitionRemoteTabState(tabID, gen, "ready", "ready", fmt.Sprintf("Could not open remote session %q: %v", name, err))
+			return
 		}
-		body, _ := json.Marshal(map[string]string{"path": entry.Path})
+		for _, entry := range entries {
+			if entry.Name == name {
+				target = entry
+				break
+			}
+		}
+	}
+	if target.Path != "" {
+		body, _ := json.Marshal(map[string]string{"path": target.Path})
 		if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
 			if remoteSessionTransitionBusy(err) {
 				a.transitionRemoteTabState(tabID, gen, "ready", "ready", "Finish the current turn before switching sessions.")
@@ -133,7 +145,7 @@ func (a *App) resumeRemoteTabSession(tabID, name string) {
 			a.transitionRemoteTabState(tabID, gen, "ready", "ready", err.Error())
 			return
 		}
-		title := strings.TrimSpace(entry.Title)
+		title := strings.TrimSpace(target.Title)
 		if title == "" {
 			title = name
 		}
@@ -146,13 +158,21 @@ func (a *App) resumeRemoteTabSession(tabID, name string) {
 		current.topicTitle = title
 		current.session.reset = false
 		current.session.newSession = false
-		current.session.name = name
+		current.session.name = strings.TrimSpace(target.Name)
+		current.session.path = target.Path
+		current.currentSessionPath = target.Path
+		current.pendingEvents = nil
 		current.runtime.revision++
+		current.runtime.running = target.Running || current.runningSessions[target.Path]
+		current.runtime.pendingPrompt = false
+		current.runtime.cancelRequested = false
+		current.runtime.cancellable = current.runtime.running
 		meta := remoteTabMetaLocked(current)
 		a.remoteTabMu.Unlock()
 		a.emitRemoteEvent("remote-tab:updated", meta)
 		a.saveTabsFromRemote()
 		a.transitionRemoteTabState(tabID, gen, "ready", "ready", "")
+		a.goSafe("remoteTabResumeStatus", func() { _, _ = a.RemoteTabStatus(tabID) })
 		return
 	}
 	a.transitionRemoteTabState(tabID, gen, "ready", "ready", fmt.Sprintf("remote session %q not found", name))
@@ -448,6 +468,8 @@ func (a *App) refreshRemoteTabTitle(tabID string) {
 		current.session.reset = false
 		current.session.newSession = false
 		current.session.name = entry.Name
+		current.session.path = entry.Path
+		current.currentSessionPath = entry.Path
 		meta := remoteTabMetaLocked(current)
 		a.remoteTabMu.Unlock()
 		if changed {
@@ -491,6 +513,8 @@ func (a *App) rotateRemoteTabSession(tabID, path string) error {
 		}
 		tab.session.newSession = true
 		tab.session.name = ""
+		tab.session.path = ""
+		tab.currentSessionPath = ""
 		a.remoteTabMu.Unlock()
 		return nil
 	}
@@ -499,12 +523,14 @@ func (a *App) rotateRemoteTabSession(tabID, path string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := servePost(ctx, client, serveURL(base, path), nil); err != nil {
+	rotatedPath, err := servePostSessionPath(ctx, client, serveURL(base, path), nil)
+	if err != nil {
 		// Session rotation can be rejected while the current remote turn is active.
 		// That does not invalidate the attached session or its event pump, so
 		// return an action error while leaving the tab ready and observable.
 		return err
 	}
+	target := serveSessionEntry{Path: rotatedPath, Current: true}
 	title := a.localizedDefaultTopicTitle()
 	a.remoteTabMu.Lock()
 	if a.remoteTabs[tabID] != tab || tab.client != client {
@@ -514,8 +540,17 @@ func (a *App) rotateRemoteTabSession(tabID, path string) error {
 	tab.topicTitle = title
 	tab.session.reset = true
 	tab.session.newSession = true
-	tab.session.name = ""
+	tab.session.name = target.Name
+	tab.session.path = target.Path
+	tab.currentSessionPath = target.Path
+	tab.pendingEvents = nil
 	tab.runtime.revision++
+	tab.runtime.running = false
+	tab.runtime.turnStartedAt = 0
+	tab.runtime.pendingPrompt = false
+	tab.runtime.backgroundJobs = 0
+	tab.runtime.cancelRequested = false
+	tab.runtime.cancellable = false
 	meta := remoteTabMetaLocked(tab)
 	a.remoteTabMu.Unlock()
 	a.emitRemoteEvent("remote-tab:updated", meta)

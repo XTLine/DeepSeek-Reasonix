@@ -202,5 +202,6 @@ func (s *Server) providersReload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	s.cancelDetachedForProviderHeal()
 	writeJSON(w, map[string]string{"model": ref})
 }

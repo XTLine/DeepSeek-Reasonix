@@ -147,6 +147,9 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 	m.mu.Unlock()
 	c := mh.client
 	if m.readyServeReusable(ctx, c, mh, hostID, workspace, previousServer, previousToken, previousAddr) {
+		if entry, entryErr := configuredRemoteHost(hostID); entryErr == nil && entry.CredentialProxyEnabled() {
+			m.startCredentialWatchdog(mh, hostID, workspace)
+		}
 		return previousServer, previousToken, nil
 	}
 	opCtx, cancel := managedOperationContext(ctx, mh)
@@ -204,6 +207,7 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 				m.publishServerIfCurrent(hostID, mh, failed, "", "")
 				return failed, "", err
 			}
+			m.startCredentialWatchdog(mh, hostID, workspace)
 		}
 		return previousServer, res.Token, nil
 	}
@@ -234,6 +238,7 @@ func (m *desktopRemoteManager) EnsureServer(ctx context.Context, hostID, workspa
 			m.publishServerIfCurrent(hostID, mh, failed, "", "")
 			return failed, "", err
 		}
+		m.startCredentialWatchdog(mh, hostID, workspace)
 	}
 	return view, res.Token, nil
 }
@@ -287,6 +292,129 @@ func (m *desktopRemoteManager) readyServeReusable(ctx context.Context, c desktop
 		return false
 	}
 	return true
+}
+
+// credentialChannelDecision keeps the runtime health policy independently
+// testable from SSH plumbing.
+type credentialChannelDecision struct {
+	HasForward  bool
+	ForwardPort int
+	HealedPort  int
+	ProbeOK     bool
+}
+
+func (d credentialChannelDecision) needsHeal() bool {
+	return !d.HasForward || !d.ProbeOK || d.HealedPort <= 0 || d.ForwardPort != d.HealedPort
+}
+
+// startCredentialWatchdog guards a credential-enabled host after the initial
+// EnsureServer heal. Reverse forwards can silently rebound to a new port during
+// an SSH reconnect; this loop detects that drift while a tab remains open.
+func (m *desktopRemoteManager) startCredentialWatchdog(mh *managedHost, hostID, workspace string) {
+	if mh == nil || !m.isCurrent(hostID, mh) {
+		return
+	}
+	mh.credWatchMu.Lock()
+	mh.credWorkspace = workspace
+	if mh.credWatchCancel != nil {
+		mh.credWatchMu.Unlock()
+		return
+	}
+	parent := mh.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	mh.credWatchCancel = cancel
+	mh.credWatchMu.Unlock()
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if !m.isCurrent(hostID, mh) {
+				return
+			}
+			m.checkCredentialChannel(mh, hostID)
+		}
+	}()
+}
+
+func (m *desktopRemoteManager) checkCredentialChannel(mh *managedHost, hostID string) {
+	m.mu.Lock()
+	state := ""
+	if m.hosts[hostID] == mh {
+		state = mh.status.State
+	}
+	m.mu.Unlock()
+	if state != "connected" || mh.client == nil {
+		return
+	}
+	port, has := credentialForwardPort(mh.client, hostID)
+	probeOK := has && probeReverseTunnel(mh.client, port) == nil
+	decision := credentialChannelDecision{
+		HasForward: has, ForwardPort: port, HealedPort: int(mh.credPort.Load()), ProbeOK: probeOK,
+	}
+	if decision.needsHeal() {
+		m.healCredentialChannelWatchdog(mh, hostID)
+	}
+}
+
+// healCredentialChannelWatchdog rebuilds the reverse forward, rewrites the
+// remote provider before reloading running Serve processes, and only reopens
+// the fast-reuse gate after every step succeeds.
+func (m *desktopRemoteManager) healCredentialChannelWatchdog(mh *managedHost, hostID string) {
+	mh.credWatchMu.Lock()
+	workspace := mh.credWorkspace
+	mh.credWatchMu.Unlock()
+	if workspace == "" {
+		return
+	}
+	mh.serveMu.Lock()
+	defer mh.serveMu.Unlock()
+	if !m.isCurrent(hostID, mh) || mh.client == nil {
+		return
+	}
+	c := mh.client
+	log.Printf("[remote] credential watchdog: channel broken, re-healing host=%s ws=%s", hostID, workspace)
+	_ = c.Forwards().Remove("cred-proxy:" + hostID)
+	opts, err := m.credentialProxySetup(c, hostID, workspace)
+	if err != nil {
+		log.Printf("[remote] credential watchdog: setup FAILED host=%s err=%v", hostID, err)
+		return
+	}
+	healCtx, healCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	_, err = bootstrap.HealCredentialProvider(healCtx, c, opts)
+	healCancel()
+	if err != nil {
+		log.Printf("[remote] credential watchdog: config heal FAILED host=%s err=%v", hostID, err)
+		return
+	}
+	port, has := credentialForwardPort(c, hostID)
+	if !has {
+		log.Printf("[remote] credential watchdog: forward missing after setup host=%s", hostID)
+		return
+	}
+	if err := probeReverseTunnel(c, port); err != nil {
+		log.Printf("[remote] credential watchdog: probe still FAILED host=%s port=%d err=%v", hostID, port, err)
+		return
+	}
+	reloadCtx, reloadCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	reloadOK := m.reloadServeProviders(reloadCtx, hostID, workspace, "", "")
+	reloadCancel()
+	if !reloadOK {
+		log.Printf("[remote] credential watchdog: provider reload FAILED host=%s", hostID)
+		return
+	}
+	if !m.isCurrent(hostID, mh) {
+		return
+	}
+	mh.credPort.Store(int64(port))
+	log.Printf("[remote] credential watchdog: channel re-healed host=%s port=%d", hostID, port)
 }
 
 // healCredentialChannel runs at the END of a successful ensure round, when the
@@ -619,6 +747,9 @@ func (m *desktopRemoteManager) reloadServeProviders(ctx context.Context, hostID,
 			err = servePost(callCtx, client, serveURL(t.base, "/providers/reload"), nil)
 		}
 		cancel()
+		if err != nil && strings.Contains(err.Error(), "status 409") {
+			err = m.cancelThenReload(ctx, client, t.base, t.token)
+		}
 		if err != nil {
 			log.Printf("[remote] reloadServeProviders: FAILED host=%s ws=%s err=%v", hostID, ws, err)
 			allOK = false
@@ -641,6 +772,41 @@ func (m *desktopRemoteManager) reloadServeProviders(ctx context.Context, hostID,
 		}
 	}
 	return allOK
+}
+
+// cancelThenReload breaks the credential-heal deadlock: after tunnel drift a
+// busy turn is already doomed against the stale port, so cancel it and retry
+// the provider rebuild with bounded backoff.
+func (m *desktopRemoteManager) cancelThenReload(ctx context.Context, client *http.Client, base, token string) error {
+	log.Printf("[remote] reloadServeProviders: busy turn blocks reload -> canceling turn base=%s", base)
+	cancelCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	cancelErr := servePost(cancelCtx, client, serveURL(base, "/cancel"), nil)
+	cancel()
+	if cancelErr != nil {
+		log.Printf("[remote] reloadServeProviders: cancel busy turn FAILED err=%v", cancelErr)
+	}
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		timer := time.NewTimer(time.Duration(attempt) * time.Second)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+		callCtx, callCancel := context.WithTimeout(ctx, 15*time.Second)
+		err = serveHandshake(callCtx, client, base, token)
+		if err == nil {
+			err = servePost(callCtx, client, serveURL(base, "/providers/reload"), nil)
+		}
+		callCancel()
+		if err == nil || !strings.Contains(err.Error(), "status 409") {
+			return err
+		}
+	}
+	return err
 }
 
 // markCredFallback rate-limits the legacy-serve replacement to at most one

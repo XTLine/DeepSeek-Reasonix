@@ -3,15 +3,83 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"reasonix/internal/config"
 	"reasonix/internal/remote"
 )
+
+func TestReloadServeProvidersCancelsBusyTurn(t *testing.T) {
+	var mu sync.Mutex
+	canceled := false
+	reloadCalls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /auth/token", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /cancel", func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		canceled = true
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /providers/reload", func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		reloadCalls++
+		if !canceled {
+			http.Error(w, "busy", http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	mgr := newDesktopRemoteManager(&App{})
+	mgr.mu.Lock()
+	mgr.hosts["box"] = &managedHost{serves: map[string]*serveEntry{
+		"ws": {view: RemoteServerView{LocalURL: srv.URL + "/"}, token: "tok"},
+	}}
+	mgr.mu.Unlock()
+
+	if ok := mgr.reloadServeProviders(context.Background(), "box", "ws", srv.URL+"/", "tok"); !ok {
+		t.Fatal("reloadServeProviders = false, want true after cancel + retry")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !canceled || reloadCalls < 2 {
+		t.Fatalf("canceled=%v reloadCalls=%d, want cancel and retry", canceled, reloadCalls)
+	}
+}
+
+func TestCredentialChannelDecision(t *testing.T) {
+	cases := []struct {
+		name string
+		d    credentialChannelDecision
+		want bool
+	}{
+		{"healthy", credentialChannelDecision{HasForward: true, ForwardPort: 41000, HealedPort: 41000, ProbeOK: true}, false},
+		{"no forward", credentialChannelDecision{}, true},
+		{"probe dead", credentialChannelDecision{HasForward: true, ForwardPort: 41000, HealedPort: 41000}, true},
+		{"never healed", credentialChannelDecision{HasForward: true, ForwardPort: 41000, ProbeOK: true}, true},
+		{"port rebound", credentialChannelDecision{HasForward: true, ForwardPort: 42000, HealedPort: 41000, ProbeOK: true}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.d.needsHeal(); got != tc.want {
+				t.Fatalf("needsHeal=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
 
 // fakeRemoteKernel implements remoteKernel for binding-layer tests.
 type fakeRemoteKernel struct {

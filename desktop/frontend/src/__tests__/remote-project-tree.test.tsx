@@ -31,9 +31,9 @@ const remoteIntegrationSource = readFileSync(resolve(here, "../lib/useRemoteComp
 const topicbarMenuSource = readFileSync(resolve(here, "../components/TopicbarMoreMenuContent.tsx"), "utf8");
 
 ok(
-  /remoteSession: \{ hostId: node\.remote!\.hostId, workspace: node\.remote!\.workspace, name: row\.name \}/.test(remoteSource) &&
+  /remoteSession: \{ hostId: node\.remote!\.hostId, workspace: node\.remote!\.workspace, name: row\.name, path: row\.path, title: row\.title \}/.test(remoteSource) &&
     /openRemoteSessionNode\(remote, openRemoteProject\)/.test(source) &&
-    /void open\(remote, remote\.name \? \{ sessionName: remote\.name \} : \{ focus: true \}\)/.test(remoteSource),
+    /sessionPath: remote\.path, sessionTitle: remote\.title/.test(remoteSource),
   "session rows open the matching in-app remote session",
 );
 ok(

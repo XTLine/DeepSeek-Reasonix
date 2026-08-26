@@ -281,3 +281,57 @@ func TestSessionInUseMessageFallsBackWithoutInfo(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionLeaseKeeperRebindDetachingIsFailureAtomic(t *testing.T) {
+	dir := t.TempDir()
+	current := filepath.Join(dir, "current.jsonl")
+	target := filepath.Join(dir, "target.jsonl")
+	keeper := NewSessionLeaseKeeper()
+	defer keeper.Release()
+	if err := keeper.Rebind(current); err != nil {
+		t.Fatal(err)
+	}
+	outside, err := agent.TryAcquireSessionLease(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outside.Release()
+
+	detached, err := keeper.RebindDetaching(target)
+	if !errors.Is(err, agent.ErrSessionLeaseHeld) || detached != nil {
+		t.Fatalf("RebindDetaching = (%v, %v), want held error and nil keeper", detached, err)
+	}
+	if got, want := keeper.HeldPath(), agent.CanonicalSessionPath(current); got != want {
+		t.Fatalf("held path = %q, want unchanged %q", got, want)
+	}
+}
+
+func TestSessionLeaseKeeperSplitAndAdopt(t *testing.T) {
+	dir := t.TempDir()
+	current := filepath.Join(dir, "current.jsonl")
+	target := filepath.Join(dir, "target.jsonl")
+	keeper := NewSessionLeaseKeeper()
+	defer keeper.Release()
+	if err := keeper.Rebind(current); err != nil {
+		t.Fatal(err)
+	}
+	detached, err := keeper.RebindDetaching(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := detached.HeldPath(), agent.CanonicalSessionPath(current); got != want {
+		t.Fatalf("detached path = %q, want %q", got, want)
+	}
+	if got, want := keeper.HeldPath(), agent.CanonicalSessionPath(target); got != want {
+		t.Fatalf("foreground path = %q, want %q", got, want)
+	}
+	foreground := keeper.Split()
+	defer foreground.Release()
+	keeper.Adopt(detached)
+	if got, want := keeper.HeldPath(), agent.CanonicalSessionPath(current); got != want {
+		t.Fatalf("adopted path = %q, want %q", got, want)
+	}
+	if got := detached.HeldPath(); got != "" {
+		t.Fatalf("source keeper still holds %q", got)
+	}
+}

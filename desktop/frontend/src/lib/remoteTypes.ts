@@ -34,7 +34,7 @@ export interface RemoteTabMetaFields {
 
 export interface RemoteProjectNodeFields {
   remote?: RemoteTabRefView;
-  remoteSession?: { hostId: string; workspace: string; name: string };
+  remoteSession?: { hostId: string; workspace: string; name: string; path?: string; title?: string };
 }
 
 export interface RemoteSessionMetaFields {
@@ -51,9 +51,11 @@ export interface RemoteProjectView {
 
 export interface RemoteSessionView {
   name: string;
+  path?: string;
   title: string;
   turns: number;
   current?: boolean;
+  running?: boolean;
   lastActivityAt?: number;
   pinned?: boolean;
 }
@@ -68,6 +70,8 @@ export interface RemoteTabState {
 export interface RemoteTabOpenOptions {
   newSession?: boolean;
   sessionName?: string;
+  sessionPath?: string;
+  sessionTitle?: string;
 }
 
 export interface RemoteTabSnapshot {

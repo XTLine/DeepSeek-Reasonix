@@ -364,7 +364,7 @@ func TestServeApproveMissingID(t *testing.T) {
 
 func TestServeNewSessionEndpoint(t *testing.T) {
 	bc := NewBroadcaster()
-	ctrl := control.New(control.Options{Sink: bc})
+	ctrl := control.New(control.Options{Sink: bc, SessionDir: t.TempDir()})
 	srv := httptest.NewServer(New(ctrl, bc, config.ServeConfig{}).Handler())
 	defer srv.Close()
 
@@ -375,6 +375,9 @@ func TestServeNewSessionEndpoint(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("new session = %d, want 204", resp.StatusCode)
+	}
+	if got := resp.Header.Get(sessionPathHeader); got == "" || got != ctrl.SessionPath() {
+		t.Errorf("new session path header = %q, controller path %q", got, ctrl.SessionPath())
 	}
 }
 
@@ -824,7 +827,7 @@ func TestSessionsSkipsCleanupPending(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Name != "active" || filepath.Clean(got[0].Path) != filepath.Clean(active) {
+	if len(got) != 1 || got[0].Name != "active" || got[0].Path != agent.CanonicalSessionPath(active) {
 		t.Fatalf("/sessions = %+v, want only active session", got)
 	}
 }

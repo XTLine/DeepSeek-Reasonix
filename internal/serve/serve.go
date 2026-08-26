@@ -1,8 +1,8 @@
 // Package serve exposes a control.Controller over HTTP: the typed event stream
 // as Server-Sent Events, and the commands as small JSON POST endpoints. It is a
 // second frontend alongside the chat TUI — proof that the controller is
-// transport-agnostic, and the basis for a browser/desktop client. One server
-// drives one session; multiple browser tabs share it.
+// transport-agnostic, and the basis for a browser/desktop client. A server has
+// one foreground session and may finish switched-away sessions in background.
 package serve
 
 import (
@@ -59,24 +59,35 @@ type Server struct {
 	// Nil in production (switchModel falls back to boot.Build); tests inject a
 	// fake so switchModel can be exercised without real provider IO.
 	buildController func(ctx context.Context, ref string) (*control.Controller, error)
+	// buildControllerWithOptions is the multi-session test seam. Production
+	// uses boot.Build; the legacy builder above stays source-compatible with
+	// existing switch-model tests.
+	buildControllerWithOptions func(ctx context.Context, ref string, opts boot.Options) (*control.Controller, error)
 	// rebuildController rebuilds the same model/runtime generation for an
 	// extension reload. Tests inject it to exercise publication and failure
 	// paths without starting real providers or sidecars.
-	rebuildController func(ctx context.Context, old *control.Controller, ref string) (*control.Controller, error)
-	titleProv         provider.Provider // lightweight flash provider for session titles
-	titlePrice        *provider.Pricing
-	titleModelRef     string
-	titleUsageSink    event.Sink
-	titles            *titleCache
-	auth              *authGate // nil when auth is disabled
-	providerSetupMu   sync.RWMutex
-	providerSetup     providerSetupState
+	rebuildController            func(ctx context.Context, old *control.Controller, ref string) (*control.Controller, error)
+	rebuildControllerWithOptions func(ctx context.Context, old *control.Controller, ref string, opts boot.Options) (*control.Controller, error)
+	titleProv                    provider.Provider // lightweight flash provider for session titles
+	titlePrice                   *provider.Pricing
+	titleModelRef                string
+	titleUsageSink               event.Sink
+	titles                       *titleCache
+	auth                         *authGate // nil when auth is disabled
+	providerSetupMu              sync.RWMutex
+	providerSetup                providerSetupState
 	// leases guards the active session file against other runtimes (a desktop
 	// window, another CLI). Wired by the serve CLI command with the keeper that
 	// already holds the startup session's lease; nil (tests, embedded use)
 	// disables lease gating.
-	leases *control.SessionLeaseKeeper
+	leases     *control.SessionLeaseKeeper
+	detachedMu sync.Mutex
+	detached   map[string]*detachedSession
+	tagsMu     sync.Mutex
+	tags       map[*control.Controller]*sessionTagSink
 }
+
+const sessionPathHeader = "X-Reasonix-Session-Path"
 
 // New builds a Server. bc must be the controller's event sink.
 // serveCfg controls authentication (none, token, or password).
@@ -85,11 +96,14 @@ func New(ctrl control.SessionAPI, bc *Broadcaster, serveCfg config.ServeConfig) 
 		bc = NewBroadcaster()
 	}
 	s := &Server{
-		ctrl:   ctrl,
-		bc:     bc,
-		titles: newTitleCache(ctrl.SessionDir()),
-		auth:   newAuthGate(serveCfg),
+		ctrl:     ctrl,
+		bc:       bc,
+		titles:   newTitleCache(ctrl.SessionDir()),
+		auth:     newAuthGate(serveCfg),
+		detached: map[string]*detachedSession{},
+		tags:     map[*control.Controller]*sessionTagSink{},
 	}
+	bc.SetCurrentSession(agent.CanonicalSessionPath(ctrl.SessionPath()))
 	if cfg, err := config.Load(); err == nil {
 		bc.SetDisplayCurrency(cfg.ExplicitDisplayCurrency())
 	}
@@ -207,7 +221,7 @@ func (s *Server) switchModelLocked(ctx context.Context, ref string) error {
 	prevPath := cur.SessionPath()
 	carried := cur.History()
 
-	newCtrl, err := s.build(ctx, ref)
+	newCtrl, tag, err := s.buildTagged(ctx, ref, true)
 	if err != nil {
 		return fmt.Errorf("switch model: %w", err)
 	}
@@ -229,7 +243,8 @@ func (s *Server) switchModelLocked(ctx context.Context, ref string) error {
 		}
 	}
 	newCtrl.AdoptHistory(carried, newPath)
-	newCtrl.SetOnSessionRecovered(sessionLeaseRecoveryHandler(s.leases))
+	tag.SetPath(newCtrl.SessionPath())
+	newCtrl.SetOnSessionRecovered(s.sessionRecoveryHandler(newCtrl, s.leases))
 	// A rebuild must not force the user to re-approve tools already granted
 	// this session, or re-trust Plan-mode read-only commands already trusted
 	// this session.
@@ -241,7 +256,7 @@ func (s *Server) switchModelLocked(ctx context.Context, ref string) error {
 	// would report a successful switch whose refreshed system contract disappears
 	// on restart. AdoptHistory retained the loaded CAS baseline for this rewrite.
 	if err := s.rebindSessionLeaseFor(newPath, newCtrl); err != nil {
-		newCtrl.Close()
+		s.closeTaggedController(newCtrl)
 		if errors.Is(err, agent.ErrSessionLeaseHeld) {
 			return fmt.Errorf("switch model: %s", sessionInUseError(err))
 		}
@@ -252,13 +267,14 @@ func (s *Server) switchModelLocked(ctx context.Context, ref string) error {
 			if oldCtrl, ok := cur.(*control.Controller); ok {
 				_ = s.rebindSessionLeaseFor(prevPath, oldCtrl)
 			}
-			newCtrl.Close()
+			s.closeTaggedController(newCtrl)
 			return fmt.Errorf("switch model: snapshot adopted history: %w", err)
 		}
 	}
 	activePath := newCtrl.SessionPath()
+	tag.SetPath(activePath)
 	if err := s.rebindSessionLeaseFor(activePath, newCtrl); err != nil {
-		newCtrl.Close()
+		s.closeTaggedController(newCtrl)
 		if errors.Is(err, agent.ErrSessionLeaseHeld) {
 			return fmt.Errorf("switch model: %s", sessionInUseError(err))
 		}
@@ -276,39 +292,24 @@ func (s *Server) switchModelLocked(ctx context.Context, ref string) error {
 		s.mu.Unlock()
 		oldCtrl, _ := cur.(*control.Controller)
 		if restoreErr := s.rebindSessionLeaseFor(cur.SessionPath(), oldCtrl); restoreErr != nil {
-			newCtrl.Close()
+			s.closeTaggedController(newCtrl)
 			slog.Error("serve: restore outgoing session lease after aborted model switch", "err", restoreErr)
 			return fmt.Errorf("switch model: session changed during switch; unable to restore outgoing session ownership")
 		}
-		newCtrl.Close()
+		s.closeTaggedController(newCtrl)
 		return fmt.Errorf("switch model: session changed during switch")
 	}
 	s.ctrl = newCtrl
 	s.mu.Unlock()
+	s.bc.SetCurrentSession(activePath)
 	s.refreshProviderSetup(currentModelRef(newCtrl))
 
 	// Off-lock: tear down the old controller. Close can block up to 15s.
 	cur.Close()
+	if oldCtrl, ok := cur.(*control.Controller); ok {
+		s.forgetSessionTag(oldCtrl)
+	}
 	return nil
-}
-
-// build returns the replacement controller for a model switch, using the
-// injected builder in tests and boot.Build in production.
-func (s *Server) build(ctx context.Context, ref string) (*control.Controller, error) {
-	if s.buildController != nil {
-		return s.buildController(ctx, ref)
-	}
-	opts := boot.Options{
-		Model:       ref,
-		Sink:        s.bc,
-		Stderr:      os.Stderr,
-		StatsSource: "serve",
-	}
-	// Keep the logical-session private temporary directory across model switches.
-	if cur, ok := s.ctl().(*control.Controller); ok && cur != nil {
-		opts.SessionTemp = cur.SessionTemp()
-	}
-	return boot.Build(ctx, opts)
 }
 
 // reloadExtensions fail-atomically rebuilds the active controller generation
@@ -337,9 +338,9 @@ func (s *Server) reloadExtensions(ctx context.Context) error {
 		return fmt.Errorf("reload extensions: %w", err)
 	}
 	newCtrl.EnableInteractiveApproval()
-	newCtrl.SetOnSessionRecovered(sessionLeaseRecoveryHandler(s.leases))
+	newCtrl.SetOnSessionRecovered(s.sessionRecoveryHandler(newCtrl, s.leases))
 	if err := s.rebindSessionLeaseFor(newCtrl.SessionPath(), newCtrl); err != nil {
-		newCtrl.Close()
+		s.closeTaggedController(newCtrl)
 		if errors.Is(err, agent.ErrSessionLeaseHeld) {
 			return fmt.Errorf("reload extensions: %s", sessionInUseError(err))
 		}
@@ -348,12 +349,12 @@ func (s *Server) reloadExtensions(ctx context.Context) error {
 	if newCtrl.SessionPath() != "" {
 		if err := newCtrl.Snapshot(); err != nil {
 			_ = s.rebindSessionLeaseFor(cur.SessionPath(), cur)
-			newCtrl.Close()
+			s.closeTaggedController(newCtrl)
 			return fmt.Errorf("reload extensions: snapshot migrated session: %w", err)
 		}
 	}
 	if err := s.rebindSessionLeaseFor(newCtrl.SessionPath(), newCtrl); err != nil {
-		newCtrl.Close()
+		s.closeTaggedController(newCtrl)
 		if errors.Is(err, agent.ErrSessionLeaseHeld) {
 			return fmt.Errorf("reload extensions: %s", sessionInUseError(err))
 		}
@@ -364,34 +365,60 @@ func (s *Server) reloadExtensions(ctx context.Context) error {
 	if s.ctrl != curAPI {
 		s.mu.Unlock()
 		if restoreErr := s.rebindSessionLeaseFor(cur.SessionPath(), cur); restoreErr != nil {
-			newCtrl.Close()
+			s.closeTaggedController(newCtrl)
 			slog.Error("serve: restore outgoing session lease after aborted extension reload", "err", restoreErr)
 			return fmt.Errorf("reload extensions: session changed during reload; unable to restore outgoing session ownership")
 		}
-		newCtrl.Close()
+		s.closeTaggedController(newCtrl)
 		return fmt.Errorf("reload extensions: session changed during reload")
 	}
 	s.ctrl = newCtrl
 	s.mu.Unlock()
+	s.setControllerPath(newCtrl, newCtrl.SessionPath())
 	s.refreshProviderSetup(currentModelRef(newCtrl))
 
 	cur.Close()
+	s.forgetSessionTag(cur)
 	return nil
 }
 
 func (s *Server) rebuild(ctx context.Context, old *control.Controller, ref string) (*control.Controller, error) {
+	tag := newSessionTagSink(s.bc)
+	tag.SetPath(old.SessionPath())
+	opts := boot.Options{
+		Model:         ref,
+		Sink:          tag,
+		Stderr:        os.Stderr,
+		StatsSource:   "serve",
+		SessionDir:    old.SessionDir(),
+		WorkspaceRoot: old.WorkspaceRoot(),
+	}
+	if s.rebuildControllerWithOptions != nil {
+		ctrl, err := s.rebuildControllerWithOptions(ctx, old, ref, opts)
+		if err == nil {
+			s.RegisterSessionTag(ctrl, tag)
+		}
+		return ctrl, err
+	}
 	if s.rebuildController != nil {
-		return s.rebuildController(ctx, old, ref)
+		ctrl, err := s.rebuildController(ctx, old, ref)
+		if err == nil {
+			s.RegisterSessionTag(ctrl, tag)
+		}
+		return ctrl, err
 	}
 	res, err := boot.Rebuild(ctx, old, boot.Options{
-		Model:       ref,
-		Sink:        s.bc,
-		Stderr:      os.Stderr,
-		StatsSource: "serve",
+		Model:         ref,
+		Sink:          tag,
+		Stderr:        os.Stderr,
+		StatsSource:   "serve",
+		SessionDir:    old.SessionDir(),
+		WorkspaceRoot: old.WorkspaceRoot(),
 	})
 	if err != nil {
 		return nil, err
 	}
+	s.RegisterSessionTag(res.Controller, tag)
 	return res.Controller, nil
 }
 
@@ -529,7 +556,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /skills", s.skills)
 	mux.HandleFunc("GET /todos", s.todos)
 	mux.HandleFunc("POST /delete-session", s.deleteSession)
-	return logMiddleware(s.auth.middleware(csrfGuard(mux)))
+	return logMiddleware(gzipMiddleware(s.auth.middleware(csrfGuard(mux))))
 }
 
 func (s *Server) reloadExtensionsHTTP(w http.ResponseWriter, r *http.Request) {
@@ -665,9 +692,17 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	var unsubscribe func()
 	// Subscribe and replay as one handoff. Prompt producers are serialized with
 	// this operation, so no original event can land between the two steps.
+	currentPath := s.ctl().SessionPath()
 	s.ctl().ReplayPendingPromptsWith(func() event.Sink {
-		ch, unsubscribe = s.bc.Subscribe()
+		if r.URL.Query().Get("all") == "1" {
+			ch, unsubscribe = s.bc.SubscribeAll()
+		} else {
+			ch, unsubscribe = s.bc.Subscribe()
+		}
 		return event.FuncSink(func(e event.Event) {
+			if currentPath != "" {
+				e.SessionPath = currentPath
+			}
 			s.bc.EmitTo(ch, e)
 		})
 	})
@@ -817,12 +852,27 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) newSession(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) newSession(w http.ResponseWriter, r *http.Request) {
 	// Session-path-changing entry point: serialize with /resume, /fork, and
 	// switchModel so the controller and the lease keeper move together.
 	s.bindMu.Lock()
 	defer s.bindMu.Unlock()
-	if err := s.ctl().NewSession(); err != nil {
+	cur := s.ctl()
+	if controllerHasActiveRuntimeWork(cur) {
+		curCtrl, ok := cur.(*control.Controller)
+		if !ok {
+			http.Error(w, "cannot start a new session while active work or background jobs are running", http.StatusConflict)
+			return
+		}
+		if err := s.busyDetach(r.Context(), curCtrl, "", nil); err != nil {
+			s.renderBindError(w, err)
+			return
+		}
+		w.Header().Set(sessionPathHeader, s.ctl().SessionPath())
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := cur.NewSession(); err != nil {
 		if control.IsSessionRotationBusy(err) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -830,12 +880,17 @@ func (s *Server) newSession(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.bc.ResetSession()
+	if ctrl, ok := cur.(*control.Controller); ok {
+		ctrl.EnsureSessionPath()
+		s.setControllerPath(ctrl, ctrl.SessionPath())
+	}
+	s.bc.ResetSessionPath(cur.SessionPath())
 	// Fresh path — the lease follows it; failure is theoretical but not silent.
-	if err := s.rebindSessionLease(s.ctl().SessionPath()); err != nil {
+	if err := s.rebindSessionLease(cur.SessionPath()); err != nil {
 		http.Error(w, sessionInUseError(err), http.StatusConflict)
 		return
 	}
+	w.Header().Set(sessionPathHeader, cur.SessionPath())
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -974,6 +1029,8 @@ type responseWriter struct {
 	status int
 }
 
+func (rw *responseWriter) Unwrap() http.ResponseWriter { return rw.ResponseWriter }
+
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.status = code
 	rw.ResponseWriter.WriteHeader(code)
@@ -1012,7 +1069,10 @@ func (s *Server) fork(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.bc.ResetSession()
+	if ctrl, ok := s.ctl().(*control.Controller); ok {
+		s.setControllerPath(ctrl, ctrl.SessionPath())
+	}
+	s.bc.ResetSessionPath(s.ctl().SessionPath())
 	// The controller switched to the fork (a fresh path); the lease follows it.
 	if err := s.rebindSessionLease(s.ctl().SessionPath()); err != nil {
 		http.Error(w, sessionInUseError(err), http.StatusConflict)
@@ -1154,9 +1214,46 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	// cannot land on different sessions. Validate first to avoid slow holders.
 	s.bindMu.Lock()
 	defer s.bindMu.Unlock()
+	cur := s.ctl()
+	if filepath.Clean(cur.SessionPath()) == filepath.Clean(realPath) {
+		s.bc.SetCurrentSession(realPath)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if detached := s.takeDetached(realPath); detached != nil {
+		if err := s.reattachDetached(cur, detached); err != nil {
+			s.renderBindError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		s.replayPendingPromptsBroadcast()
+		return
+	}
+	if controllerHasActiveRuntimeWork(cur) {
+		curCtrl, ok := cur.(*control.Controller)
+		if !ok {
+			http.Error(w, "cannot switch session while active work or background jobs are running", http.StatusConflict)
+			return
+		}
+		err := s.busyDetach(r.Context(), curCtrl, realPath, func(next *control.Controller) error {
+			loaded, err := agent.LoadSession(realPath)
+			if err != nil {
+				return err
+			}
+			next.Resume(loaded, realPath)
+			return nil
+		})
+		if err != nil {
+			s.renderBindError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		s.replayPendingPromptsBroadcast()
+		return
+	}
 	// Snapshot the current session before switching away — while this process
 	// still holds its lease.
-	if err := s.ctl().Snapshot(); err != nil {
+	if err := cur.Snapshot(); err != nil {
 		slog.Warn("serve: snapshot before resume", "err", err)
 	}
 	// Refuse to bind a session another runtime is writing (a desktop window,
@@ -1175,22 +1272,118 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// The lease already moved to the target; re-point it at the session the
 		// controller still owns (best-effort).
-		_ = s.rebindSessionLease(s.ctl().SessionPath())
+		_ = s.rebindSessionLease(cur.SessionPath())
 		http.Error(w, "load session: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	if hook := resumeBindHookForTest; hook != nil {
 		hook()
 	}
-	s.ctl().Resume(loaded, realPath)
-	if ctrl, ok := s.ctl().(*control.Controller); ok && s.leases != nil {
-		if err := s.leases.BindControllerAuthority(ctrl); err != nil {
-			http.Error(w, "session authority: unable to bind resumed session", http.StatusInternalServerError)
-			return
+	cur.Resume(loaded, realPath)
+	if ctrl, ok := cur.(*control.Controller); ok {
+		if s.leases != nil {
+			if err := s.leases.BindControllerAuthority(ctrl); err != nil {
+				http.Error(w, "session authority: unable to bind resumed session", http.StatusInternalServerError)
+				return
+			}
+		}
+		s.setControllerPath(ctrl, realPath)
+	}
+	s.bc.ResetSessionPath(realPath)
+	w.WriteHeader(http.StatusNoContent)
+	s.replayPendingPromptsBroadcast()
+}
+
+// reattachDetached promotes a controller owned by the background registry.
+// bindMu is held, so publication and lease ownership move as one transaction.
+func (s *Server) reattachDetached(cur control.SessionAPI, detached *detachedSession) error {
+	curCtrl, _ := cur.(*control.Controller)
+	demoted := s.leases.Split()
+	s.leases.Adopt(detached.keeper)
+	detached.keeper = nil
+	if !s.publishControllerSwap(cur, detached.ctrl) {
+		detached.keeper = s.leases.Split()
+		s.leases.Adopt(demoted)
+		_, _ = s.registerDetached(detached.ctrl, detached.keeper, detached.tag)
+		return errReplacedDuringBind
+	}
+
+	if concrete, ok := detached.ctrl.(*control.Controller); ok {
+		concrete.SetOnSessionRecovered(s.sessionRecoveryHandler(concrete, s.leases))
+	}
+	if controllerHasActiveRuntimeWork(cur) {
+		if curCtrl == nil {
+			s.restoreReattach(cur, detached, demoted)
+			return fmt.Errorf("cannot switch session while active work or background jobs are running")
+		}
+		if _, err := s.registerDetached(curCtrl, demoted, nil); err != nil {
+			s.restoreReattach(cur, detached, demoted)
+			return err
+		}
+	} else {
+		if err := cur.Snapshot(); err != nil {
+			slog.Warn("serve: snapshot before background reattach", "err", err)
+		}
+		cur.Close()
+		if curCtrl != nil {
+			s.forgetSessionTag(curCtrl)
+		}
+		if demoted != nil {
+			demoted.Release()
 		}
 	}
-	s.bc.ResetSession()
-	w.WriteHeader(http.StatusNoContent)
+
+	if concrete, ok := detached.ctrl.(*control.Controller); ok {
+		s.setControllerPath(concrete, detached.ctrl.SessionPath())
+	} else {
+		s.bc.SetCurrentSession(detached.ctrl.SessionPath())
+	}
+	slog.Info("serve: background session re-attached", "session", detached.path, "running", controllerHasActiveRuntimeWork(detached.ctrl))
+	return nil
+}
+
+// restoreReattach rolls a failed promotion back before it becomes observable.
+func (s *Server) restoreReattach(cur control.SessionAPI, detached *detachedSession, demoted *control.SessionLeaseKeeper) {
+	s.mu.Lock()
+	if s.ctrl == detached.ctrl {
+		s.ctrl = cur
+	}
+	s.mu.Unlock()
+	detached.keeper = s.leases.Split()
+	s.leases.Adopt(demoted)
+	_, _ = s.registerDetached(detached.ctrl, detached.keeper, detached.tag)
+}
+
+func (s *Server) publishControllerSwap(expect, next control.SessionAPI) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ctrl != expect {
+		return false
+	}
+	s.ctrl = next
+	return true
+}
+
+func (s *Server) replayPendingPromptsBroadcast() {
+	cur := s.ctl()
+	path := cur.SessionPath()
+	cur.ReplayPendingPromptsWith(func() event.Sink {
+		return event.FuncSink(func(e event.Event) {
+			e.SessionPath = path
+			s.bc.Emit(e)
+		})
+	})
+}
+
+func (s *Server) renderBindError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, agent.ErrSessionLeaseHeld):
+		http.Error(w, sessionInUseError(err), http.StatusConflict)
+	case errors.Is(err, errReplacedDuringBind):
+		http.Error(w, err.Error(), http.StatusConflict)
+	default:
+		http.Error(w, "switch session: "+err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // forget deletes a saved memory by name.
@@ -1329,13 +1522,16 @@ func currentModelRef(c control.SessionAPI) string {
 	return strings.TrimSpace(c.Label())
 }
 
-// status returns a combined status snapshot.
+// status returns a combined status snapshot. The desktop's runtime-only path
+// skips provider balance IO while retaining all reconciliation fields.
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
+	runtimeOnly := r.URL.Query().Get("runtime") == "1" || r.URL.Query().Get("lite") == "1"
 	used, window := s.ctl().ContextSnapshot()
 	hit, miss := s.ctl().SessionCache()
+	rs := s.ctl().RuntimeStatus()
 	sess := map[string]any{
 		"label":            s.ctl().Label(),
-		"running":          s.ctl().Running(),
+		"running":          rs.Running,
 		"plan":             s.ctl().PlanMode(),
 		"autoApproveTools": s.ctl().AutoApproveTools(),
 		"bypass":           s.ctl().AutoApproveTools(),
@@ -1373,7 +1569,6 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	// Runtime reconciliation fields for desktop running-state watchdogs: the
 	// remote tab surface polls /status and maps these onto the same
 	// reconciliation the local tabs get from ListTabs.
-	rs := s.ctl().RuntimeStatus()
 	sess["pendingPrompt"] = rs.PendingPrompt
 	sess["backgroundJobs"] = rs.BackgroundJobs
 	sess["cancelRequested"] = rs.CancelRequested
@@ -1381,21 +1576,23 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if u := s.ctl().LastUsage(); u != nil {
 		sess["lastUsage"] = u
 	}
-	if b, err := s.ctl().Balance(r.Context()); err == nil && b != nil {
-		if cfg, loadErr := config.Load(); loadErr == nil && cfg.DisplayCurrencyPref() == "" {
-			// Runtime-only hint: a single wallet currency may select an existing
-			// valuation, but is never persisted as configuration or history.
-			s.bc.SetDisplayCurrency(b.PrimaryCurrency())
+	if !runtimeOnly {
+		if b, err := s.ctl().Balance(r.Context()); err == nil && b != nil {
+			if cfg, loadErr := config.Load(); loadErr == nil && cfg.DisplayCurrencyPref() == "" {
+				// Runtime-only hint: a single wallet currency may select an existing
+				// valuation, but is never persisted as configuration or history.
+				s.bc.SetDisplayCurrency(b.PrimaryCurrency())
+			}
+			sess["balance"] = map[string]any{
+				"display":   b.Display(),
+				"available": b.Available,
+				"infos":     b.Infos,
+			}
+		} else if err != nil {
+			slog.Warn("serve: balance fetch failed", "err", err)
 		}
-		sess["balance"] = map[string]any{
-			"display":   b.Display(),
-			"available": b.Available,
-			"infos":     b.Infos,
-		}
-	} else if err != nil {
-		slog.Warn("serve: balance fetch failed", "err", err)
 	}
-	sess["sessionCostQuote"] = s.bc.SessionCostQuote()
+	sess["sessionCostQuote"] = s.bc.SessionCostQuoteFor(agent.CanonicalSessionPath(s.ctl().SessionPath()))
 	if j := s.ctl().Jobs(); len(j) > 0 {
 		sess["jobs"] = j
 	}
@@ -1507,6 +1704,10 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if filepath.Clean(abs) == filepath.Clean(s.ctl().SessionPath()) {
 		http.Error(w, "cannot delete active session", http.StatusConflict)
+		return
+	}
+	if s.detachedBusy(filepath.Clean(abs)) {
+		http.Error(w, "session is running in the background; switch to it and stop the turn first", http.StatusConflict)
 		return
 	}
 	destroy := s.ctl().BeginDestroySession(abs)
