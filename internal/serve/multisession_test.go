@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io"
@@ -235,27 +236,56 @@ func TestEventsReplayUsesControllerCapturedWithPath(t *testing.T) {
 	a := &replayRaceController{SessionAPI: baseA, path: "/sessions/a.jsonl", replayed: replayed}
 	b := &replayRaceController{SessionAPI: baseB, path: "/sessions/b.jsonl", replayed: replayed}
 	server := New(a, bc, config.ServeConfig{})
+	promotionStarted := make(chan struct{})
+	promotionDone := make(chan struct{})
 	a.onPath = func() {
 		a.onPath = nil
-		if !server.publishControllerSwap(a, b, b.path) {
-			t.Error("controller swap did not occur during path capture")
-		}
+		go func() {
+			close(promotionStarted)
+			server.bindMu.Lock()
+			if !server.publishControllerSwap(a, b, b.path) {
+				t.Error("controller promotion failed")
+			}
+			bc.Emit(event.Event{Kind: event.AskRequest, SessionPath: b.path})
+			server.bindMu.Unlock()
+			close(promotionDone)
+		}()
+		<-promotionStarted
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	req := httptest.NewRequest(http.MethodGet, "/events", nil).WithContext(ctx)
-	rec := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() { server.events(rec, req); close(done) }()
+
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, httpServer.URL+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	scanner := bufio.NewScanner(resp.Body)
+	nextData := func() string {
+		t.Helper()
+		for scanner.Scan() {
+			if line := scanner.Text(); strings.HasPrefix(line, "data: ") {
+				return strings.TrimPrefix(line, "data: ")
+			}
+		}
+		t.Fatalf("event stream ended before the next frame: %v", scanner.Err())
+		return ""
+	}
+	if first := nextData(); !strings.Contains(first, `"sessionPath":"/sessions/a.jsonl"`) {
+		t.Fatalf("first frame = %s, want controller A replay", first)
+	}
 	select {
-	case path := <-replayed:
-		if path != a.path {
-			t.Fatalf("replayed controller path = %q, want captured %q", path, a.path)
-		}
+	case <-promotionDone:
 	case <-time.After(2 * time.Second):
-		t.Fatal("events handler did not replay pending prompts")
+		t.Fatal("controller promotion remained blocked after subscription")
 	}
-	cancel()
-	<-done
+	if second := nextData(); !strings.Contains(second, `"sessionPath":"/sessions/b.jsonl"`) {
+		t.Fatalf("second frame = %s, want promoted controller B prompt", second)
+	}
 }
 
 func TestSlashNewRefreshesControllerTagAndForegroundRoute(t *testing.T) {

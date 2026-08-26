@@ -1443,6 +1443,8 @@ func (s *Server) generateTitle(ctx context.Context, firstMsg string) string {
 	return strings.TrimSpace(title)
 }
 
+var deleteSessionBeforeOwnershipLockHookForTest func()
+
 // deleteSession removes a saved session by the session name returned from /sessions.
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -1461,6 +1463,15 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid session name", http.StatusBadRequest)
 		return
 	}
+	// Serialize active/detached ownership checks with session promotion. A
+	// detached controller is removed from the background registry while it is
+	// being promoted; without bindMu a concurrent delete can pass both checks
+	// in that transfer window and remove the live controller's transcript.
+	if deleteSessionBeforeOwnershipLockHookForTest != nil {
+		deleteSessionBeforeOwnershipLockHookForTest()
+	}
+	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
 	dir := s.ctl().SessionDir()
 	if dir == "" {
 		http.Error(w, "sessions disabled", http.StatusBadRequest)

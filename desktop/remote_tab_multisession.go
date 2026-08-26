@@ -103,6 +103,15 @@ func serveCurrentSession(ctx context.Context, client *http.Client, base string) 
 	return serveSessionEntry{}, nil
 }
 
+// installRemoteTabAttachRoute fences listings both before a target is installed
+// and after Serve commits it, preventing either stale epoch from restoring the
+// former current session.
+func installRemoteTabAttachRoute(tab *remoteTab, path string) {
+	tab.routing.currentPath = strings.TrimSpace(path)
+	tab.session.path = tab.routing.currentPath
+	tab.routing.revision++
+}
+
 // routeRemoteTabFrame tracks background runtime without leaking its frames
 // into the foreground reducer. Untagged frames remain legacy-compatible.
 func (a *App) routeRemoteTabFrame(tabID string, gen uint64, sessionPath, kind string) bool {
@@ -161,8 +170,15 @@ func (a *App) adoptRemoteTabFrameCurrent(tabID string, gen uint64, sessionPath s
 	tab.session.newSession = false
 	tab.session.reset = false
 	meta := remoteTabMetaLocked(tab)
+	ready := tab.state == "ready"
 	a.remoteTabMu.Unlock()
 	a.emitRemoteEvent("remote-tab:updated", meta)
+	if ready {
+		// The frontend treats ready -> ready as a new surface generation. Emit it
+		// before the triggering frame is forwarded so that frame is buffered until
+		// the newly current session snapshot replaces the old transcript.
+		a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:state", tabID), RemoteTabStateView{State: "ready"})
+	}
 }
 
 // remoteTabFramePathUnknown distinguishes a possible foreground recovery or

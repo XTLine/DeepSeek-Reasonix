@@ -49,6 +49,25 @@ type fakeServe struct {
 	statusAfterCancel              string
 }
 
+func TestRegisterRemoteTabOpenReviveCarriesSelectedTitle(t *testing.T) {
+	ref := RemoteTabRef{HostID: "box", Workspace: "~/app"}
+	existing := &remoteTab{
+		id: "remote-1", ref: ref, state: "disconnected", topicTitle: "Old title",
+		session: remoteTabSessionState{name: "old", path: "/sessions/old.jsonl"},
+		routing: remoteTabSessionRouting{currentPath: "/sessions/old.jsonl", running: map[string]bool{}},
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{existing.id: existing}}
+	registration := a.registerRemoteTabOpen(&remoteTab{id: "unused", ref: ref}, "Box", RemoteTabOpenOptions{
+		SessionName: "selected", SessionPath: "/sessions/selected.jsonl", SessionTitle: "Selected title",
+	})
+	if registration.reuseID != existing.id || !registration.revive {
+		t.Fatalf("registration = %+v, want revived %q", registration, existing.id)
+	}
+	if existing.topicTitle != "Selected title" {
+		t.Fatalf("revived title = %q, want selected title", existing.topicTitle)
+	}
+}
+
 func (fs *fakeServe) eventsCount() int { fs.mu.Lock(); defer fs.mu.Unlock(); return fs.eventsConns }
 
 func (fs *fakeServe) recorded() []string {

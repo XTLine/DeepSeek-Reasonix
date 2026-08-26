@@ -80,8 +80,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	tab.base = base
 	tab.token = token
 	if !opts.NewSession {
-		tab.routing.currentPath = strings.TrimSpace(target.Path)
-		tab.session.path = tab.routing.currentPath
+		installRemoteTabAttachRoute(tab, target.Path)
 	}
 	gen := tab.gen
 	pumpCtx, cancelPump := context.WithCancel(ctx)
@@ -124,8 +123,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	}
 	a.remoteTabMu.Lock()
 	if current := a.remoteTabs[tabID]; current == tab && current.gen == gen {
-		current.routing.currentPath = strings.TrimSpace(target.Path)
-		current.session.path = current.routing.currentPath
+		installRemoteTabAttachRoute(current, target.Path)
 		if name := strings.TrimSpace(target.Name); name != "" {
 			current.session.name = name
 		}
