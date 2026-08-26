@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"reasonix/internal/agent"
 	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/eventwire"
@@ -32,7 +33,8 @@ func TestServeSilentRotationsPublishSessionChanged(t *testing.T) {
 	for _, endpoint := range []string{"/clear", "/new"} {
 		t.Run(endpoint, func(t *testing.T) {
 			bc := NewBroadcaster()
-			ctrl := control.New(control.Options{Sink: bc, SessionDir: t.TempDir()})
+			exec := agent.New(nil, nil, agent.NewSession("system"), agent.Options{}, bc)
+			ctrl := control.New(control.Options{Executor: exec, Sink: bc, SessionDir: t.TempDir()})
 			ctrl.EnsureSessionPath()
 			oldPath := ctrl.SessionPath()
 			server := New(ctrl, bc, config.ServeConfig{})
