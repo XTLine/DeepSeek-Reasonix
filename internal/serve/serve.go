@@ -854,10 +854,7 @@ func historyMessages(msgs []provider.Message) []historyMessage {
 				continue
 			}
 		}
-		hm := historyMessage{Role: string(m.Role), Content: m.Content}
-		if m.Role == provider.RoleUser {
-			hm.Content = agent.UserMessageText(m)
-		}
+		hm := historyMessage{Role: string(m.Role), Content: historyMessageContent(m)}
 		if m.Role == provider.RoleAssistant {
 			hm.Reasoning = m.ReasoningContent
 			if len(m.ToolCalls) > 0 {

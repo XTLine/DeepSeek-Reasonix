@@ -310,18 +310,7 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 			a.emitRemoteTabState(registration.reuseID, "connecting", "")
 			a.goSafe("remoteTabServe", func() { a.bootstrapRemoteTab(registration.reuseID, hostID, workspace) })
 		} else if name := strings.TrimSpace(opts.SessionName); name != "" || strings.TrimSpace(opts.SessionPath) != "" {
-			selection := registration.previousSelection
-			if selection != nil {
-				a.remoteTabMu.Lock()
-				if current := a.remoteTabs[registration.reuseID]; current != nil {
-					selection.revision = current.selectionRevision
-				}
-				a.remoteTabMu.Unlock()
-			}
-			a.goSafe("remoteTabResume", func() {
-				a.resumeRemoteTabSessionPath(registration.reuseID, name, opts.SessionPath, opts.SessionTitle)
-				a.restoreRejectedRemoteTabOpenSelection(registration.reuseID, selection)
-			})
+			a.resumeRemoteTabOpenAsync(registration.reuseID, name, opts.SessionPath, opts.SessionTitle, registration.previousSelection)
 		} else {
 			// Reuse the pending blank like EnsureBlankTab does locally; only
 			// reset again once the current session earned content.
@@ -357,6 +346,20 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 	// Persist after activation so the file records the highlighted remote id.
 	a.saveTabsFromRemote()
 	return meta, nil
+}
+
+func (a *App) resumeRemoteTabOpenAsync(tabID, name, sessionPath, sessionTitle string, selection *remoteTabOpenSelection) {
+	if selection != nil {
+		a.remoteTabMu.Lock()
+		if current := a.remoteTabs[tabID]; current != nil {
+			selection.revision = current.selectionRevision
+		}
+		a.remoteTabMu.Unlock()
+	}
+	a.goSafe("remoteTabResume", func() {
+		a.resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle)
+		a.restoreRejectedRemoteTabOpenSelection(tabID, selection)
+	})
 }
 
 func (a *App) restoreRejectedRemoteTabOpenSelection(tabID string, previous *remoteTabOpenSelection) {
