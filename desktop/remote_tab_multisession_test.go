@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/cookiejar"
 	"slices"
@@ -538,19 +539,19 @@ func TestFailedProvisionalResumeRestoresRouteWithNewRevision(t *testing.T) {
 
 func TestRemoteProjectSessionsAdoptsAuthoritativeCurrentRoute(t *testing.T) {
 	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "a", Path: "/a.jsonl"}, {Name: "b", Path: "/b.jsonl", Current: true}})
-	kernel := &fakeRemoteKernel{
-		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
-		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
-	}
 	seedBridgeTestHost(t, "box")
-	a := &App{remoteRuntime: kernel}
-	cleanupRemoteTabPumps(t, a)
-	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionName: "b"})
-	a.remoteTabMu.Lock()
-	tab := a.remoteTabs[meta.ID]
-	tab.routing.currentPath = "/a.jsonl"
-	tab.session.name, tab.session.path = "a", "/a.jsonl"
-	a.remoteTabMu.Unlock()
+	client, _ := remoteSessionTestClient(t, fs)
+	log := &eventLog{}
+	tab := &remoteTab{
+		id: "remote-1", ref: RemoteTabRef{HostID: "box", Workspace: "~/app"}, state: "ready",
+		client: client, base: fs.server.URL, gen: 7,
+		session:       remoteTabSessionState{name: "a", path: "/a.jsonl"},
+		routing:       remoteTabSessionRouting{currentPath: "/a.jsonl", running: map[string]bool{}},
+		pendingEvents: map[string]json.RawMessage{"approval_request:1": json.RawMessage(`{"kind":"approval_request"}`)},
+		runtime:       remoteTabRuntimeState{pendingPrompt: true},
+	}
+	a := &App{remoteEventHook: log.add, remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	readyPrefix := "remote-tab:" + tab.id + ":state"
 	sessions, err := a.RemoteProjectSessions("box", "~/app")
 	if err != nil {
 		t.Fatal(err)
@@ -561,9 +562,16 @@ func TestRemoteProjectSessionsAdoptsAuthoritativeCurrentRoute(t *testing.T) {
 	}
 	a.remoteTabMu.Lock()
 	name, path, route := tab.session.name, tab.session.path, tab.routing.currentPath
+	pendingEvents, pendingPrompt := len(tab.pendingEvents), tab.runtime.pendingPrompt
 	a.remoteTabMu.Unlock()
 	if name != "b" || path != "/b.jsonl" || route != "/b.jsonl" {
 		t.Fatalf("adopted identity = %q/%q/%q, want b//b.jsonl//b.jsonl", name, path, route)
+	}
+	if pendingEvents != 0 || pendingPrompt {
+		t.Fatalf("listing adoption retained stale prompts: events=%d pending=%v", pendingEvents, pendingPrompt)
+	}
+	if got := log.count(readyPrefix); got != 1 {
+		t.Fatalf("listing adoption emitted %d ready barriers, want 1", got)
 	}
 }
 

@@ -246,6 +246,8 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 	liveRunning := map[string]bool{}
 	liveCurrentPath := ""
 	preferLiveCurrent := false
+	var routeUpdate *TabMeta
+	routeReadyBarrier := false
 	for _, tab := range a.remoteTabs {
 		if tab.ref.HostID != hostID || tab.ref.Workspace != workspace {
 			continue
@@ -261,14 +263,13 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 			tab.routing.running = authoritative
 			if authoritativeCurrent != nil {
 				path := strings.TrimSpace(authoritativeCurrent.Path)
-				if path != "" && tab.routing.currentPath != path {
-					tab.routing.currentPath = path
-					tab.routing.revision++
-				}
-				tab.session.path = path
+				pathChanged := adoptRemoteTabSessionPathLocked(tab, path)
 				tab.session.name = strings.TrimSpace(authoritativeCurrent.Name)
-				tab.session.newSession = false
-				tab.session.reset = false
+				if pathChanged {
+					meta := remoteTabMetaLocked(tab)
+					routeUpdate = &meta
+					routeReadyBarrier = remoteTabReadyBarrier(tab, true)
+				}
 			}
 		} else {
 			preferLiveCurrent = true
@@ -278,6 +279,12 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 		break
 	}
 	a.remoteTabMu.Unlock()
+	if routeUpdate != nil {
+		a.emitRemoteEvent("remote-tab:updated", *routeUpdate)
+		if routeReadyBarrier {
+			a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:state", routeUpdate.ID), RemoteTabStateView{State: "ready"})
+		}
+	}
 	out := make([]RemoteSessionView, 0, len(entries))
 	pinned := make([]RemoteSessionView, 0, len(entries))
 	hasCurrent := false

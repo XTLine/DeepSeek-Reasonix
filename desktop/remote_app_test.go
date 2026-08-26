@@ -82,6 +82,15 @@ func TestReloadServeProvidersCancelsBusyTurn(t *testing.T) {
 	}
 }
 
+func TestCredentialProviderReloadBudgetScalesWithTrackedServes(t *testing.T) {
+	if got, want := credentialProviderReloadBudget(4), 4*remoteProviderReloadTimeout; got != want {
+		t.Fatalf("four-target reload budget = %s, want %s", got, want)
+	}
+	if got := credentialProviderReloadBudget(0); got != remoteProviderReloadTimeout {
+		t.Fatalf("empty-target reload budget = %s, want one-target floor %s", got, remoteProviderReloadTimeout)
+	}
+}
+
 func TestReloadServeProvidersRejectsReplacedHostGeneration(t *testing.T) {
 	var reloadCalls int
 	mux := http.NewServeMux()
