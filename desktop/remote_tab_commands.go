@@ -547,6 +547,7 @@ func (a *App) rotateRemoteTabSession(tabID, path string) error {
 		tab.session.name = ""
 		tab.session.path = ""
 		tab.routing.currentPath = ""
+		tab.routing.revision++
 		a.remoteTabMu.Unlock()
 		return nil
 	}
@@ -575,6 +576,7 @@ func (a *App) rotateRemoteTabSession(tabID, path string) error {
 	tab.session.name = target.Name
 	tab.session.path = target.Path
 	tab.routing.currentPath = target.Path
+	tab.routing.revision++
 	tab.pendingEvents = nil
 	tab.runtime.revision++
 	tab.runtime.running = false

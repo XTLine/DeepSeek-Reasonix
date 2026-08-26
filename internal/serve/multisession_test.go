@@ -59,6 +59,61 @@ func (c *closeProbeController) Close() {
 	c.Controller.Close()
 }
 
+type retiringCloseProbeController struct {
+	*control.Controller
+	closeStarted chan struct{}
+	closeRelease chan struct{}
+}
+
+func (c *retiringCloseProbeController) Close() {
+	close(c.closeStarted)
+	<-c.closeRelease
+	c.Controller.Close()
+}
+
+func TestDetachedSessionRemainsBusyUntilCloseFinishes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "retiring.jsonl")
+	ctrl := &retiringCloseProbeController{
+		Controller:   control.New(control.Options{SessionPath: path}),
+		closeStarted: make(chan struct{}),
+		closeRelease: make(chan struct{}),
+	}
+	t.Cleanup(func() {
+		select {
+		case <-ctrl.closeRelease:
+		default:
+			close(ctrl.closeRelease)
+		}
+	})
+	server := New(control.New(control.Options{}), NewBroadcaster(), config.ServeConfig{})
+	tag := NewSessionTagSink(server.bc)
+	tag.SetPath(path)
+	detached, err := server.registerDetached(ctrl, nil, tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ctrl.closeStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("detached controller did not start retiring")
+	}
+	if !server.detachedBusy(path) {
+		t.Fatal("retiring session disappeared before controller Close finished")
+	}
+	if got := server.takeDetached(path); got != nil {
+		t.Fatal("retiring controller remained reattachable")
+	}
+	close(ctrl.closeRelease)
+	select {
+	case <-detached.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("detached retirement did not finish")
+	}
+	if server.detachedBusy(path) {
+		t.Fatal("retired session remained busy after controller Close finished")
+	}
+}
+
 func TestServerCloseClosesPublishedForegroundReplacement(t *testing.T) {
 	bc := NewBroadcaster()
 	first := &closeProbeController{Controller: control.New(control.Options{Sink: bc})}

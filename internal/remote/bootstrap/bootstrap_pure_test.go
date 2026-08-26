@@ -167,7 +167,7 @@ func TestLaunchCommandDetachAndLogHardening(t *testing.T) {
 
 func TestLocateCommandProbesRequiredServeCapabilities(t *testing.T) {
 	cmd := LocateCommand("/home/x/.reasonix/remote/bin/reasonix")
-	for _, want := range []string{"serve --help", "port-file", "session-events", "detached-heal", serveCapsToken, "portfile:yes", "sessionevents:yes", "detachedheal:yes", "caps:yes"} {
+	for _, want := range []string{"serve --help", "port-file", "session-events", "detached-heal", ServeCapsToken, "portfile:yes", "sessionevents:yes", "detachedheal:yes", "caps:yes"} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("LocateCommand missing %q:\n%s", want, cmd)
 		}
@@ -193,7 +193,7 @@ func TestLocateNPMGlobalCommandBypassesPathCandidates(t *testing.T) {
 
 func TestSupportsRequiredServeCapabilitiesCommand(t *testing.T) {
 	cmd := SupportsRequiredServeCapabilitiesCommand(42)
-	for _, want := range []string{"/proc/42/exe", "ps -p 42", "session-events", "detached-heal", serveCapsToken} {
+	for _, want := range []string{"/proc/42/exe", "ps -p 42", "session-events", "detached-heal", ServeCapsToken} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("capability probe missing %q:\n%s", want, cmd)
 		}

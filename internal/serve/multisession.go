@@ -63,6 +63,7 @@ type detachedSession struct {
 	ctrl     control.SessionAPI
 	keeper   *control.SessionLeaseKeeper
 	tag      *sessionTagSink
+	retiring bool // guarded by Server.detachedMu; blocks reattach during Close
 	force    chan struct{}
 	reattach chan struct{}
 	done     chan struct{}
@@ -173,8 +174,10 @@ func (s *Server) takeDetached(path string) *detachedSession {
 	path = agent.CanonicalSessionPath(path)
 	s.detachedMu.Lock()
 	d := s.detached[path]
-	if d != nil {
+	if d != nil && !d.retiring {
 		delete(s.detached, path)
+	} else {
+		d = nil
 	}
 	s.detachedMu.Unlock()
 	if d == nil {
@@ -254,12 +257,13 @@ func (s *Server) watchDetached(d *detachedSession) {
 		}
 	}
 
-	// Claim close ownership only while the registry still points at d. A
-	// concurrent takeDetached removes it first and receives the live controller.
+	// Claim close ownership only while the registry still points at d. Keep the
+	// retiring entry visible until Close and lease release finish so deletion
+	// cannot race final controller writes. takeDetached refuses retiring entries.
 	s.detachedMu.Lock()
 	owns := s.detached[d.path] == d
 	if owns {
-		delete(s.detached, d.path)
+		d.retiring = true
 	}
 	s.detachedMu.Unlock()
 	if !owns {
@@ -273,7 +277,13 @@ func (s *Server) watchDetached(d *detachedSession) {
 	if concrete, ok := d.ctrl.(*control.Controller); ok {
 		s.forgetSessionTag(concrete)
 	}
-	slog.Info("serve: background session closed", "session", d.path, "forced", forced)
+	s.detachedMu.Lock()
+	closedPath := d.path
+	if s.detached[d.path] == d {
+		delete(s.detached, d.path)
+	}
+	s.detachedMu.Unlock()
+	slog.Info("serve: background session closed", "session", closedPath, "forced", forced)
 	close(d.done)
 }
 
@@ -409,6 +419,10 @@ func (s *Server) resumeActiveSession(w http.ResponseWriter, r *http.Request, cur
 		}
 		w.WriteHeader(http.StatusNoContent)
 		s.replayPendingPromptsBroadcast()
+		return true
+	}
+	if s.detachedBusy(realPath) {
+		http.Error(w, "session is finishing background teardown; retry shortly", http.StatusConflict)
 		return true
 	}
 	if !controllerHasActiveRuntimeWork(cur) {

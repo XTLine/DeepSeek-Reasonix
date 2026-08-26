@@ -25,6 +25,18 @@ type lockProbeController struct {
 	onClose    func()
 }
 
+type blockingNewSessionController struct {
+	*control.Controller
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *blockingNewSessionController) NewSession() error {
+	close(c.entered)
+	<-c.release
+	return c.Controller.NewSession()
+}
+
 func (c *lockProbeController) Snapshot() error {
 	if c.onSnapshot != nil {
 		c.onSnapshot()
@@ -291,6 +303,61 @@ func TestSubmitWaitsForExtensionReloadAndTargetsReplacement(t *testing.T) {
 	}
 	replacement.Cancel()
 	waitNotRunning(t, replacement)
+}
+
+func TestSubmitNewHoldsBindingLockUntilRotationCompletes(t *testing.T) {
+	bc := NewBroadcaster()
+	ctrl := &blockingNewSessionController{
+		Controller: control.New(control.Options{Sink: bc, SessionDir: t.TempDir()}),
+		entered:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	t.Cleanup(func() {
+		select {
+		case <-ctrl.release:
+		default:
+			close(ctrl.release)
+		}
+	})
+	s := New(ctrl, bc, config.ServeConfig{})
+	submitDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/submit", strings.NewReader(`{"input":"/new"}`))
+		rec := httptest.NewRecorder()
+		s.submit(rec, req)
+		submitDone <- rec
+	}()
+	select {
+	case <-ctrl.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("/submit /new did not enter synchronous rotation")
+	}
+	lockAcquired := make(chan struct{})
+	go func() {
+		s.bindMu.Lock()
+		s.bindMu.Unlock()
+		close(lockAcquired)
+	}()
+	select {
+	case <-lockAcquired:
+		t.Fatal("bindMu was released before /new finished")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(ctrl.release)
+	var rec *httptest.ResponseRecorder
+	select {
+	case rec = <-submitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("/submit /new did not return after rotation finished")
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("/submit /new status = %d, want 204", rec.Code)
+	}
+	select {
+	case <-lockAcquired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("bindMu stayed locked after /new completed")
+	}
 }
 
 // blockingRunner keeps a turn "running" until its context is cancelled, so tests

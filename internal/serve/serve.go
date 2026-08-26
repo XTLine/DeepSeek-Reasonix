@@ -703,6 +703,17 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "shell commands are unavailable over HTTP", http.StatusForbidden)
 		return
 	}
+	// Session rotations must complete while bindMu is held. Controller.Submit
+	// dispatches these verbs asynchronously, which would let a following model,
+	// resume, or extension command cross the rotation generation boundary.
+	switch trimmed {
+	case "/new":
+		s.newSessionFromSubmit(w, r)
+		return
+	case "/clear":
+		s.clearSessionFromSubmit(w, r)
+		return
+	}
 	// Intercept /model <ref> for runtime model switching (the controller's
 	// Submit path only lists models — switching is frontend-specific).
 	if s.submitModelCommand(w, r, trimmed) {

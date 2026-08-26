@@ -116,9 +116,10 @@ const serveSessionEventsMarker = "session-events"
 // retire background controllers instead of leaving them on a stale tunnel.
 const serveDetachedHealMarker = "detached-heal"
 
-// serveCapsToken is the rolling capability revision advertised in serve help.
-// Bump this when the desktop requires a newer wire/runtime contract.
-const serveCapsToken = "reasonix-serve-caps-20260826a"
+// ServeCapsToken is the rolling capability revision advertised in serve help.
+// Bump this when the desktop requires a newer wire/runtime contract. The CLI
+// imports this value so the advertised token cannot drift from the probe.
+const ServeCapsToken = "reasonix-serve-caps-20260826a"
 
 // LocateCommand probes for a usable reasonix binary and the exact Serve
 // capabilities required by the desktop. Capability probes are authoritative:
@@ -164,7 +165,7 @@ func locateResolvedCommand(resolve string) string {
 			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo sessionevents:yes; else echo sessionevents:no; fi; "+
 			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo detachedheal:yes; else echo detachedheal:no; fi; "+
 			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo caps:yes; else echo caps:no; fi; fi",
-		shellQuote(servePortFileMarker), shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(serveCapsToken),
+		shellQuote(servePortFileMarker), shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(ServeCapsToken),
 	)
 }
 
@@ -175,6 +176,6 @@ func SupportsRequiredServeCapabilitiesCommand(pid int) string {
 		"BIN=$(readlink /proc/%d/exe 2>/dev/null); "+
 			"if [ -z \"$BIN\" ]; then BIN=$(ps -p %d -o comm= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); fi; "+
 			"if [ -n \"$BIN\" ] && [ -x \"$BIN\" ] && \"$BIN\" serve --help 2>&1 | grep -q -- %s && \"$BIN\" serve --help 2>&1 | grep -q -- %s && \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo yes; else echo no; fi",
-		pid, pid, shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(serveCapsToken),
+		pid, pid, shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(ServeCapsToken),
 	)
 }

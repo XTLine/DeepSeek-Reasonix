@@ -7,11 +7,12 @@ import (
 	"reasonix/internal/boot"
 	"reasonix/internal/config"
 	"reasonix/internal/control"
+	"reasonix/internal/remote/bootstrap"
 	"reasonix/internal/serve"
 )
 
 func registerServeCapabilityFlags(fs *flag.FlagSet) {
-	_ = fs.Bool("session-events", false, "tag session events and finish switched-away turns in background (reasonix-serve-caps-20260822c)")
+	_ = fs.Bool("session-events", false, "tag session events and finish switched-away turns in background ("+bootstrap.ServeCapsToken+")")
 	_ = fs.Bool("detached-heal", false, "retire background sessions after provider credential-channel repair")
 }
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"reasonix/internal/control"
+	"reasonix/internal/event"
 )
 
 func (s *Server) planDecision(w http.ResponseWriter, r *http.Request) {
@@ -38,6 +39,14 @@ func (s *Server) plan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) clearSession(w http.ResponseWriter, _ *http.Request) {
+	s.clearSessionCommand(w, false)
+}
+
+func (s *Server) clearSessionFromSubmit(w http.ResponseWriter, _ *http.Request) {
+	s.clearSessionCommand(w, true)
+}
+
+func (s *Server) clearSessionCommand(w http.ResponseWriter, emitNotice bool) {
 	// Clear rotates the session path just like /new, but also removes the old
 	// transcript artifacts. Keep controller mutation and lease rebinding under
 	// one binding lock so remote clients never observe split ownership.
@@ -60,11 +69,23 @@ func (s *Server) clearSession(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, sessionInUseError(err), http.StatusConflict)
 		return
 	}
-	w.Header().Set(sessionPathHeader, s.ctl().SessionPath())
+	path := s.ctl().SessionPath()
+	w.Header().Set(sessionPathHeader, path)
+	if emitNotice {
+		s.bc.Emit(event.Event{Kind: event.Notice, Text: "context cleared", SessionPath: path})
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) newSession(w http.ResponseWriter, r *http.Request) {
+	s.newSessionCommand(w, r, false)
+}
+
+func (s *Server) newSessionFromSubmit(w http.ResponseWriter, r *http.Request) {
+	s.newSessionCommand(w, r, true)
+}
+
+func (s *Server) newSessionCommand(w http.ResponseWriter, r *http.Request, emitNotice bool) {
 	s.bindMu.Lock()
 	defer s.bindMu.Unlock()
 	cur := s.ctl()
@@ -78,7 +99,11 @@ func (s *Server) newSession(w http.ResponseWriter, r *http.Request) {
 			s.renderBindError(w, err)
 			return
 		}
-		w.Header().Set(sessionPathHeader, s.ctl().SessionPath())
+		path := s.ctl().SessionPath()
+		w.Header().Set(sessionPathHeader, path)
+		if emitNotice {
+			s.bc.Emit(event.Event{Kind: event.Notice, Text: "new session", SessionPath: path})
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -99,6 +124,10 @@ func (s *Server) newSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, sessionInUseError(err), http.StatusConflict)
 		return
 	}
-	w.Header().Set(sessionPathHeader, cur.SessionPath())
+	path := cur.SessionPath()
+	w.Header().Set(sessionPathHeader, path)
+	if emitNotice {
+		s.bc.Emit(event.Event{Kind: event.Notice, Text: "new session", SessionPath: path})
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

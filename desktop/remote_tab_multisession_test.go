@@ -396,6 +396,58 @@ func TestProvisionalResumeRouteFencesStaleSessionListing(t *testing.T) {
 	}
 }
 
+func TestRemoteNewSessionFencesStaleSessionListing(t *testing.T) {
+	const currentPath = "/sessions/current.jsonl"
+	const rotatedPath = "/sessions/rotated.jsonl"
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "current", Path: currentPath, Current: true}})
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionPath: currentPath})
+
+	fs.mu.Lock()
+	fs.sessionsStarted = make(chan struct{}, 1)
+	fs.sessionsRelease = make(chan struct{})
+	fs.newSessionPath = rotatedPath
+	started, release := fs.sessionsStarted, fs.sessionsRelease
+	fs.mu.Unlock()
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	listingDone := make(chan error, 1)
+	go func() {
+		_, err := a.RemoteProjectSessions("box", "~/app")
+		listingDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("session listing did not start")
+	}
+	if err := a.resetRemoteTabSession(meta.ID); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-listingDone; err != nil {
+		t.Fatal(err)
+	}
+	a.remoteTabMu.Lock()
+	path := a.remoteTabs[meta.ID].routing.currentPath
+	a.remoteTabMu.Unlock()
+	if path != rotatedPath {
+		t.Fatalf("stale /sessions response replaced rotated route with %q, want %q", path, rotatedPath)
+	}
+}
+
 func TestFailedProvisionalResumeRestoresRouteWithNewRevision(t *testing.T) {
 	const currentPath = "/sessions/current.jsonl"
 	const targetPath = "/sessions/target.jsonl"
