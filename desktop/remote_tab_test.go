@@ -378,6 +378,20 @@ func waitForTabState(t *testing.T, a *App, tabID, want string) {
 	}
 }
 
+func waitForRemoteEventCount(t *testing.T, log *eventLog, prefix string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if got := log.count(prefix); got >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("event count for %q = %d, want >= %d (events: %v)", prefix, log.count(prefix), want, log.recorded())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // cleanupRemoteTabPumps cancels every open tab's SSE pump when the test
 // ends. Without this the long-lived /events connection keeps the httptest
 // server's Close waiting forever.
@@ -436,9 +450,9 @@ func TestRemoteTabBridgeEntersNewSessionAndStreams(t *testing.T) {
 	if currentPath != "/sessions/fresh.jsonl" {
 		t.Fatalf("current session path = %q, want response header path", currentPath)
 	}
-	if log.count("remote-tab:"+meta.ID+":state") < 2 {
-		t.Fatalf("expected connecting + ready state events, got %v", log.events)
-	}
+	// State becomes observable immediately before its event is emitted. Wait for
+	// the event too so a slow runner cannot sample that intentional handoff gap.
+	waitForRemoteEventCount(t, log, "remote-tab:"+meta.ID+":state", 2)
 
 	// Cancelling the pump (close/reconnect) must exit silently: no error
 	// state is emitted for a deliberate stop.
