@@ -169,7 +169,7 @@ func (a *App) routeRemoteTabFrame(tabID string, gen uint64, sessionPath, kind st
 	// A detached turn can finish while background jobs remain. Its later notice
 	// makes /sessions authoritative again, so refresh project-tree rows without
 	// forwarding that background notice to the foreground reducer.
-	backgroundChanged := !foreground && (changed || kind == "notice" && knownBackground)
+	backgroundChanged := !foreground && (changed || kind == "turn_done" || kind == "notice" && knownBackground)
 	meta := remoteTabMetaLocked(tab)
 	a.remoteTabMu.Unlock()
 	if backgroundChanged {

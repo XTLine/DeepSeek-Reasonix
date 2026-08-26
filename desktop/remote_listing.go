@@ -96,14 +96,41 @@ func servePost(ctx context.Context, client *http.Client, url string, body []byte
 	return err
 }
 
+const expectedSessionPathHeader = "X-Reasonix-Expected-Session-Path"
+
+// servePostForSession fences a foreground mutation to the session the Desktop
+// tab displayed when the command was issued. Older Serve binaries ignore the
+// optional header and retain their single-session behavior.
+func servePostForSession(ctx context.Context, client *http.Client, url string, body []byte, expectedPath string) error {
+	if body == nil {
+		body = []byte("{}")
+	}
+	resp, err := serveDoForSession(ctx, client, http.MethodPost, url, body, expectedPath)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	return &serveHTTPStatusError{
+		url: url, statusCode: resp.StatusCode, message: strings.TrimSpace(string(data)),
+	}
+}
+
 // servePostSessionPath preserves the ordinary 2xx contract while reading the
 // optional path header returned by session-rotation endpoints. Older Serve
 // binaries omit it and keep their legacy untagged single-session behavior.
 func servePostSessionPath(ctx context.Context, client *http.Client, url string, body []byte) (string, error) {
+	return servePostSessionPathForSession(ctx, client, url, body, "")
+}
+
+func servePostSessionPathForSession(ctx context.Context, client *http.Client, url string, body []byte, expectedPath string) (string, error) {
 	if body == nil {
 		body = []byte("{}")
 	}
-	resp, err := serveDo(ctx, client, http.MethodPost, url, body)
+	resp, err := serveDoForSession(ctx, client, http.MethodPost, url, body, expectedPath)
 	if err != nil {
 		return "", err
 	}
@@ -119,11 +146,18 @@ func servePostSessionPath(ctx context.Context, client *http.Client, url string, 
 
 // serveDo issues a JSON request; the csrf guard rejects non-JSON POSTs.
 func serveDo(ctx context.Context, client *http.Client, method, url string, body []byte) (*http.Response, error) {
+	return serveDoForSession(ctx, client, method, url, body, "")
+}
+
+func serveDoForSession(ctx context.Context, client *http.Client, method, url string, body []byte, expectedPath string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if expectedPath = strings.TrimSpace(expectedPath); expectedPath != "" {
+		req.Header.Set(expectedSessionPathHeader, expectedPath)
+	}
 	return client.Do(req)
 }
 

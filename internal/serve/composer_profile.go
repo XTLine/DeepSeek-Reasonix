@@ -28,6 +28,9 @@ func (s *Server) composerProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	s.bindMu.Lock()
 	defer s.bindMu.Unlock()
+	if !s.validateExpectedSessionLocked(w, r) {
+		return
+	}
 	drained, err := s.ctl().ApplyComposerProfile(collaborationMode == "plan", body.ToolApprovalMode, body.Goal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)

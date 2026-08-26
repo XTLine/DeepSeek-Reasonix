@@ -9,6 +9,7 @@ import (
 type remoteTabProvisionalResume struct {
 	targetPath      string
 	previousPath    string
+	pathRevision    uint64
 	previousPending map[string]json.RawMessage
 	previousRuntime remoteTabRuntimeState
 	active          bool
@@ -39,6 +40,7 @@ func (a *App) beginRemoteTabProvisionalResume(tabID string, tab *remoteTab, clie
 		return route
 	}
 	route.previousPath = current.routing.currentPath
+	route.pathRevision = current.routing.pathRevision
 	if route.targetPath == route.previousPath {
 		return route
 	}
@@ -60,18 +62,24 @@ func (a *App) beginRemoteTabProvisionalResume(tabID string, tab *remoteTab, clie
 	return route
 }
 
-func (a *App) rollbackRemoteTabProvisionalResume(tabID string, tab *remoteTab, client *http.Client, gen uint64, route remoteTabProvisionalResume) {
-	if !route.active {
-		return
-	}
+func (a *App) rollbackRemoteTabProvisionalResume(tabID string, tab *remoteTab, client *http.Client, gen uint64, route remoteTabProvisionalResume) bool {
 	tab.routeEventMu.Lock()
 	defer tab.routeEventMu.Unlock()
 	a.remoteTabMu.Lock()
 	defer a.remoteTabMu.Unlock()
 	current := a.remoteTabs[tabID]
-	if current != tab || current.client != client || current.gen != gen ||
-		current.routing.currentPath != route.targetPath || current.routing.rehydratingPath != route.targetPath {
-		return
+	if current != tab || current.client != client || current.gen != gen || current.state != "ready" ||
+		current.routing.currentPath != route.targetPath {
+		return false
+	}
+	if !route.active {
+		// Re-selecting the already current session creates no rehydration epoch.
+		// The path revision still proves whether this failed request owns the
+		// visible route or a newer adoption has already superseded it.
+		return current.routing.pathRevision == route.pathRevision
+	}
+	if current.routing.rehydratingPath != route.targetPath {
+		return false
 	}
 	current.routing.currentPath = route.previousPath
 	current.routing.pathRevision++
@@ -82,6 +90,7 @@ func (a *App) rollbackRemoteTabProvisionalResume(tabID string, tab *remoteTab, c
 	restoredRuntime := route.previousRuntime
 	restoredRuntime.revision = max(current.runtime.revision, route.previousRuntime.revision) + 1
 	current.runtime = restoredRuntime
+	return true
 }
 
 // reconcileRemoteTabRejectedResume installs the route Serve reports after an
@@ -91,8 +100,9 @@ func (a *App) rollbackRemoteTabProvisionalResume(tabID string, tab *remoteTab, c
 func (a *App) reconcileRemoteTabRejectedResume(tabID string, tab *remoteTab, client *http.Client, gen uint64, route remoteTabProvisionalResume, authoritative serveSessionEntry, resumeErr error) {
 	authoritative.Path = strings.TrimSpace(authoritative.Path)
 	if authoritative.Path == route.previousPath {
-		a.rollbackRemoteTabProvisionalResume(tabID, tab, client, gen, route)
-		a.transitionRemoteTabState(tabID, gen, "ready", "ready", resumeErr.Error())
+		if a.rollbackRemoteTabProvisionalResume(tabID, tab, client, gen, route) {
+			a.transitionRemoteTabState(tabID, gen, "ready", "ready", resumeErr.Error())
+		}
 		return
 	}
 	tab.routeEventMu.Lock()
@@ -100,7 +110,9 @@ func (a *App) reconcileRemoteTabRejectedResume(tabID string, tab *remoteTab, cli
 	a.remoteTabMu.Lock()
 	current := a.remoteTabs[tabID]
 	if current != tab || current.client != client || current.gen != gen || current.state != "ready" ||
-		current.routing.currentPath != route.targetPath || current.routing.rehydratingPath != route.targetPath {
+		current.routing.currentPath != route.targetPath ||
+		route.active && current.routing.rehydratingPath != route.targetPath ||
+		!route.active && current.routing.pathRevision != route.pathRevision {
 		a.remoteTabMu.Unlock()
 		return
 	}
@@ -134,7 +146,9 @@ func (a *App) commitRemoteTabResume(tabID string, tab *remoteTab, client *http.C
 	defer a.remoteTabMu.Unlock()
 	current := a.remoteTabs[tabID]
 	if current != tab || current.client != client || current.gen != gen || current.state != "ready" ||
-		route.active && current.routing.rehydratingPath != route.targetPath {
+		current.routing.currentPath != route.targetPath ||
+		route.active && current.routing.rehydratingPath != route.targetPath ||
+		!route.active && current.routing.pathRevision != route.pathRevision {
 		return TabMeta{}, false
 	}
 	current.topicTitle = title

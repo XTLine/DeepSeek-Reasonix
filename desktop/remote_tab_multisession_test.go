@@ -94,6 +94,28 @@ func TestBackgroundCompletionNoticeRefreshesRemoteRows(t *testing.T) {
 	}
 }
 
+func TestRecoveredBackgroundTerminalFrameRefreshesRemoteRows(t *testing.T) {
+	const currentPath = "/sessions/current.jsonl"
+	const originalPath = "/sessions/background.jsonl"
+	const recoveredPath = "/sessions/background-recovered.jsonl"
+	log := &eventLog{}
+	a := &App{remoteEventHook: log.add, remoteTabs: map[string]*remoteTab{
+		"remote-1": {
+			id: "remote-1", gen: 7,
+			routing: remoteTabSessionRouting{
+				currentPath: currentPath,
+				running:     map[string]bool{originalPath: true},
+			},
+		},
+	}}
+	if a.routeRemoteTabFrame("remote-1", 7, recoveredPath, "turn_done") {
+		t.Fatal("recovered background terminal frame was routed to the foreground")
+	}
+	if got := log.count("remote-tab:updated"); got != 1 {
+		t.Fatalf("recovered terminal frame emitted %d row refreshes, want 1", got)
+	}
+}
+
 func TestFocusOnlyAttachRoutesImmediatePendingPrompt(t *testing.T) {
 	const currentPath = "/sessions/current.jsonl"
 	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "current", Path: currentPath, Current: true}})
@@ -259,8 +281,8 @@ func TestUnknownBackgroundPathReconcilesStatusOnlyOnce(t *testing.T) {
 	if after-before != 1 {
 		t.Fatalf("unknown background path triggered %d status requests, want 1", after-before)
 	}
-	if got := log.count("remote-tab:updated") - beforeRefreshes; got != 1 {
-		t.Fatalf("unknown background path emitted %d row refreshes, want 1", got)
+	if got := log.count("remote-tab:updated") - beforeRefreshes; got != 2 {
+		t.Fatalf("unknown background notice and terminal frame emitted %d row refreshes, want 2", got)
 	}
 }
 

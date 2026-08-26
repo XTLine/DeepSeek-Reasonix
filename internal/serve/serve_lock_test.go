@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -173,6 +174,39 @@ func TestSwitchModelRejectsWhileRunning(t *testing.T) {
 		t.Fatal("switchModel built a controller despite a running turn")
 	}
 	ctrl.Cancel()
+	waitNotRunning(t, ctrl)
+}
+
+func TestForegroundMutationRejectsStaleSessionPath(t *testing.T) {
+	dir := t.TempDir()
+	currentPath := filepath.Join(dir, "current.jsonl")
+	stalePath := filepath.Join(dir, "stale.jsonl")
+	bc := NewBroadcaster()
+	ctrl := control.New(control.Options{Runner: blockingRunner{}, Sink: bc, SessionPath: currentPath})
+	s := New(ctrl, bc, config.ServeConfig{})
+
+	ctrl.SubmitHTTP("hi")
+	waitRunning(t, ctrl)
+	req := httptest.NewRequest(http.MethodPost, "/cancel", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(expectedSessionPathHeader, stalePath)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("stale cancel status = %d, want %d", rec.Code, http.StatusConflict)
+	}
+	if !ctrl.Running() {
+		t.Fatal("stale cancel reached the newly current controller")
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/cancel", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(expectedSessionPathHeader, currentPath)
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("current cancel status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
 	waitNotRunning(t, ctrl)
 }
 

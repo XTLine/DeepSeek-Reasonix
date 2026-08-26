@@ -142,7 +142,9 @@ func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle 
 		if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
 			var statusErr *serveHTTPStatusError
 			if errors.As(err, &statusErr) {
-				a.rollbackRemoteTabProvisionalResume(tabID, tab, client, gen, route)
+				if !a.rollbackRemoteTabProvisionalResume(tabID, tab, client, gen, route) {
+					return
+				}
 				if remoteSessionTransitionBusy(err) {
 					a.transitionRemoteTabState(tabID, gen, "ready", "ready", "Finish the current turn before switching sessions.")
 					return
@@ -226,7 +228,7 @@ func (a *App) DeleteRemoteProjectSession(hostID, workspace, name string) error {
 }
 
 func (a *App) remoteTabPost(tabID, path string, body map[string]any) error {
-	client, base, err := a.remoteTabCommandClient(tabID)
+	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
 	}
@@ -236,7 +238,7 @@ func (a *App) remoteTabPost(tabID, path string, body map[string]any) error {
 	if body != nil {
 		payload, _ = json.Marshal(body)
 	}
-	return servePost(ctx, client, serveURL(base, path), payload)
+	return servePostForSession(ctx, client, serveURL(base, path), payload, expectedPath)
 }
 
 func (a *App) remoteTabGet(tabID, path string) (json.RawMessage, error) {
@@ -555,7 +557,7 @@ func (a *App) rotateRemoteTabSession(tabID, path string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	rotatedPath, err := servePostSessionPath(ctx, client, serveURL(base, path), nil)
+	rotatedPath, err := servePostSessionPathForSession(ctx, client, serveURL(base, path), nil, requestPath)
 	if err != nil {
 		// Session rotation can be rejected while the current remote turn is active.
 		// That does not invalidate the attached session or its event pump, so

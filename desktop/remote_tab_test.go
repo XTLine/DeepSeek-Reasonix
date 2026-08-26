@@ -29,6 +29,7 @@ type fakeServe struct {
 	cookieOnNew                    bool
 	sessions                       []serveSessionEntry
 	calls                          []string // "METHOD /path body" per command request
+	expectedPaths                  []string // foreground command fence headers
 	failNext                       string   // non-empty ⇒ next command endpoint replies 409 with this text
 	failEnter                      string   // non-empty ⇒ next /new or /resume replies 409
 	enterDelay                     time.Duration
@@ -83,6 +84,12 @@ func (fs *fakeServe) recorded() []string {
 	out := make([]string, len(fs.calls))
 	copy(out, fs.calls)
 	return out
+}
+
+func (fs *fakeServe) recordedExpectedPaths() []string {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	return append([]string(nil), fs.expectedPaths...)
 }
 
 func (fs *fakeServe) record(method, path, body string) {
@@ -257,6 +264,7 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 			data, _ := io.ReadAll(io.LimitReader(r.Body, 4<<10))
 			fs.record(r.Method, path, string(data))
 			fs.mu.Lock()
+			fs.expectedPaths = append(fs.expectedPaths, r.Header.Get(expectedSessionPathHeader))
 			fail := fs.failNext
 			fs.failNext = ""
 			if path == "/cancel" && fs.statusAfterCancel != "" {

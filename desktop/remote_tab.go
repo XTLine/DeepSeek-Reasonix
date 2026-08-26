@@ -488,20 +488,26 @@ func commandContext(a *App) (context.Context, context.CancelFunc) {
 // that has not finished bootstrap, is reconnecting, or has failed is an
 // error, not a silent no-op.
 func (a *App) remoteTabCommandClient(tabID string) (*http.Client, string, error) {
+	client, base, _, err := a.remoteTabCommandTarget(tabID)
+	return client, base, err
+}
+
+func (a *App) remoteTabCommandTarget(tabID string) (*http.Client, string, string, error) {
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
 	var client *http.Client
-	var base string
+	var base, expectedPath string
 	usable := tab != nil && tab.client != nil && tab.state == "ready"
 	if usable {
 		client, base = tab.client, tab.base
+		expectedPath = tab.routing.currentPath
 	}
 	a.remoteTabMu.Unlock()
 	if !usable {
 		log.Printf("[remote] remoteTabCommandClient: REFUSED tab=%q (tab=%v client=%v)", tabID, tab != nil, tab != nil && tab.client != nil)
-		return nil, "", fmt.Errorf("remote tab %q is not connected", tabID)
+		return nil, "", "", fmt.Errorf("remote tab %q is not connected", tabID)
 	}
-	return client, base, nil
+	return client, base, expectedPath, nil
 }
 
 func (a *App) isRemoteTab(tabID string) bool {
@@ -540,7 +546,7 @@ func (a *App) remoteTabCurrentModel(tabID string) (string, bool) {
 }
 
 func (a *App) SubmitRemoteTab(tabID, text string) error {
-	client, base, err := a.remoteTabCommandClient(tabID)
+	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
 	}
@@ -548,7 +554,7 @@ func (a *App) SubmitRemoteTab(tabID, text string) error {
 	defer cancel()
 	body, _ := json.Marshal(map[string]string{"input": text})
 	started := time.Now()
-	err = servePost(ctx, client, serveURL(base, "/submit"), body)
+	err = servePostForSession(ctx, client, serveURL(base, "/submit"), body, expectedPath)
 	if err != nil {
 		log.Printf("[remote] submit failed tab=%s dur=%s err=%v", tabID, time.Since(started).Round(time.Millisecond), err)
 	}
@@ -556,20 +562,20 @@ func (a *App) SubmitRemoteTab(tabID, text string) error {
 }
 
 func (a *App) CancelRemoteTab(tabID string) error {
-	client, base, err := a.remoteTabCommandClient(tabID)
+	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := commandContext(a)
 	defer cancel()
-	return servePost(ctx, client, serveURL(base, "/cancel"), nil)
+	return servePostForSession(ctx, client, serveURL(base, "/cancel"), nil, expectedPath)
 }
 
 // ApproveRemoteTab answers a tool-approval request. Serve takes
 // {id, allow, session, persist}; preserve the same once/session/persistent
 // scopes exposed by the local approval surface.
 func (a *App) ApproveRemoteTab(tabID, callID, decision string) error {
-	client, base, err := a.remoteTabCommandClient(tabID)
+	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
 	}
@@ -589,7 +595,7 @@ func (a *App) ApproveRemoteTab(tabID, callID, decision string) error {
 		return fmt.Errorf("invalid remote approval decision %q", decision)
 	}
 	body, _ := json.Marshal(map[string]any{"id": callID, "allow": allow, "session": session, "persist": persist})
-	if err := servePost(ctx, client, serveURL(base, "/approve"), body); err != nil {
+	if err := servePostForSession(ctx, client, serveURL(base, "/approve"), body, expectedPath); err != nil {
 		return err
 	}
 	a.clearRemotePendingEvent(tabID, "approval_request", callID)
@@ -602,7 +608,7 @@ func (a *App) ApproveRemoteTab(tabID, callID, decision string) error {
 // before resolving the approval; a tunnel failure can no longer split the
 // decision from the requested revision.
 func (a *App) ResolveRemoteTabPlanDecision(tabID, callID, action, feedback string) error {
-	client, base, err := a.remoteTabCommandClient(tabID)
+	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
 	}
@@ -615,7 +621,7 @@ func (a *App) ResolveRemoteTabPlanDecision(tabID, callID, action, feedback strin
 	ctx, cancel := commandContext(a)
 	defer cancel()
 	body, _ := json.Marshal(map[string]string{"id": callID, "action": action, "feedback": strings.TrimSpace(feedback)})
-	if err := servePost(ctx, client, serveURL(base, "/plan-decision"), body); err != nil {
+	if err := servePostForSession(ctx, client, serveURL(base, "/plan-decision"), body, expectedPath); err != nil {
 		return err
 	}
 	a.clearRemotePendingEvent(tabID, "approval_request", callID)
@@ -630,7 +636,7 @@ type RemoteAskAnswer struct {
 // AnswerRemoteTab preserves the batch ask id at the top level and sends every
 // question's own id/selections in the Serve AskAnswer wire shape.
 func (a *App) AnswerRemoteTab(tabID, callID string, answers []RemoteAskAnswer) error {
-	client, base, err := a.remoteTabCommandClient(tabID)
+	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
 	}
@@ -640,7 +646,7 @@ func (a *App) AnswerRemoteTab(tabID, callID string, answers []RemoteAskAnswer) e
 		"id":      callID,
 		"answers": answers,
 	})
-	if err := servePost(ctx, client, serveURL(base, "/answer"), body); err != nil {
+	if err := servePostForSession(ctx, client, serveURL(base, "/answer"), body, expectedPath); err != nil {
 		return err
 	}
 	a.clearRemotePendingEvent(tabID, "ask_request", callID)
@@ -660,7 +666,7 @@ func (a *App) SubmitRemoteTabExtensionForm(tabID, pluginID, surfaceID string, va
 // RewindRemoteTab rewinds to a checkpoint. Serve identifies checkpoints by
 // TURN index and takes {turn, scope}; the checkpointID string is that turn.
 func (a *App) RewindRemoteTab(tabID, checkpointID, scope string) error {
-	client, base, err := a.remoteTabCommandClient(tabID)
+	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
 	}
@@ -677,22 +683,22 @@ func (a *App) RewindRemoteTab(tabID, checkpointID, scope string) error {
 		return fmt.Errorf("invalid rewind scope %q", scope)
 	}
 	body, _ := json.Marshal(map[string]any{"turn": turn, "scope": scope})
-	return servePost(ctx, client, serveURL(base, "/rewind"), body)
+	return servePostForSession(ctx, client, serveURL(base, "/rewind"), body, expectedPath)
 }
 
 func (a *App) SetRemoteTabToolApprovalMode(tabID, mode string) error {
-	client, base, err := a.remoteTabCommandClient(tabID)
+	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := commandContext(a)
 	defer cancel()
 	body, _ := json.Marshal(map[string]string{"mode": mode})
-	return servePost(ctx, client, serveURL(base, "/tool-approval-mode"), body)
+	return servePostForSession(ctx, client, serveURL(base, "/tool-approval-mode"), body, expectedPath)
 }
 
 func (a *App) SetRemoteTabComposerProfile(tabID, collaborationMode, toolApprovalMode, goal string) ([]string, error) {
-	client, base, err := a.remoteTabCommandClient(tabID)
+	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return nil, err
 	}
@@ -703,7 +709,7 @@ func (a *App) SetRemoteTabComposerProfile(tabID, collaborationMode, toolApproval
 	})
 	ctx, cancel := commandContext(a)
 	defer cancel()
-	resp, err := serveDo(ctx, client, http.MethodPost, serveURL(base, "/composer-profile"), body)
+	resp, err := serveDoForSession(ctx, client, http.MethodPost, serveURL(base, "/composer-profile"), body, expectedPath)
 	if err != nil {
 		return nil, err
 	}
@@ -728,14 +734,14 @@ func (a *App) SetRemoteTabComposerProfile(tabID, collaborationMode, toolApproval
 }
 
 func (a *App) SetRemoteTabGoal(tabID, goal string) error {
-	client, base, err := a.remoteTabCommandClient(tabID)
+	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := commandContext(a)
 	defer cancel()
 	body, _ := json.Marshal(map[string]string{"goal": goal})
-	return servePost(ctx, client, serveURL(base, "/goal"), body)
+	return servePostForSession(ctx, client, serveURL(base, "/goal"), body, expectedPath)
 }
 
 func (a *App) SetRemoteTabQualityFloor(tabID, floor string) error {

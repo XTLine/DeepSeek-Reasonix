@@ -520,6 +520,83 @@ func TestRemoteRejectedResumeReconciliationCannotOverwriteNewerAdoption(t *testi
 	}
 }
 
+func TestRemoteRejectedResumeReconcilesReselectedCurrentSession(t *testing.T) {
+	const currentPath = "/sessions/current.jsonl"
+	const authoritativePath = "/sessions/authoritative.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		session: remoteTabSessionState{path: currentPath},
+		routing: remoteTabSessionRouting{currentPath: currentPath, pathRevision: 9, running: map[string]bool{}},
+	}
+	log := &eventLog{}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}, remoteEventHook: log.add}
+	route := a.beginRemoteTabProvisionalResume(tab.id, tab, client, tab.gen, currentPath)
+	if route.active || route.pathRevision != 9 {
+		t.Fatalf("reselection route = %+v, want inactive revision 9", route)
+	}
+	a.reconcileRemoteTabRejectedResume(tab.id, tab, client, tab.gen, route, serveSessionEntry{Path: authoritativePath}, errors.New("resume response lost"))
+	a.remoteTabMu.Lock()
+	got := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if got != authoritativePath {
+		t.Fatalf("reselected current route = %q, want authoritative %q", got, authoritativePath)
+	}
+	if log.count("remote-tab:"+tab.id+":state") != 1 {
+		t.Fatalf("authoritative reconciliation did not publish one ready barrier: %v", log.recorded())
+	}
+}
+
+func TestRemoteRejectedResumeRollbackCannotMarkNewerRouteErrored(t *testing.T) {
+	const previousPath = "/sessions/previous.jsonl"
+	const targetPath = "/sessions/target.jsonl"
+	const newerPath = "/sessions/newer.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		session: remoteTabSessionState{path: previousPath},
+		routing: remoteTabSessionRouting{currentPath: previousPath, running: map[string]bool{}},
+	}
+	log := &eventLog{}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}, remoteEventHook: log.add}
+	route := a.beginRemoteTabProvisionalResume(tab.id, tab, client, tab.gen, targetPath)
+	a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, newerPath, true)
+	eventsBefore := len(log.recorded())
+	a.reconcileRemoteTabRejectedResume(tab.id, tab, client, tab.gen, route, serveSessionEntry{Path: previousPath}, errors.New("resume response lost"))
+	a.remoteTabMu.Lock()
+	got := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if got != newerPath {
+		t.Fatalf("stale rollback replaced newer route with %q, want %q", got, newerPath)
+	}
+	if eventsAfter := len(log.recorded()); eventsAfter != eventsBefore {
+		t.Fatalf("stale rollback emitted %d events after newer adoption, want 0", eventsAfter-eventsBefore)
+	}
+}
+
+func TestRemoteReselectionSuccessCannotOverwriteNewerAdoption(t *testing.T) {
+	const previousPath = "/sessions/previous.jsonl"
+	const newerPath = "/sessions/newer.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		session: remoteTabSessionState{path: previousPath},
+		routing: remoteTabSessionRouting{currentPath: previousPath, pathRevision: 3, running: map[string]bool{}},
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	route := a.beginRemoteTabProvisionalResume(tab.id, tab, client, tab.gen, previousPath)
+	a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, newerPath, true)
+	if _, committed := a.commitRemoteTabResume(tab.id, tab, client, tab.gen, route, serveSessionEntry{Path: previousPath}, "Previous"); committed {
+		t.Fatal("late reselection success overwrote a newer route")
+	}
+	a.remoteTabMu.Lock()
+	got := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if got != newerPath {
+		t.Fatalf("late reselection changed route to %q, want %q", got, newerPath)
+	}
+}
+
 func TestExternalSessionAdoptionResetsAndSeedsForegroundRuntime(t *testing.T) {
 	const oldPath = "/sessions/old.jsonl"
 	const targetPath = "/sessions/target.jsonl"
