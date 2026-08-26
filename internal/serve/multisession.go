@@ -2,9 +2,12 @@ package serve
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -371,6 +374,134 @@ func (*replacedDuringBindError) Error() string { return "session changed during 
 func (s *Server) rollbackDetach(demoted *control.SessionLeaseKeeper) {
 	if demoted != nil && s.leases != nil {
 		s.leases.Adopt(demoted)
+	}
+}
+
+func (s *Server) resumeActiveSession(w http.ResponseWriter, r *http.Request, cur control.SessionAPI, realPath string) bool {
+	if filepath.Clean(cur.SessionPath()) == filepath.Clean(realPath) {
+		s.bc.SetCurrentSession(realPath)
+		w.WriteHeader(http.StatusNoContent)
+		return true
+	}
+	if detached := s.takeDetached(realPath); detached != nil {
+		if err := s.reattachDetached(cur, detached); err != nil {
+			s.renderBindError(w, err)
+			return true
+		}
+		w.WriteHeader(http.StatusNoContent)
+		s.replayPendingPromptsBroadcast()
+		return true
+	}
+	if !controllerHasActiveRuntimeWork(cur) {
+		return false
+	}
+	curCtrl, ok := cur.(*control.Controller)
+	if !ok {
+		http.Error(w, "cannot switch session while active work or background jobs are running", http.StatusConflict)
+		return true
+	}
+	err := s.busyDetach(r.Context(), curCtrl, realPath, func(next *control.Controller) error {
+		loaded, err := agent.LoadSession(realPath)
+		if err == nil {
+			next.Resume(loaded, realPath)
+		}
+		return err
+	})
+	if err != nil {
+		s.renderBindError(w, err)
+		return true
+	}
+	w.WriteHeader(http.StatusNoContent)
+	s.replayPendingPromptsBroadcast()
+	return true
+}
+
+// reattachDetached promotes a controller owned by the background registry.
+// bindMu is held, so publication and lease ownership move as one transaction.
+func (s *Server) reattachDetached(cur control.SessionAPI, detached *detachedSession) error {
+	curCtrl, _ := cur.(*control.Controller)
+	demoted := s.leases.Split()
+	s.leases.Adopt(detached.keeper)
+	detached.keeper = nil
+	if !s.publishControllerSwap(cur, detached.ctrl) {
+		detached.keeper = s.leases.Split()
+		s.leases.Adopt(demoted)
+		_, _ = s.registerDetached(detached.ctrl, detached.keeper, detached.tag)
+		return errReplacedDuringBind
+	}
+	if concrete, ok := detached.ctrl.(*control.Controller); ok {
+		concrete.SetOnSessionRecovered(s.sessionRecoveryHandler(concrete, s.leases))
+	}
+	if controllerHasActiveRuntimeWork(cur) {
+		if curCtrl == nil {
+			s.restoreReattach(cur, detached, demoted)
+			return fmt.Errorf("cannot switch session while active work or background jobs are running")
+		}
+		if _, err := s.registerDetached(curCtrl, demoted, nil); err != nil {
+			s.restoreReattach(cur, detached, demoted)
+			return err
+		}
+	} else {
+		if err := cur.Snapshot(); err != nil {
+			slog.Warn("serve: snapshot before background reattach", "err", err)
+		}
+		cur.Close()
+		if curCtrl != nil {
+			s.forgetSessionTag(curCtrl)
+		}
+		if demoted != nil {
+			demoted.Release()
+		}
+	}
+	if concrete, ok := detached.ctrl.(*control.Controller); ok {
+		s.setControllerPath(concrete, detached.ctrl.SessionPath())
+	} else {
+		s.bc.SetCurrentSession(detached.ctrl.SessionPath())
+	}
+	slog.Info("serve: background session re-attached", "session", detached.path, "running", controllerHasActiveRuntimeWork(detached.ctrl))
+	return nil
+}
+
+func (s *Server) restoreReattach(cur control.SessionAPI, detached *detachedSession, demoted *control.SessionLeaseKeeper) {
+	s.mu.Lock()
+	if s.ctrl == detached.ctrl {
+		s.ctrl = cur
+	}
+	s.mu.Unlock()
+	detached.keeper = s.leases.Split()
+	s.leases.Adopt(demoted)
+	_, _ = s.registerDetached(detached.ctrl, detached.keeper, detached.tag)
+}
+
+func (s *Server) publishControllerSwap(expect, next control.SessionAPI) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ctrl != expect {
+		return false
+	}
+	s.ctrl = next
+	return true
+}
+
+func (s *Server) replayPendingPromptsBroadcast() {
+	cur := s.ctl()
+	path := cur.SessionPath()
+	cur.ReplayPendingPromptsWith(func() event.Sink {
+		return event.FuncSink(func(e event.Event) {
+			e.SessionPath = path
+			s.bc.Emit(e)
+		})
+	})
+}
+
+func (s *Server) renderBindError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, agent.ErrSessionLeaseHeld):
+		http.Error(w, sessionInUseError(err), http.StatusConflict)
+	case errors.Is(err, errReplacedDuringBind):
+		http.Error(w, err.Error(), http.StatusConflict)
+	default:
+		http.Error(w, "switch session: "+err.Error(), http.StatusInternalServerError)
 	}
 }
 

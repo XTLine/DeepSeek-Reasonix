@@ -45,6 +45,24 @@ func TestServeClearSessionEndpoint(t *testing.T) {
 	}
 }
 
+func TestServeNewSessionEndpoint(t *testing.T) {
+	bc := NewBroadcaster()
+	ctrl := control.New(control.Options{Sink: bc, SessionDir: t.TempDir()})
+	srv := httptest.NewServer(New(ctrl, bc, config.ServeConfig{}).Handler())
+	defer srv.Close()
+	resp, err := http.Post(srv.URL+"/new", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("new session = %d, want 204", resp.StatusCode)
+	}
+	if got := resp.Header.Get(sessionPathHeader); got == "" || got != ctrl.SessionPath() {
+		t.Errorf("new session path header = %q, controller path %q", got, ctrl.SessionPath())
+	}
+}
+
 func TestServeManagementSubmitReturnsNoContent(t *testing.T) {
 	bc := NewBroadcaster()
 	ctrl := control.New(control.Options{Sink: bc})

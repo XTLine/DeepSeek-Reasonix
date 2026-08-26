@@ -20,72 +20,6 @@ import (
 
 const remoteTabStreamOpenStability = 50 * time.Millisecond
 
-// enterRemoteSession enters a fresh or named Serve session. Kept as the
-// compatibility wrapper used by focused bridge tests.
-func enterRemoteSession(ctx context.Context, client *http.Client, base string, opts RemoteTabOpenOptions) error {
-	_, err := enterRemoteSessionTarget(ctx, client, base, opts)
-	return err
-}
-
-func enterRemoteSessionTarget(ctx context.Context, client *http.Client, base string, opts RemoteTabOpenOptions) (serveSessionEntry, error) {
-	name := strings.TrimSpace(opts.SessionName)
-	if opts.NewSession {
-		path, err := servePostSessionPath(ctx, client, serveURL(base, "/new"), nil)
-		if err != nil {
-			return serveSessionEntry{}, err
-		}
-		return serveSessionEntry{Path: path, Current: true}, nil
-	}
-	if sessionPath := strings.TrimSpace(opts.SessionPath); sessionPath != "" {
-		body, err := json.Marshal(map[string]string{"path": sessionPath})
-		if err != nil {
-			return serveSessionEntry{}, err
-		}
-		if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
-			return serveSessionEntry{}, err
-		}
-		return serveSessionEntry{Name: name, Path: sessionPath, Title: strings.TrimSpace(opts.SessionTitle), Current: true}, nil
-	}
-	// An empty target is a focus-only attach. The managed Serve may already
-	// own an idle conversation shared with another client; attaching must not
-	// abandon it. Only an explicit NewSession request is allowed to POST /new.
-	if name == "" {
-		current, _ := serveCurrentSession(ctx, client, base)
-		return current, nil
-	}
-	sessions, err := serveSessions(ctx, client, base)
-	if err != nil {
-		return serveSessionEntry{}, err
-	}
-	for _, s := range sessions {
-		if s.Name == name {
-			body, err := json.Marshal(map[string]string{"path": s.Path})
-			if err != nil {
-				return serveSessionEntry{}, err
-			}
-			if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
-				return serveSessionEntry{}, err
-			}
-			s.Current = true
-			return s, nil
-		}
-	}
-	return serveSessionEntry{}, fmt.Errorf("remote session %q not found", name)
-}
-
-func serveCurrentSession(ctx context.Context, client *http.Client, base string) (serveSessionEntry, error) {
-	sessions, err := serveSessions(ctx, client, base)
-	if err != nil {
-		return serveSessionEntry{}, err
-	}
-	for _, session := range sessions {
-		if session.Current {
-			return session, nil
-		}
-	}
-	return serveSessionEntry{}, nil
-}
-
 func remoteSessionTransitionBusy(err error) bool {
 	if err == nil {
 		return false
@@ -168,16 +102,16 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	}
 	a.remoteTabMu.Lock()
 	if current := a.remoteTabs[tabID]; current == tab && current.gen == gen {
-		current.currentSessionPath = strings.TrimSpace(target.Path)
-		current.session.path = current.currentSessionPath
+		current.routing.currentPath = strings.TrimSpace(target.Path)
+		current.session.path = current.routing.currentPath
 		if name := strings.TrimSpace(target.Name); name != "" {
 			current.session.name = name
 		}
 		if title := strings.TrimSpace(target.Title); title != "" {
 			current.topicTitle = title
 		}
-		if current.runningSessions == nil {
-			current.runningSessions = map[string]bool{}
+		if current.routing.running == nil {
+			current.routing.running = map[string]bool{}
 		}
 	}
 	a.remoteTabMu.Unlock()
@@ -438,42 +372,6 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64, opene
 			a.goSafe("remoteTabReattach", func() { a.reattachRemoteTab(tabID) })
 		}
 	}
-}
-
-// routeRemoteTabFrame records background runtime without leaking its frames
-// into the foreground reducer. Untagged frames remain compatible with older
-// Serve binaries.
-func (a *App) routeRemoteTabFrame(tabID string, gen uint64, sessionPath, kind string) bool {
-	a.remoteTabMu.Lock()
-	tab := a.remoteTabs[tabID]
-	if tab == nil || tab.gen != gen {
-		a.remoteTabMu.Unlock()
-		return false
-	}
-	if tab.runningSessions == nil {
-		tab.runningSessions = map[string]bool{}
-	}
-	changed := false
-	if sessionPath != "" {
-		switch kind {
-		case "turn_started":
-			changed = !tab.runningSessions[sessionPath]
-			tab.runningSessions[sessionPath] = true
-		case "turn_done":
-			changed = tab.runningSessions[sessionPath]
-			tab.runningSessions[sessionPath] = false
-		}
-	}
-	foreground := sessionPath == "" || (tab.currentSessionPath != "" && sessionPath == tab.currentSessionPath)
-	backgroundChanged := changed && !foreground
-	meta := remoteTabMetaLocked(tab)
-	a.remoteTabMu.Unlock()
-	if backgroundChanged {
-		// ProjectTreeRemoteGroups uses this signal to refresh /sessions; its
-		// immediate overlay also reads runningSessions through the Go binding.
-		a.emitRemoteEvent("remote-tab:updated", meta)
-	}
-	return foreground
 }
 
 func (a *App) completeRemoteTabTurn(tabID string, gen uint64) {

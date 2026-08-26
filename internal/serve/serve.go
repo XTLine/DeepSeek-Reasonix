@@ -667,76 +667,6 @@ func (s *Server) logoWordmark(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(logoWordmarkSVG)
 }
 
-// sseKeepaliveInterval is how often the /events handler emits a `: ping`
-// SSE comment. Most reverse proxies (nginx, ALB, Cloudflare) close idle
-// upstream connections after 30–60 s; a long quiet turn (the agent
-// thinking, the model generating a single long response) easily hits
-// that window. The comment is one byte on the wire and is dropped by
-// the EventSource client, so it's a no-op for the consumer while it
-// keeps the TCP socket warm for the proxy.
-const sseKeepaliveInterval = 15 * time.Second
-
-// events streams the controller's event flow as SSE until the client
-// disconnects. Each event is one `data:` frame of the JSON wire form.
-func (s *Server) events(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	var ch <-chan []byte
-	var unsubscribe func()
-	// Subscribe and replay as one handoff. Prompt producers are serialized with
-	// this operation, so no original event can land between the two steps.
-	currentPath := s.ctl().SessionPath()
-	s.ctl().ReplayPendingPromptsWith(func() event.Sink {
-		if r.URL.Query().Get("all") == "1" {
-			ch, unsubscribe = s.bc.SubscribeAll()
-		} else {
-			ch, unsubscribe = s.bc.Subscribe()
-		}
-		return event.FuncSink(func(e event.Event) {
-			if currentPath != "" {
-				e.SessionPath = currentPath
-			}
-			s.bc.EmitTo(ch, e)
-		})
-	})
-	defer unsubscribe()
-
-	fmt.Fprint(w, ": connected\n\n") // open the stream immediately
-	flusher.Flush()
-
-	keepalive := time.NewTicker(sseKeepaliveInterval)
-	defer keepalive.Stop()
-
-	for {
-		select {
-		case data, ok := <-ch:
-			if !ok {
-				return
-			}
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
-		case <-keepalive.C:
-			// SSE comment lines start with `:` and are ignored by the
-			// client. Emit one every sseKeepaliveInterval so the
-			// upstream socket stays warm; without this, a long quiet
-			// turn (e.g. a model thinking) lets a proxy like nginx
-			// or an ALB close the idle connection and the next
-			// event arrives on a half-closed stream.
-			fmt.Fprint(w, ": ping\n\n")
-			flusher.Flush()
-		case <-r.Context().Done():
-			return
-		}
-	}
-}
-
 // submit runs raw user input as a turn (slash commands and @-references
 // resolved by the controller). Returns 202 — output arrives on the event stream.
 // An optional "format":"json_object" asks the model for structured JSON output
@@ -849,48 +779,6 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) newSession(w http.ResponseWriter, r *http.Request) {
-	// Session-path-changing entry point: serialize with /resume, /fork, and
-	// switchModel so the controller and the lease keeper move together.
-	s.bindMu.Lock()
-	defer s.bindMu.Unlock()
-	cur := s.ctl()
-	if controllerHasActiveRuntimeWork(cur) {
-		curCtrl, ok := cur.(*control.Controller)
-		if !ok {
-			http.Error(w, "cannot start a new session while active work or background jobs are running", http.StatusConflict)
-			return
-		}
-		if err := s.busyDetach(r.Context(), curCtrl, "", nil); err != nil {
-			s.renderBindError(w, err)
-			return
-		}
-		w.Header().Set(sessionPathHeader, s.ctl().SessionPath())
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	if err := cur.NewSession(); err != nil {
-		if control.IsSessionRotationBusy(err) {
-			http.Error(w, err.Error(), http.StatusConflict)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if ctrl, ok := cur.(*control.Controller); ok {
-		ctrl.EnsureSessionPath()
-		s.setControllerPath(ctrl, ctrl.SessionPath())
-	}
-	s.bc.ResetSessionPath(cur.SessionPath())
-	// Fresh path — the lease follows it; failure is theoretical but not silent.
-	if err := s.rebindSessionLease(cur.SessionPath()); err != nil {
-		http.Error(w, sessionInUseError(err), http.StatusConflict)
-		return
-	}
-	w.Header().Set(sessionPathHeader, cur.SessionPath())
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1215,40 +1103,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	s.bindMu.Lock()
 	defer s.bindMu.Unlock()
 	cur := s.ctl()
-	if filepath.Clean(cur.SessionPath()) == filepath.Clean(realPath) {
-		s.bc.SetCurrentSession(realPath)
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	if detached := s.takeDetached(realPath); detached != nil {
-		if err := s.reattachDetached(cur, detached); err != nil {
-			s.renderBindError(w, err)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-		s.replayPendingPromptsBroadcast()
-		return
-	}
-	if controllerHasActiveRuntimeWork(cur) {
-		curCtrl, ok := cur.(*control.Controller)
-		if !ok {
-			http.Error(w, "cannot switch session while active work or background jobs are running", http.StatusConflict)
-			return
-		}
-		err := s.busyDetach(r.Context(), curCtrl, realPath, func(next *control.Controller) error {
-			loaded, err := agent.LoadSession(realPath)
-			if err != nil {
-				return err
-			}
-			next.Resume(loaded, realPath)
-			return nil
-		})
-		if err != nil {
-			s.renderBindError(w, err)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-		s.replayPendingPromptsBroadcast()
+	if s.resumeActiveSession(w, r, cur, realPath) {
 		return
 	}
 	// Snapshot the current session before switching away — while this process
@@ -1292,98 +1147,6 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	s.bc.ResetSessionPath(realPath)
 	w.WriteHeader(http.StatusNoContent)
 	s.replayPendingPromptsBroadcast()
-}
-
-// reattachDetached promotes a controller owned by the background registry.
-// bindMu is held, so publication and lease ownership move as one transaction.
-func (s *Server) reattachDetached(cur control.SessionAPI, detached *detachedSession) error {
-	curCtrl, _ := cur.(*control.Controller)
-	demoted := s.leases.Split()
-	s.leases.Adopt(detached.keeper)
-	detached.keeper = nil
-	if !s.publishControllerSwap(cur, detached.ctrl) {
-		detached.keeper = s.leases.Split()
-		s.leases.Adopt(demoted)
-		_, _ = s.registerDetached(detached.ctrl, detached.keeper, detached.tag)
-		return errReplacedDuringBind
-	}
-
-	if concrete, ok := detached.ctrl.(*control.Controller); ok {
-		concrete.SetOnSessionRecovered(s.sessionRecoveryHandler(concrete, s.leases))
-	}
-	if controllerHasActiveRuntimeWork(cur) {
-		if curCtrl == nil {
-			s.restoreReattach(cur, detached, demoted)
-			return fmt.Errorf("cannot switch session while active work or background jobs are running")
-		}
-		if _, err := s.registerDetached(curCtrl, demoted, nil); err != nil {
-			s.restoreReattach(cur, detached, demoted)
-			return err
-		}
-	} else {
-		if err := cur.Snapshot(); err != nil {
-			slog.Warn("serve: snapshot before background reattach", "err", err)
-		}
-		cur.Close()
-		if curCtrl != nil {
-			s.forgetSessionTag(curCtrl)
-		}
-		if demoted != nil {
-			demoted.Release()
-		}
-	}
-
-	if concrete, ok := detached.ctrl.(*control.Controller); ok {
-		s.setControllerPath(concrete, detached.ctrl.SessionPath())
-	} else {
-		s.bc.SetCurrentSession(detached.ctrl.SessionPath())
-	}
-	slog.Info("serve: background session re-attached", "session", detached.path, "running", controllerHasActiveRuntimeWork(detached.ctrl))
-	return nil
-}
-
-// restoreReattach rolls a failed promotion back before it becomes observable.
-func (s *Server) restoreReattach(cur control.SessionAPI, detached *detachedSession, demoted *control.SessionLeaseKeeper) {
-	s.mu.Lock()
-	if s.ctrl == detached.ctrl {
-		s.ctrl = cur
-	}
-	s.mu.Unlock()
-	detached.keeper = s.leases.Split()
-	s.leases.Adopt(demoted)
-	_, _ = s.registerDetached(detached.ctrl, detached.keeper, detached.tag)
-}
-
-func (s *Server) publishControllerSwap(expect, next control.SessionAPI) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.ctrl != expect {
-		return false
-	}
-	s.ctrl = next
-	return true
-}
-
-func (s *Server) replayPendingPromptsBroadcast() {
-	cur := s.ctl()
-	path := cur.SessionPath()
-	cur.ReplayPendingPromptsWith(func() event.Sink {
-		return event.FuncSink(func(e event.Event) {
-			e.SessionPath = path
-			s.bc.Emit(e)
-		})
-	})
-}
-
-func (s *Server) renderBindError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, agent.ErrSessionLeaseHeld):
-		http.Error(w, sessionInUseError(err), http.StatusConflict)
-	case errors.Is(err, errReplacedDuringBind):
-		http.Error(w, err.Error(), http.StatusConflict)
-	default:
-		http.Error(w, "switch session: "+err.Error(), http.StatusInternalServerError)
-	}
 }
 
 // forget deletes a saved memory by name.

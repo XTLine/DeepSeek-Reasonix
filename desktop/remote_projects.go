@@ -88,10 +88,8 @@ type remoteTab struct {
 	// Transient runtime state is projected into TabMeta even while this tab is
 	// inactive, matching the local tab strip's running/prompt/job indicators.
 	runtime remoteTabRuntimeState
-	// currentSessionPath fences the all-session SSE stream. runningSessions
-	// retains background turn state for the project-tree rows.
-	currentSessionPath string
-	runningSessions    map[string]bool
+	// routing fences all-session SSE and retains background project-tree state.
+	routing remoteTabSessionRouting
 }
 
 type remoteTabRuntimeState struct {
@@ -378,7 +376,7 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 		id: tabID, ref: ref, state: "connecting",
 		session:   remoteTabSessionState{newSession: opts.NewSession, name: strings.TrimSpace(opts.SessionName), path: strings.TrimSpace(opts.SessionPath)},
 		hostLabel: host.Name, topicTitle: title, model: model,
-		currentSessionPath: strings.TrimSpace(opts.SessionPath), runningSessions: map[string]bool{},
+		routing: remoteTabSessionRouting{currentPath: strings.TrimSpace(opts.SessionPath), running: map[string]bool{}},
 	}
 
 	// Reuse-or-insert is atomic so concurrent opens cannot create two sessions.

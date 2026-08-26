@@ -160,11 +160,11 @@ func (a *App) recordRemoteTabSessionStatus(tabID string, client *http.Client, ge
 	}
 	if payload.Running != nil {
 		tab.runtime.running = *payload.Running
-		if tab.currentSessionPath != "" {
-			if tab.runningSessions == nil {
-				tab.runningSessions = map[string]bool{}
+		if tab.routing.currentPath != "" {
+			if tab.routing.running == nil {
+				tab.routing.running = map[string]bool{}
 			}
-			tab.runningSessions[tab.currentSessionPath] = *payload.Running
+			tab.routing.running[tab.routing.currentPath] = *payload.Running
 		}
 	}
 	if payload.PendingPrompt != nil {

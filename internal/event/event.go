@@ -574,12 +574,8 @@ type Event struct {
 	RetryMax        int                       // Retrying: total attempts before giving up
 	RetryScope      RetryScope                // Retrying: optional "headers" | "stream"; empty for older emitters
 	StreamAttempt   StreamAttemptInfo         // StreamAttempt lifecycle
-	// ItemID correlates Steer / unapplied-steer / TurnDone with a durable
-	// session-inbox entry. Empty for legacy callers that still use text only.
-	ItemID string
-	// SessionPath tags the session file this event belongs to. Empty on
-	// single-session surfaces; multi-session Serve stamps it at the sink so
-	// subscribers can route frames without changing older clients.
+	// ItemID correlates durable inbox events; SessionPath routes Serve frames.
+	ItemID      string
 	SessionPath string
 	Workspace   *WorkspaceChangedPayload // WorkspaceChanged (host-local)
 	// PhaseName is set on TurnPhase events (working|checking|verifying|reviewing).

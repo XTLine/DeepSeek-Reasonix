@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -223,10 +224,8 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 		if tab.ref.HostID != hostID || tab.ref.Workspace != workspace {
 			continue
 		}
-		liveCurrentPath = tab.currentSessionPath
-		for path, running := range tab.runningSessions {
-			liveRunning[path] = running
-		}
+		liveCurrentPath = tab.routing.currentPath
+		maps.Copy(liveRunning, tab.routing.running)
 		break
 	}
 	a.remoteTabMu.Unlock()
@@ -260,7 +259,7 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 		var blank *RemoteSessionView
 		for _, tab := range a.remoteTabs {
 			if tab.ref.HostID == hostID && tab.ref.Workspace == workspace && tab.session.reset {
-				blank = &RemoteSessionView{Name: "", Path: tab.currentSessionPath, Title: tab.topicTitle, Current: true, Running: tab.runtime.running, LastActivityAt: time.Now().UnixMilli()}
+				blank = &RemoteSessionView{Name: "", Path: tab.routing.currentPath, Title: tab.topicTitle, Current: true, Running: tab.runtime.running, LastActivityAt: time.Now().UnixMilli()}
 				break
 			}
 		}

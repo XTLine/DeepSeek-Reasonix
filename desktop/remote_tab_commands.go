@@ -160,10 +160,10 @@ func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle 
 		current.session.newSession = false
 		current.session.name = strings.TrimSpace(target.Name)
 		current.session.path = target.Path
-		current.currentSessionPath = target.Path
+		current.routing.currentPath = target.Path
 		current.pendingEvents = nil
 		current.runtime.revision++
-		current.runtime.running = target.Running || current.runningSessions[target.Path]
+		current.runtime.running = target.Running || current.routing.running[target.Path]
 		current.runtime.pendingPrompt = false
 		current.runtime.cancelRequested = false
 		current.runtime.cancellable = current.runtime.running
@@ -469,7 +469,7 @@ func (a *App) refreshRemoteTabTitle(tabID string) {
 		current.session.newSession = false
 		current.session.name = entry.Name
 		current.session.path = entry.Path
-		current.currentSessionPath = entry.Path
+		current.routing.currentPath = entry.Path
 		meta := remoteTabMetaLocked(current)
 		a.remoteTabMu.Unlock()
 		if changed {
@@ -514,7 +514,7 @@ func (a *App) rotateRemoteTabSession(tabID, path string) error {
 		tab.session.newSession = true
 		tab.session.name = ""
 		tab.session.path = ""
-		tab.currentSessionPath = ""
+		tab.routing.currentPath = ""
 		a.remoteTabMu.Unlock()
 		return nil
 	}
@@ -542,7 +542,7 @@ func (a *App) rotateRemoteTabSession(tabID, path string) error {
 	tab.session.newSession = true
 	tab.session.name = target.Name
 	tab.session.path = target.Path
-	tab.currentSessionPath = target.Path
+	tab.routing.currentPath = target.Path
 	tab.pendingEvents = nil
 	tab.runtime.revision++
 	tab.runtime.running = false

@@ -63,3 +63,42 @@ func (s *Server) clearSession(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set(sessionPathHeader, s.ctl().SessionPath())
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (s *Server) newSession(w http.ResponseWriter, r *http.Request) {
+	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
+	cur := s.ctl()
+	if controllerHasActiveRuntimeWork(cur) {
+		curCtrl, ok := cur.(*control.Controller)
+		if !ok {
+			http.Error(w, "cannot start a new session while active work or background jobs are running", http.StatusConflict)
+			return
+		}
+		if err := s.busyDetach(r.Context(), curCtrl, "", nil); err != nil {
+			s.renderBindError(w, err)
+			return
+		}
+		w.Header().Set(sessionPathHeader, s.ctl().SessionPath())
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := cur.NewSession(); err != nil {
+		if control.IsSessionRotationBusy(err) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if ctrl, ok := cur.(*control.Controller); ok {
+		ctrl.EnsureSessionPath()
+		s.setControllerPath(ctrl, ctrl.SessionPath())
+	}
+	s.bc.ResetSessionPath(cur.SessionPath())
+	if err := s.rebindSessionLease(cur.SessionPath()); err != nil {
+		http.Error(w, sessionInUseError(err), http.StatusConflict)
+		return
+	}
+	w.Header().Set(sessionPathHeader, cur.SessionPath())
+	w.WriteHeader(http.StatusNoContent)
+}

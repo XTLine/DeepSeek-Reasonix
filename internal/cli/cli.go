@@ -813,8 +813,7 @@ func runServeWithOptions(args []string, opts serveRunOptions) int {
 	portFile := fs.String("port-file", "", "write the actual bound listen address (host:port) to this file after binding")
 	tokenFile := fs.String("token-file", "", "read the auth=token pre-shared token from this file (overrides --token; keeps the secret out of argv)")
 	pidFile := fs.String("pid-file", "", "write the server process id to this file")
-	_ = fs.Bool("session-events", false, "tag session events and finish switched-away turns in background (reasonix-serve-caps-20260822c)")
-	_ = fs.Bool("detached-heal", false, "retire background sessions after provider credential-channel repair")
+	registerServeCapabilityFlags(fs)
 	openBrowser := fs.Bool("open", opts.openBrowser, "open the Web UI in the default browser")
 	noOpen := fs.Bool("no-open", false, "do not open the Web UI in the default browser")
 	if code, ok := parseCommandFlags(fs, args); !ok {
@@ -857,9 +856,7 @@ func runServeWithOptions(args []string, opts serveRunOptions) int {
 	}
 
 	ctx := context.Background()
-	bc := serve.NewBroadcaster()
-	sessionTag := serve.NewSessionTagSink(bc)
-	cfg, _ := config.Load()
+	bc, sessionTag, cfg := newServeBootstrap()
 
 	// Build serve config, merging CLI flags over config file.
 	serveCfg := serveConfigWithCommandDefaults(opts.command, authExplicit, cfg.Serve)
@@ -957,7 +954,6 @@ func runServeWithOptions(args []string, opts serveRunOptions) int {
 		ctrl.SetFreshSessionPath(freshPath)
 	}
 	ctrl.EnsureSessionPath()
-	sessionTag.SetPath(ctrl.SessionPath())
 	// Fresh sessions take the lease too (defensive: the path is brand new); a
 	// resumed path is already held, making this a no-op.
 	if err := rebindCLIControllerAuthority(leases, ctrl); err != nil {
@@ -965,9 +961,7 @@ func runServeWithOptions(args []string, opts serveRunOptions) int {
 		return 1
 	}
 
-	srv := serve.New(ctrl, bc, serveCfg)
-	srv.RegisterSessionTag(ctrl, sessionTag)
-	_ = srv.SetSessionLeases(leases) // same live keeper was bound above
+	srv := newCLIMultiSessionServer(ctrl, bc, sessionTag, serveCfg, leases)
 	defer srv.CloseBackground()
 	return runServeFrontend(ctrl, srv, serveCfg, serveFrontendOptions{
 		command: opts.command, address: *addr,

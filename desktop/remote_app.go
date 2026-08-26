@@ -621,11 +621,7 @@ type managedHost struct {
 	credPort atomic.Int64
 	// credFallbackAt throttles legacy-serve replacement per workspace.
 	credFallbackAt map[string]int64
-	// credWatchMu protects the watchdog lifecycle and its recovery workspace.
-	// It is separate from the manager lock so host teardown can cancel safely.
-	credWatchMu     sync.Mutex
-	credWatchCancel context.CancelFunc
-	credWorkspace   string
+	credWatch      credentialWatchdog
 }
 
 // serveEntry is one workspace's serve registration: the published view (with
@@ -940,14 +936,7 @@ func closeManagedHost(mh *managedHost) {
 	if mh == nil {
 		return
 	}
-	mh.credWatchMu.Lock()
-	watchCancel := mh.credWatchCancel
-	mh.credWatchCancel = nil
-	mh.credWorkspace = ""
-	mh.credWatchMu.Unlock()
-	if watchCancel != nil {
-		watchCancel()
-	}
+	mh.credWatch.stop()
 	if mh.cancel != nil {
 		mh.cancel()
 	}
