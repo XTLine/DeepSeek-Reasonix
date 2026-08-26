@@ -72,8 +72,16 @@ func ensureBinary(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, h
 // install/upload path replaces it. minVersion is accepted for signature
 // stability but the flag probe is authoritative.
 func locate(ctx context.Context, conn Conn, uploaded, minVersion string) (bin, version string) {
+	return locateWithCommand(ctx, conn, LocateCommand(uploaded), minVersion)
+}
+
+func locateUploaded(ctx context.Context, conn Conn, uploaded, minVersion string) (bin, version string) {
+	return locateWithCommand(ctx, conn, LocateUploadedCommand(uploaded), minVersion)
+}
+
+func locateWithCommand(ctx context.Context, conn Conn, command, minVersion string) (bin, version string) {
 	_ = minVersion
-	res, err := conn.Exec(ctx, LocateCommand(uploaded))
+	res, err := conn.Exec(ctx, command)
 	if err != nil {
 		return "", ""
 	}
@@ -156,7 +164,7 @@ func installBinaryBytes(ctx context.Context, conn Conn, fs *sftpfs.FS, data []by
 	if err := fs.WriteFileAtomic(ctx, uploaded, data, 0o755); err != nil {
 		return "", "", fmt.Errorf("bootstrap: upload binary: %w", err)
 	}
-	loc, ver := locate(ctx, conn, uploaded, minVersion)
+	loc, ver := locateUploaded(ctx, conn, uploaded, minVersion)
 	if loc == "" {
 		return "", "", fmt.Errorf("bootstrap: uploaded binary not runnable on remote")
 	}

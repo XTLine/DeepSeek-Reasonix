@@ -124,17 +124,36 @@ const serveCapsToken = "reasonix-serve-caps-20260822c"
 // capabilities required by the desktop. Capability probes are authoritative:
 // an old binary can have an otherwise acceptable product version.
 func LocateCommand(uploadedBin string) string {
+	return locateCommand(uploadedBin, false)
+}
+
+// LocateUploadedCommand probes exactly the freshly written managed binary.
+// A stale PATH candidate must not shadow an upload performed to repair missing
+// Serve capabilities.
+func LocateUploadedCommand(uploadedBin string) string {
+	return locateCommand(uploadedBin, true)
+}
+
+func locateCommand(uploadedBin string, preferUploaded bool) string {
+	resolve := fmt.Sprintf(
+		"BIN=\"$(command -v reasonix 2>/dev/null)\"; if [ -z \"$BIN\" ] && [ -x %s ]; then BIN=%s; fi; ",
+		shellQuote(uploadedBin), shellQuote(uploadedBin),
+	)
+	fallback := "if [ -z \"$BIN\" ]; then P=\"$(npm prefix -g 2>/dev/null)\"; if [ -n \"$P\" ] && [ -x \"$P/bin/reasonix\" ]; then BIN=\"$P/bin/reasonix\"; fi; fi; "
+	if preferUploaded {
+		resolve = fmt.Sprintf("BIN=; if [ -x %s ]; then BIN=%s; fi; ", shellQuote(uploadedBin), shellQuote(uploadedBin))
+		fallback = ""
+	}
 	return fmt.Sprintf(
-		"BIN=\"$(command -v reasonix 2>/dev/null)\"; "+
-			"if [ -z \"$BIN\" ] && [ -x %s ]; then BIN=%s; fi; "+
-			"if [ -z \"$BIN\" ]; then P=\"$(npm prefix -g 2>/dev/null)\"; if [ -n \"$P\" ] && [ -x \"$P/bin/reasonix\" ]; then BIN=\"$P/bin/reasonix\"; fi; fi; "+
+		resolve+
+			fallback+
 			"echo \"$BIN\"; "+
 			"if [ -n \"$BIN\" ]; then \"$BIN\" --version 2>/dev/null; "+
 			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo portfile:yes; else echo portfile:no; fi; "+
 			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo sessionevents:yes; else echo sessionevents:no; fi; "+
 			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo detachedheal:yes; else echo detachedheal:no; fi; "+
 			"if \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo caps:yes; else echo caps:no; fi; fi",
-		shellQuote(uploadedBin), shellQuote(uploadedBin), shellQuote(servePortFileMarker), shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(serveCapsToken),
+		shellQuote(servePortFileMarker), shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(serveCapsToken),
 	)
 }
 

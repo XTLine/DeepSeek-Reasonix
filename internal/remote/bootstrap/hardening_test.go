@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -126,10 +127,9 @@ func TestAutoInstallDownloadsVerifiedCrossPlatformBinaryAfterNPMFailure(t *testi
 		switch {
 		case strings.Contains(cmd, "npm i -g reasonix"):
 			return remote.ExecResult{Stdout: []byte("npm: command not found"), ExitCode: 127}, nil
+		case strings.Contains(cmd, "BIN=; if [ -x "+shellQuote(uploaded)):
+			return ok(uploaded + "\nreasonix v1.2.3\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
 		case strings.Contains(cmd, "command -v reasonix"):
-			if _, err := os.Stat(uploaded); err == nil {
-				return ok(uploaded + "\nreasonix v1.2.3\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
-			}
 			return ok("\n")
 		default:
 			return ok("")
@@ -152,5 +152,39 @@ func TestAutoInstallDownloadsVerifiedCrossPlatformBinaryAfterNPMFailure(t *testi
 	}
 	if !fetched || bin != uploaded {
 		t.Fatalf("bin=%q fetched=%v", bin, fetched)
+	}
+}
+
+func TestUploadInstallProbesFreshBinaryBeforeStalePathCandidate(t *testing.T) {
+	skipOnWindows(t)
+	root := t.TempDir()
+	uploaded := uploadedBinPath(root)
+	local := filepath.Join(root, "local-reasonix")
+	if err := os.WriteFile(local, []byte("fresh-cli"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	probedUpload := false
+	conn := newFakeConn(t, root, func(cmd string) (remote.ExecResult, error) {
+		switch {
+		case strings.Contains(cmd, "command -v reasonix"):
+			return ok("/usr/bin/reasonix\nreasonix v1.0.0\nportfile:yes\nsessionevents:no\ndetachedheal:no\ncaps:no\n")
+		case strings.Contains(cmd, "BIN=; if [ -x "+shellQuote(uploaded)):
+			probedUpload = true
+			if _, err := os.Stat(uploaded); err != nil {
+				t.Fatalf("uploaded probe ran before binary write: %v", err)
+			}
+			return ok(uploaded + "\nreasonix v9.9.0\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
+		default:
+			return ok("")
+		}
+	})
+	bin, _, err := ensureBinary(context.Background(), conn, conn.fs, Options{
+		Install: InstallUpload, LocalBinary: local, LocalGOOS: "linux", LocalGOARCH: "amd64",
+	}, root, "linux", "amd64", pathsFor(root, root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !probedUpload || bin != uploaded {
+		t.Fatalf("fresh upload result = bin:%q probed:%v, want %q/true", bin, probedUpload, uploaded)
 	}
 }

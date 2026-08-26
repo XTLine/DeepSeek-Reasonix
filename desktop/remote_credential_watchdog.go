@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -146,15 +147,19 @@ func (m *desktopRemoteManager) healCredentialChannelWatchdog(watchCtx context.Co
 	opCtx, opCancel := managedOperationContext(watchCtx, mh)
 	defer opCancel()
 	c := mh.client
-	log.Printf("[remote] credential watchdog: channel broken, re-healing host=%s ws=%s", hostID, workspace)
+	workspaces := m.trackedCredentialWorkspaces(hostID, workspace)
+	log.Printf("[remote] credential watchdog: channel broken, re-healing host=%s workspaces=%d", hostID, len(workspaces))
 	_ = c.Forwards().Remove("cred-proxy:" + hostID)
-	opts, err := m.credentialProxySetup(c, hostID, workspace)
-	if err != nil {
-		log.Printf("[remote] credential watchdog: setup FAILED host=%s err=%v", hostID, err)
-		return
-	}
 	healCtx, healCancel := context.WithTimeout(opCtx, 30*time.Second)
-	_, err = bootstrap.HealCredentialProvider(healCtx, c, opts)
+	err = healTrackedCredentialProviders(healCtx, workspaces,
+		func(workspace string) (*bootstrap.CredentialProxyOptions, error) {
+			return m.credentialProxySetup(c, hostID, workspace)
+		},
+		func(ctx context.Context, opts *bootstrap.CredentialProxyOptions) error {
+			_, healErr := bootstrap.HealCredentialProvider(ctx, c, opts)
+			return healErr
+		},
+	)
 	healCancel()
 	if err != nil {
 		log.Printf("[remote] credential watchdog: config heal FAILED host=%s err=%v", hostID, err)
@@ -184,4 +189,17 @@ func (m *desktopRemoteManager) healCredentialChannelWatchdog(watchCtx context.Co
 	}
 	mh.credPort.Store(int64(port))
 	log.Printf("[remote] credential watchdog: channel re-healed host=%s port=%d", hostID, port)
+}
+
+func healTrackedCredentialProviders(ctx context.Context, workspaces []string, setup func(string) (*bootstrap.CredentialProxyOptions, error), heal func(context.Context, *bootstrap.CredentialProxyOptions) error) error {
+	for _, workspace := range workspaces {
+		opts, err := setup(workspace)
+		if err != nil {
+			return fmt.Errorf("workspace %q setup: %w", workspace, err)
+		}
+		if err := heal(ctx, opts); err != nil {
+			return fmt.Errorf("workspace %q heal: %w", workspace, err)
+		}
+	}
+	return nil
 }

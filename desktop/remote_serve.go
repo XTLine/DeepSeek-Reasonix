@@ -453,6 +453,21 @@ func (m *desktopRemoteManager) credentialProxySetup(c desktopSSHClient, hostID, 
 }
 
 func (m *desktopRemoteManager) registerTrackedCredentialRoutes(app *App, hostID, workspace string) (credentialProxyRouteInfo, error) {
+	workspaces := m.trackedCredentialWorkspaces(hostID, workspace)
+	var info credentialProxyRouteInfo
+	for index, trackedWorkspace := range workspaces {
+		registered, err := app.registerCredentialProxyRoute(hostID, trackedWorkspace)
+		if err != nil {
+			return credentialProxyRouteInfo{}, err
+		}
+		if index == 0 {
+			info = registered
+		}
+	}
+	return info, nil
+}
+
+func (m *desktopRemoteManager) trackedCredentialWorkspaces(hostID, workspace string) []string {
 	workspaces := []string{workspace}
 	m.mu.Lock()
 	if managed := m.hosts[hostID]; managed != nil {
@@ -466,17 +481,7 @@ func (m *desktopRemoteManager) registerTrackedCredentialRoutes(app *App, hostID,
 		workspaces = append(workspaces, peers...)
 	}
 	m.mu.Unlock()
-	var info credentialProxyRouteInfo
-	for index, trackedWorkspace := range workspaces {
-		registered, err := app.registerCredentialProxyRoute(hostID, trackedWorkspace)
-		if err != nil {
-			return credentialProxyRouteInfo{}, err
-		}
-		if index == 0 {
-			info = registered
-		}
-	}
-	return info, nil
+	return workspaces
 }
 
 // ensureCredentialProxyForward opens (idempotently) the reverse tunnel: the

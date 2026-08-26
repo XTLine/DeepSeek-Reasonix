@@ -174,6 +174,14 @@ func TestLocateCommandProbesRequiredServeCapabilities(t *testing.T) {
 	}
 }
 
+func TestLocateUploadedCommandBypassesPathCandidates(t *testing.T) {
+	uploaded := "/home/x/.reasonix/remote/bin/reasonix"
+	cmd := LocateUploadedCommand(uploaded)
+	if !strings.Contains(cmd, "BIN='"+uploaded+"'") || strings.Contains(cmd, "command -v reasonix") || strings.Contains(cmd, "npm prefix") {
+		t.Fatalf("uploaded probe did not target only the managed binary:\n%s", cmd)
+	}
+}
+
 func TestSupportsRequiredServeCapabilitiesCommand(t *testing.T) {
 	cmd := SupportsRequiredServeCapabilitiesCommand(42)
 	for _, want := range []string{"/proc/42/exe", "ps -p 42", "session-events", "detached-heal", serveCapsToken} {
