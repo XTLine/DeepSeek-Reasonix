@@ -9,14 +9,18 @@ import (
 )
 
 func TestNewerTerminalStateOverridesStaleRunningListingRow(t *testing.T) {
-	testTerminalListingRace(t, false)
+	testTerminalListingRace(t, false, false)
 }
 
 func TestNewerTerminalStateRetainsBackgroundRunningListingRow(t *testing.T) {
-	testTerminalListingRace(t, true)
+	testTerminalListingRace(t, true, false)
 }
 
-func testTerminalListingRace(t *testing.T, serveStillRunning bool) {
+func TestRecoveredTerminalPathRetriesStaleRunningListingRow(t *testing.T) {
+	testTerminalListingRace(t, false, true)
+}
+
+func testTerminalListingRace(t *testing.T, serveStillRunning, recovered bool) {
 	t.Helper()
 	const path = "/sessions/current.jsonl"
 	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "current", Path: path, Current: true, Running: true}})
@@ -46,11 +50,15 @@ func testTerminalListingRace(t *testing.T, serveStillRunning bool) {
 	a.remoteTabMu.Lock()
 	gen := a.remoteTabs[meta.ID].gen
 	a.remoteTabMu.Unlock()
-	if !a.routeRemoteTabFrame(meta.ID, gen, path, "turn_done") {
-		t.Fatal("current terminal frame was not routed")
+	terminalPath := path
+	if recovered {
+		terminalPath = "/sessions/current-recovery.jsonl"
+	}
+	if routed := a.routeRemoteTabFrame(meta.ID, gen, terminalPath, "turn_done"); routed != !recovered {
+		t.Fatalf("terminal route result = %v, recovered=%v", routed, recovered)
 	}
 	fs.mu.Lock()
-	fs.sessions[0].Running = serveStillRunning
+	fs.sessions[0] = serveSessionEntry{Name: "current", Path: terminalPath, Current: true, Running: serveStillRunning}
 	fs.mu.Unlock()
 	closeTestSignal(release)
 	var got result
@@ -63,7 +71,7 @@ func testTerminalListingRace(t *testing.T, serveStillRunning bool) {
 		t.Fatal(got.err)
 	}
 	for _, session := range got.sessions {
-		if session.Path == path && session.Running == serveStillRunning {
+		if session.Path == terminalPath && session.Running == serveStillRunning {
 			return
 		}
 	}

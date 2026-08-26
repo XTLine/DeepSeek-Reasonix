@@ -411,8 +411,15 @@ listingAttempt:
 }
 
 func remoteSessionRunningConflict(entries []serveSessionEntry, live map[string]bool) bool {
+	listedPaths := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
+		listedPaths[entry.Path] = struct{}{}
 		if running, ok := live[entry.Path]; entry.Running && ok && !running {
+			return true
+		}
+	}
+	for path, running := range live {
+		if _, listed := listedPaths[path]; !running && !listed {
 			return true
 		}
 	}
