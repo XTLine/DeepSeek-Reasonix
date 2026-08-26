@@ -413,6 +413,12 @@ func TestRemoteStatusAdoptionWaitsForFramePublication(t *testing.T) {
 	if frameIndex < 0 || readyIndex < frameIndex {
 		t.Fatalf("status ready barrier overtook the current frame: %s", events)
 	}
+	a.remoteTabMu.Lock()
+	adoptedPath := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if adoptedPath != laterPath {
+		t.Fatalf("status route = %q, want %q", adoptedPath, laterPath)
+	}
 }
 
 func TestRemoteRejectedResumeReconciliationWaitsForFramePublication(t *testing.T) {
