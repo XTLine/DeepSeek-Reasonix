@@ -349,35 +349,7 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64, opene
 		if a.bufferRemoteTabResumeFrame(tabID, gen, framePath, kind, json.RawMessage(frame)) {
 			continue
 		}
-		refreshRuntime := false
-		switch kind {
-		case "turn_started":
-			a.recordRemoteTabTurnStarted(tabID, gen, json.RawMessage(frame))
-			refreshRuntime = true
-		case "approval_request", "ask_request":
-			a.cacheRemotePendingEvent(tabID, gen, kind, json.RawMessage(frame))
-			refreshRuntime = true
-		case "extension_surface":
-			refreshRuntime = a.cacheRemotePendingExtensionForm(tabID, gen, json.RawMessage(frame))
-		case "turn_done":
-			a.completeRemoteTabTurn(tabID, gen)
-		}
-		a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:event", tabID), json.RawMessage(frame))
-		if refreshRuntime {
-			a.goSafe("remoteTabRuntimeStatus", func() { _, _ = a.RemoteTabStatus(tabID) })
-		}
-		if kind == "turn_done" {
-			// Capture the durable session name immediately, closing the window
-			// where a replacement Serve could otherwise lose a just-finished
-			// conversation before the slower generated-title refresh runs.
-			a.goSafe("remoteTabTitle", func() {
-				_, _ = a.RemoteTabStatus(tabID)
-				// The serve generates the session title from the finished
-				// conversation; pick it up shortly after the turn settles.
-				time.Sleep(1500 * time.Millisecond)
-				a.refreshRemoteTabTitle(tabID)
-			})
-		}
+		a.publishRemoteTabFrame(tabID, gen, kind, json.RawMessage(frame))
 	}
 	if err := scanner.Err(); err != nil {
 		log.Printf("[remote] remoteTabPump: READ-EXIT tab=%s gen=%d err=%v ctxErr=%v", tabID, gen, err, ctx.Err())
@@ -388,6 +360,41 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64, opene
 		if startRetry := a.reconnectRemoteTabGeneration(tabID, gen); startRetry {
 			a.goSafe("remoteTabReattach", func() { a.reattachRemoteTab(tabID) })
 		}
+	}
+}
+
+func (a *App) publishRemoteTabFrame(tabID string, gen uint64, kind string, frame json.RawMessage) {
+	if !a.remoteTabGenerationCurrent(tabID, gen) {
+		return
+	}
+	refreshRuntime := false
+	switch kind {
+	case "turn_started":
+		a.recordRemoteTabTurnStarted(tabID, gen, frame)
+		refreshRuntime = true
+	case "approval_request", "ask_request":
+		a.cacheRemotePendingEvent(tabID, gen, kind, frame)
+		refreshRuntime = true
+	case "extension_surface":
+		refreshRuntime = a.cacheRemotePendingExtensionForm(tabID, gen, frame)
+	case "turn_done":
+		a.completeRemoteTabTurn(tabID, gen)
+	}
+	a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:event", tabID), frame)
+	if refreshRuntime {
+		a.goSafe("remoteTabRuntimeStatus", func() { _, _ = a.RemoteTabStatus(tabID) })
+	}
+	if kind == "turn_done" {
+		// Capture the durable session name immediately, closing the window
+		// where a replacement Serve could otherwise lose a just-finished
+		// conversation before the slower generated-title refresh runs.
+		a.goSafe("remoteTabTitle", func() {
+			_, _ = a.RemoteTabStatus(tabID)
+			// The serve generates the session title from the finished
+			// conversation; pick it up shortly after the turn settles.
+			time.Sleep(1500 * time.Millisecond)
+			a.refreshRemoteTabTitle(tabID)
+		})
 	}
 }
 

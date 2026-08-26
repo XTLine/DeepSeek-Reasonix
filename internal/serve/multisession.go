@@ -55,6 +55,16 @@ func (s *sessionTagSink) PrimePath(path string) {
 	s.mu.Unlock()
 }
 
+// BufferPath retags synchronous in-place Resume events but withholds them until
+// Serve publishes the matching foreground route. Unlike PrimePath, it also
+// pauses a sink that was already active for the previous session.
+func (s *sessionTagSink) BufferPath(path string) {
+	s.mu.Lock()
+	s.path = canonicalSessionPath(path)
+	s.active = false
+	s.mu.Unlock()
+}
+
 func canonicalSessionPath(path string) string {
 	if path != "" {
 		return agent.CanonicalSessionPath(path)

@@ -174,3 +174,35 @@ func TestBroadcasterReservesCapacityForTerminalFrames(t *testing.T) {
 		t.Fatal("slow subscriber lost the terminal frame after a delta flood")
 	}
 }
+
+func TestBroadcasterEvictsRecoverableFramesForTerminalEvents(t *testing.T) {
+	b := NewBroadcaster()
+	ch, cancel := b.SubscribeAll()
+	defer cancel()
+	for range subscriberBufferSize - subscriberPriorityReserve {
+		b.Emit(event.Event{Kind: event.Text, Text: "delta"})
+	}
+	for range subscriberPriorityReserve {
+		b.Emit(event.Event{Kind: event.Notice, Text: "priority"})
+	}
+	if got := len(ch); got != subscriberBufferSize {
+		t.Fatalf("saturated subscriber length = %d, want %d", got, subscriberBufferSize)
+	}
+
+	b.Emit(event.Event{Kind: event.TurnDone})
+	b.Emit(event.Event{Kind: event.SessionChanged, SessionPath: "/sessions/next.jsonl"})
+
+	found := map[string]bool{}
+	for len(ch) > 0 {
+		var frame eventwire.Event
+		if err := json.Unmarshal(<-ch, &frame); err != nil {
+			t.Fatal(err)
+		}
+		found[frame.Kind] = true
+	}
+	for _, kind := range []string{"turn_done", "session_changed"} {
+		if !found[kind] {
+			t.Fatalf("slow subscriber lost %s after priority reserve saturation", kind)
+		}
+	}
+}

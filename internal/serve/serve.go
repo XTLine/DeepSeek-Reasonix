@@ -1153,18 +1153,8 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "load session: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if hook := resumeBindHookForTest; hook != nil {
-		hook()
-	}
-	cur.Resume(loaded, realPath)
-	if ctrl, ok := cur.(*control.Controller); ok {
-		if s.leases != nil {
-			if err := s.leases.BindControllerAuthority(ctrl); err != nil {
-				http.Error(w, "session authority: unable to bind resumed session", http.StatusInternalServerError)
-				return
-			}
-		}
-		s.setControllerPath(ctrl, realPath)
+	if !s.commitLoadedResume(w, cur, loaded, realPath) {
+		return
 	}
 	s.bc.ResetSessionPath(realPath)
 	s.announceSessionChanged(realPath, false)

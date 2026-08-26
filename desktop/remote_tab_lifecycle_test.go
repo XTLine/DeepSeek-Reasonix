@@ -493,7 +493,7 @@ func TestRemoteResumeRejectedRestoresForegroundRoute(t *testing.T) {
 func TestRemoteResumeBuffersTargetFramesUntilPostCommit(t *testing.T) {
 	const oldPath = "/old.jsonl"
 	const targetPath = "/target.jsonl"
-	feed := make(chan string, 1)
+	feed := make(chan string, 4)
 	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
 		{Name: "old", Path: oldPath, Current: true},
 		{Name: "target", Path: targetPath, Running: true},
@@ -535,12 +535,15 @@ func TestRemoteResumeBuffersTargetFramesUntilPostCommit(t *testing.T) {
 		t.Fatal("resume request did not start")
 	}
 	feed <- `{"kind":"approval_request","approval":{"id":"target-approval"},"sessionPath":"/target.jsonl","sessionCurrent":true}`
+	feed <- `{"kind":"text","text":"first retained delta","sessionPath":"/target.jsonl","sessionCurrent":true}`
+	feed <- `{"kind":"notice","text":"second retained notice","sessionPath":"/target.jsonl","sessionCurrent":true}`
 	deadline := time.Now().Add(time.Second)
 	for {
 		a.remoteTabMu.Lock()
 		pending := len(a.remoteTabs[meta.ID].pendingEvents)
+		buffered := len(a.remoteTabs[meta.ID].routing.rehydratingFrames)
 		a.remoteTabMu.Unlock()
-		if pending == 1 {
+		if pending == 1 && buffered == 2 {
 			break
 		}
 		select {
@@ -549,7 +552,7 @@ func TestRemoteResumeBuffersTargetFramesUntilPostCommit(t *testing.T) {
 		default:
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("target prompt was not retained while /resume was pending: %v", log.recorded())
+			t.Fatalf("target frames were not retained while /resume was pending: pending=%d buffered=%d log=%v", pending, buffered, log.recorded())
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -564,6 +567,22 @@ func TestRemoteResumeBuffersTargetFramesUntilPostCommit(t *testing.T) {
 	}
 	if got := log.count(readyPrefix); got != readyBefore+1 {
 		t.Fatalf("committed resume emitted %d ready barriers, want %d: %v", got, readyBefore+1, log.recorded())
+	}
+	events := log.recorded()
+	readyIndex, firstIndex, secondIndex := -1, -1, -1
+	for i, got := range events {
+		if strings.HasPrefix(got, readyPrefix+" ") {
+			readyIndex = i
+		}
+		if strings.Contains(got, `"text":"first retained delta"`) {
+			firstIndex = i
+		}
+		if strings.Contains(got, `"text":"second retained notice"`) {
+			secondIndex = i
+		}
+	}
+	if readyIndex < 0 || firstIndex <= readyIndex || secondIndex <= firstIndex {
+		t.Fatalf("buffered target frames were not replayed in order after ready: %v", events)
 	}
 	a.remoteTabMu.Lock()
 	pending := len(a.remoteTabs[meta.ID].pendingEvents)

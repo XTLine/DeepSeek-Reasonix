@@ -9,10 +9,11 @@ import (
 )
 
 type remoteTabSessionRouting struct {
-	currentPath     string
-	rehydratingPath string
-	running         map[string]bool
-	revision        uint64
+	currentPath       string
+	rehydratingPath   string
+	rehydratingFrames []json.RawMessage
+	running           map[string]bool
+	revision          uint64
 }
 
 // enterRemoteSession is the compatibility wrapper used by bridge tests.
@@ -110,6 +111,7 @@ func serveCurrentSession(ctx context.Context, client *http.Client, base string) 
 func installRemoteTabAttachRoute(tab *remoteTab, path string) {
 	tab.routing.currentPath = strings.TrimSpace(path)
 	tab.routing.rehydratingPath = ""
+	tab.routing.rehydratingFrames = nil
 	tab.session.path = tab.routing.currentPath
 	tab.routing.revision++
 }
@@ -228,6 +230,7 @@ func adoptRemoteTabSessionPathLocked(tab *remoteTab, sessionPath string) bool {
 	}
 	tab.routing.currentPath = sessionPath
 	tab.routing.rehydratingPath = ""
+	tab.routing.rehydratingFrames = nil
 	tab.routing.revision++
 	tab.session.path = sessionPath
 	tab.session.newSession = false

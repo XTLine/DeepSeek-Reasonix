@@ -45,6 +45,7 @@ func (a *App) beginRemoteTabProvisionalResume(tabID string, tab *remoteTab, clie
 	route.active = true
 	current.routing.currentPath = route.targetPath
 	current.routing.rehydratingPath = route.targetPath
+	current.routing.rehydratingFrames = nil
 	current.routing.revision++
 	current.pendingEvents = nil
 	current.runtime.revision++
@@ -69,6 +70,7 @@ func (a *App) rollbackRemoteTabProvisionalResume(tabID string, tab *remoteTab, c
 	}
 	current.routing.currentPath = route.previousPath
 	current.routing.rehydratingPath = ""
+	current.routing.rehydratingFrames = nil
 	current.routing.revision++
 	current.pendingEvents = route.previousPending
 	restoredRuntime := route.previousRuntime
@@ -103,11 +105,28 @@ func (a *App) publishRemoteTabResumeReady(tabID string, tab *remoteTab, client *
 	if !a.transitionRemoteTabState(tabID, gen, "ready", "ready", "") {
 		return
 	}
-	a.remoteTabMu.Lock()
-	defer a.remoteTabMu.Unlock()
-	current := a.remoteTabs[tabID]
-	if current == tab && current.client == client && current.gen == gen && current.routing.rehydratingPath == route.targetPath {
-		current.routing.rehydratingPath = ""
+	for {
+		a.remoteTabMu.Lock()
+		current := a.remoteTabs[tabID]
+		if current != tab || current.client != client || current.gen != gen || current.routing.rehydratingPath != route.targetPath {
+			a.remoteTabMu.Unlock()
+			return
+		}
+		frames := current.routing.rehydratingFrames
+		current.routing.rehydratingFrames = nil
+		if len(frames) == 0 {
+			// Clearing the path under the same lock that producers use closes the
+			// replay/live race: a later frame either joined this drain or observes
+			// the committed live route after every older frame was published.
+			current.routing.rehydratingPath = ""
+			a.remoteTabMu.Unlock()
+			return
+		}
+		a.remoteTabMu.Unlock()
+		for _, frame := range frames {
+			kind, _, _, _ := probeRemoteTabFrame(string(frame))
+			a.publishRemoteTabFrame(tabID, gen, kind, frame)
+		}
 	}
 }
 
@@ -169,6 +188,8 @@ func (a *App) bufferRemoteTabResumeFrame(tabID string, gen uint64, sessionPath, 
 		tab.pendingEvents[key] = append(json.RawMessage(nil), frame...)
 		tab.runtime.pendingPrompt = true
 		tab.runtime.cancellable = true
+	} else {
+		tab.routing.rehydratingFrames = append(tab.routing.rehydratingFrames, append(json.RawMessage(nil), frame...))
 	}
 	return true
 }
