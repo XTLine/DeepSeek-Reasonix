@@ -54,6 +54,19 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	tab.sessionMu.Lock()
 	defer tab.sessionMu.Unlock()
 
+	// A focus-only attach has no transition endpoint that can reveal its path
+	// after the stream opens. Resolve it first so the Serve's immediate pending-
+	// prompt replay is routed to the foreground instead of being discarded as an
+	// unknown tagged session.
+	var target serveSessionEntry
+	focusResolved := !opts.NewSession && strings.TrimSpace(opts.SessionName) == "" && strings.TrimSpace(opts.SessionPath) == ""
+	if focusResolved {
+		target, err = serveCurrentSession(callCtx, client, base)
+		if err != nil {
+			return false, err
+		}
+	}
+
 	a.remoteTabMu.Lock()
 	if a.remoteTabs[tabID] != tab {
 		a.remoteTabMu.Unlock()
@@ -68,6 +81,10 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	tab.client = client
 	tab.base = base
 	tab.token = token
+	if focusResolved {
+		tab.routing.currentPath = strings.TrimSpace(target.Path)
+		tab.session.path = tab.routing.currentPath
+	}
 	gen := tab.gen
 	pumpCtx, cancelPump := context.WithCancel(ctx)
 	tab.cancel = cancelPump
@@ -85,8 +102,11 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 		a.retireRemoteTabGeneration(tabID, gen)
 		return false, callCtx.Err()
 	}
-	target, err := enterRemoteSessionTarget(callCtx, client, base, opts)
-	entered := err == nil
+	entered := true
+	if !focusResolved {
+		target, err = enterRemoteSessionTarget(callCtx, client, base, opts)
+		entered = err == nil
+	}
 	if err != nil {
 		// A busy serve refuses session transitions with 409 but retains its
 		// usable current session. Keep the attach so pending work remains visible.

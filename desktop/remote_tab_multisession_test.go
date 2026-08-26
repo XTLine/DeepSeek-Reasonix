@@ -13,7 +13,7 @@ import (
 func TestRemoteTabAllSessionEventsRouteOnlyCurrentFrames(t *testing.T) {
 	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
 		{Name: "current", Path: "/sessions/current.jsonl", Current: true},
-		{Name: "background", Path: "/sessions/background.jsonl"},
+		{Name: "background", Path: "/sessions/background.jsonl", Running: true},
 	})
 	fs.mu.Lock()
 	fs.eventFrames = []string{
@@ -57,6 +57,51 @@ func TestRemoteTabAllSessionEventsRouteOnlyCurrentFrames(t *testing.T) {
 		return session.Path == "/sessions/background.jsonl" && session.Running
 	}) {
 		t.Fatalf("background session is not marked running: %+v", sessions)
+	}
+	fs.mu.Lock()
+	fs.sessions[1].Running = false
+	fs.mu.Unlock()
+	sessions, err = a.RemoteProjectSessions("box", "~/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(sessions, func(session RemoteSessionView) bool {
+		return session.Path == "/sessions/background.jsonl" && session.Running
+	}) {
+		t.Fatalf("authoritative idle listing did not clear stale running state: %+v", sessions)
+	}
+}
+
+func TestFocusOnlyAttachRoutesImmediatePendingPrompt(t *testing.T) {
+	const currentPath = "/sessions/current.jsonl"
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "current", Path: currentPath, Current: true}})
+	fs.mu.Lock()
+	fs.eventFrames = []string{
+		`{"kind":"approval_request","sessionPath":"/sessions/current.jsonl","approval":{"id":"approval-1"}}`,
+		`{"kind":"ready","sessionPath":"/sessions/current.jsonl"}`,
+	}
+	fs.mu.Unlock()
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{})
+	events := log.recorded()
+	if !slices.ContainsFunc(events, func(event string) bool {
+		return strings.HasPrefix(event, "remote-tab:"+meta.ID+":event") && strings.Contains(event, `"approval-1"`)
+	}) {
+		t.Fatalf("focus-only attach dropped the immediate pending prompt: %v", events)
+	}
+	a.remoteTabMu.Lock()
+	gotPath := a.remoteTabs[meta.ID].routing.currentPath
+	a.remoteTabMu.Unlock()
+	if gotPath != currentPath {
+		t.Fatalf("focus-only path = %q, want %q", gotPath, currentPath)
 	}
 }
 

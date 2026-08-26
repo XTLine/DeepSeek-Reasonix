@@ -11,6 +11,7 @@ import (
 type remoteTabSessionRouting struct {
 	currentPath string
 	running     map[string]bool
+	revision    uint64
 }
 
 // enterRemoteSession is the compatibility wrapper used by bridge tests.
@@ -94,9 +95,11 @@ func (a *App) routeRemoteTabFrame(tabID string, gen uint64, sessionPath, kind st
 	if sessionPath != "" {
 		switch kind {
 		case "turn_started":
+			tab.routing.revision++
 			changed = !tab.routing.running[sessionPath]
 			tab.routing.running[sessionPath] = true
 		case "turn_done":
+			tab.routing.revision++
 			changed = tab.routing.running[sessionPath]
 			tab.routing.running[sessionPath] = false
 		}

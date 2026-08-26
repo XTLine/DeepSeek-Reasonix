@@ -237,6 +237,7 @@ func (k *SessionLeaseKeeper) Split() *SessionLeaseKeeper {
 	dst := &SessionLeaseKeeper{lease: k.lease, controller: k.controller, retired: k.retired}
 	if dst.controller != nil {
 		dst.controller.SetOnSessionTransition(dst.HandleSessionTransition)
+		dst.controller.SetOnSessionRecovered(dst.HandleSessionRecovered)
 	}
 	k.lease, k.controller, k.retired = nil, nil, nil
 	return dst
@@ -268,6 +269,7 @@ func (k *SessionLeaseKeeper) RebindDetaching(path string) (*SessionLeaseKeeper, 
 	}
 	if dst.controller != nil {
 		dst.controller.SetOnSessionTransition(dst.HandleSessionTransition)
+		dst.controller.SetOnSessionRecovered(dst.HandleSessionRecovered)
 	}
 	k.lease, k.controller, k.retired = lease, nil, nil
 	k.mu.Unlock()
@@ -286,6 +288,7 @@ func (k *SessionLeaseKeeper) Adopt(other *SessionLeaseKeeper) {
 	other.mu.Unlock()
 	if inCtrl != nil {
 		inCtrl.SetOnSessionTransition(k.HandleSessionTransition)
+		inCtrl.SetOnSessionRecovered(k.HandleSessionRecovered)
 	}
 	k.mu.Lock()
 	k.releaseLocked()
@@ -300,6 +303,7 @@ func (k *SessionLeaseKeeper) releaseLocked() {
 	}
 	if k.controller != nil {
 		k.controller.SetOnSessionTransition(nil)
+		k.controller.SetOnSessionRecovered(nil)
 		_ = k.controller.BindSessionWriteAuthority(nil)
 		k.controller = nil
 	}

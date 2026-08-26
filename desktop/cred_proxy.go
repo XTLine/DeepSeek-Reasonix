@@ -261,7 +261,7 @@ func resolveProxyProvider(cfg *config.Config, ref string) (proxyUpstream, error)
 	}
 	apiKey := config.ResolveCredential(entry.APIKeyEnv).Value
 	if apiKey == "" {
-		return proxyUpstream{}, fmt.Errorf("credential proxy: %s is not set — the local key is required in local-proxy mode", entry.APIKeyEnv)
+		return proxyUpstream{}, fmt.Errorf("credential proxy: the local provider credential is not configured")
 	}
 	base := strings.TrimSpace(entry.BaseURL)
 	if base == "" {

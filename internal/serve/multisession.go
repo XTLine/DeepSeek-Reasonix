@@ -198,6 +198,9 @@ func (s *Server) registerDetached(ctrl control.SessionAPI, keeper *control.Sessi
 			tag = s.tagFor(concrete)
 		}
 	}
+	if tag == nil {
+		return nil, errSessionTagUnavailable
+	}
 	if keeper != nil {
 		if concrete, ok := ctrl.(*control.Controller); ok {
 			concrete.SetOnSessionRecovered(s.sessionRecoveryHandler(concrete, keeper))
@@ -300,9 +303,23 @@ func (s *Server) CloseBackground() {
 	}
 }
 
+// Close stops every controller the server owns, including a foreground
+// replacement created after the CLI's original controller was constructed.
+func (s *Server) Close() {
+	s.CloseBackground()
+	cur := s.ctl()
+	cur.Close()
+	if concrete, ok := cur.(*control.Controller); ok {
+		s.forgetSessionTag(concrete)
+	}
+}
+
 // busyDetach publishes a fresh controller before demoting a busy controller.
 // Every failure before publication restores the original lease ownership.
 func (s *Server) busyDetach(ctx context.Context, cur *control.Controller, targetPath string, loadTarget func(*control.Controller) error) error {
+	if s.tagFor(cur) == nil {
+		return errSessionTagUnavailable
+	}
 	newCtrl, tag, err := s.buildTagged(ctx, currentModelRef(cur), false)
 	if err != nil {
 		return err
@@ -325,7 +342,7 @@ func (s *Server) busyDetach(ctx context.Context, cur *control.Controller, target
 	if loadTarget != nil {
 		if err := loadTarget(newCtrl); err != nil {
 			s.closeTaggedController(newCtrl)
-			s.rollbackDetach(demoted)
+			s.rollbackDetach(demoted, cur)
 			return err
 		}
 	}
@@ -335,45 +352,42 @@ func (s *Server) busyDetach(ctx context.Context, cur *control.Controller, target
 	if s.leases != nil {
 		if err := s.leases.BindControllerAuthority(newCtrl); err != nil {
 			s.closeTaggedController(newCtrl)
-			s.rollbackDetach(demoted)
+			s.rollbackDetach(demoted, cur)
 			return err
 		}
 	}
 
-	s.mu.Lock()
-	if s.ctrl != control.SessionAPI(cur) {
-		s.mu.Unlock()
+	if !s.publishControllerSwap(cur, newCtrl, targetPath) {
 		s.closeTaggedController(newCtrl)
-		s.rollbackDetach(demoted)
+		s.rollbackDetach(demoted, cur)
 		return errReplacedDuringBind
 	}
-	s.ctrl = newCtrl
-	s.mu.Unlock()
 
 	if _, err := s.registerDetached(cur, demoted, nil); err != nil {
 		// bindMu prevents another foreground swap here. Roll publication back so
 		// a registry failure cannot strand a running controller.
-		s.mu.Lock()
-		s.ctrl = cur
-		s.mu.Unlock()
+		_ = s.publishControllerSwap(newCtrl, cur, cur.SessionPath())
 		s.closeTaggedController(newCtrl)
-		s.rollbackDetach(demoted)
+		s.rollbackDetach(demoted, cur)
 		return err
 	}
-	s.setControllerPath(newCtrl, targetPath)
 	s.bc.ResetSessionPath(targetPath)
 	return nil
 }
 
 var errReplacedDuringBind = &replacedDuringBindError{}
+var errSessionTagUnavailable = errors.New("multi-session switching requires a session-tagged Serve controller")
 
 type replacedDuringBindError struct{}
 
 func (*replacedDuringBindError) Error() string { return "session changed during switch" }
 
-func (s *Server) rollbackDetach(demoted *control.SessionLeaseKeeper) {
+func (s *Server) rollbackDetach(demoted *control.SessionLeaseKeeper, ctrl *control.Controller) {
 	if demoted != nil && s.leases != nil {
 		s.leases.Adopt(demoted)
+	}
+	if ctrl != nil {
+		ctrl.SetOnSessionRecovered(s.sessionRecoveryHandler(ctrl, s.leases))
 	}
 }
 
@@ -423,14 +437,20 @@ func (s *Server) reattachDetached(cur control.SessionAPI, detached *detachedSess
 	demoted := s.leases.Split()
 	s.leases.Adopt(detached.keeper)
 	detached.keeper = nil
-	if !s.publishControllerSwap(cur, detached.ctrl) {
-		detached.keeper = s.leases.Split()
-		s.leases.Adopt(demoted)
-		_, _ = s.registerDetached(detached.ctrl, detached.keeper, detached.tag)
-		return errReplacedDuringBind
+	if detached.tag != nil {
+		detached.tag.SetPath(detached.ctrl.SessionPath())
 	}
 	if concrete, ok := detached.ctrl.(*control.Controller); ok {
 		concrete.SetOnSessionRecovered(s.sessionRecoveryHandler(concrete, s.leases))
+	}
+	if !s.publishControllerSwap(cur, detached.ctrl, detached.ctrl.SessionPath()) {
+		detached.keeper = s.leases.Split()
+		s.leases.Adopt(demoted)
+		if curCtrl != nil {
+			curCtrl.SetOnSessionRecovered(s.sessionRecoveryHandler(curCtrl, s.leases))
+		}
+		_, _ = s.registerDetached(detached.ctrl, detached.keeper, detached.tag)
+		return errReplacedDuringBind
 	}
 	if controllerHasActiveRuntimeWork(cur) {
 		if curCtrl == nil {
@@ -453,33 +473,31 @@ func (s *Server) reattachDetached(cur control.SessionAPI, detached *detachedSess
 			demoted.Release()
 		}
 	}
-	if concrete, ok := detached.ctrl.(*control.Controller); ok {
-		s.setControllerPath(concrete, detached.ctrl.SessionPath())
-	} else {
-		s.bc.SetCurrentSession(detached.ctrl.SessionPath())
-	}
 	slog.Info("serve: background session re-attached", "session", detached.path, "running", controllerHasActiveRuntimeWork(detached.ctrl))
 	return nil
 }
 
 func (s *Server) restoreReattach(cur control.SessionAPI, detached *detachedSession, demoted *control.SessionLeaseKeeper) {
-	s.mu.Lock()
-	if s.ctrl == detached.ctrl {
-		s.ctrl = cur
-	}
-	s.mu.Unlock()
+	_ = s.publishControllerSwap(detached.ctrl, cur, cur.SessionPath())
 	detached.keeper = s.leases.Split()
 	s.leases.Adopt(demoted)
+	if concrete, ok := cur.(*control.Controller); ok {
+		concrete.SetOnSessionRecovered(s.sessionRecoveryHandler(concrete, s.leases))
+	}
 	_, _ = s.registerDetached(detached.ctrl, detached.keeper, detached.tag)
 }
 
-func (s *Server) publishControllerSwap(expect, next control.SessionAPI) bool {
+// publishControllerSwap makes the command target and current-only SSE route
+// visible as one generation. Readers cannot observe next while the broadcaster
+// still filters against expect's session.
+func (s *Server) publishControllerSwap(expect, next control.SessionAPI, path string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ctrl != expect {
 		return false
 	}
 	s.ctrl = next
+	s.bc.SetCurrentSession(path)
 	return true
 }
 
@@ -498,7 +516,7 @@ func (s *Server) renderBindError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, agent.ErrSessionLeaseHeld):
 		http.Error(w, sessionInUseError(err), http.StatusConflict)
-	case errors.Is(err, errReplacedDuringBind):
+	case errors.Is(err, errReplacedDuringBind), errors.Is(err, errSessionTagUnavailable):
 		http.Error(w, err.Error(), http.StatusConflict)
 	default:
 		http.Error(w, "switch session: "+err.Error(), http.StatusInternalServerError)

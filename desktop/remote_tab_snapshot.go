@@ -164,6 +164,7 @@ func (a *App) recordRemoteTabSessionStatus(tabID string, client *http.Client, ge
 			if tab.routing.running == nil {
 				tab.routing.running = map[string]bool{}
 			}
+			tab.routing.revision++
 			tab.routing.running[tab.routing.currentPath] = *payload.Running
 		}
 	}

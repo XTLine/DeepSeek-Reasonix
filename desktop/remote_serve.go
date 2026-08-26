@@ -644,6 +644,12 @@ func (m *desktopRemoteManager) cancelThenReload(ctx context.Context, client *htt
 	if cancelErr != nil {
 		log.Printf("[remote] reloadServeProviders: cancel busy turn FAILED err=%v", cancelErr)
 	}
+	jobsCtx, jobsCancel := context.WithTimeout(ctx, 5*time.Second)
+	jobsErr := cancelServeBackgroundJobs(jobsCtx, client, base)
+	jobsCancel()
+	if jobsErr != nil {
+		log.Printf("[remote] reloadServeProviders: cancel background jobs FAILED err=%v", jobsErr)
+	}
 	var err error
 	for attempt := 1; attempt <= 3; attempt++ {
 		timer := time.NewTimer(time.Duration(attempt) * time.Second)
@@ -666,6 +672,35 @@ func (m *desktopRemoteManager) cancelThenReload(ctx context.Context, client *htt
 		}
 	}
 	return err
+}
+
+func cancelServeBackgroundJobs(ctx context.Context, client *http.Client, base string) error {
+	status, err := serveGet(ctx, client, serveURL(base, "/status?runtime=1"))
+	if err != nil {
+		return err
+	}
+	var payload struct {
+		Jobs []struct {
+			ID string `json:"id"`
+		} `json:"jobs"`
+	}
+	if err := json.Unmarshal(status, &payload); err != nil {
+		return fmt.Errorf("decode serve jobs: %w", err)
+	}
+	ids := make([]string, 0, len(payload.Jobs))
+	for _, job := range payload.Jobs {
+		if id := strings.TrimSpace(job.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	body, err := json.Marshal(map[string]any{"ids": ids})
+	if err != nil {
+		return err
+	}
+	return servePost(ctx, client, serveURL(base, "/jobs/cancel"), body)
 }
 
 // markCredFallback rate-limits the legacy-serve replacement to at most one

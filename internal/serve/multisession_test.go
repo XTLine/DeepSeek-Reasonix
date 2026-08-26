@@ -27,6 +27,57 @@ func (replayStubController) ReplayPendingPromptsWith(factory func() event.Sink) 
 	factory().Emit(event.Event{Kind: event.ApprovalRequest})
 }
 
+type closeProbeController struct {
+	*control.Controller
+	closed atomic.Bool
+}
+
+func (c *closeProbeController) Close() {
+	c.closed.Store(true)
+	c.Controller.Close()
+}
+
+func TestServerCloseClosesPublishedForegroundReplacement(t *testing.T) {
+	bc := NewBroadcaster()
+	first := &closeProbeController{Controller: control.New(control.Options{Sink: bc})}
+	replacement := &closeProbeController{Controller: control.New(control.Options{Sink: bc})}
+	server := New(first, bc, config.ServeConfig{})
+	if !server.publishControllerSwap(first, replacement, replacement.SessionPath()) {
+		t.Fatal("replacement publication failed")
+	}
+	server.Close()
+	if !replacement.closed.Load() {
+		t.Fatal("server shutdown left the published foreground controller open")
+	}
+}
+
+func TestBusyNewRejectsUntaggedLegacyController(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "legacy.jsonl")
+	bc := NewBroadcaster()
+	ctrl := control.New(control.Options{Runner: blockingRunner{}, Sink: bc, SessionDir: dir, SessionPath: path})
+	server := New(ctrl, bc, config.ServeConfig{})
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+	defer ctrl.Close()
+	ctrl.Submit("keep running")
+	waitRunning(t, ctrl)
+	resp, err := http.Post(httpServer.URL+"/new", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("untagged busy /new = %d, want 409: %s", resp.StatusCode, body)
+	}
+	if server.ctl() != control.SessionAPI(ctrl) || !ctrl.Running() {
+		t.Fatal("legacy controller was detached without a session tag")
+	}
+	ctrl.Cancel()
+	waitNotRunning(t, ctrl)
+}
+
 func TestReplayPendingPromptsBroadcastTagsFrames(t *testing.T) {
 	bc := NewBroadcaster()
 	ctrl := control.New(control.Options{Sink: bc})

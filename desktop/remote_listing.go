@@ -213,6 +213,16 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 	defer done()
 	ctx, cancel := commandContext(a)
 	defer cancel()
+	a.remoteTabMu.Lock()
+	var observedTab *remoteTab
+	var observedRevision uint64
+	for _, tab := range a.remoteTabs {
+		if tab.ref.HostID == hostID && tab.ref.Workspace == workspace {
+			observedTab, observedRevision = tab, tab.routing.revision
+			break
+		}
+	}
+	a.remoteTabMu.Unlock()
 	entries, err := serveSessions(ctx, client, base)
 	if err != nil {
 		return nil, err
@@ -225,6 +235,16 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 			continue
 		}
 		liveCurrentPath = tab.routing.currentPath
+		// /sessions is authoritative when no newer SSE/status update raced the
+		// request. Replace the cache so a dropped turn_done cannot leave a row
+		// permanently running; a changed revision preserves the newer live view.
+		if tab == observedTab && tab.routing.revision == observedRevision {
+			authoritative := make(map[string]bool, len(entries))
+			for _, entry := range entries {
+				authoritative[entry.Path] = entry.Running
+			}
+			tab.routing.running = authoritative
+		}
 		maps.Copy(liveRunning, tab.routing.running)
 		break
 	}

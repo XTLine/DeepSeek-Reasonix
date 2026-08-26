@@ -962,7 +962,7 @@ func runServeWithOptions(args []string, opts serveRunOptions) int {
 	}
 
 	srv := newCLIMultiSessionServer(ctrl, bc, sessionTag, serveCfg, leases)
-	defer srv.CloseBackground()
+	defer srv.Close()
 	return runServeFrontend(ctrl, srv, serveCfg, serveFrontendOptions{
 		command: opts.command, address: *addr,
 		portFile: *portFile, tokenFile: *tokenFile, pidFile: *pidFile,

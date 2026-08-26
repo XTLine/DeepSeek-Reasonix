@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 func TestReloadServeProvidersCancelsBusyTurn(t *testing.T) {
 	var mu sync.Mutex
 	canceled := false
+	jobsCanceled := false
 	reloadCalls := 0
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /auth/token", func(w http.ResponseWriter, _ *http.Request) {
@@ -30,11 +32,27 @@ func TestReloadServeProvidersCancelsBusyTurn(t *testing.T) {
 		mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("GET /status", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"jobs":[{"id":"job-1"}]}`))
+	})
+	mux.HandleFunc("POST /jobs/cancel", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			IDs []string `json:"ids"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || len(body.IDs) != 1 || body.IDs[0] != "job-1" {
+			http.Error(w, "bad jobs", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		jobsCanceled = true
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("POST /providers/reload", func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 		reloadCalls++
-		if !canceled {
+		if !canceled || !jobsCanceled {
 			http.Error(w, "busy", http.StatusConflict)
 			return
 		}
@@ -55,8 +73,8 @@ func TestReloadServeProvidersCancelsBusyTurn(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if !canceled || reloadCalls < 2 {
-		t.Fatalf("canceled=%v reloadCalls=%d, want cancel and retry", canceled, reloadCalls)
+	if !canceled || !jobsCanceled || reloadCalls < 2 {
+		t.Fatalf("canceled=%v jobsCanceled=%v reloadCalls=%d, want turn/jobs cancellation and retry", canceled, jobsCanceled, reloadCalls)
 	}
 }
 

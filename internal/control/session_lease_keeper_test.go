@@ -175,6 +175,41 @@ func TestSessionLeaseKeeperRecoveryRebindsControllerBeforeReturning(t *testing.T
 	releaseSave()
 }
 
+func TestSessionLeaseKeeperRebindDetachingTransfersRecoveryCallback(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.jsonl")
+	b := filepath.Join(dir, "b.jsonl")
+	c := filepath.Join(dir, "c.jsonl")
+	ctrl := New(Options{Executor: agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard), SessionPath: a, Sink: event.Discard})
+	keeper := NewSessionLeaseKeeper()
+	if err := keeper.Rebind(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := keeper.BindControllerAuthority(ctrl); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.SetOnSessionRecovered(keeper.HandleSessionRecovered)
+	detached, err := keeper.RebindDetaching(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer keeper.Release()
+	defer detached.Release()
+	handler := ctrl.sessionRecoveredHandler()
+	if handler == nil {
+		t.Fatal("detached controller lost its recovery callback")
+	}
+	if err := handler(SessionRecoveryInfo{RecoveryPath: c}); err != nil {
+		t.Fatal(err)
+	}
+	if got := detached.HeldPath(); got != agent.CanonicalSessionPath(c) {
+		t.Fatalf("detached recovery moved %q, want %q", got, agent.CanonicalSessionPath(c))
+	}
+	if got := keeper.HeldPath(); got != agent.CanonicalSessionPath(b) {
+		t.Fatalf("foreground keeper moved to %q, want %q", got, agent.CanonicalSessionPath(b))
+	}
+}
+
 func TestSessionLeaseKeeperTransitionBindsCandidateBeforeMove(t *testing.T) {
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a.jsonl")

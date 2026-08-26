@@ -287,9 +287,7 @@ func (s *Server) switchModelLocked(ctx context.Context, ref string) error {
 	// defensive: it keeps a future controller-swapping path (or a test doing so)
 	// from being silently clobbered after the off-lock build. On a mismatch,
 	// discard the fresh controller off-lock instead of leaking it.
-	s.mu.Lock()
-	if s.ctrl != cur {
-		s.mu.Unlock()
+	if !s.publishControllerSwap(cur, newCtrl, activePath) {
 		oldCtrl, _ := cur.(*control.Controller)
 		if restoreErr := s.rebindSessionLeaseFor(cur.SessionPath(), oldCtrl); restoreErr != nil {
 			s.closeTaggedController(newCtrl)
@@ -299,9 +297,6 @@ func (s *Server) switchModelLocked(ctx context.Context, ref string) error {
 		s.closeTaggedController(newCtrl)
 		return fmt.Errorf("switch model: session changed during switch")
 	}
-	s.ctrl = newCtrl
-	s.mu.Unlock()
-	s.bc.SetCurrentSession(activePath)
 	s.refreshProviderSetup(currentModelRef(newCtrl))
 
 	// Off-lock: tear down the old controller. Close can block up to 15s.
@@ -361,9 +356,7 @@ func (s *Server) reloadExtensions(ctx context.Context) error {
 		return fmt.Errorf("reload extensions: unable to secure replacement session")
 	}
 
-	s.mu.Lock()
-	if s.ctrl != curAPI {
-		s.mu.Unlock()
+	if !s.publishControllerSwap(curAPI, newCtrl, newCtrl.SessionPath()) {
 		if restoreErr := s.rebindSessionLeaseFor(cur.SessionPath(), cur); restoreErr != nil {
 			s.closeTaggedController(newCtrl)
 			slog.Error("serve: restore outgoing session lease after aborted extension reload", "err", restoreErr)
@@ -372,9 +365,6 @@ func (s *Server) reloadExtensions(ctx context.Context) error {
 		s.closeTaggedController(newCtrl)
 		return fmt.Errorf("reload extensions: session changed during reload")
 	}
-	s.ctrl = newCtrl
-	s.mu.Unlock()
-	s.setControllerPath(newCtrl, newCtrl.SessionPath())
 	s.refreshProviderSetup(currentModelRef(newCtrl))
 
 	cur.Close()
