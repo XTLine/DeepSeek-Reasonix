@@ -39,26 +39,6 @@ export function RemoteSessionSurface({ tab, session }: { tab: TabMeta; session: 
   };
   if (!tab.remote) return null;
 
-  if (session.state === "disconnected") {
-    // A restored shell: reconnect lands in a fresh blank session; past
-    // conversations are picked from the tree group's session rows.
-    const reconnect = () => {
-      runAction(() => app.OpenRemoteProjectTab(tab.remote!.hostId, tab.remote!.workspace, { newSession: true }));
-    };
-    return (
-      <div className="remote-surface remote-surface--disconnected" role="status">
-        <CloudOff size={18} aria-hidden="true" />
-        <span>{t("remoteSurface.disconnected")}</span>
-        <span className="remote-surface__detail">{t("remoteSurface.disconnectedHint")}</span>
-        {actionError ? <span className="remote-surface__detail" role="alert">{actionError}</span> : null}
-        <button type="button" className="btn btn--ghost" onClick={reconnect}>
-          <RotateCw size={14} aria-hidden="true" />
-          {t("remoteSurface.reconnect")}
-        </button>
-      </div>
-    );
-  }
-
   if (session.state === "serve_down") {
     const retry = () => {
       // With no explicit target, the backend preserves the parked tab's

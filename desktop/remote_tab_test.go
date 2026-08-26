@@ -33,7 +33,10 @@ type fakeServe struct {
 	failNext                       string   // non-empty ⇒ next command endpoint replies 409 with this text
 	failEnter                      string   // non-empty ⇒ next /new or /resume replies 409
 	enterDelay                     time.Duration
+	resumeStarted                  chan string
+	resumeRelease                  <-chan struct{}
 	failHistory                    bool // /history replies 500 when set
+	historyBody                    string
 	historyStarted, historyRelease chan struct{}
 	failSessions                   bool // /sessions replies 500 when set
 	sessionsStarted                chan struct{}
@@ -132,10 +135,25 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 			return
 		}
 		fs.resumePath = body.Path
+		started, release := fs.resumeStarted, fs.resumeRelease
 		for i := range fs.sessions {
 			fs.sessions[i].Current = fs.sessions[i].Path == body.Path
 		}
 		fs.mu.Unlock()
+		if started != nil {
+			select {
+			case started <- body.Path:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		if release != nil {
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if enterDelay > 0 {
 			time.Sleep(enterDelay)
 		}
@@ -227,7 +245,7 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 			fs.record(r.Method, path, "")
 			if path == "/history" {
 				fs.mu.Lock()
-				fail := fs.failHistory
+				fail, historyBody := fs.failHistory, fs.historyBody
 				started, release := fs.historyStarted, fs.historyRelease
 				fs.mu.Unlock()
 				if started != nil {
@@ -243,6 +261,9 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 				if fail {
 					http.Error(w, "gone", http.StatusInternalServerError)
 					return
+				}
+				if historyBody != "" {
+					payload = historyBody
 				}
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -339,27 +360,6 @@ func (l *eventLog) count(prefix string) int {
 		}
 	}
 	return n
-}
-
-func waitForTabState(t *testing.T, a *App, tabID, want string) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		a.remoteTabMu.Lock()
-		tab := a.remoteTabs[tabID]
-		state := ""
-		if tab != nil {
-			state = tab.state
-		}
-		a.remoteTabMu.Unlock()
-		if state == want {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("remote tab %s state = %q, want %q", tabID, state, want)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 }
 
 // cleanupRemoteTabPumps cancels every open tab's SSE pump when the test

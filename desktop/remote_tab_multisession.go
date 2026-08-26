@@ -12,6 +12,7 @@ type remoteTabSessionRouting struct {
 	currentPath string
 	running     map[string]bool
 	revision    uint64
+	resumeGen   uint64
 }
 
 // enterRemoteSession is the compatibility wrapper used by bridge tests.

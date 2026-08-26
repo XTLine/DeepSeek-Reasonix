@@ -48,8 +48,8 @@ const [{ createRoot }, { RemoteConnectWizard }, { LocaleProvider }, { useRemoteS
 // Bridge call tape: every remote method appends "<name>:<detail>".
 const tape: string[] = [];
 const savedHosts: RemoteHostView[] = [
-  { id: "gpu-box", label: "gpu-box", host: "192.168.1.10", port: 22, user: "dev", identityFile: "~/.ssh/id_ed25519", proxyJump: "", defaultWorkspace: "", serveInstall: "auto", credentialMode: "remote", useSSHConfig: false },
-  { id: "pw-box", label: "pw-box", host: "10.0.0.8", port: 22, user: "ops", identityFile: "", proxyJump: "", defaultWorkspace: "", serveInstall: "auto", credentialMode: "remote", useSSHConfig: false, passwordSet: true },
+  { id: "gpu-box", label: "gpu-box", host: "192.168.1.10", port: 22, user: "dev", identityFile: "~/.ssh/id_ed25519", proxyJump: "", defaultWorkspace: "", serveInstall: "auto", useSSHConfig: false },
+  { id: "pw-box", label: "pw-box", host: "10.0.0.8", port: 22, user: "ops", identityFile: "", proxyJump: "", defaultWorkspace: "", serveInstall: "auto", useSSHConfig: false, passwordSet: true },
 ];
 let hostCount = 0;
 
@@ -99,9 +99,9 @@ window.go = { main: { App: {
   },
   async AddRemoteHost(input: RemoteHostView & { label?: string; host?: string }) {
     lastAddInput = input as unknown as RemoteHostInput;
-    tape.push(`AddRemoteHost:${input.label}:${input.host}:${(input as RemoteHostInput).credentialMode ?? ""}`);
+    tape.push(`AddRemoteHost:${input.label}:${input.host}`);
     hostCount += 1;
-    const view = { id: `new-${hostCount}`, label: String(input.label), host: String(input.host), port: 22, user: "", identityFile: "", proxyJump: "", defaultWorkspace: "", serveInstall: "npm", credentialMode: "remote", useSSHConfig: false } as RemoteHostView;
+    const view = { id: `new-${hostCount}`, label: String(input.label), host: String(input.host), port: 22, user: "", identityFile: "", proxyJump: "", defaultWorkspace: "", serveInstall: "npm", useSSHConfig: false } as RemoteHostView;
     savedHosts.push(view);
     return view;
   },
@@ -192,7 +192,7 @@ const railItems = () => [...document.querySelectorAll(".remote-wizard__rail-item
 ok(railItems().length === 3, "stepper rail lists all three steps");
 ok(railItems()[0]?.className.includes("--current") === true, "step 1 is current on open");
 ok(railItems().every((item) => !item.className.includes("--done")), "no step is done on open");
-ok(document.querySelectorAll(".remote-wizard__seg").length === 3, "auth, download, and credential mode use segmented sliders");
+ok(document.querySelectorAll(".remote-wizard__seg").length === 2, "auth and download use segmented sliders (credential mode is gone)");
 const hostInput = document.querySelector<HTMLInputElement>(".remote-wizard__suggest input");
 ok(Boolean(hostInput), "config step shows the host input");
 ok(document.activeElement === hostInput, "opening the dialog focuses the first field");
@@ -416,23 +416,18 @@ await act(async () => {
   await Promise.resolve();
 });
 {
-  // Credential mode: a segmented control mirroring the download method;
-  // picking local-proxy must ride the AddRemoteHost payload.
+  // Credential mode: the wizard no longer offers a choice — desktop
+  // onboarding is local-proxy only and the payload carries no field.
   const segButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".remote-wizard__field .provider-add-segmented__item"));
   const localProxy = segButtons.find((b) => b.textContent?.includes("本机") || b.textContent?.includes("this computer"));
-  ok(Boolean(localProxy), "wizard host form offers the credential-mode segmented control");
-  await act(async () => {
-    localProxy?.click();
-    await Promise.resolve();
-  });
-  ok(localProxy?.className.includes("--active") === true, "local-proxy segment highlights when selected");
+  ok(!localProxy, "wizard host form no longer offers the credential-mode segmented control");
 }
 await act(async () => {
   buttonByText("Next")?.click();
   await flush();
 });
 ok(tape.some((entry) => entry.startsWith("AddRemoteHost:10.9.8.7:10.9.8.7")), "a new host is added (label defaults to the host)");
-ok(lastAddInput?.credentialMode === "local-proxy", `AddRemoteHost carries the chosen credential mode (got ${lastAddInput?.credentialMode})`);
+ok(lastAddInput != null && !("credentialMode" in lastAddInput), "AddRemoteHost carries no credential mode (desktop onboarding is local-proxy only)");
 
 await act(async () => secondRoot.unmount());
 

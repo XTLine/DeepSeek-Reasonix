@@ -33,7 +33,6 @@ type RemoteHostView struct {
 	ProxyJump        string `json:"proxyJump"`
 	DefaultWorkspace string `json:"defaultWorkspace"`
 	ServeInstall     string `json:"serveInstall"`
-	CredentialMode   string `json:"credentialMode"`
 	UseSSHConfig     bool   `json:"useSSHConfig"`
 	PasswordSet      bool   `json:"passwordSet,omitempty"`
 	KeyPassphraseSet bool   `json:"keyPassphraseSet,omitempty"`
@@ -48,7 +47,6 @@ type RemoteHostInput struct {
 	ProxyJump                string `json:"proxyJump"`
 	DefaultWorkspace         string `json:"defaultWorkspace"`
 	ServeInstall             string `json:"serveInstall"`
-	CredentialMode           string `json:"credentialMode"`
 	UseSSHConfig             bool   `json:"useSSHConfig"`
 	Password                 string `json:"password,omitempty"`
 	KeyPassphrase            string `json:"keyPassphrase,omitempty"`
@@ -1463,6 +1461,9 @@ func preserveRemoteHostHiddenFields(entry *config.RemoteHostEntry, existing conf
 	entry.PassphraseEnv = existing.PassphraseEnv
 	entry.PasswordEnv = existing.PasswordEnv
 	entry.Forwards = append([]config.RemoteForwardEntry(nil), existing.Forwards...)
+	// The credential mode is desktop-invisible (onboarding is local-proxy
+	// only): a hand-configured remote-mode entry survives desktop edits.
+	entry.CredentialMode = existing.CredentialMode
 }
 
 // Importing an already-managed SSH alias refreshes only its OpenSSH lookup
@@ -1505,7 +1506,7 @@ func hostEntryToView(h config.RemoteHostEntry) RemoteHostView {
 	return RemoteHostView{
 		ID: h.Name, Label: h.Name, Host: h.Host, Port: h.Port, User: h.User,
 		IdentityFile: h.IdentityFile, ProxyJump: h.ProxyJump,
-		DefaultWorkspace: h.Workspace, ServeInstall: h.ServeInstallMode(), CredentialMode: credentialModeView(h), UseSSHConfig: h.UseSSHConfig,
+		DefaultWorkspace: h.Workspace, ServeInstall: h.ServeInstallMode(), UseSSHConfig: h.UseSSHConfig,
 		PasswordSet:      config.ResolveCredential(h.PasswordEnv).Set,
 		KeyPassphraseSet: config.ResolveCredential(h.PassphraseEnv).Set,
 	}
@@ -1516,7 +1517,10 @@ func inputToHostEntry(in RemoteHostInput) config.RemoteHostEntry {
 	return config.RemoteHostEntry{
 		Name: name, Host: in.Host, Port: in.Port, User: in.User,
 		IdentityFile: in.IdentityFile, ProxyJump: in.ProxyJump,
-		Workspace: in.DefaultWorkspace, ServeInstall: in.ServeInstall, CredentialMode: normalizeCredentialMode(in.CredentialMode), UseSSHConfig: in.UseSSHConfig,
+		// Desktop onboarding is local-key only: hosts created here always
+		// run the local-proxy credential mode. Hand-set modes (CLI, edited
+		// config) survive later desktop edits via the hidden-field preserve.
+		Workspace: in.DefaultWorkspace, ServeInstall: in.ServeInstall, CredentialMode: "local-proxy", UseSSHConfig: in.UseSSHConfig,
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"reasonix/internal/agent"
 )
 
 type RemoteTabSnapshot struct {
@@ -19,6 +22,41 @@ type RemoteTabSnapshot struct {
 	Commands      json.RawMessage   `json:"commands,omitempty"`
 	Status        json.RawMessage   `json:"status,omitempty"`
 	PendingEvents []json.RawMessage `json:"pendingEvents,omitempty"`
+}
+
+// sanitizeRemoteHistory keeps older Serve builds from leaking provider-only
+// transient blocks into the desktop transcript.
+func sanitizeRemoteHistory(body []byte) []byte {
+	var rows []map[string]json.RawMessage
+	if json.Unmarshal(body, &rows) != nil {
+		return body
+	}
+	changed := false
+	for _, row := range rows {
+		var role, content string
+		if json.Unmarshal(row["role"], &role) != nil || role != "user" || json.Unmarshal(row["content"], &content) != nil {
+			continue
+		}
+		clean := agent.UserPreviewText(content)
+		if clean == content {
+			continue
+		}
+		encoded, err := json.Marshal(clean)
+		if err == nil {
+			row["content"] = encoded
+			changed = true
+		}
+	}
+	if !changed {
+		return body
+	}
+	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	if encoder.Encode(rows) != nil {
+		return body
+	}
+	return bytes.TrimSpace(out.Bytes())
 }
 
 // RemoteTabSnapshot merges the serve's GET members in parallel. Only
@@ -67,6 +105,7 @@ func (a *App) RemoteTabSnapshot(tabID string) (RemoteTabSnapshot, error) {
 	if len(snap.History) == 0 {
 		return RemoteTabSnapshot{}, fmt.Errorf("remote tab %q: empty history", tabID)
 	}
+	snap.History = sanitizeRemoteHistory(snap.History)
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
 	if tab == nil || tab.client != client || tab.gen != gen || tab.state != "ready" {

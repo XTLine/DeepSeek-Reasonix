@@ -310,6 +310,7 @@ func TestRemoteResumeBusyKeepsCurrentSessionReady(t *testing.T) {
 	if _, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{SessionName: "saved"}); err != nil {
 		t.Fatal(err)
 	}
+	waitForRemoteTabError(t, a, meta.ID, "Finish the current turn")
 	a.remoteTabMu.Lock()
 	state, message := a.remoteTabs[meta.ID].state, a.remoteTabs[meta.ID].err
 	a.remoteTabMu.Unlock()

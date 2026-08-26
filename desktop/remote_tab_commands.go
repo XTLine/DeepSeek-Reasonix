@@ -100,19 +100,63 @@ func (a *App) resumeRemoteTabSession(tabID, name string) {
 func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle string) {
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
-	a.remoteTabMu.Unlock()
 	if tab == nil {
-		return
-	}
-	tab.sessionMu.Lock()
-	defer tab.sessionMu.Unlock()
-	a.remoteTabMu.Lock()
-	if a.remoteTabs[tabID] != tab || tab.client == nil || tab.state != "ready" {
 		a.remoteTabMu.Unlock()
 		return
 	}
-	client, base, gen := tab.client, tab.base, tab.gen
+	tab.routing.resumeGen++
+	resumeGen := tab.routing.resumeGen
 	a.remoteTabMu.Unlock()
+	a.resumeRemoteTabSessionPathGeneration(tabID, resumeGen, name, sessionPath, sessionTitle, nil)
+}
+
+type remoteTabResumeIdentity struct {
+	name, path       string
+	newSession, reset bool
+	title            string
+}
+
+func (a *App) rollbackRemoteTabResume(tabID string, resumeGen uint64, previous *remoteTabResumeIdentity) {
+	if previous == nil {
+		return
+	}
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil || tab.routing.resumeGen != resumeGen {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	tab.session.name, tab.session.path = previous.name, previous.path
+	tab.session.newSession, tab.session.reset = previous.newSession, previous.reset
+	tab.topicTitle = previous.title
+	meta := remoteTabMetaLocked(tab)
+	a.remoteTabMu.Unlock()
+	a.emitRemoteEvent("remote-tab:updated", meta)
+}
+
+func (a *App) resumeRemoteTabSessionPathGeneration(tabID string, resumeGen uint64, name, sessionPath, sessionTitle string, previous *remoteTabResumeIdentity) {
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil || tab.routing.resumeGen != resumeGen {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	a.remoteTabMu.Unlock()
+	tab.sessionMu.Lock()
+	defer tab.sessionMu.Unlock()
+	a.remoteTabMu.Lock()
+	if a.remoteTabs[tabID] != tab || tab.routing.resumeGen != resumeGen || tab.client == nil || tab.state != "ready" {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	client, base, connectionGen := tab.client, tab.base, tab.gen
+	a.remoteTabMu.Unlock()
+	stillCurrent := func() bool {
+		a.remoteTabMu.Lock()
+		defer a.remoteTabMu.Unlock()
+		current := a.remoteTabs[tabID]
+		return current == tab && current.client == client && current.gen == connectionGen && current.routing.resumeGen == resumeGen
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -122,7 +166,10 @@ func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle 
 	} else {
 		entries, err := serveSessions(ctx, client, base)
 		if err != nil {
-			a.transitionRemoteTabState(tabID, gen, "ready", "ready", fmt.Sprintf("Could not open remote session %q: %v", name, err))
+			if stillCurrent() {
+				a.rollbackRemoteTabResume(tabID, resumeGen, previous)
+				a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", fmt.Sprintf("Could not open remote session %q: %v", name, err))
+			}
 			return
 		}
 		for _, entry := range entries {
@@ -135,14 +182,19 @@ func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle 
 	if target.Path != "" {
 		body, _ := json.Marshal(map[string]string{"path": target.Path})
 		if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
+			if !stillCurrent() {
+				return
+			}
 			if remoteSessionTransitionBusy(err) {
-				a.transitionRemoteTabState(tabID, gen, "ready", "ready", "Finish the current turn before switching sessions.")
+				a.rollbackRemoteTabResume(tabID, resumeGen, previous)
+				a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", "Finish the current turn before switching sessions.")
 				return
 			}
 			// /resume is an action on an already attached Serve. Any rejection
 			// leaves that current session and event pump usable, so surface the
 			// action error without replacing the ready transcript.
-			a.transitionRemoteTabState(tabID, gen, "ready", "ready", err.Error())
+			a.rollbackRemoteTabResume(tabID, resumeGen, previous)
+			a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", err.Error())
 			return
 		}
 		title := strings.TrimSpace(target.Title)
@@ -151,7 +203,7 @@ func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle 
 		}
 		a.remoteTabMu.Lock()
 		current := a.remoteTabs[tabID]
-		if current != tab || current.client != client || current.gen != gen || current.state != "ready" {
+		if current != tab || current.client != client || current.gen != connectionGen || current.routing.resumeGen != resumeGen || current.state != "ready" {
 			a.remoteTabMu.Unlock()
 			return
 		}
@@ -171,11 +223,14 @@ func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle 
 		a.remoteTabMu.Unlock()
 		a.emitRemoteEvent("remote-tab:updated", meta)
 		a.saveTabsFromRemote()
-		a.transitionRemoteTabState(tabID, gen, "ready", "ready", "")
+		a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", "")
 		a.goSafe("remoteTabResumeStatus", func() { _, _ = a.RemoteTabStatus(tabID) })
 		return
 	}
-	a.transitionRemoteTabState(tabID, gen, "ready", "ready", fmt.Sprintf("remote session %q not found", name))
+	if stillCurrent() {
+		a.rollbackRemoteTabResume(tabID, resumeGen, previous)
+		a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", fmt.Sprintf("remote session %q not found", name))
+	}
 }
 
 func (a *App) SetRemoteSessionPinned(hostID, workspace, name string, pinned bool) error {

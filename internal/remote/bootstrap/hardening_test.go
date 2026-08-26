@@ -58,6 +58,8 @@ func TestEnsureServeSerializesConcurrentClients(t *testing.T) {
 			launches.Add(1)
 			_ = os.WriteFile(paths.PortFile, []byte("127.0.0.1:45123\n"), 0o600)
 			return ok("321\n")
+		case strings.Contains(cmd, "serve --help"):
+			return ok("yes\n")
 		case strings.Contains(cmd, "ps -p 321"):
 			return ok("1\n")
 		default:

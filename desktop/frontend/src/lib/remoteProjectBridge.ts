@@ -7,6 +7,7 @@ export interface RemoteProjectBindings {
   ListRemoteProjects(): Promise<RemoteProjectView[]>;
   OpenRemoteProjectTab(hostId: string, workspace: string, opts?: RemoteTabOpenOptions): Promise<TabMeta>;
   RemoteProjectSessions(hostId: string, workspace: string): Promise<RemoteSessionView[]>;
+  EnsureRemoteProjectSessions(hostId: string, workspace: string): Promise<RemoteSessionView[]>;
   SetRemoteSessionPinned(hostId: string, workspace: string, name: string, pinned: boolean): Promise<void>;
   SetRemoteProjectTitle(hostId: string, workspace: string, title: string): Promise<void>;
   RenameRemoteProjectSession(hostId: string, workspace: string, name: string, title: string): Promise<void>;

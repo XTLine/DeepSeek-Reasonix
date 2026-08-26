@@ -12,7 +12,27 @@ export function remoteProjectKey(ref: RemoteTabRefView): string {
   return `${ref.hostId}\u0000${ref.workspace}`;
 }
 
-export function remoteServeBadgeState(view?: RemoteServerView): string {
+const REMOTE_SESSIONS_CACHE_PREFIX = "projectTree:remoteSessions:";
+
+function cacheRemoteSessions(groupKey: string, rows: RemoteSessionView[]) {
+  try {
+    localStorage.setItem(REMOTE_SESSIONS_CACHE_PREFIX + groupKey, JSON.stringify(rows));
+  } catch {
+    // Cache is an optimistic paint only.
+  }
+}
+
+function loadCachedRemoteSessions(groupKey: string): RemoteSessionView[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(REMOTE_SESSIONS_CACHE_PREFIX + groupKey) || "null") as unknown;
+    return Array.isArray(parsed) ? parsed as RemoteSessionView[] : [];
+  } catch {
+    return [];
+  }
+}
+
+export function remoteServeBadgeState(view?: RemoteServerView, busy = false): string {
+  if (busy) return "serve-busy";
   if (view?.state === "ready") return "serve-ready";
   if (view?.state === "error") return "serve-error";
   if (!view || view.state === "stopped") return "serve-idle";
@@ -111,8 +131,11 @@ export function useRemoteProjectGroups(
   const statuses = useRemoteStore((state) => state.statuses);
   const servers = useRemoteStore((state) => state.servers);
   const [sessions, setSessions] = useState<Record<string, RemoteSessionView[]>>({});
+  const [groupBusy, setGroupBusy] = useState<Record<string, boolean>>({});
+  const [groupError, setGroupError] = useState<Record<string, string>>({});
   const sessionLoads = useRef(new Map<string, number>());
   const eligibleSessionKeys = useRef(new Set<string>());
+  const groupBusyRef = useRef(new Set<string>());
   const nextLoad = useRef(0);
   const opening = useRef(new Set<string>());
   const [revision, setRevision] = useState(0);
@@ -141,6 +164,25 @@ export function useRemoteProjectGroups(
     }
   }, [showToast]);
 
+  const ensureRemoteGroupSessions = useCallback(async (hostId: string, workspace: string) => {
+    const key = `${hostId}\u0000${workspace}`;
+    if (groupBusyRef.current.has(key)) return;
+    groupBusyRef.current.add(key);
+    setGroupBusy((current) => ({ ...current, [key]: true }));
+    setGroupError((current) => ({ ...current, [key]: "" }));
+    try {
+      const rows = await app.EnsureRemoteProjectSessions(hostId, workspace);
+      cacheRemoteSessions(key, rows);
+      setSessions((current) => ({ ...current, [key]: rows }));
+      void app.RemoteServerStatus(hostId, workspace).then((view) => useRemoteStore.getState().setServer(view)).catch(() => {});
+    } catch (error) {
+      setGroupError((current) => ({ ...current, [key]: error instanceof Error ? error.message : String(error) }));
+    } finally {
+      groupBusyRef.current.delete(key);
+      setGroupBusy((current) => ({ ...current, [key]: false }));
+    }
+  }, []);
+
   const openRemoteWindow = useCallback(async (ref: RemoteTabRefView) => {
     try {
       const state = statuses[ref.hostId]?.state;
@@ -165,6 +207,7 @@ export function useRemoteProjectGroups(
     void app.RemoteProjectSessions(meta.remote.hostId, meta.remote.workspace)
       .then((rows) => {
         if (sessionLoads.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
+          cacheRemoteSessions(key, rows);
           setSessions((current) => ({ ...current, [key]: rows }));
         }
       })
@@ -173,6 +216,17 @@ export function useRemoteProjectGroups(
         if (sessionLoads.current.get(key) === load) sessionLoads.current.delete(key);
       });
   }), [groupKeys]);
+
+  useEffect(() => {
+    const seeded: Record<string, RemoteSessionView[]> = {};
+    for (const key of groupKeys) {
+      const rows = loadCachedRemoteSessions(key);
+      if (rows.length > 0) seeded[key] = rows;
+    }
+    if (Object.keys(seeded).length > 0) {
+      setSessions((current) => ({ ...seeded, ...current }));
+    }
+  }, [groupKeys]);
 
   useEffect(() => {
     void app.RemoteConnectionStatuses()
@@ -201,13 +255,10 @@ export function useRemoteProjectGroups(
     for (const key of sessionLoads.current.keys()) {
       if (!eligible.has(key)) sessionLoads.current.delete(key);
     }
-    const connected = new Set(groupKeys.filter((key) => {
-      const state = statuses[key.split("\u0000")[0]]?.state;
-      return state === "connected" || state === "degraded";
-    }));
     setSessions((current) => {
-      if (Object.keys(current).every((key) => connected.has(key))) return current;
-      const next = Object.fromEntries(Object.entries(current).filter(([key]) => connected.has(key)));
+      const retained = new Set(groupKeys);
+      if (Object.keys(current).every((key) => retained.has(key))) return current;
+      const next = Object.fromEntries(Object.entries(current).filter(([key]) => retained.has(key)));
       return next;
     });
     for (const key of eligible) {
@@ -218,6 +269,7 @@ export function useRemoteProjectGroups(
       void app.RemoteProjectSessions(hostId, workspace)
         .then((rows) => {
           if (sessionLoads.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
+            cacheRemoteSessions(key, rows);
             setSessions((current) => ({ ...current, [key]: rows }));
           }
         })
@@ -236,10 +288,54 @@ export function useRemoteProjectGroups(
     openRemoteProject,
     openRemoteWindow,
     remoteSessions: sessions,
+    remoteGroupBusy: groupBusy,
+    remoteGroupError: groupError,
+    ensureRemoteGroupSessions,
     setRemoteSessions: setSessions,
     remoteServers: servers,
     refreshRemoteSessions: () => setRevision((current) => current + 1),
   };
+}
+
+export function RemoteProjectEmptyState({
+  busy, error, ready, isExpanded, depth, classicTopics, t, onEnsure,
+}: {
+  busy: boolean;
+  error: string;
+  ready: boolean;
+  isExpanded: boolean;
+  depth: number;
+  classicTopics: boolean;
+  t: Translator;
+  onEnsure: () => void;
+}) {
+  const inner = busy ? (
+    <div className="project-tree__skeleton" style={{ paddingLeft: 14 + (depth + 1) * 16 }} aria-hidden="true">
+      <span className="project-tree__skeleton-bar" />
+      <span className="project-tree__skeleton-bar project-tree__skeleton-bar--short" />
+      <span className="project-tree__skeleton-bar" />
+      <span className="project-tree__skeleton-bar project-tree__skeleton-bar--short" />
+    </div>
+  ) : error || !ready ? (
+    <button
+      type="button"
+      className={`project-tree__remote-status${error ? " project-tree__remote-status--error" : ""}`}
+      style={{ paddingLeft: 14 + (depth + 1) * 16 }}
+      onClick={onEnsure}
+    >
+      {error ? t("projectTree.remoteConnectFailed") : t("projectTree.remoteConnect")}
+    </button>
+  ) : classicTopics ? (
+    <div className="project-tree__topic-placeholder" style={{ paddingLeft: 14 + (depth + 1) * 16 }}>
+      {t("projectTree.noTopics")}
+    </div>
+  ) : null;
+  if (!inner) return null;
+  return (
+    <div className={`project-tree__children${isExpanded ? " project-tree__children--expanded" : ""}`}>
+      <div className="project-tree__children-inner">{inner}</div>
+    </div>
+  );
 }
 
 interface RemoteMenuOptions {

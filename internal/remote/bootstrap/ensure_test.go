@@ -178,6 +178,9 @@ func TestEnsureServeReusesLiveProcess(t *testing.T) {
 		if strings.Contains(cmd, "kill -0 777") {
 			return ok("1\n") // alive
 		}
+		if strings.Contains(cmd, "serve --help") {
+			return ok("yes\n")
+		}
 		if strings.Contains(cmd, "uname") || strings.Contains(cmd, "nohup") {
 			t.Errorf("reuse path should not detect/launch; ran: %s", cmd)
 		}

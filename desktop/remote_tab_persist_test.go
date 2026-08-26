@@ -77,7 +77,7 @@ func TestRemoveRemoteHostReplacesSoleRemoteSurfaceWithLocalBlank(t *testing.T) {
 // TestRemoteTabOpenPersistRoundTrip: an open remote tab lands in
 // desktop-tabs.json; closing removes it again.
 func TestRemoteTabOpenPersistRoundTrip(t *testing.T) {
-	fs := newFakeServe(t, "s3cret", nil)
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "s1", Path: "/remote/sessions/s1.jsonl", Title: "Prior chat", Current: true}})
 	kernel := &fakeRemoteKernel{
 		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
 		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
@@ -87,7 +87,7 @@ func TestRemoteTabOpenPersistRoundTrip(t *testing.T) {
 	a := &App{remoteRuntime: kernel}
 	cleanupRemoteTabPumps(t, a)
 
-	meta, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{NewSession: true})
+	meta, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{SessionName: "s1", SessionPath: "/remote/sessions/s1.jsonl", SessionTitle: "Prior chat"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +100,9 @@ func TestRemoteTabOpenPersistRoundTrip(t *testing.T) {
 	entry := f.RemoteTabs[0]
 	if entry.ID != meta.ID || entry.HostID != "box" || entry.Workspace != "~/app" {
 		t.Fatalf("persisted entry = %+v, want id/host/workspace for %s", entry, meta.ID)
+	}
+	if entry.SessionName != "s1" || entry.SessionPath != "/remote/sessions/s1.jsonl" {
+		t.Fatalf("persisted session = %q at %q, want s1", entry.SessionName, entry.SessionPath)
 	}
 	if f.RemoteTabOrder[0] != entry.ID {
 		t.Fatalf("persisted remote order = %v, want the entry id first", f.RemoteTabOrder)
@@ -117,15 +120,16 @@ func TestRemoteTabOpenPersistRoundTrip(t *testing.T) {
 }
 
 // TestRemoteTabRestoreBuildsDisconnectedShells: restore rebuilds shells
-// without connecting anything; invalid and local-colliding ids are skipped;
-// the persisted active remote id routes to the shell.
+// without connecting anything; invalid and local-colliding ids are skipped.
+// Restored shells stay in the strip but must NOT become the startup active
+// surface — first open would otherwise land on the disconnected placeholder.
 func TestRemoteTabRestoreBuildsDisconnectedShells(t *testing.T) {
 	seedBridgeTestHost(t, "box")
 	a := &App{}
 	seedLocalTab(a, "local-1")
 	f := desktopTabsFile{
 		RemoteTabs: []desktopRemoteTabEntry{
-			{ID: "r-1", HostID: "box", Workspace: "~/app", TopicTitle: "Fix bug"},
+			{ID: "r-1", HostID: "box", Workspace: "~/app", TopicTitle: "Fix bug", SessionName: "s1", SessionPath: "/remote/sessions/s1.jsonl"},
 			{ID: "r-2", HostID: "box", Workspace: "~/web"},
 			{ID: "", HostID: "box", Workspace: "~/skip"},
 			{ID: "local-1", HostID: "box", Workspace: "~/dup"},
@@ -141,8 +145,8 @@ func TestRemoteTabRestoreBuildsDisconnectedShells(t *testing.T) {
 		t.Fatalf("restored shells = %+v", a.remoteTabs)
 	}
 	for id, tab := range a.remoteTabs {
-		if tab.state != "disconnected" || !tab.session.newSession {
-			t.Fatalf("shell %s = state %q newSession %v, want disconnected + newSession", id, tab.state, tab.session.newSession)
+		if tab.state != "disconnected" {
+			t.Fatalf("shell %s state = %q, want disconnected", id, tab.state)
 		}
 		if tab.client != nil || tab.cancel != nil {
 			t.Fatalf("shell %s connected during restore", id)
@@ -151,18 +155,21 @@ func TestRemoteTabRestoreBuildsDisconnectedShells(t *testing.T) {
 	if got := a.remoteTabs["r-1"].topicTitle; got != "Fix bug" {
 		t.Fatalf("restored title = %q, want the persisted one", got)
 	}
+	if tab := a.remoteTabs["r-1"]; tab.session.newSession || tab.session.name != "s1" || tab.session.path != "/remote/sessions/s1.jsonl" {
+		t.Fatalf("restored session identity = %+v", tab.session)
+	}
 	if got := strings.Join(a.remoteTabLayout.order, ","); got != "r-2,r-1" {
 		t.Fatalf("restored remote order = %q, want r-2,r-1", got)
 	}
-	if a.remoteTabLayout.activeID != "r-1" {
-		t.Fatalf("remoteActiveTabID = %q, want r-1", a.remoteTabLayout.activeID)
+	if a.remoteTabLayout.activeID != "" {
+		t.Fatalf("remoteActiveTabID = %q, want local startup surface", a.remoteTabLayout.activeID)
 	}
 }
 
-// TestActivateDisconnectedShellReconnects: clicking a shell (SetActiveTab)
-// drives the bootstrap — connect, serve, POST /new — reusing the shell id.
+// TestActivateDisconnectedShellReconnects resumes the persisted session in
+// the existing shell instead of replacing it with a blank conversation.
 func TestActivateDisconnectedShellReconnects(t *testing.T) {
-	fs := newFakeServe(t, "s3cret", nil)
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "s1", Path: "/remote/sessions/s1.jsonl"}})
 	kernel := &fakeRemoteKernel{
 		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
 		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
@@ -173,7 +180,7 @@ func TestActivateDisconnectedShellReconnects(t *testing.T) {
 	cleanupRemoteTabPumps(t, a)
 	a.remoteTabMu.Lock()
 	a.remoteTabs = map[string]*remoteTab{
-		"shell-1": {id: "shell-1", ref: RemoteTabRef{HostID: "box", Workspace: "~/app"}, state: "disconnected", session: remoteTabSessionState{newSession: true}, hostLabel: "box", topicTitle: "app"},
+		"shell-1": {id: "shell-1", ref: RemoteTabRef{HostID: "box", Workspace: "~/app"}, state: "disconnected", session: remoteTabSessionState{name: "s1", path: "/remote/sessions/s1.jsonl"}, hostLabel: "box", topicTitle: "Prior chat"},
 	}
 	a.remoteTabLayout.order = []string{"shell-1"}
 	a.remoteTabMu.Unlock()
@@ -182,9 +189,9 @@ func TestActivateDisconnectedShellReconnects(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForTabState(t, a, "shell-1", "ready")
-	newCalled, _, _ := fs.snapshot()
-	if newCalled != 1 {
-		t.Fatalf("POST /new called %d times, want 1 (fresh blank session)", newCalled)
+	newCalled, resumePath, _ := fs.snapshot()
+	if newCalled != 0 || resumePath != "/remote/sessions/s1.jsonl" {
+		t.Fatalf("revive called new=%d resume=%q, want persisted s1", newCalled, resumePath)
 	}
 	a.remoteTabMu.Lock()
 	active := a.remoteTabLayout.activeID

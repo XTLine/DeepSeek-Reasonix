@@ -280,6 +280,22 @@ func TestHistoryMessagesPreserveToolDetails(t *testing.T) {
 	}
 }
 
+func TestHistoryMessagesStripTransientReasoningLanguageBlock(t *testing.T) {
+	got := historyMessages([]provider.Message{
+		{Role: provider.RoleUser, Content: "<reasoning-language>\nVisible reasoning/thinking text preference: use English.\n</reasoning-language>\n\nExplain this module"},
+		{Role: provider.RoleAssistant, Content: "ok"},
+	})
+	if len(got) != 2 {
+		t.Fatalf("history length = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].Role != "user" || got[0].Content != "Explain this module" {
+		t.Fatalf("user history = %+v, want plain user text without reasoning-language", got[0])
+	}
+	if strings.Contains(got[0].Content, "<reasoning-language>") {
+		t.Fatalf("reasoning-language leaked into /history user content: %q", got[0].Content)
+	}
+}
+
 func TestSessionsListPreviewStripsTransientReasoningLanguageBlock(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")

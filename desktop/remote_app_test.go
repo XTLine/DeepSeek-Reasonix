@@ -117,6 +117,7 @@ type fakeRemoteKernel struct {
 	secretCalls       []remoteSecretAnswer
 	secretPromptIDs   []string
 	closed            bool
+	snapshotMiss      bool // ServeSnapshot reports nothing even with a ready ensureView (serve down, EnsureServer can boot it)
 }
 
 func TestRemoteConnectionErrorDetailsPreserveHostKeyMismatch(t *testing.T) {
@@ -207,7 +208,7 @@ func (f *fakeRemoteKernel) StopServer(_ string, workspace string) error {
 }
 func (f *fakeRemoteKernel) ServerStatus(string, string) RemoteServerView { return f.ensureView }
 func (f *fakeRemoteKernel) ServeSnapshot(string, string) (RemoteServerView, string, bool) {
-	if f.ensureErr != nil || f.ensureView.State != "ready" || f.ensureView.LocalURL == "" || f.ensureToken == "" {
+	if f.snapshotMiss || f.ensureErr != nil || f.ensureView.State != "ready" || f.ensureView.LocalURL == "" || f.ensureToken == "" {
 		return RemoteServerView{}, "", false
 	}
 	return f.ensureView, f.ensureToken, true

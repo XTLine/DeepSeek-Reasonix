@@ -60,6 +60,8 @@ globalThis.requestAnimationFrame = dom.window.requestAnimationFrame?.bind(dom.wi
 globalThis.cancelAnimationFrame = dom.window.cancelAnimationFrame?.bind(dom.window) ?? ((handle: number) => clearTimeout(handle));
 Object.defineProperty(elementProto, "detachEvent", { configurable: true, value: () => {} });
 
+globalThis.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
+
 const tape: string[] = [];
 let failApproval = false;
 let failOpen = false;
@@ -216,6 +218,9 @@ window.go = { main: { App: {
     tape.push(`open:${hostId}:${workspace}:${opts?.newSession ? "new" : ""}`);
     if (failOpen) throw new Error("reconnect failed");
     return { ...remoteTab, remote: { hostId, workspace } };
+  },
+  async SetActiveTab(tabID: string) {
+    tape.push(`setActive:${tabID}`);
   },
 } as Partial<AppBindings> as AppBindings } };
 
@@ -460,32 +465,27 @@ await act(async () => {
   failOpen = false;
 }
 
-// ── Restored shell: the disconnected state renders a reconnect affordance
-// whose click reopens the project (fresh blank session) ──
-await act(async () => {
-  __emitMockRemoteTab("tab-remote-1", "state", { state: "disconnected" });
-  await flush();
-});
+// Mid-flight disconnected events also refuse the placeholder.
+await act(async () => { __emitMockRemoteTab("tab-remote-1", "state", { state: "disconnected" }); await flush(); });
 {
-  const shell = document.querySelector(".remote-surface--disconnected");
-  ok(Boolean(shell), "disconnected renders the restored-shell state");
-  const reconnect = [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes("Reconnect"));
-  ok(Boolean(reconnect), "the disconnected surface offers a reconnect button");
-  await act(async () => {
-    reconnect?.click();
-    await flush();
-  });
-  ok(tape.includes("open:gpu-box:~/app:new"), "reconnect reopens the project with a fresh session");
+  ok(!document.querySelector(".remote-surface--disconnected"), "live disconnected events do not render the placeholder");
+  ok(Boolean(document.querySelector(".remote-surface--waiting")), "live disconnected events show connecting instead");
+  ok(tape.includes("setActive:tab-remote-1"), "live disconnected events trigger backend revival");
 }
 
 await act(async () => root.unmount());
 
+let restoredShellState = "";
+function RestoredShellProbe() { restoredShellState = useRemoteSession("tab-restored-shell", "disconnected").state; return null; }
+const restoredShellRoot = createRoot(document.getElementById("root")!);
+await act(async () => { restoredShellRoot.render(<RestoredShellProbe />); await flush(); });
+ok(restoredShellState === "connecting", "restored disconnected shells mount as connecting");
+ok(tape.includes("setActive:tab-restored-shell"), "restored disconnected shells trigger backend revival");
+await act(async () => restoredShellRoot.unmount());
+
 // ── Hook: optimistic user bubble + command forwarding ──
 let probe: RemoteSessionApi | undefined;
-function HookProbe({ tabId = "tab-remote-2" }: { tabId?: string }) {
-  probe = useRemoteSession(tabId);
-  return null;
-}
+function HookProbe({ tabId = "tab-remote-2" }: { tabId?: string }) { probe = useRemoteSession(tabId); return null; }
 const probeRoot = createRoot(document.createElement("div"));
 await act(async () => { probeRoot.render(<LocaleProvider><HookProbe /></LocaleProvider>); await flush(); });
 ok(probe?.state === "ready", "a successful fenced snapshot recovers a ready event missed before listener mount");

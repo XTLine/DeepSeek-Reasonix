@@ -99,11 +99,13 @@ func (a *App) remoteTabsFileEntries(localIDs []string) ([]desktopRemoteTabEntry,
 			continue
 		}
 		entries = append(entries, desktopRemoteTabEntry{
-			ID:         tab.id,
-			HostID:     tab.ref.HostID,
-			Workspace:  tab.ref.Workspace,
-			TopicTitle: tab.topicTitle,
-			Model:      tab.model,
+			ID:          tab.id,
+			HostID:      tab.ref.HostID,
+			Workspace:   tab.ref.Workspace,
+			TopicTitle:  tab.topicTitle,
+			Model:       tab.model,
+			SessionName: tab.session.name,
+			SessionPath: tab.session.path,
 		})
 	}
 	order := append([]string(nil), ids...)

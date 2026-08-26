@@ -202,6 +202,43 @@ func (a *App) serveClientForRef(hostID, workspace string) (*http.Client, string,
 	return client, view.LocalURL, cancel, nil
 }
 
+// serveClientEnsured may connect the host and start Serve, so only explicit
+// user-intent paths should use it. Passive listings remain read-only.
+func (a *App) serveClientEnsured(hostID, workspace string) (*http.Client, string, func(), error) {
+	if client, base, done, err := a.serveClientForRef(hostID, workspace); err == nil {
+		return client, base, done, nil
+	}
+	rt, err := a.remoteRT()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if err := rt.Connect(hostID); err != nil {
+		return nil, "", nil, err
+	}
+	if err := waitForRemoteHost(rt, hostID, 60*time.Second); err != nil {
+		return nil, "", nil, err
+	}
+	bootCtx := a.bootContext()
+	if bootCtx == nil {
+		bootCtx = context.Background()
+	}
+	view, token, err := rt.EnsureServer(bootCtx, hostID, workspace)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	callCtx, cancel := context.WithTimeout(bootCtx, 30*time.Second)
+	client, err := newServeHTTPClient(view.LocalURL)
+	if err != nil {
+		cancel()
+		return nil, "", nil, err
+	}
+	if err := serveHandshake(callCtx, client, view.LocalURL, token); err != nil {
+		cancel()
+		return nil, "", nil, err
+	}
+	return client, view.LocalURL, cancel, nil
+}
+
 // RemoteProjectSessions lists a remote project's serve sessions for the
 // project tree. Live-tab fast paths, desktop title overrides and pinned
 // synthesis arrive with the remote sessions PR.
@@ -213,6 +250,23 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 	defer done()
 	ctx, cancel := commandContext(a)
 	defer cancel()
+	return a.remoteProjectSessions(ctx, client, base, hostID, workspace)
+}
+
+// EnsureRemoteProjectSessions is the explicit group-open listing path. It can
+// wake the SSH host and Serve before returning sessions.
+func (a *App) EnsureRemoteProjectSessions(hostID, workspace string) ([]RemoteSessionView, error) {
+	client, base, done, err := a.serveClientEnsured(hostID, workspace)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	ctx, cancel := commandContext(a)
+	defer cancel()
+	return a.remoteProjectSessions(ctx, client, base, hostID, workspace)
+}
+
+func (a *App) remoteProjectSessions(ctx context.Context, client *http.Client, base, hostID, workspace string) ([]RemoteSessionView, error) {
 	a.remoteTabMu.Lock()
 	var observedTab *remoteTab
 	var observedRevision uint64

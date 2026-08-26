@@ -70,7 +70,6 @@ type remoteTab struct {
 	// modelSeq orders concurrent writes for deterministic proxy registration.
 	model    string
 	modelSeq uint64
-
 	// Bridge fields are protected by App.remoteTabMu. gen fences old pumps;
 	// client preserves cookies and token permits a new handshake.
 	client *http.Client
@@ -137,6 +136,16 @@ func (a *App) ListRemoteProjects() ([]RemoteProjectView, error) {
 func (a *App) AddRemoteProject(hostID, workspace string) (RemoteProjectView, error) {
 	hostID = strings.TrimSpace(hostID)
 	workspace = strings.TrimSpace(workspace)
+	// Fast path: already pinned (the common case — OpenRemoteProjectTab
+	// re-registers on every click). A read-only overlap check avoids taking
+	// the config edit lock and rewriting the file per session switch.
+	if cfg, err := config.Load(); err == nil {
+		if merged, ok := resolveOverlappingWorkspace(cfg.Remote.Projects, hostID, workspace); ok {
+			view := remoteProjectEntryToView(config.RemoteProjectEntry{HostID: hostID, Workspace: merged})
+			view.Merged = true
+			return view, nil
+		}
+	}
 	var view RemoteProjectView
 	err := editUserConfig(func(c *config.Config) error {
 		// Overlapping pins on one host collapse into the existing group.
@@ -403,7 +412,9 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 			a.emitRemoteTabState(registration.reuseID, "connecting", "")
 			a.goSafe("remoteTabServe", func() { a.bootstrapRemoteTab(registration.reuseID, hostID, workspace) })
 		} else if name := strings.TrimSpace(opts.SessionName); name != "" || strings.TrimSpace(opts.SessionPath) != "" {
-			a.resumeRemoteTabSessionPath(registration.reuseID, name, opts.SessionPath, opts.SessionTitle)
+			if err := a.beginRemoteTabResume(registration.reuseID, name, opts.SessionPath, opts.SessionTitle); err != nil {
+				return TabMeta{}, err
+			}
 		} else {
 			// Reuse the pending blank like EnsureBlankTab does locally; only
 			// reset again once the current session earned content.
@@ -444,7 +455,9 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 // restoreRemoteTabShells rebuilds disconnected registry entries from the
 // persisted tab file so remote tabs survive a restart. Shells never connect
 // on their own: activating one (SetActiveTab) or opening its project
-// bootstraps the reconnect, which lands in a fresh blank session.
+// bootstraps the reconnect. Restored shells stay in the strip/tree only —
+// first open follows the local active surface, because no remote connection
+// exists yet and the disconnected placeholder must not become the startup page.
 func (a *App) restoreRemoteTabShells(f desktopTabsFile) {
 	if len(f.RemoteTabs) == 0 {
 		return
@@ -461,6 +474,7 @@ func (a *App) restoreRemoteTabShells(f desktopTabsFile) {
 
 	cfg, cfgErr := config.Load()
 	a.remoteTabMu.Lock()
+	defer a.remoteTabMu.Unlock()
 	if a.remoteTabs == nil {
 		a.remoteTabs = map[string]*remoteTab{}
 	}
@@ -490,8 +504,13 @@ func (a *App) restoreRemoteTabShells(f desktopTabsFile) {
 		}
 		restored := &remoteTab{
 			id: id, ref: RemoteTabRef{HostID: hostID, Workspace: ws},
-			state: "disconnected", session: remoteTabSessionState{newSession: true},
+			state: "disconnected",
+			session: remoteTabSessionState{
+				newSession: strings.TrimSpace(entry.SessionName) == "" && strings.TrimSpace(entry.SessionPath) == "",
+				name: strings.TrimSpace(entry.SessionName), path: strings.TrimSpace(entry.SessionPath),
+			},
 			hostLabel: hostLabel, topicTitle: title, model: model,
+			routing: remoteTabSessionRouting{currentPath: strings.TrimSpace(entry.SessionPath), running: map[string]bool{}},
 		}
 		restored.modelSeq = remoteTabModelSeq.Add(1)
 		a.remoteTabs[id] = restored
@@ -511,10 +530,8 @@ func (a *App) restoreRemoteTabShells(f desktopTabsFile) {
 			seen[id] = true
 		}
 	}
-	if f.ActiveTab != "" && a.remoteTabs[f.ActiveTab] != nil {
-		a.remoteTabLayout.activeID = f.ActiveTab
-	}
-	a.remoteTabMu.Unlock()
+	// Restored shells stay selectable in the strip, but startup follows the
+	// live local surface until the user explicitly revives a remote session.
 }
 
 // removeRemoteTabOrderID drops one id from the remote strip order.
@@ -567,7 +584,9 @@ func remoteTabMetaLocked(tab *remoteTab) TabMeta {
 		Scope:           "project",
 		WorkspaceRoot:   tab.ref.Workspace,
 		WorkspaceName:   remoteWorkspaceName(tab.ref.Workspace),
+		TopicID:         remoteTabTopicID(tab),
 		TopicTitle:      tab.topicTitle,
+		SessionPath:     tab.session.path,
 		Label:           label,
 		Mode:            "normal",
 		Active:          true,
@@ -582,6 +601,13 @@ func remoteTabMetaLocked(tab *remoteTab) TabMeta {
 		CancelRequested: tab.runtime.cancelRequested,
 		Cancellable:     tab.runtime.cancellable,
 	}
+}
+
+func remoteTabTopicID(tab *remoteTab) string {
+	if tab == nil {
+		return ""
+	}
+	return tab.ref.HostID + "\x00" + tab.ref.Workspace + "\x00" + tab.session.name
 }
 
 func (a *App) remoteTabMetaSnapshot(tabID string) (TabMeta, bool) {
@@ -691,6 +717,7 @@ func (a *App) bootstrapRemoteTab(tabID, hostID, workspace string) {
 	}
 	// The confirmed /events pump makes the session usable without losing prompts.
 	// Saving the explorer default is auxiliary and cannot downgrade a healthy tab.
+	a.saveTabsFromRemote()
 	_ = a.saveLastRemoteWorkspace(hostID, workspace)
 }
 

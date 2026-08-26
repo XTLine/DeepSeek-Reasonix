@@ -74,7 +74,7 @@ window.go = { main: { App: {
   },
 } as Partial<AppBindings> as AppBindings } };
 
-const host = { id: "box", label: "box", host: "box.test", port: 22, user: "dev", identityFile: "", proxyJump: "", defaultWorkspace: "/srv/app", serveInstall: "auto", credentialMode: "remote", useSSHConfig: false };
+const host = { id: "box", label: "box", host: "box.test", port: 22, user: "dev", identityFile: "", proxyJump: "", defaultWorkspace: "/srv/app", serveInstall: "auto", useSSHConfig: false };
 useRemoteStore.getState().setHosts([host]);
 useRemoteStore.getState().openExplorer("box");
 useRemoteStore.getState().setExplorerTab("server");
@@ -134,7 +134,7 @@ await act(async () => {
   useRemoteStore.getState().setExplorerTab("server");
   useRemoteStore.getState().setHosts([
     host,
-    { id: "bare", label: "bare", host: "bare.test", port: 22, user: "dev", identityFile: "", proxyJump: "", defaultWorkspace: "", serveInstall: "auto", credentialMode: "remote", useSSHConfig: false },
+    { id: "bare", label: "bare", host: "bare.test", port: 22, user: "dev", identityFile: "", proxyJump: "", defaultWorkspace: "", serveInstall: "auto", useSSHConfig: false },
   ]);
   useRemoteStore.getState().applyStatus({ hostId: "bare", state: "connected" });
   await Promise.resolve();

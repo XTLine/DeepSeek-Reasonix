@@ -3,11 +3,13 @@ package main
 import "strings"
 
 type desktopRemoteTabEntry struct {
-	ID         string `json:"id"`
-	HostID     string `json:"hostId"`
-	Workspace  string `json:"workspace"`
-	TopicTitle string `json:"topicTitle,omitempty"`
-	Model      string `json:"model,omitempty"`
+	ID          string `json:"id"`
+	HostID      string `json:"hostId"`
+	Workspace   string `json:"workspace"`
+	TopicTitle  string `json:"topicTitle,omitempty"`
+	Model       string `json:"model,omitempty"`
+	SessionName string `json:"sessionName,omitempty"`
+	SessionPath string `json:"sessionPath,omitempty"`
 }
 
 func singleSurfaceLayoutStyle(style string) bool {

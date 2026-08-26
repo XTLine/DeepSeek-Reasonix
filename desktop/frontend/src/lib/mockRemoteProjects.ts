@@ -66,6 +66,9 @@ export function createMockRemoteProjects(): {
     async RemoteProjectSessions(hostId, workspace) {
       return (sessions[key(hostId, workspace)] ?? []).map((row) => ({ ...row }));
     },
+    async EnsureRemoteProjectSessions(hostId, workspace) {
+      return (sessions[key(hostId, workspace)] ?? []).map((row) => ({ ...row }));
+    },
     async SetRemoteSessionPinned(hostId, workspace, name, pinned) {
       const row = (sessions[key(hostId, workspace)] ?? []).find((item) => item.name === name);
       if (row) row.pinned = pinned;

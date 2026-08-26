@@ -29,6 +29,8 @@ const composerSource = readFileSync(resolve(here, "../components/Composer.tsx"),
 const contentMenuSource = readFileSync(resolve(here, "../components/ComposerContentMenuActions.tsx"), "utf8");
 const remoteIntegrationSource = readFileSync(resolve(here, "../lib/useRemoteComposerIntegration.ts"), "utf8");
 const topicbarMenuSource = readFileSync(resolve(here, "../components/TopicbarMoreMenuContent.tsx"), "utf8");
+const bridgeSource = readFileSync(resolve(here, "../lib/remoteProjectBridge.ts"), "utf8");
+const remoteOpenSource = readFileSync(resolve(here, "../../../remote_tab_open_session.go"), "utf8");
 
 ok(
   /remoteSession: \{ hostId: node\.remote!\.hostId, workspace: node\.remote!\.workspace, name: row\.name, path: row\.path, title: row\.title \}/.test(remoteSource) &&
@@ -45,7 +47,7 @@ ok(
   "sessions are fetched through the bridge",
 );
 ok(
-  /state === "connected" \|\| state === "degraded"/.test(remoteSource),
+  /state !== "connected" && state !== "degraded"/.test(remoteSource),
   "session fetch waits for a connected host",
 );
 ok(
@@ -66,13 +68,13 @@ ok(
   "unpin removes the registration and refreshes the tree",
 );
 ok(
-  /project-tree__remote-badge--\$\{remoteServeBadgeState\(remoteServers\[node\.remote\.hostId\]\?\.\[node\.remote\.workspace\]\)\}/.test(source),
+  /remoteServeBadgeState\(remoteServers\[node\.remote\.hostId\]\?\.\[node\.remote\.workspace\], remoteGroupBusy/.test(source),
   "the group row badge reflects the workspace-specific serve state",
 );
 ok(
   /sessionLoads\.current\.has\(key\)/.test(remoteSource) &&
     /eligibleSessionKeys\.current\.has\(key\)/.test(remoteSource) &&
-    /filter\(\(\[key\]\) => connected\.has\(key\)\)/.test(remoteSource),
+    /filter\(\(\[key\]\) => retained\.has\(key\)\)/.test(remoteSource),
   "session fetches deduplicate in flight and discard disconnected or stale group results",
 );
 ok(
@@ -182,6 +184,27 @@ ok(
   /SetRemoteTabComposerProfile\(activeTabId, controllerMode, toolApprovalMode, ""\)/.test(modeActionsSource) &&
     !/Promise\.allSettled\(\[[\s\S]*?SetRemoteTabGoal\(activeTabId, goal\)/.test(modeActionsSource),
   "remote collaboration changes rely on the atomic backend transaction instead of tunnel rollback",
+);
+ok(
+  /EnsureRemoteProjectSessions\(hostId: string, workspace: string\): Promise<RemoteSessionView\[\]>;/.test(bridgeSource),
+  "the bridge exposes the explicit-intent ensure listing",
+);
+ok(
+  /app\.EnsureRemoteProjectSessions\(hostId, workspace\)/.test(remoteSource) &&
+    /if \(groupBusyRef\.current\.has\(key\)\) return;/.test(remoteSource),
+  "a group click cold-starts the serve through the deduped ensure listing",
+);
+ok(
+  /if \(!\(cached && cached\.length > 0\)\) \{\s*ensureRemoteGroupSessions\(node\.remote\.hostId, node\.remote\.workspace\);/.test(source),
+  "the ensure path fires on any expand without cached rows (stale serve state cannot block it)",
+);
+ok(
+  /project-tree__remote-status/.test(remoteSource) && /projectTree\.remoteConnectFailed/.test(remoteSource),
+  "remote groups render retryable connect/error rows instead of going silent",
+);
+ok(
+  /tab\.routing\.resumeGen\+\+[\s\S]*?a\.goSafe\("remoteTabResume"/.test(remoteOpenSource),
+  "session switches resume in the background behind a generation guard",
 );
 
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
