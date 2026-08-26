@@ -548,7 +548,7 @@ func TestRemoteResumeBuffersTargetFramesUntilPostCommit(t *testing.T) {
 		pending := len(a.remoteTabs[meta.ID].pendingEvents)
 		buffered := len(a.remoteTabs[meta.ID].routing.rehydratingFrames)
 		a.remoteTabMu.Unlock()
-		if pending == 1 && buffered == 2 {
+		if pending == 1 && buffered == 3 {
 			break
 		}
 		select {
@@ -574,10 +574,13 @@ func TestRemoteResumeBuffersTargetFramesUntilPostCommit(t *testing.T) {
 		t.Fatalf("committed resume emitted %d ready barriers, want %d: %v", got, readyBefore+1, log.recorded())
 	}
 	events := log.recorded()
-	readyIndex, firstIndex, secondIndex := -1, -1, -1
+	readyIndex, approvalIndex, firstIndex, secondIndex := -1, -1, -1, -1
 	for i, got := range events {
 		if strings.HasPrefix(got, readyPrefix+" ") {
 			readyIndex = i
+		}
+		if strings.Contains(got, `"id":"target-approval"`) {
+			approvalIndex = i
 		}
 		if strings.Contains(got, `"text":"first retained delta"`) {
 			firstIndex = i
@@ -586,7 +589,7 @@ func TestRemoteResumeBuffersTargetFramesUntilPostCommit(t *testing.T) {
 			secondIndex = i
 		}
 	}
-	if readyIndex < 0 || firstIndex <= readyIndex || secondIndex <= firstIndex {
+	if readyIndex < 0 || approvalIndex <= readyIndex || firstIndex <= approvalIndex || secondIndex <= firstIndex {
 		t.Fatalf("buffered target frames were not replayed in order after ready: %v", events)
 	}
 	a.remoteTabMu.Lock()

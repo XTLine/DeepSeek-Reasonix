@@ -148,8 +148,10 @@ func (a *App) bufferRemoteTabResumeFrame(tabID string, gen uint64, sessionPath, 
 		tab.pendingEvents[key] = append(json.RawMessage(nil), frame...)
 		tab.runtime.pendingPrompt = true
 		tab.runtime.cancellable = true
-	} else {
-		tab.routing.rehydratingFrames = append(tab.routing.rehydratingFrames, append(json.RawMessage(nil), frame...))
 	}
+	// Actionable frames must also cross the same fenced handoff as ordinary
+	// output. Snapshot hydration deduplicates prompt IDs against live-buffered
+	// events, while this replay closes the window after snapshot capture.
+	tab.routing.rehydratingFrames = append(tab.routing.rehydratingFrames, append(json.RawMessage(nil), frame...))
 	return true
 }

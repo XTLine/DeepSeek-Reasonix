@@ -2997,20 +2997,14 @@ func (c *Controller) NewSession() error {
 		freshPath = agent.NewSessionPath(c.sessionDir, c.label)
 	}
 	freshSession := agent.NewSession(c.systemPrompt)
-	if freshPath != oldPath {
-		if err := c.prepareSessionTransition(freshPath, "new", freshSession); err != nil {
-			return fmt.Errorf("bind new session: %w", err)
-		}
+	commitTransition, err := c.prepareSessionTransition(freshPath, "new", freshSession)
+	if err != nil {
+		return fmt.Errorf("bind new session: %w", err)
 	}
 	// Hold snapshotMu across the swap so an in-flight save cannot pair the old
 	// path with the fresh session (or the fresh path with the old session).
 	c.snapshotMu.Lock()
-	c.mu.Lock()
-	c.sessionPath = freshPath
-	c.guardianPath = guardian.PathFor(freshPath)
-	c.mu.Unlock()
-	c.setActiveJobSession(c.SessionPath())
-	c.executor.SetSession(freshSession)
+	commitTransition.publish()
 	c.bindExecutorProjection(c.SessionPath(), false)
 	if c.guardianSess != nil {
 		c.guardianSess.Reset()
@@ -3094,23 +3088,17 @@ func (c *Controller) ClearSession() error {
 		freshPath = agent.NewSessionPath(c.sessionDir, c.label)
 	}
 	freshSession := agent.NewSession(c.systemPrompt)
-	if freshPath != oldPath {
-		if err := c.prepareSessionTransition(freshPath, "clear", freshSession); err != nil {
-			if destroy.Async {
-				destroy.Finish()
-			}
-			c.snapshotMu.Unlock()
-			return fmt.Errorf("bind cleared session: %w", err)
+	commitTransition, err := c.prepareSessionTransition(freshPath, "clear", freshSession)
+	if err != nil {
+		if destroy.Async {
+			destroy.Finish()
 		}
+		c.snapshotMu.Unlock()
+		return fmt.Errorf("bind cleared session: %w", err)
 	}
 	c.hooks.SessionEnd(context.Background(), "clear")
 	c.extensionSessionEvent(extension.PointSessionEnd, dispatch.PhaseEnd, oldPath)
-	c.mu.Lock()
-	c.sessionPath = freshPath
-	c.guardianPath = guardian.PathFor(freshPath)
-	c.mu.Unlock()
-	c.setActiveJobSession(c.SessionPath())
-	c.executor.SetSession(freshSession)
+	commitTransition.publish()
 	c.bindExecutorProjection(c.SessionPath(), false)
 	if c.guardianSess != nil {
 		c.guardianSess.Reset()
@@ -3332,21 +3320,17 @@ func (c *Controller) forkNamedReady(turn int, name string, switchToFork bool) (s
 		return "", c.rewindFail(err)
 	}
 	if switchToFork {
-		if err := c.prepareSessionTransition(newPath, "fork", sess); err != nil {
+		commitTransition, err := c.prepareSessionTransition(newPath, "fork", sess)
+		if err != nil {
 			return "", c.rewindFail(fmt.Errorf("bind fork session: %w", err))
 		}
 		// See snapshotMu: the swap must not interleave with an in-flight save.
 		c.snapshotMu.Lock()
-		c.executor.SetSession(sess)
-		c.mu.Lock()
-		c.sessionPath = newPath
-		c.guardianPath = guardian.PathFor(newPath)
-		c.mu.Unlock()
+		commitTransition.publish()
 		// Load the child sidecar when the covered prefix survived the fork. The
 		// loader rebinds its lineage key without touching the parent's sidecar.
 		c.bindExecutorProjection(newPath, true)
 		c.ResetPlannerSession()
-		c.setActiveJobSession(newPath)
 		c.rebindCheckpoints(newPath)
 		// A historical fork rewinds before later failures, so it starts with no
 		// active recovery event even though it inherits the session preference.
@@ -3425,19 +3409,15 @@ func (c *Controller) Branch(name string) (string, error) {
 	}); err != nil {
 		return "", c.rewindFail(err)
 	}
-	if err := c.prepareSessionTransition(newPath, "branch", sess); err != nil {
+	commitTransition, err := c.prepareSessionTransition(newPath, "branch", sess)
+	if err != nil {
 		return "", c.rewindFail(fmt.Errorf("bind branch session: %w", err))
 	}
 	// See snapshotMu: the swap must not interleave with an in-flight save.
 	c.snapshotMu.Lock()
-	c.executor.SetSession(sess)
-	c.mu.Lock()
-	c.sessionPath = newPath
-	c.guardianPath = guardian.PathFor(newPath)
-	c.mu.Unlock()
+	commitTransition.publish()
 	c.bindExecutorProjection(newPath, true)
 	c.ResetPlannerSession()
-	c.setActiveJobSession(newPath)
 	c.rebindCheckpoints(newPath)
 	if c.guardianSess != nil {
 		c.guardianSess.Reset()
@@ -3490,21 +3470,15 @@ func (c *Controller) SwitchBranch(ref string) (agent.BranchInfo, error) {
 	if err != nil {
 		return agent.BranchInfo{}, c.rewindFail(err)
 	}
-	if err := c.prepareSessionTransition(match.Path, "switch", loaded); err != nil {
+	commitTransition, err := c.prepareSessionTransition(match.Path, "switch", loaded)
+	if err != nil {
 		return agent.BranchInfo{}, c.rewindFail(fmt.Errorf("bind switched session: %w", err))
 	}
 	// See snapshotMu: the swap must not interleave with an in-flight save.
 	c.snapshotMu.Lock()
-	if c.executor != nil {
-		c.executor.SetSession(loaded)
-	}
-	c.mu.Lock()
-	c.sessionPath = match.Path
-	c.guardianPath = guardian.PathFor(match.Path)
-	c.mu.Unlock()
+	commitTransition.publish()
 	c.bindExecutorProjection(match.Path, true)
 	c.ResetPlannerSession()
-	c.setActiveJobSession(match.Path)
 	c.rebindCheckpoints(match.Path)
 	c.restoreTerminalGoalTodos(match.Path)
 	c.loadGuardianSession()

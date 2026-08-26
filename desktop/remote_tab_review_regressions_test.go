@@ -213,6 +213,70 @@ func TestRemoteResumeReplayStopsAfterLaterSessionAdoption(t *testing.T) {
 	}
 }
 
+func TestRemoteResumeReplaysPromptArrivingDuringDrain(t *testing.T) {
+	const targetPath = "/sessions/target.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		routing: remoteTabSessionRouting{
+			currentPath: targetPath, rehydratingPath: targetPath, running: map[string]bool{},
+			rehydratingFrames: []json.RawMessage{
+				json.RawMessage(`{"kind":"text","text":"drain-start","sessionPath":"/sessions/target.jsonl"}`),
+			},
+		},
+	}
+	firstPublished := make(chan struct{})
+	release := make(chan struct{})
+	log := &eventLog{}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	a.remoteEventHook = func(name string, payload any) {
+		log.add(name, payload)
+		data, _ := json.Marshal(payload)
+		if name == "remote-tab:"+tab.id+":event" && strings.Contains(string(data), "drain-start") {
+			close(firstPublished)
+			<-release
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		a.publishRemoteTabResumeReady(tab.id, tab, client, tab.gen, remoteTabProvisionalResume{targetPath: targetPath, active: true})
+		close(done)
+	}()
+	select {
+	case <-firstPublished:
+	case <-time.After(time.Second):
+		t.Fatal("resume drain did not publish its first frame")
+	}
+	// The aggregate snapshot has already copied an empty prompt set. A prompt
+	// arriving now must therefore reach the frontend through the fenced drain.
+	a.remoteTabMu.Lock()
+	snapshotPending := len(tab.pendingEvents)
+	a.remoteTabMu.Unlock()
+	if snapshotPending != 0 {
+		t.Fatalf("snapshot pending events = %d, want 0", snapshotPending)
+	}
+	approval := json.RawMessage(`{"kind":"approval_request","approval":{"id":"during-drain"},"sessionPath":"/sessions/target.jsonl","sessionCurrent":true}`)
+	if !a.bufferRemoteTabResumeFrame(tab.id, tab.gen, targetPath, "approval_request", approval) {
+		t.Fatal("prompt arriving during drain was not buffered")
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resume drain did not finish")
+	}
+	events := strings.Join(log.recorded(), "\n")
+	if !strings.Contains(events, `"id":"during-drain"`) {
+		t.Fatalf("prompt arriving after snapshot was not replayed: %s", events)
+	}
+	a.remoteTabMu.Lock()
+	pending, rehydrating := len(tab.pendingEvents), tab.routing.rehydratingPath
+	a.remoteTabMu.Unlock()
+	if pending != 1 || rehydrating != "" {
+		t.Fatalf("post-drain pending/rehydrating = %d/%q, want 1/empty", pending, rehydrating)
+	}
+}
+
 func TestExternalSessionAdoptionResetsAndSeedsForegroundRuntime(t *testing.T) {
 	const oldPath = "/sessions/old.jsonl"
 	const targetPath = "/sessions/target.jsonl"
