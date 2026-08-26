@@ -239,7 +239,7 @@ func TestRemoteResumeReplaysPromptArrivingDuringDrain(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		a.publishRemoteTabResumeReady(tab.id, tab, client, tab.gen, remoteTabProvisionalResume{targetPath: targetPath, active: true})
+		a.publishRemoteTabResumeReady(tab.id, tab, client, tab.gen, targetPath)
 		close(done)
 	}()
 	select {
