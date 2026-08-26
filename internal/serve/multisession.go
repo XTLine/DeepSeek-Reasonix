@@ -124,12 +124,13 @@ func (s *Server) setControllerPath(ctrl *control.Controller, path string) {
 // complete boot contract can inject buildControllerWithOptions.
 func (s *Server) buildTagged(ctx context.Context, ref string, inheritTemp bool) (*control.Controller, *sessionTagSink, error) {
 	tag := newSessionTagSink(s.bc)
-	opts := boot.Options{
-		Model:       ref,
-		Sink:        tag,
-		Stderr:      os.Stderr,
-		StatsSource: "serve",
+	opts := s.buildOptions
+	opts.Model = ref
+	opts.Sink = tag
+	if opts.Stderr == nil {
+		opts.Stderr = os.Stderr
 	}
+	opts.StatsSource = "serve"
 	if cur, ok := s.ctl().(*control.Controller); ok && cur != nil {
 		opts.SessionDir = cur.SessionDir()
 		opts.WorkspaceRoot = cur.WorkspaceRoot()

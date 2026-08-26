@@ -230,7 +230,8 @@ func TestUnknownBackgroundPathReconcilesStatusOnlyOnce(t *testing.T) {
 		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
 	}
 	seedBridgeTestHost(t, "box")
-	a := &App{remoteRuntime: kernel}
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
 	cleanupRemoteTabPumps(t, a)
 	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{})
 	a.remoteTabMu.Lock()
@@ -246,15 +247,19 @@ func TestUnknownBackgroundPathReconcilesStatusOnlyOnce(t *testing.T) {
 		return count
 	}
 	before := countStatusRequests()
-	if a.routeRemoteTabFrameReconciled(meta.ID, gen, backgroundPath, "content") {
+	beforeRefreshes := log.count("remote-tab:updated")
+	if a.routeRemoteTabFrameReconciled(meta.ID, gen, backgroundPath, "notice") {
 		t.Fatal("unknown background frame was routed to the foreground")
 	}
-	if a.routeRemoteTabFrameReconciled(meta.ID, gen, backgroundPath, "notice") {
+	if a.routeRemoteTabFrameReconciled(meta.ID, gen, backgroundPath, "turn_done") {
 		t.Fatal("known background frame was routed to the foreground")
 	}
 	after := countStatusRequests()
 	if after-before != 1 {
 		t.Fatalf("unknown background path triggered %d status requests, want 1", after-before)
+	}
+	if got := log.count("remote-tab:updated") - beforeRefreshes; got != 1 {
+		t.Fatalf("unknown background path emitted %d row refreshes, want 1", got)
 	}
 }
 

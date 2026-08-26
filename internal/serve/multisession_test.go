@@ -268,6 +268,7 @@ func TestBuildTaggedInheritsWorkspacePlacement(t *testing.T) {
 	bc := NewBroadcaster()
 	ctrl := control.New(control.Options{Sink: bc, SessionDir: sessionDir, WorkspaceRoot: root})
 	server := New(ctrl, bc, config.ServeConfig{})
+	server.SetControllerBuildOptions(boot.Options{MaxSteps: 7, MaxStepsKey: "--max-steps", AgentPreset: "delivery"})
 	var got boot.Options
 	server.buildControllerWithOptions = func(_ context.Context, _ string, opts boot.Options) (*control.Controller, error) {
 		got = opts
@@ -280,6 +281,9 @@ func TestBuildTaggedInheritsWorkspacePlacement(t *testing.T) {
 	defer built.Close()
 	if got.SessionDir != sessionDir || got.WorkspaceRoot != root {
 		t.Fatalf("build placement = (%q, %q), want (%q, %q)", got.SessionDir, got.WorkspaceRoot, sessionDir, root)
+	}
+	if got.MaxSteps != 7 || got.MaxStepsKey != "--max-steps" || got.AgentPreset != "delivery" {
+		t.Fatalf("process build options = max:%d key:%q preset:%q, want 7/--max-steps/delivery", got.MaxSteps, got.MaxStepsKey, got.AgentPreset)
 	}
 }
 

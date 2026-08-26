@@ -731,6 +731,14 @@ func (m *desktopRemoteManager) UpdateHost(id string, in RemoteHostInput) (Remote
 	}); err != nil {
 		return RemoteHostView{}, err
 	}
+	if !merged.CredentialProxyEnabled() {
+		m.mu.Lock()
+		mh := m.hosts[id]
+		m.mu.Unlock()
+		if mh != nil {
+			mh.credWatch.stop()
+		}
+	}
 	return hostEntryToView(merged), nil
 }
 

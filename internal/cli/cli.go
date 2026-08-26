@@ -931,10 +931,7 @@ func runServeWithOptions(args []string, opts serveRunOptions) int {
 	// Keep the browser reachable when the selected provider has no saved key.
 	// The loopback-only provider setup surface stores the missing credential and
 	// rebuilds this controller in place before the normal web UI is exposed.
-	ctrl, err := setupProfileWithOverrides(ctx, *model, *maxSteps, false, sessionTag, cliBuildOverrides{
-		Preset:             deprecatedMode,
-		OnSessionRecovered: cliSessionRecoveredHandler(leases),
-	})
+	ctrl, serveBuildOpts, err := setupCLIMultiSessionProfile(ctx, *model, *maxSteps, deprecatedMode, sessionTag, leases)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 		return 1
@@ -961,7 +958,7 @@ func runServeWithOptions(args []string, opts serveRunOptions) int {
 		return 1
 	}
 
-	srv := newCLIMultiSessionServer(ctrl, bc, sessionTag, serveCfg, leases)
+	srv := newCLIMultiSessionServer(ctrl, bc, sessionTag, serveCfg, leases, serveBuildOpts)
 	defer srv.Close()
 	return runServeFrontend(ctrl, srv, serveCfg, serveFrontendOptions{
 		command: opts.command, address: *addr,

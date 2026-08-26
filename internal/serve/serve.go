@@ -63,6 +63,9 @@ type Server struct {
 	// uses boot.Build; the legacy builder above stays source-compatible with
 	// existing switch-model tests.
 	buildControllerWithOptions func(ctx context.Context, ref string, opts boot.Options) (*control.Controller, error)
+	// buildOptions preserves process-local CLI knobs when multi-session Serve
+	// creates a foreground replacement after detaching a busy controller.
+	buildOptions boot.Options
 	// rebuildController rebuilds the same model/runtime generation for an
 	// extension reload. Tests inject it to exercise publication and failure
 	// paths without starting real providers or sidecars.
@@ -85,6 +88,13 @@ type Server struct {
 	detached   map[string]*detachedSession
 	tagsMu     sync.Mutex
 	tags       map[*control.Controller]*sessionTagSink
+}
+
+// SetControllerBuildOptions records the process-local options used to build
+// Serve's initial controller. Replacement controllers override only fields
+// that necessarily change with their session tag and active model.
+func (s *Server) SetControllerBuildOptions(opts boot.Options) {
+	s.buildOptions = opts
 }
 
 const sessionPathHeader = "X-Reasonix-Session-Path"

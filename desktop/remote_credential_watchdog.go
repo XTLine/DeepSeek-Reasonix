@@ -45,6 +45,10 @@ func (m *desktopRemoteManager) startCredentialWatchdogIfEnabled(mh *managedHost,
 	entry, err := configuredRemoteHost(hostID)
 	if err == nil && entry.CredentialProxyEnabled() {
 		m.startCredentialWatchdog(mh, hostID, workspace)
+		return
+	}
+	if mh != nil {
+		mh.credWatch.stop()
 	}
 }
 
@@ -91,12 +95,17 @@ func (m *desktopRemoteManager) startCredentialWatchdog(mh *managedHost, hostID, 
 			if !m.isCurrent(hostID, mh) {
 				return
 			}
-			m.checkCredentialChannel(mh, hostID)
+			m.checkCredentialChannel(ctx, mh, hostID)
 		}
 	}()
 }
 
-func (m *desktopRemoteManager) checkCredentialChannel(mh *managedHost, hostID string) {
+func (m *desktopRemoteManager) checkCredentialChannel(ctx context.Context, mh *managedHost, hostID string) {
+	entry, err := configuredRemoteHost(hostID)
+	if err != nil || !entry.CredentialProxyEnabled() {
+		mh.credWatch.stop()
+		return
+	}
 	m.mu.Lock()
 	state := ""
 	if m.hosts[hostID] == mh {
@@ -112,13 +121,13 @@ func (m *desktopRemoteManager) checkCredentialChannel(mh *managedHost, hostID st
 	port, has := credentialForwardPort(mh.client, hostID)
 	decision := credentialChannelDecision{HasForward: has, ForwardPort: port, HealedPort: int(mh.credPort.Load()), ProbeOK: has && probeReverseTunnel(mh.client, port) == nil}
 	if decision.needsHeal() {
-		m.healCredentialChannelWatchdog(mh, hostID)
+		m.healCredentialChannelWatchdog(ctx, mh, hostID)
 	}
 }
 
 // healCredentialChannelWatchdog reopens the fast-reuse gate only after the
 // forward, remote provider, live Serve providers, and end-to-end probe agree.
-func (m *desktopRemoteManager) healCredentialChannelWatchdog(mh *managedHost, hostID string) {
+func (m *desktopRemoteManager) healCredentialChannelWatchdog(watchCtx context.Context, mh *managedHost, hostID string) {
 	mh.credWatch.mu.Lock()
 	workspace := mh.credWatch.workspace
 	mh.credWatch.mu.Unlock()
@@ -130,7 +139,11 @@ func (m *desktopRemoteManager) healCredentialChannelWatchdog(mh *managedHost, ho
 	if !m.isCurrent(hostID, mh) || mh.client == nil {
 		return
 	}
-	opCtx, opCancel := managedOperationContext(context.Background(), mh)
+	entry, err := configuredRemoteHost(hostID)
+	if err != nil || !entry.CredentialProxyEnabled() {
+		return
+	}
+	opCtx, opCancel := managedOperationContext(watchCtx, mh)
 	defer opCancel()
 	c := mh.client
 	log.Printf("[remote] credential watchdog: channel broken, re-healing host=%s ws=%s", hostID, workspace)

@@ -397,6 +397,42 @@ func TestUpdateHostPreservesHiddenFields(t *testing.T) {
 	}
 }
 
+func TestUpdateHostStopsCredentialWatchdogWhenLocalProxyDisabled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("REASONIX_HOME", home)
+	t.Setenv("HOME", home)
+	if err := editUserConfig(func(c *config.Config) error {
+		return c.UpsertRemoteHost(config.RemoteHostEntry{
+			Name: "box", Host: "10.0.0.9", Port: 22, User: "dev", CredentialMode: "local-proxy",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	watchCtx, cancel := context.WithCancel(context.Background())
+	mgr := newDesktopRemoteManager(&App{})
+	mh := &managedHost{}
+	mh.credWatch.cancel = cancel
+	mh.credWatch.workspace = "/srv/app"
+	mgr.hosts["box"] = mh
+
+	if _, err := mgr.UpdateHost("box", RemoteHostInput{
+		Label: "box", Host: "10.0.0.9", Port: 22, User: "dev", ServeInstall: "auto", CredentialMode: "remote",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-watchCtx.Done():
+	default:
+		t.Fatal("credential watchdog remained active after local-proxy was disabled")
+	}
+	mh.credWatch.mu.Lock()
+	defer mh.credWatch.mu.Unlock()
+	if mh.credWatch.cancel != nil || mh.credWatch.workspace != "" {
+		t.Fatalf("credential watchdog state = cancel:%v workspace:%q, want stopped", mh.credWatch.cancel != nil, mh.credWatch.workspace)
+	}
+}
+
 func TestSSHConfigReimportPreservesReasonixSettings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("REASONIX_HOME", home)

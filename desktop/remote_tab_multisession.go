@@ -163,12 +163,13 @@ func (a *App) reconcileRemoteTabFramePath(tabID string, gen uint64, sessionPath 
 		return false
 	}
 	a.remoteTabMu.Lock()
-	defer a.remoteTabMu.Unlock()
 	tab := a.remoteTabs[tabID]
 	if tab == nil || tab.gen != gen {
+		a.remoteTabMu.Unlock()
 		return false
 	}
 	if tab.routing.currentPath == sessionPath {
+		a.remoteTabMu.Unlock()
 		return true
 	}
 	// The authoritative status confirmed another foreground path. Remember
@@ -177,9 +178,16 @@ func (a *App) reconcileRemoteTabFramePath(tabID string, gen uint64, sessionPath 
 	if tab.routing.running == nil {
 		tab.routing.running = map[string]bool{}
 	}
+	var refresh *TabMeta
 	if _, known := tab.routing.running[sessionPath]; !known {
 		tab.routing.running[sessionPath] = false
 		tab.routing.revision++
+		meta := remoteTabMetaLocked(tab)
+		refresh = &meta
+	}
+	a.remoteTabMu.Unlock()
+	if refresh != nil {
+		a.emitRemoteEvent("remote-tab:updated", *refresh)
 	}
 	return false
 }
