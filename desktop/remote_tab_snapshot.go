@@ -137,6 +137,7 @@ func (a *App) reserveRemoteTabStatusSequence(tabID string, client *http.Client, 
 func (a *App) recordRemoteTabSessionStatus(tabID string, client *http.Client, gen, statusSeq uint64, status json.RawMessage) bool {
 	var payload struct {
 		SessionName     string `json:"sessionName"`
+		SessionPath     string `json:"sessionPath"`
 		Running         *bool  `json:"running"`
 		PendingPrompt   *bool  `json:"pendingPrompt"`
 		BackgroundJobs  *int   `json:"backgroundJobs"`
@@ -153,6 +154,10 @@ func (a *App) recordRemoteTabSessionStatus(tabID string, client *http.Client, ge
 		return false
 	}
 	before := remoteTabMetaLocked(tab)
+	if path := strings.TrimSpace(payload.SessionPath); path != "" {
+		tab.routing.currentPath = path
+		tab.session.path = path
+	}
 	if name := strings.TrimSpace(payload.SessionName); name != "" {
 		tab.session.name = name
 		tab.session.newSession = false
@@ -187,7 +192,8 @@ func (a *App) recordRemoteTabSessionStatus(tabID string, client *http.Client, ge
 	}
 	after := remoteTabMetaLocked(tab)
 	a.remoteTabMu.Unlock()
-	if before.Running != after.Running || before.TurnStartedAt != after.TurnStartedAt ||
+	if before.SessionPath != after.SessionPath || before.TopicID != after.TopicID ||
+		before.Running != after.Running || before.TurnStartedAt != after.TurnStartedAt ||
 		before.PendingPrompt != after.PendingPrompt || before.BackgroundJobs != after.BackgroundJobs ||
 		before.CancelRequested != after.CancelRequested || before.Cancellable != after.Cancellable {
 		a.emitRemoteEvent("remote-tab:updated", after)

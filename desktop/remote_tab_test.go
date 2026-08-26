@@ -41,6 +41,7 @@ type fakeServe struct {
 	eventsConns                    int // /events connections opened
 	eventsQuery                    string
 	eventFrames                    []string
+	eventFeed                      <-chan string
 	eventsStatus                   int  // non-zero makes /events fail before opening
 	eventsCloseEarly               bool // return immediately after the initial 200 frames
 	statusPayload                  string
@@ -173,6 +174,7 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		eventsStatus := fs.eventsStatus
 		closeEarly := fs.eventsCloseEarly
 		frames := append([]string(nil), fs.eventFrames...)
+		feed := fs.eventFeed
 		fs.mu.Unlock()
 		if eventsStatus != 0 {
 			http.Error(w, "event stream unavailable", eventsStatus)
@@ -194,7 +196,19 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		if closeEarly {
 			return
 		}
-		<-r.Context().Done()
+		if feed == nil {
+			<-r.Context().Done()
+			return
+		}
+		for {
+			select {
+			case frame := <-feed:
+				fmt.Fprintf(w, "data: %s\n\n", frame)
+				flusher.Flush()
+			case <-r.Context().Done():
+				return
+			}
+		}
 	})
 	command := func(path string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {

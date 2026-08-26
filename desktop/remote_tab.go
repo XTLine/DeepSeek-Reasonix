@@ -349,7 +349,8 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64, opene
 		if json.Unmarshal([]byte(frame), &probe) == nil && probe.Kind != "" {
 			kind = probe.Kind
 		}
-		if !a.routeRemoteTabFrame(tabID, gen, strings.TrimSpace(probe.SessionPath), kind) {
+		framePath := strings.TrimSpace(probe.SessionPath)
+		if !a.routeRemoteTabFrameReconciled(tabID, gen, framePath, kind) {
 			continue
 		}
 		refreshRuntime := false

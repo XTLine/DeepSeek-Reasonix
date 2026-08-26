@@ -105,6 +105,50 @@ func TestFocusOnlyAttachRoutesImmediatePendingPrompt(t *testing.T) {
 	}
 }
 
+func TestForegroundRecoveryPathIsReconciledBeforeRoutingFrame(t *testing.T) {
+	const oldPath = "/sessions/current.jsonl"
+	const recoveryPath = "/sessions/current-recovery.jsonl"
+	feed := make(chan string, 1)
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "current", Path: oldPath, Current: true}})
+	fs.mu.Lock()
+	fs.eventFrames = []string{`{"kind":"ready","sessionPath":"/sessions/current.jsonl"}`}
+	fs.eventFeed = feed
+	fs.statusPayload = `{"running":false,"sessionName":"current","sessionPath":"/sessions/current.jsonl"}`
+	fs.mu.Unlock()
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{})
+	fs.mu.Lock()
+	fs.statusPayload = `{"running":false,"sessionName":"current-recovery","sessionPath":"/sessions/current-recovery.jsonl"}`
+	fs.mu.Unlock()
+	feed <- `{"kind":"notice","text":"continued on recovery","sessionPath":"/sessions/current-recovery.jsonl"}`
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		events := log.recorded()
+		if slices.ContainsFunc(events, func(event string) bool {
+			return strings.HasPrefix(event, "remote-tab:"+meta.ID+":event") && strings.Contains(event, "continued on recovery")
+		}) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("recovery frame was not routed after status reconciliation: %v", events)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	a.remoteTabMu.Lock()
+	got := a.remoteTabs[meta.ID].routing.currentPath
+	a.remoteTabMu.Unlock()
+	if got != recoveryPath {
+		t.Fatalf("foreground route = %q, want recovered path %q", got, recoveryPath)
+	}
+}
+
 func remoteSessionTestClient(t *testing.T, fs *fakeServe) (*http.Client, context.Context) {
 	t.Helper()
 	jar, err := cookiejar.New(nil)

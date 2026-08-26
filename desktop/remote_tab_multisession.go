@@ -113,3 +113,38 @@ func (a *App) routeRemoteTabFrame(tabID string, gen uint64, sessionPath, kind st
 	}
 	return foreground
 }
+
+// remoteTabFramePathUnknown distinguishes a possible foreground recovery or
+// slash-command rotation from a path already observed as background work.
+func (a *App) remoteTabFramePathUnknown(tabID string, gen uint64, sessionPath string) bool {
+	if sessionPath == "" {
+		return false
+	}
+	a.remoteTabMu.Lock()
+	defer a.remoteTabMu.Unlock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil || tab.gen != gen || sessionPath == tab.routing.currentPath {
+		return false
+	}
+	_, knownBackground := tab.routing.running[sessionPath]
+	return !knownBackground
+}
+
+func (a *App) reconcileRemoteTabFramePath(tabID string, gen uint64, sessionPath string) bool {
+	if _, err := a.RemoteTabStatus(tabID); err != nil {
+		return false
+	}
+	a.remoteTabMu.Lock()
+	defer a.remoteTabMu.Unlock()
+	tab := a.remoteTabs[tabID]
+	return tab != nil && tab.gen == gen && tab.routing.currentPath == sessionPath
+}
+
+func (a *App) routeRemoteTabFrameReconciled(tabID string, gen uint64, sessionPath, kind string) bool {
+	pathUnknown := a.remoteTabFramePathUnknown(tabID, gen, sessionPath)
+	if a.routeRemoteTabFrame(tabID, gen, sessionPath, kind) {
+		return true
+	}
+	return pathUnknown && a.reconcileRemoteTabFramePath(tabID, gen, sessionPath) &&
+		a.routeRemoteTabFrame(tabID, gen, sessionPath, kind)
+}

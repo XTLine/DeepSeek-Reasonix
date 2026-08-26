@@ -1279,33 +1279,35 @@ func currentModelRef(c control.SessionAPI) string {
 // skips provider balance IO while retaining all reconciliation fields.
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	runtimeOnly := r.URL.Query().Get("runtime") == "1" || r.URL.Query().Get("lite") == "1"
-	used, window := s.ctl().ContextSnapshot()
-	hit, miss := s.ctl().SessionCache()
-	rs := s.ctl().RuntimeStatus()
+	ctrl := s.ctl()
+	used, window := ctrl.ContextSnapshot()
+	hit, miss := ctrl.SessionCache()
+	rs := ctrl.RuntimeStatus()
 	sess := map[string]any{
-		"label":            s.ctl().Label(),
+		"label":            ctrl.Label(),
 		"running":          rs.Running,
-		"plan":             s.ctl().PlanMode(),
-		"autoApproveTools": s.ctl().AutoApproveTools(),
-		"bypass":           s.ctl().AutoApproveTools(),
-		"toolApprovalMode": s.ctl().ToolApprovalMode(),
-		"goal":             s.ctl().Goal(),
-		"goalStatus":       s.ctl().GoalStatus(),
-		"qualityFloor":     s.ctl().QualityFloor(),
-		"cwd":              s.ctl().SessionDir(),
+		"plan":             ctrl.PlanMode(),
+		"autoApproveTools": ctrl.AutoApproveTools(),
+		"bypass":           ctrl.AutoApproveTools(),
+		"toolApprovalMode": ctrl.ToolApprovalMode(),
+		"goal":             ctrl.Goal(),
+		"goalStatus":       ctrl.GoalStatus(),
+		"qualityFloor":     ctrl.QualityFloor(),
+		"cwd":              ctrl.SessionDir(),
 		"used":             used,
 		"window":           window,
 		"cacheHit":         hit,
 		"cacheMiss":        miss,
 	}
-	if s.ctl().Goal() != "" {
-		sess["goalRuntime"] = s.ctl().GoalRuntime()
+	if ctrl.Goal() != "" {
+		sess["goalRuntime"] = ctrl.GoalRuntime()
 	}
-	if path := strings.TrimSpace(s.ctl().SessionPath()); path != "" && store.IsSessionTranscriptName(filepath.Base(path)) {
+	if path := strings.TrimSpace(ctrl.SessionPath()); path != "" && store.IsSessionTranscriptName(filepath.Base(path)) {
 		sess["sessionName"] = strings.TrimSuffix(filepath.Base(path), ".jsonl")
+		sess["sessionPath"] = agent.CanonicalSessionPath(path)
 	}
 	if cfg, err := config.Load(); err == nil {
-		if entry, ok := cfg.ResolveModel(currentModelRef(s.ctl())); ok {
+		if entry, ok := cfg.ResolveModel(currentModelRef(ctrl)); ok {
 			capability := config.EffortCapabilityForEntry(entry)
 			levels := capability.Levels
 			if levels == nil {
@@ -1326,11 +1328,11 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	sess["backgroundJobs"] = rs.BackgroundJobs
 	sess["cancelRequested"] = rs.CancelRequested
 	sess["cancellable"] = rs.Cancellable
-	if u := s.ctl().LastUsage(); u != nil {
+	if u := ctrl.LastUsage(); u != nil {
 		sess["lastUsage"] = u
 	}
 	if !runtimeOnly {
-		if b, err := s.ctl().Balance(r.Context()); err == nil && b != nil {
+		if b, err := ctrl.Balance(r.Context()); err == nil && b != nil {
 			if cfg, loadErr := config.Load(); loadErr == nil && cfg.DisplayCurrencyPref() == "" {
 				// Runtime-only hint: a single wallet currency may select an existing
 				// valuation, but is never persisted as configuration or history.
@@ -1345,8 +1347,8 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("serve: balance fetch failed", "err", err)
 		}
 	}
-	sess["sessionCostQuote"] = s.bc.SessionCostQuoteFor(agent.CanonicalSessionPath(s.ctl().SessionPath()))
-	if j := s.ctl().Jobs(); len(j) > 0 {
+	sess["sessionCostQuote"] = s.bc.SessionCostQuoteFor(agent.CanonicalSessionPath(ctrl.SessionPath()))
+	if j := ctrl.Jobs(); len(j) > 0 {
 		sess["jobs"] = j
 	}
 	writeJSON(w, sess)

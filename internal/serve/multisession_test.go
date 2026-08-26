@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"reasonix/internal/agent"
 	"reasonix/internal/billing"
@@ -18,12 +19,32 @@ import (
 	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/event"
+	"reasonix/internal/provider"
 )
 
 type replayStubController struct{ *control.Controller }
 
 func (replayStubController) SessionPath() string { return "/sessions/a.jsonl" }
 func (replayStubController) ReplayPendingPromptsWith(factory func() event.Sink) {
+	factory().Emit(event.Event{Kind: event.ApprovalRequest})
+}
+
+type replayRaceController struct {
+	control.SessionAPI
+	path     string
+	onPath   func()
+	replayed chan string
+}
+
+func (c *replayRaceController) SessionPath() string {
+	if c.onPath != nil {
+		c.onPath()
+	}
+	return c.path
+}
+
+func (c *replayRaceController) ReplayPendingPromptsWith(factory func() event.Sink) {
+	c.replayed <- c.path
 	factory().Emit(event.Event{Kind: event.ApprovalRequest})
 }
 
@@ -92,6 +113,117 @@ func TestReplayPendingPromptsBroadcastTagsFrames(t *testing.T) {
 		}
 	default:
 		t.Fatal("pending prompt was not replayed")
+	}
+}
+
+func TestEventsReplayUsesControllerCapturedWithPath(t *testing.T) {
+	bc := NewBroadcaster()
+	baseA := control.New(control.Options{Sink: bc})
+	baseB := control.New(control.Options{Sink: bc})
+	replayed := make(chan string, 2)
+	a := &replayRaceController{SessionAPI: baseA, path: "/sessions/a.jsonl", replayed: replayed}
+	b := &replayRaceController{SessionAPI: baseB, path: "/sessions/b.jsonl", replayed: replayed}
+	server := New(a, bc, config.ServeConfig{})
+	a.onPath = func() {
+		a.onPath = nil
+		if !server.publishControllerSwap(a, b, b.path) {
+			t.Error("controller swap did not occur during path capture")
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/events", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() { server.events(rec, req); close(done) }()
+	select {
+	case path := <-replayed:
+		if path != a.path {
+			t.Fatalf("replayed controller path = %q, want captured %q", path, a.path)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("events handler did not replay pending prompts")
+	}
+	cancel()
+	<-done
+}
+
+func TestSlashNewRefreshesControllerTagAndForegroundRoute(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "current.jsonl")
+	saveServeTestSession(t, path)
+	bc := NewBroadcaster()
+	tag := NewSessionTagSink(bc)
+	tag.SetPath(path)
+	loaded, err := agent.LoadSession(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := agent.New(nil, nil, loaded, agent.Options{}, tag)
+	ctrl := control.New(control.Options{Executor: exec, Sink: tag, SessionDir: dir, SessionPath: path, Label: "test"})
+	server := New(ctrl, bc, config.ServeConfig{})
+	server.RegisterSessionTag(ctrl, tag)
+	leases := control.NewSessionLeaseKeeper()
+	defer leases.Release()
+	if err := leases.Rebind(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.SetSessionLeases(leases); err != nil {
+		t.Fatal(err)
+	}
+	all, stop := bc.SubscribeAll()
+	defer stop()
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+	resp, err := http.Post(httpServer.URL+"/submit", "application/json", strings.NewReader(`{"input":"/new"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("slash /new submit status = %d, want 204", resp.StatusCode)
+	}
+	select {
+	case frame := <-all:
+		deadline := time.After(2 * time.Second)
+		for !strings.Contains(string(frame), `"kind":"notice"`) || !strings.Contains(string(frame), `"text":"new session"`) {
+			select {
+			case frame = <-all:
+			case <-deadline:
+				t.Fatal("slash /new did not publish its completion notice")
+			}
+		}
+		newPath := agent.CanonicalSessionPath(ctrl.SessionPath())
+		if newPath == agent.CanonicalSessionPath(path) || tag.Path() != newPath || bc.CurrentSession() != newPath {
+			t.Fatalf("slash /new routing = controller %q tag %q broadcaster %q frame=%s", newPath, tag.Path(), bc.CurrentSession(), frame)
+		}
+		if !strings.Contains(string(frame), `"sessionPath":"`+newPath+`"`) {
+			t.Fatalf("slash /new notice kept the old session tag: %s", frame)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("slash /new emitted no event")
+	}
+}
+
+type backgroundJobOnlyController struct{ *control.Controller }
+
+func (c *backgroundJobOnlyController) RuntimeStatus() control.RuntimeStatus {
+	return control.RuntimeStatus{BackgroundJobs: 1, Cancellable: true}
+}
+
+func TestSessionsReportsForegroundBackgroundJobsAsRunning(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "jobs.jsonl")
+	saveServeTestSession(t, path)
+	ctrl := &backgroundJobOnlyController{Controller: control.New(control.Options{SessionDir: dir, SessionPath: path})}
+	server := New(ctrl, NewBroadcaster(), config.ServeConfig{})
+	rec := httptest.NewRecorder()
+	server.sessions(rec, httptest.NewRequest(http.MethodGet, "/sessions", nil))
+	var rows []sessionListEntry
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || !rows[0].Current || !rows[0].Running {
+		t.Fatalf("foreground background-job session = %+v, want current and running", rows)
 	}
 }
 
@@ -248,4 +380,71 @@ func TestBusyResumeDetachesAndReattachesRunningController(t *testing.T) {
 	}
 	ctrlA.Cancel()
 	waitNotRunning(t, ctrlA)
+}
+
+func TestDetachedRecoveryKeepsServeRoutingWrapper(t *testing.T) {
+	dir := t.TempDir()
+	aPath := filepath.Join(dir, "a.jsonl")
+	bPath := filepath.Join(dir, "b.jsonl")
+	saveServeTestSession(t, aPath)
+	saveServeTestSession(t, bPath)
+	loaded, err := agent.LoadSession(aPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc := NewBroadcaster()
+	tag := NewSessionTagSink(bc)
+	tag.SetPath(aPath)
+	exec := agent.New(nil, nil, loaded, agent.Options{}, tag)
+	ctrlA := control.New(control.Options{Runner: blockingRunner{}, Executor: exec, Sink: tag, SessionDir: dir, SessionPath: aPath, Label: "test"})
+	server := New(ctrlA, bc, config.ServeConfig{})
+	server.RegisterSessionTag(ctrlA, tag)
+	leases := control.NewSessionLeaseKeeper()
+	defer leases.Release()
+	if err := leases.Rebind(aPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.SetSessionLeases(leases); err != nil {
+		t.Fatal(err)
+	}
+	server.buildControllerWithOptions = func(_ context.Context, _ string, opts boot.Options) (*control.Controller, error) {
+		return control.New(control.Options{Sink: opts.Sink, SessionDir: opts.SessionDir, Label: "test"}), nil
+	}
+	ctrlA.Submit("keep running")
+	waitRunning(t, ctrlA)
+	if err := server.busyDetach(context.Background(), ctrlA, bPath, func(next *control.Controller) error {
+		session, loadErr := agent.LoadSession(bPath)
+		if loadErr == nil {
+			next.Resume(session, bPath)
+		}
+		return loadErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	disk, err := agent.LoadSession(aPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk.Add(provider.Message{Role: provider.RoleUser, Content: "disk diverged"})
+	if err := disk.Save(aPath); err != nil {
+		t.Fatal(err)
+	}
+	ctrlA.Executor().Session().Add(provider.Message{Role: provider.RoleUser, Content: "local diverged"})
+	if err := ctrlA.Snapshot(); err != nil {
+		t.Fatal(err)
+	}
+	recoveryPath := agent.CanonicalSessionPath(ctrlA.SessionPath())
+	if recoveryPath == agent.CanonicalSessionPath(aPath) {
+		t.Fatal("detached controller did not move to a recovery transcript")
+	}
+	server.detachedMu.Lock()
+	detached := server.detached[recoveryPath]
+	oldEntry := server.detached[agent.CanonicalSessionPath(aPath)]
+	server.detachedMu.Unlock()
+	if detached == nil || detached.ctrl != control.SessionAPI(ctrlA) || oldEntry != nil || tag.Path() != recoveryPath {
+		t.Fatalf("detached recovery routing = entry %v old %v tag %q want %q", detached != nil, oldEntry != nil, tag.Path(), recoveryPath)
+	}
+	ctrlA.Cancel()
+	waitNotRunning(t, ctrlA)
+	server.CloseBackground()
 }
