@@ -524,6 +524,10 @@ func TestRemoteResumeBuffersTargetFramesUntilPostCommit(t *testing.T) {
 	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{})
 	eventPrefix := "remote-tab:" + meta.ID + ":event"
 	readyPrefix := "remote-tab:" + meta.ID + ":state"
+	// openReadyRemoteTab observes the protected state; the matching event is
+	// emitted immediately afterward, so wait for that publication before using
+	// the event count as the resume-barrier baseline.
+	waitForRemoteEventCount(t, log, readyPrefix, 2)
 	eventsBefore, readyBefore := log.count(eventPrefix), log.count(readyPrefix)
 	done := make(chan struct{})
 	go func() {

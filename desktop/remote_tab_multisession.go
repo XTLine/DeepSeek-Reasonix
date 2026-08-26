@@ -186,7 +186,6 @@ func (a *App) adoptRemoteTabFrameCurrent(tabID string, gen uint64, sessionPath s
 		tab.session.newSession = true
 		tab.session.reset = true
 		tab.topicTitle = resetTitle
-		resetRemoteTabForegroundRuntimeLocked(tab)
 	} else {
 		// The routing marker has no title. Stop displaying the previous
 		// session's title while the authoritative /sessions row is fetched.
@@ -229,6 +228,8 @@ func adoptRemoteTabSessionPathLocked(tab *remoteTab, sessionPath string) bool {
 	if tab == nil || sessionPath == "" || tab.routing.currentPath == sessionPath {
 		return false
 	}
+	running := tab.routing.running[sessionPath]
+	resetRemoteTabForegroundRuntimeLocked(tab)
 	tab.routing.currentPath = sessionPath
 	tab.routing.rehydratingPath = ""
 	tab.routing.rehydratingFrames = nil
@@ -236,8 +237,8 @@ func adoptRemoteTabSessionPathLocked(tab *remoteTab, sessionPath string) bool {
 	tab.session.path = sessionPath
 	tab.session.newSession = false
 	tab.session.reset = false
-	tab.pendingEvents = nil
-	tab.runtime.pendingPrompt = false
+	tab.runtime.running = running
+	tab.runtime.cancellable = running
 	return true
 }
 

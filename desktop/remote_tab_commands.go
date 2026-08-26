@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -255,17 +256,46 @@ func (a *App) resumeRemoteTabResolvedTarget(ctx context.Context, tabID string, r
 		if !stillCurrent() {
 			return
 		}
-		if remoteSessionTransitionBusy(err) {
+		var statusErr *serveHTTPStatusError
+		if errors.As(err, &statusErr) {
 			a.rollbackRemoteTabResume(tabID, resumeGen, previous)
-			a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", "Finish the current turn before switching sessions.")
+			if remoteSessionTransitionBusy(err) {
+				a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", "Finish the current turn before switching sessions.")
+				return
+			}
+			// A received HTTP rejection is definitive: Serve did not commit the
+			// target, so the previous ready route remains authoritative.
+			a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", err.Error())
 			return
 		}
-		// /resume is an action on an already attached Serve. Any rejection
-		// leaves that current session and event pump usable, so surface the
-		// action error without replacing the ready transcript.
-		a.rollbackRemoteTabResume(tabID, resumeGen, previous)
-		a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", err.Error())
-		return
+		// A transport failure is ambiguous: Serve may have committed the
+		// resume before the tunnel lost its response. Query its current route
+		// before deciding whether to commit or restore local state.
+		reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		authoritative, reconcileErr := serveCurrentSession(reconcileCtx, client, base)
+		reconcileCancel()
+		if !stillCurrent() {
+			return
+		}
+		if reconcileErr != nil || authoritative.Path == "" {
+			// Do not publish either transcript from an unconfirmed generation.
+			// A fresh attach resolves Serve's current session before ready.
+			if startRetry := a.reconnectRemoteTabGeneration(tabID, connectionGen); startRetry {
+				a.goSafe("remoteTabResumeReattach", func() { a.reattachRemoteTab(tabID) })
+			}
+			return
+		}
+		if authoritative.Path != target.Path {
+			a.reconcileRemoteTabResumeRoute(tabID, resumeGen, connectionGen, previous, authoritative, err)
+			return
+		}
+		if target.Name == "" {
+			target.Name = authoritative.Name
+		}
+		if target.Title == "" {
+			target.Title = authoritative.Title
+		}
+		target.Running = target.Running || authoritative.Running
 	}
 	title := strings.TrimSpace(target.Title)
 	if title == "" {

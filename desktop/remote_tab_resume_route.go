@@ -20,6 +20,48 @@ func probeRemoteTabFrame(frame string) (kind, path string, current, reset bool) 
 	return kind, strings.TrimSpace(probe.SessionPath), probe.SessionCurrent, probe.SessionReset
 }
 
+// reconcileRemoteTabResumeRoute installs the route Serve reports after an
+// ambiguous transport failure. The common unchanged case restores the exact
+// preflight snapshot; an externally changed route drops controller-local state
+// and publishes the authoritative identity behind a new ready barrier.
+func (a *App) reconcileRemoteTabResumeRoute(tabID string, resumeGen, connectionGen uint64, previous *remoteTabResumeIdentity, authoritative serveSessionEntry, resumeErr error) {
+	authoritative.Path = strings.TrimSpace(authoritative.Path)
+	if previous != nil && authoritative.Path == previous.routePath {
+		a.rollbackRemoteTabResume(tabID, resumeGen, previous)
+		a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", resumeErr.Error())
+		return
+	}
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	if tab == nil || tab.gen != connectionGen || tab.routing.resumeGen != resumeGen || tab.state != "ready" {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	if !adoptRemoteTabSessionPathLocked(tab, authoritative.Path) {
+		tab.routing.rehydratingPath = ""
+		tab.routing.rehydratingFrames = nil
+	}
+	tab.session.name = strings.TrimSpace(authoritative.Name)
+	tab.session.path = authoritative.Path
+	tab.session.newSession = false
+	tab.session.reset = false
+	tab.runtime.running = authoritative.Running || tab.routing.running[authoritative.Path]
+	tab.runtime.cancellable = tab.runtime.running
+	title := strings.TrimSpace(authoritative.Title)
+	if title == "" {
+		title = strings.TrimSpace(authoritative.Name)
+	}
+	if title == "" {
+		title = remoteWorkspaceName(tab.ref.Workspace)
+	}
+	tab.topicTitle = title
+	meta := remoteTabMetaLocked(tab)
+	a.remoteTabMu.Unlock()
+	a.emitRemoteEvent("remote-tab:updated", meta)
+	a.saveTabsFromRemote()
+	a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", resumeErr.Error())
+}
+
 func (a *App) publishRemoteTabResumeReady(tabID string, tab *remoteTab, client *http.Client, gen uint64, targetPath string) {
 	if !a.transitionRemoteTabState(tabID, gen, "ready", "ready", "") {
 		return
@@ -43,7 +85,17 @@ func (a *App) publishRemoteTabResumeReady(tabID string, tab *remoteTab, client *
 		}
 		a.remoteTabMu.Unlock()
 		for _, frame := range frames {
-			kind, _, _, _ := probeRemoteTabFrame(string(frame))
+			kind, path, _, _ := probeRemoteTabFrame(string(frame))
+			a.remoteTabMu.Lock()
+			current = a.remoteTabs[tabID]
+			valid := current == tab && current.client == client && current.gen == gen &&
+				current.routing.currentPath == targetPath &&
+				current.routing.rehydratingPath == targetPath &&
+				(path == "" || path == targetPath)
+			a.remoteTabMu.Unlock()
+			if !valid {
+				return
+			}
 			a.publishRemoteTabFrame(tabID, gen, kind, frame)
 		}
 	}
