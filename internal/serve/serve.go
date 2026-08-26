@@ -1164,7 +1164,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		s.setControllerPath(ctrl, realPath)
 	}
 	s.bc.ResetSessionPath(realPath)
-	s.announceSessionChanged(realPath)
+	s.announceSessionChanged(realPath, false)
 	w.WriteHeader(http.StatusNoContent)
 	s.replayPendingPromptsBroadcast()
 }

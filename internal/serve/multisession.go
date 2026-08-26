@@ -434,8 +434,8 @@ func (s *Server) busyDetach(ctx context.Context, cur *control.Controller, target
 	return nil
 }
 
-func (s *Server) announceSessionChanged(path string) {
-	s.bc.Emit(event.Event{Kind: event.SessionChanged, SessionPath: path})
+func (s *Server) announceSessionChanged(path string, reset bool) {
+	s.bc.Emit(event.Event{Kind: event.SessionChanged, SessionPath: path, SessionReset: reset})
 }
 
 var errReplacedDuringBind = &replacedDuringBindError{}
@@ -457,7 +457,7 @@ func (s *Server) rollbackDetach(demoted *control.SessionLeaseKeeper, ctrl *contr
 func (s *Server) resumeActiveSession(w http.ResponseWriter, r *http.Request, cur control.SessionAPI, realPath string) bool {
 	if agent.CanonicalSessionPath(cur.SessionPath()) == agent.CanonicalSessionPath(realPath) {
 		s.bc.SetCurrentSession(realPath)
-		s.announceSessionChanged(realPath)
+		s.announceSessionChanged(realPath, false)
 		w.WriteHeader(http.StatusNoContent)
 		return true
 	}
@@ -466,7 +466,7 @@ func (s *Server) resumeActiveSession(w http.ResponseWriter, r *http.Request, cur
 			s.renderBindError(w, err)
 			return true
 		}
-		s.announceSessionChanged(realPath)
+		s.announceSessionChanged(realPath, false)
 		w.WriteHeader(http.StatusNoContent)
 		s.replayPendingPromptsBroadcast()
 		return true
@@ -494,7 +494,7 @@ func (s *Server) resumeActiveSession(w http.ResponseWriter, r *http.Request, cur
 		s.renderBindError(w, err)
 		return true
 	}
-	s.announceSessionChanged(realPath)
+	s.announceSessionChanged(realPath, false)
 	w.WriteHeader(http.StatusNoContent)
 	s.replayPendingPromptsBroadcast()
 	return true

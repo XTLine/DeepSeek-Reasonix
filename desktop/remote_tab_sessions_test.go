@@ -92,6 +92,9 @@ func TestMigrateBlankRemoteSessionTitleOverride(t *testing.T) {
 	}
 }
 
+// TestSetRemoteTabModelFailureKeepsPreviousModel: a local-proxy switch that
+// fails at the credential-proxy step must leave the tab's previous model
+// intact instead of half-committing the new one.
 func TestSetRemoteTabModelFailureKeepsPreviousModel(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	setDesktopTestCredential(t, "DEEPSEEK_API_KEY", "sk-test")

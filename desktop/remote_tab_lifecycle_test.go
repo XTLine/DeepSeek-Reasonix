@@ -432,7 +432,7 @@ func TestRemoteResumeRejectedRestoresForegroundRoute(t *testing.T) {
 	}
 }
 
-func TestRemoteResumeRoutesTargetFramesBeforePostReturns(t *testing.T) {
+func TestRemoteResumeBuffersTargetFramesUntilPostCommit(t *testing.T) {
 	const oldPath = "/old.jsonl"
 	const targetPath = "/target.jsonl"
 	feed := make(chan string, 1)
@@ -463,6 +463,9 @@ func TestRemoteResumeRoutesTargetFramesBeforePostReturns(t *testing.T) {
 	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
 	cleanupRemoteTabPumps(t, a)
 	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{})
+	eventPrefix := "remote-tab:" + meta.ID + ":event"
+	readyPrefix := "remote-tab:" + meta.ID + ":state"
+	eventsBefore, readyBefore := log.count(eventPrefix), log.count(readyPrefix)
 	done := make(chan struct{})
 	go func() {
 		a.resumeRemoteTabSessionPath(meta.ID, "target", targetPath, "Target")
@@ -473,24 +476,43 @@ func TestRemoteResumeRoutesTargetFramesBeforePostReturns(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("resume request did not start")
 	}
-	feed <- `{"kind":"notice","text":"reattached output","sessionPath":"/target.jsonl"}`
+	feed <- `{"kind":"approval_request","approval":{"id":"target-approval"},"sessionPath":"/target.jsonl","sessionCurrent":true}`
 	deadline := time.Now().Add(time.Second)
-	for log.count("remote-tab:"+meta.ID+":event") < 2 {
+	for {
+		a.remoteTabMu.Lock()
+		pending := len(a.remoteTabs[meta.ID].pendingEvents)
+		a.remoteTabMu.Unlock()
+		if pending == 1 {
+			break
+		}
 		select {
 		case <-done:
 			t.Fatal("resume returned before the test released its response")
 		default:
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("target frame was dropped while /resume was pending: %v", log.recorded())
+			t.Fatalf("target prompt was not retained while /resume was pending: %v", log.recorded())
 		}
 		time.Sleep(time.Millisecond)
+	}
+	if got := log.count(eventPrefix); got != eventsBefore {
+		t.Fatalf("provisional target frame reached the old transcript: events %d -> %d, log=%v", eventsBefore, got, log.recorded())
 	}
 	close(release)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("resume did not finish")
+	}
+	if got := log.count(readyPrefix); got != readyBefore+1 {
+		t.Fatalf("committed resume emitted %d ready barriers, want %d: %v", got, readyBefore+1, log.recorded())
+	}
+	a.remoteTabMu.Lock()
+	pending := len(a.remoteTabs[meta.ID].pendingEvents)
+	rehydrating := a.remoteTabs[meta.ID].routing.rehydratingPath
+	a.remoteTabMu.Unlock()
+	if pending != 1 || rehydrating != "" {
+		t.Fatalf("committed target pending/rehydrating = %d/%q, want 1/empty", pending, rehydrating)
 	}
 }
 

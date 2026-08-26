@@ -13,17 +13,7 @@ const remotePendingExtensionFormKey = "extension_surface:form"
 // remain ordinary stream history; the shared reducer only exposes one pending
 // form at a time, so the newest form replaces the previous one here as well.
 func (a *App) cacheRemotePendingExtensionForm(tabID string, gen uint64, frame json.RawMessage) bool {
-	var probe struct {
-		Extension *struct {
-			PluginID  string          `json:"pluginId"`
-			SurfaceID string          `json:"surfaceId"`
-			Kind      string          `json:"kind"`
-			Form      json.RawMessage `json:"form"`
-		} `json:"extension"`
-	}
-	if json.Unmarshal(frame, &probe) != nil || probe.Extension == nil ||
-		probe.Extension.Kind != "form" || len(probe.Extension.Form) == 0 || bytes.Equal(bytes.TrimSpace(probe.Extension.Form), []byte("null")) ||
-		strings.TrimSpace(probe.Extension.PluginID) == "" || strings.TrimSpace(probe.Extension.SurfaceID) == "" {
+	if !remotePendingExtensionForm(frame) {
 		return false
 	}
 	a.remoteTabMu.Lock()
@@ -42,6 +32,23 @@ func (a *App) cacheRemotePendingExtensionForm(tabID string, gen uint64, frame js
 	meta := remoteTabMetaLocked(tab)
 	a.remoteTabMu.Unlock()
 	a.emitRemoteEvent("remote-tab:updated", meta)
+	return true
+}
+
+func remotePendingExtensionForm(frame json.RawMessage) bool {
+	var probe struct {
+		Extension *struct {
+			PluginID  string          `json:"pluginId"`
+			SurfaceID string          `json:"surfaceId"`
+			Kind      string          `json:"kind"`
+			Form      json.RawMessage `json:"form"`
+		} `json:"extension"`
+	}
+	if json.Unmarshal(frame, &probe) != nil || probe.Extension == nil ||
+		probe.Extension.Kind != "form" || len(probe.Extension.Form) == 0 || bytes.Equal(bytes.TrimSpace(probe.Extension.Form), []byte("null")) ||
+		strings.TrimSpace(probe.Extension.PluginID) == "" || strings.TrimSpace(probe.Extension.SurfaceID) == "" {
+		return false
+	}
 	return true
 }
 

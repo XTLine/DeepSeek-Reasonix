@@ -574,10 +574,10 @@ type Event struct {
 	RetryMax        int                       // Retrying: total attempts before giving up
 	RetryScope      RetryScope                // Retrying: optional "headers" | "stream"; empty for older emitters
 	StreamAttempt   StreamAttemptInfo         // StreamAttempt lifecycle
-	// ItemID correlates durable inbox events; SessionPath routes Serve frames.
-	ItemID      string
-	SessionPath string
-	Workspace   *WorkspaceChangedPayload // WorkspaceChanged (host-local)
+	ItemID          string                    // correlates durable inbox events
+	SessionPath     string                    // routes Serve frames
+	SessionReset    bool                      // SessionChanged came from /new or /clear, not resume/recovery
+	Workspace       *WorkspaceChangedPayload  // WorkspaceChanged (host-local)
 	// PhaseName is set on TurnPhase events (working|checking|verifying|reviewing).
 	PhaseName TurnPhaseName
 	// Completion is set on CompletionSummary events.

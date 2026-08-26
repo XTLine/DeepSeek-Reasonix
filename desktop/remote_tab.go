@@ -341,17 +341,11 @@ func (a *App) remoteTabPump(ctx context.Context, tabID string, gen uint64, opene
 		if !a.remoteTabGenerationCurrent(tabID, gen) {
 			return
 		}
-		var probe struct {
-			Kind           string `json:"kind"`
-			SessionPath    string `json:"sessionPath"`
-			SessionCurrent bool   `json:"sessionCurrent"`
+		kind, framePath, current, reset := probeRemoteTabFrame(frame)
+		if !a.routeRemoteTabWireFrame(tabID, gen, framePath, kind, current, reset) {
+			continue
 		}
-		kind := "?"
-		if json.Unmarshal([]byte(frame), &probe) == nil && probe.Kind != "" {
-			kind = probe.Kind
-		}
-		framePath := strings.TrimSpace(probe.SessionPath)
-		if !a.routeRemoteTabWireFrame(tabID, gen, framePath, kind, probe.SessionCurrent) {
+		if a.bufferRemoteTabResumeFrame(tabID, gen, framePath, kind, json.RawMessage(frame)) {
 			continue
 		}
 		refreshRuntime := false
@@ -445,22 +439,7 @@ func (a *App) recordRemoteTabTurnStarted(tabID string, gen uint64, frame json.Ra
 }
 
 func (a *App) cacheRemotePendingEvent(tabID string, gen uint64, kind string, frame json.RawMessage) {
-	var probe struct {
-		Approval *struct {
-			ID string `json:"id"`
-		} `json:"approval"`
-		Ask *struct {
-			ID string `json:"id"`
-		} `json:"ask"`
-	}
-	_ = json.Unmarshal(frame, &probe)
-	id := ""
-	if probe.Approval != nil {
-		id = probe.Approval.ID
-	} else if probe.Ask != nil {
-		id = probe.Ask.ID
-	}
-	key := kind + ":" + strings.TrimSpace(id)
+	key := remotePendingEventKey(kind, frame)
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
 	if tab == nil || tab.gen != gen {

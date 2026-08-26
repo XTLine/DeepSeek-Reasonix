@@ -60,7 +60,7 @@ func TestServeSilentRotationsPublishSessionChanged(t *testing.T) {
 			default:
 				t.Fatalf("%s emitted no routing barrier", endpoint)
 			}
-			if frame.Kind != "session_changed" || !frame.SessionCurrent || frame.SessionPath == "" || frame.SessionPath == oldPath {
+			if frame.Kind != "session_changed" || !frame.SessionCurrent || !frame.SessionReset || frame.SessionPath == "" || frame.SessionPath == oldPath {
 				t.Fatalf("%s routing frame = %+v, old path %q", endpoint, frame, oldPath)
 			}
 		})
