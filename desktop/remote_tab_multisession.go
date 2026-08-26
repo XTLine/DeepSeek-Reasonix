@@ -14,6 +14,9 @@ type remoteTabSessionRouting struct {
 	rehydratingFrames []json.RawMessage
 	running           map[string]bool
 	revision          uint64
+	// pathRevision changes only when foreground identity changes. Unlike
+	// revision, background running/listing refreshes do not advance it.
+	pathRevision uint64
 }
 
 // enterRemoteSession is the compatibility wrapper used by bridge tests.
@@ -109,7 +112,11 @@ func serveCurrentSession(ctx context.Context, client *http.Client, base string) 
 // and after Serve commits it, preventing either stale epoch from restoring the
 // former current session.
 func installRemoteTabAttachRoute(tab *remoteTab, path string) {
-	tab.routing.currentPath = strings.TrimSpace(path)
+	path = strings.TrimSpace(path)
+	if tab.routing.currentPath != path {
+		tab.routing.currentPath = path
+		tab.routing.pathRevision++
+	}
 	tab.routing.rehydratingPath = ""
 	tab.routing.rehydratingFrames = nil
 	tab.session.path = tab.routing.currentPath
@@ -170,28 +177,36 @@ func (a *App) adoptRemoteTabFrameCurrent(tabID string, gen uint64, sessionPath s
 	if sessionPath == "" {
 		return
 	}
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	a.remoteTabMu.Unlock()
+	if tab == nil {
+		return
+	}
+	tab.routeEventMu.Lock()
+	defer tab.routeEventMu.Unlock()
 	resetTitle := ""
 	if reset {
 		resetTitle = a.localizedDefaultTopicTitle()
 	}
 	a.remoteTabMu.Lock()
-	tab := a.remoteTabs[tabID]
-	if tab == nil || tab.gen != gen || !adoptRemoteTabSessionPathLocked(tab, sessionPath) {
+	current := a.remoteTabs[tabID]
+	if current != tab || current.gen != gen || !adoptRemoteTabSessionPathLocked(current, sessionPath) {
 		a.remoteTabMu.Unlock()
 		return
 	}
 	if reset {
-		tab.session.name = ""
-		tab.session.newSession = true
-		tab.session.reset = true
-		tab.topicTitle = resetTitle
+		current.session.name = ""
+		current.session.newSession = true
+		current.session.reset = true
+		current.topicTitle = resetTitle
 	} else {
 		// The routing marker has no title. Stop displaying the previous
 		// session's title while the authoritative /sessions row is fetched.
-		tab.topicTitle = remoteWorkspaceName(tab.ref.Workspace)
+		current.topicTitle = remoteWorkspaceName(current.ref.Workspace)
 	}
-	meta := remoteTabMetaLocked(tab)
-	ready := tab.state == "ready"
+	meta := remoteTabMetaLocked(current)
+	ready := current.state == "ready"
 	a.remoteTabMu.Unlock()
 	a.emitRemoteEvent("remote-tab:updated", meta)
 	if !reset {
@@ -230,6 +245,7 @@ func adoptRemoteTabSessionPathLocked(tab *remoteTab, sessionPath string) bool {
 	running := tab.routing.running[sessionPath]
 	resetRemoteTabForegroundRuntimeLocked(tab)
 	tab.routing.currentPath = sessionPath
+	tab.routing.pathRevision++
 	tab.routing.rehydratingPath = ""
 	tab.routing.rehydratingFrames = nil
 	tab.routing.revision++

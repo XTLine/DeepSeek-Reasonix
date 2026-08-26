@@ -44,6 +44,7 @@ func (a *App) beginRemoteTabProvisionalResume(tabID string, tab *remoteTab, clie
 	route.previousRuntime = current.runtime
 	route.active = true
 	current.routing.currentPath = route.targetPath
+	current.routing.pathRevision++
 	current.routing.rehydratingPath = route.targetPath
 	current.routing.rehydratingFrames = nil
 	current.routing.revision++
@@ -69,6 +70,7 @@ func (a *App) rollbackRemoteTabProvisionalResume(tabID string, tab *remoteTab, c
 		return
 	}
 	current.routing.currentPath = route.previousPath
+	current.routing.pathRevision++
 	current.routing.rehydratingPath = ""
 	current.routing.rehydratingFrames = nil
 	current.routing.revision++
@@ -144,6 +146,11 @@ func (a *App) commitRemoteTabResume(tabID string, tab *remoteTab, client *http.C
 }
 
 func (a *App) publishRemoteTabResumeReady(tabID string, tab *remoteTab, client *http.Client, gen uint64, route remoteTabProvisionalResume) {
+	// Keep the ready barrier and the complete buffered drain in one ordered
+	// route-publication epoch. A later session adoption waits until every frame
+	// from this snapshot is visible, then publishes its own ready barrier.
+	tab.routeEventMu.Lock()
+	defer tab.routeEventMu.Unlock()
 	if !a.transitionRemoteTabState(tabID, gen, "ready", "ready", "") {
 		return
 	}
@@ -167,17 +174,12 @@ func (a *App) publishRemoteTabResumeReady(tabID string, tab *remoteTab, client *
 		a.remoteTabMu.Unlock()
 		for _, frame := range frames {
 			kind, path, _, _ := probeRemoteTabFrame(string(frame))
-			a.remoteTabMu.Lock()
-			current = a.remoteTabs[tabID]
-			valid := current == tab && current.client == client && current.gen == gen &&
-				current.routing.currentPath == route.targetPath &&
-				current.routing.rehydratingPath == route.targetPath &&
-				(path == "" || path == route.targetPath)
-			a.remoteTabMu.Unlock()
-			if !valid {
+			if path != "" && path != route.targetPath {
 				return
 			}
-			a.publishRemoteTabFrame(tabID, gen, kind, frame)
+			if !a.publishRemoteTabFrameForRouteLocked(tabID, tab, tab, client, gen, route.targetPath, true, kind, frame) {
+				return
+			}
 		}
 	}
 }

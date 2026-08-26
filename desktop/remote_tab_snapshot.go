@@ -155,6 +155,13 @@ func (a *App) recordRemoteTabSessionStatus(tabID string, client *http.Client, ge
 		a.remoteTabMu.Unlock()
 		return false
 	}
+	// Serve still reports the outgoing foreground until an in-flight /resume
+	// commits. That status is older than the provisional route and must not roll
+	// it back; target SSE frames are already buffering behind its ready barrier.
+	if pendingPath := tab.routing.rehydratingPath; pendingPath != "" && payload.SessionPath != "" && payload.SessionPath != pendingPath {
+		a.remoteTabMu.Unlock()
+		return false
+	}
 	before := remoteTabMetaLocked(tab)
 	pathChanged := adoptRemoteTabSessionPathLocked(tab, payload.SessionPath)
 	if pathChanged {

@@ -540,12 +540,17 @@ func (a *App) rotateRemoteTabSession(tabID, path string) error {
 		tab.session.newSession = true
 		tab.session.name = ""
 		tab.session.path = ""
-		tab.routing.currentPath = ""
+		if tab.routing.currentPath != "" {
+			tab.routing.currentPath = ""
+			tab.routing.pathRevision++
+		}
 		tab.routing.revision++
 		a.remoteTabMu.Unlock()
 		return nil
 	}
 	client, base := tab.client, tab.base
+	requestPath := tab.routing.currentPath
+	requestPathRevision := tab.routing.pathRevision
 	a.remoteTabMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -559,10 +564,22 @@ func (a *App) rotateRemoteTabSession(tabID, path string) error {
 	}
 	target := serveSessionEntry{Path: rotatedPath, Current: true}
 	title := a.localizedDefaultTopicTitle()
+	tab.routeEventMu.Lock()
+	defer tab.routeEventMu.Unlock()
 	a.remoteTabMu.Lock()
 	if a.remoteTabs[tabID] != tab || tab.client != client {
 		a.remoteTabMu.Unlock()
 		return fmt.Errorf("remote tab %q changed while starting a new session", tabID)
+	}
+	if tab.routing.pathRevision != requestPathRevision || tab.routing.currentPath != requestPath {
+		alreadyAdopted := tab.routing.currentPath == target.Path
+		a.remoteTabMu.Unlock()
+		if alreadyAdopted {
+			a.saveTabsFromRemote()
+		}
+		// A session_changed frame won the race. Its foreground identity is newer
+		// than this HTTP response, even when a second rotation already moved on.
+		return nil
 	}
 	tab.topicTitle = title
 	tab.session.reset = true
@@ -570,6 +587,7 @@ func (a *App) rotateRemoteTabSession(tabID, path string) error {
 	tab.session.name = target.Name
 	tab.session.path = target.Path
 	tab.routing.currentPath = target.Path
+	tab.routing.pathRevision++
 	tab.routing.revision++
 	tab.pendingEvents = nil
 	tab.runtime.revision++

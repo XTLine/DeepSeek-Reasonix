@@ -534,6 +534,17 @@ func TestRemoteResumeBuffersTargetFramesUntilPostCommit(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("resume request did not start")
 	}
+	// Until /resume commits, Serve's authoritative status is still the old
+	// foreground. A poll from the runtime watchdog must not roll the provisional
+	// target route back and create a second target ready barrier.
+	_, _ = a.RemoteTabStatus(meta.ID)
+	a.remoteTabMu.Lock()
+	provisionalPath := a.remoteTabs[meta.ID].routing.currentPath
+	rehydratingPath := a.remoteTabs[meta.ID].routing.rehydratingPath
+	a.remoteTabMu.Unlock()
+	if provisionalPath != targetPath || rehydratingPath != targetPath {
+		t.Fatalf("old status rolled back provisional route: current/rehydrating = %q/%q", provisionalPath, rehydratingPath)
+	}
 	feed <- `{"kind":"approval_request","approval":{"id":"target-approval"},"sessionPath":"/target.jsonl","sessionCurrent":true}`
 	feed <- `{"kind":"text","text":"first retained delta","sessionPath":"/target.jsonl","sessionCurrent":true}`
 	feed <- `{"kind":"notice","text":"second retained notice","sessionPath":"/target.jsonl","sessionCurrent":true}`

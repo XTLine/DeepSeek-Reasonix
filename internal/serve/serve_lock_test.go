@@ -360,6 +360,43 @@ func TestSubmitNewHoldsBindingLockUntilRotationCompletes(t *testing.T) {
 	}
 }
 
+func TestSessionSnapshotEndpointsWaitForBindingEpoch(t *testing.T) {
+	bc := NewBroadcaster()
+	ctrl := control.New(control.Options{Sink: bc, SessionDir: t.TempDir()})
+	s := New(ctrl, bc, config.ServeConfig{})
+
+	for _, endpoint := range []struct {
+		name    string
+		handler func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "history", handler: s.history},
+		{name: "status", handler: s.status},
+	} {
+		t.Run(endpoint.name, func(t *testing.T) {
+			s.bindMu.Lock()
+			done := make(chan struct{})
+			go func() {
+				rec := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodGet, "/"+endpoint.name+"?runtime=1", nil)
+				endpoint.handler(rec, req)
+				close(done)
+			}()
+			select {
+			case <-done:
+				s.bindMu.Unlock()
+				t.Fatalf("/%s observed a controller snapshot during an active binding epoch", endpoint.name)
+			case <-time.After(100 * time.Millisecond):
+			}
+			s.bindMu.Unlock()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatalf("/%s stayed blocked after the binding epoch completed", endpoint.name)
+			}
+		})
+	}
+}
+
 // blockingRunner keeps a turn "running" until its context is cancelled, so tests
 // can observe Running() == true deterministically.
 type blockingRunner struct{}

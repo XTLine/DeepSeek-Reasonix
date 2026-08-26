@@ -5,7 +5,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -189,23 +191,57 @@ func TestRemoteResumeReplayStopsAfterLaterSessionAdoption(t *testing.T) {
 		},
 	}
 	log := &eventLog{}
-	adopted := false
 	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	firstFrameEntered := make(chan struct{})
+	releaseFirstFrame := make(chan struct{})
+	var firstFrameOnce sync.Once
 	a.remoteEventHook = func(name string, payload any) {
 		log.add(name, payload)
-		if !adopted && name == "remote-tab:"+tab.id+":event" {
+		if name == "remote-tab:"+tab.id+":event" {
 			data, _ := json.Marshal(payload)
 			if strings.Contains(string(data), "target-first") {
-				adopted = true
-				a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, laterPath, true)
+				firstFrameOnce.Do(func() { close(firstFrameEntered) })
+				<-releaseFirstFrame
 			}
 		}
 	}
 	route := remoteTabProvisionalResume{targetPath: targetPath, previousPath: oldPath, active: true}
-	a.publishRemoteTabResumeReady(tab.id, tab, client, tab.gen, route)
+	resumeDone := make(chan struct{})
+	go func() {
+		a.publishRemoteTabResumeReady(tab.id, tab, client, tab.gen, route)
+		close(resumeDone)
+	}()
+	select {
+	case <-firstFrameEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first replay frame did not reach publication")
+	}
+	adoptDone := make(chan struct{})
+	go func() {
+		a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, laterPath, true)
+		close(adoptDone)
+	}()
+	select {
+	case <-adoptDone:
+		t.Fatal("later route adoption overtook an in-flight frame publication")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirstFrame)
+	select {
+	case <-adoptDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("later route adoption did not complete after publication")
+	}
+	select {
+	case <-resumeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("resume replay did not stop after later adoption")
+	}
 	events := strings.Join(log.recorded(), "\n")
-	if !strings.Contains(events, "target-first") || strings.Contains(events, "target-second") {
-		t.Fatalf("replay crossed later adoption barrier: %s", events)
+	secondFrame := strings.Index(events, "target-second")
+	laterReady := strings.LastIndex(events, "remote-tab:"+tab.id+":state")
+	if !strings.Contains(events, "target-first") || secondFrame < 0 || laterReady < secondFrame {
+		t.Fatalf("later adoption overtook the ordered replay: %s", events)
 	}
 	a.remoteTabMu.Lock()
 	path, rehydrating := tab.routing.currentPath, tab.routing.rehydratingPath
@@ -276,6 +312,54 @@ func TestRemoteResumeReplaysPromptArrivingDuringDrain(t *testing.T) {
 	a.remoteTabMu.Unlock()
 	if pending != 1 || rehydrating != "" {
 		t.Fatalf("post-drain pending/rehydrating = %d/%q, want 1/empty", pending, rehydrating)
+	}
+}
+
+func TestRemoteRotationResponseCannotOverwriteLaterRouteAdoption(t *testing.T) {
+	const oldPath = "/sessions/old.jsonl"
+	const responsePath = "/sessions/response.jsonl"
+	const laterPath = "/sessions/later.jsonl"
+	requestEntered := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/new" {
+			http.NotFound(w, r)
+			return
+		}
+		close(requestEntered)
+		<-releaseResponse
+		w.Header().Set("X-Reasonix-Session-Path", responsePath)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: server.Client(), base: server.URL, gen: 7,
+		session: remoteTabSessionState{name: "old", path: oldPath},
+		routing: remoteTabSessionRouting{currentPath: oldPath, running: map[string]bool{}},
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	done := make(chan error, 1)
+	go func() { done <- a.rotateRemoteTabSession(tab.id, "/new") }()
+	select {
+	case <-requestEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("rotation request did not reach Serve")
+	}
+	a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, laterPath, true)
+	close(releaseResponse)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rotation did not finish")
+	}
+	a.remoteTabMu.Lock()
+	path, sessionPath := tab.routing.currentPath, tab.session.path
+	a.remoteTabMu.Unlock()
+	if path != laterPath || sessionPath == responsePath {
+		t.Fatalf("stale rotation response replaced later route: routing/session = %q/%q, want later route %q", path, sessionPath, laterPath)
 	}
 }
 

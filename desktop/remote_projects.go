@@ -57,12 +57,16 @@ type RemoteTabStateView struct {
 // remoteTab is one open remote project tab.
 type remoteTab struct {
 	sessionMu sync.Mutex
-	id        string
-	ref       RemoteTabRef
-	state     string
-	err       string
-	session   remoteTabSessionState
-	hostLabel string
+	// routeEventMu orders foreground-route adoption with route-scoped frames.
+	// It stays separate from remoteTabMu so frontend callbacks run unlocked;
+	// lock order is routeEventMu, then App.remoteTabMu.
+	routeEventMu sync.Mutex
+	id           string
+	ref          RemoteTabRef
+	state        string
+	err          string
+	session      remoteTabSessionState
+	hostLabel    string
 	// topicTitle starts as the workspace name and adopts the generated title.
 	topicTitle   string
 	titleRefresh remoteTabTitleRefreshState

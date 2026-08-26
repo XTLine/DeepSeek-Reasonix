@@ -860,6 +860,8 @@ func historyMessages(msgs []provider.Message) []historyMessage {
 // if the client sends If-None-Match with the current ETag, the server returns
 // 304 Not Modified with no body, saving bandwidth on reconnects.
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
+	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
 	writeJSONCached(w, r, historyMessages(s.ctl().History()))
 }
 
@@ -1301,6 +1303,10 @@ func currentModelRef(c control.SessionAPI) string {
 // status returns a combined status snapshot. The desktop's runtime-only path
 // skips provider balance IO while retaining all reconciliation fields.
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
+	// Session rotations publish the controller path and executor Session while
+	// holding bindMu. Read the combined snapshot in that same binding epoch so
+	// callers can never pair a newly published path with the outgoing history.
+	s.bindMu.Lock()
 	runtimeOnly := r.URL.Query().Get("runtime") == "1" || r.URL.Query().Get("lite") == "1"
 	ctrl := s.ctl()
 	used, window := ctrl.ContextSnapshot()
@@ -1325,9 +1331,10 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if ctrl.Goal() != "" {
 		sess["goalRuntime"] = ctrl.GoalRuntime()
 	}
-	if path := strings.TrimSpace(ctrl.SessionPath()); path != "" && store.IsSessionTranscriptName(filepath.Base(path)) {
-		sess["sessionName"] = strings.TrimSuffix(filepath.Base(path), ".jsonl")
-		sess["sessionPath"] = agent.CanonicalSessionPath(path)
+	sessionPath := strings.TrimSpace(ctrl.SessionPath())
+	if sessionPath != "" && store.IsSessionTranscriptName(filepath.Base(sessionPath)) {
+		sess["sessionName"] = strings.TrimSuffix(filepath.Base(sessionPath), ".jsonl")
+		sess["sessionPath"] = agent.CanonicalSessionPath(sessionPath)
 	}
 	if cfg, err := config.Load(); err == nil {
 		if entry, ok := cfg.ResolveModel(currentModelRef(ctrl)); ok {
@@ -1354,6 +1361,13 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if u := ctrl.LastUsage(); u != nil {
 		sess["lastUsage"] = u
 	}
+	sess["sessionCostQuote"] = s.bc.SessionCostQuoteFor(agent.CanonicalSessionPath(sessionPath))
+	if j := ctrl.Jobs(); len(j) > 0 {
+		sess["jobs"] = j
+	}
+	// Balance can perform provider IO and does not participate in session
+	// identity. Release the binding epoch before that optional slow request.
+	s.bindMu.Unlock()
 	if !runtimeOnly {
 		if b, err := ctrl.Balance(r.Context()); err == nil && b != nil {
 			if cfg, loadErr := config.Load(); loadErr == nil && cfg.DisplayCurrencyPref() == "" {
@@ -1369,10 +1383,6 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		} else if err != nil {
 			slog.Warn("serve: balance fetch failed", "err", err)
 		}
-	}
-	sess["sessionCostQuote"] = s.bc.SessionCostQuoteFor(agent.CanonicalSessionPath(ctrl.SessionPath()))
-	if j := ctrl.Jobs(); len(j) > 0 {
-		sess["jobs"] = j
 	}
 	writeJSON(w, sess)
 }
