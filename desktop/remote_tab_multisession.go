@@ -20,6 +20,30 @@ func enterRemoteSession(ctx context.Context, client *http.Client, base string, o
 	return err
 }
 
+// preflightRemoteSessionTarget resolves the foreground identity without
+// mutating Serve. Attach uses it to publish routing before the event pump can
+// observe an immediate replay from a detached controller.
+func preflightRemoteSessionTarget(ctx context.Context, client *http.Client, base string, opts RemoteTabOpenOptions) (serveSessionEntry, error) {
+	name := strings.TrimSpace(opts.SessionName)
+	if path := strings.TrimSpace(opts.SessionPath); path != "" {
+		return serveSessionEntry{Name: name, Path: path, Title: strings.TrimSpace(opts.SessionTitle), Current: true}, nil
+	}
+	if name == "" {
+		return serveCurrentSession(ctx, client, base)
+	}
+	sessions, err := serveSessions(ctx, client, base)
+	if err != nil {
+		return serveSessionEntry{}, err
+	}
+	for _, session := range sessions {
+		if session.Name == name {
+			session.Current = true
+			return session, nil
+		}
+	}
+	return serveSessionEntry{}, fmt.Errorf("remote session %q not found", name)
+}
+
 func enterRemoteSessionTarget(ctx context.Context, client *http.Client, base string, opts RemoteTabOpenOptions) (serveSessionEntry, error) {
 	name := strings.TrimSpace(opts.SessionName)
 	if opts.NewSession {

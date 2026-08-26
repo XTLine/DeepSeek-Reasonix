@@ -97,6 +97,11 @@ func TestCredentialChannelDecision(t *testing.T) {
 			}
 		})
 	}
+	for state, want := range map[string]bool{"connected": true, "degraded": true, "connecting": false, "error": false} {
+		if got := credentialWatchdogEligibleState(state); got != want {
+			t.Fatalf("credentialWatchdogEligibleState(%q)=%v, want %v", state, got, want)
+		}
+	}
 }
 
 // fakeRemoteKernel implements remoteKernel for binding-layer tests.

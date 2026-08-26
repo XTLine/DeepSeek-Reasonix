@@ -523,15 +523,23 @@ func (s *Server) renderBindError(w http.ResponseWriter, err error) {
 	}
 }
 
-func (s *Server) cancelDetachedForProviderHeal() {
+// retireDetachedForProviderHeal is called with bindMu held. It makes every
+// detached controller unreattachable and waits for its provider generation to
+// close before credential reload is acknowledged.
+func (s *Server) retireDetachedForProviderHeal() {
 	s.detachedMu.Lock()
 	detached := make([]*detachedSession, 0, len(s.detached))
 	for _, d := range s.detached {
 		detached = append(detached, d)
+		select {
+		case <-d.force:
+		default:
+			close(d.force)
+		}
 	}
 	s.detachedMu.Unlock()
 	for _, d := range detached {
-		slog.Info("serve: provider heal cancels background session", "session", d.path)
-		d.ctrl.Cancel()
+		slog.Info("serve: provider heal retires background session", "session", d.path)
+		<-d.done
 	}
 }

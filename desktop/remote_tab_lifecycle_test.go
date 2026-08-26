@@ -131,12 +131,14 @@ func TestRemoteTabDoesNotPublishReadyWhenEventStreamClosesDuringAttach(t *testin
 
 func TestRemoteTabReviveAppliesRequestedNamedSession(t *testing.T) {
 	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "saved", Path: "/saved.jsonl", Title: "Saved"}})
+	feed := make(chan string, 1)
 	kernel := &fakeRemoteKernel{
 		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
 		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
 	}
 	seedBridgeTestHost(t, "box")
-	a := &App{remoteRuntime: kernel}
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
 	cleanupRemoteTabPumps(t, a)
 	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
 	a.remoteTabMu.Lock()
@@ -149,9 +151,36 @@ func TestRemoteTabReviveAppliesRequestedNamedSession(t *testing.T) {
 	tab.state = "disconnected"
 	tab.session = remoteTabSessionState{newSession: true}
 	a.remoteTabMu.Unlock()
+	fs.mu.Lock()
+	fs.eventFeed = feed
+	fs.resumeStarted = make(chan struct{}, 1)
+	fs.resumeRelease = make(chan struct{})
+	started, release := fs.resumeStarted, fs.resumeRelease
+	fs.mu.Unlock()
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
 	if _, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{SessionName: "saved"}); err != nil {
 		t.Fatal(err)
 	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("revived resume request did not start")
+	}
+	feed <- `{"kind":"notice","text":"revived output","sessionPath":"/saved.jsonl"}`
+	deadline := time.Now().Add(time.Second)
+	for log.count("remote-tab:"+meta.ID+":event") < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("revived target frame was dropped while /resume was pending: %v", log.recorded())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
 	waitForTabState(t, a, meta.ID, "ready")
 	_, resumed, _ := fs.snapshot()
 	if resumed != "/saved.jsonl" {

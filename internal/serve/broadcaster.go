@@ -158,15 +158,21 @@ func (b *Broadcaster) Emit(e event.Event) {
 // that attached after the original event was emitted. Normal runtime events
 // should continue to use Emit so every subscriber receives them.
 func (b *Broadcaster) EmitTo(target <-chan []byte, e event.Event) {
+	if e.SessionPath != "" {
+		e.SessionPath = agent.CanonicalSessionPath(e.SessionPath)
+	}
 	data, err := json.Marshal(eventwire.ToWire(e))
 	if err != nil {
 		return
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for ch := range b.subs {
+	for ch, sub := range b.subs {
 		if (<-chan []byte)(ch) != target {
 			continue
+		}
+		if !sub.all && e.SessionPath != "" && e.SessionPath != b.current {
+			return
 		}
 		select {
 		case ch <- data:

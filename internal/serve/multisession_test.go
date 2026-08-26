@@ -210,6 +210,38 @@ func (c *backgroundJobOnlyController) RuntimeStatus() control.RuntimeStatus {
 	return control.RuntimeStatus{BackgroundJobs: 1, Cancellable: true}
 }
 
+type detachedProviderHealProbe struct {
+	*control.Controller
+	closed atomic.Bool
+}
+
+func (c *detachedProviderHealProbe) RuntimeStatus() control.RuntimeStatus {
+	return control.RuntimeStatus{BackgroundJobs: 1, Cancellable: true}
+}
+
+func (c *detachedProviderHealProbe) Close() {
+	c.closed.Store(true)
+	c.Controller.Close()
+}
+
+func TestProviderHealSynchronouslyRetiresDetachedControllers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "background.jsonl")
+	ctrl := &detachedProviderHealProbe{Controller: control.New(control.Options{SessionPath: path})}
+	server := New(control.New(control.Options{}), NewBroadcaster(), config.ServeConfig{})
+	tag := NewSessionTagSink(server.bc)
+	tag.SetPath(path)
+	if _, err := server.registerDetached(ctrl, nil, tag); err != nil {
+		t.Fatal(err)
+	}
+	server.retireDetachedForProviderHeal()
+	if !ctrl.closed.Load() {
+		t.Fatal("provider heal returned before the detached controller closed")
+	}
+	if server.detachedBusy(path) {
+		t.Fatal("provider heal left the detached controller reattachable")
+	}
+}
+
 func TestSessionsReportsForegroundBackgroundJobsAsRunning(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "jobs.jsonl")

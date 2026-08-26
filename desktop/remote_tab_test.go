@@ -162,6 +162,7 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		fs.mu.Lock()
 		fail := fs.failSessions
 		started, release := fs.sessionsStarted, fs.sessionsRelease
+		sessions := append([]serveSessionEntry(nil), fs.sessions...)
 		fs.mu.Unlock()
 		if started != nil {
 			select {
@@ -180,7 +181,7 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 			http.Error(w, "sessions unavailable", http.StatusInternalServerError)
 			return
 		}
-		writeTestJSON(w, fs.sessions)
+		writeTestJSON(w, sessions)
 	})
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
 		fs.mu.Lock()

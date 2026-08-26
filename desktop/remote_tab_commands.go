@@ -450,12 +450,12 @@ func (a *App) refreshRemoteTabTitle(tabID string) {
 		return
 	}
 	tab.titleRefreshInFlight = true
-	client, base := tab.client, tab.base
+	client, base, gen, expectedPath := tab.client, tab.base, tab.gen, tab.routing.currentPath
 	a.remoteTabMu.Unlock()
 	defer func() {
 		a.remoteTabMu.Lock()
-		if tab := a.remoteTabs[tabID]; tab != nil {
-			tab.titleRefreshInFlight = false
+		if current := a.remoteTabs[tabID]; current == tab {
+			current.titleRefreshInFlight = false
 		}
 		a.remoteTabMu.Unlock()
 	}()
@@ -484,7 +484,7 @@ func (a *App) refreshRemoteTabTitle(tabID string) {
 		}
 		a.remoteTabMu.Lock()
 		current := a.remoteTabs[tabID]
-		if current != tab || current.client != client {
+		if current != tab || current.client != client || current.gen != gen || current.routing.currentPath != expectedPath {
 			a.remoteTabMu.Unlock()
 			return
 		}

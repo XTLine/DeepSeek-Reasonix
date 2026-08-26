@@ -64,6 +64,27 @@ func TestBroadcasterFanOut(t *testing.T) {
 	}
 }
 
+func TestBroadcasterEmitToHonorsCurrentSession(t *testing.T) {
+	b := NewBroadcaster()
+	b.SetCurrentSession("/sessions/b.jsonl")
+	current, stopCurrent := b.Subscribe()
+	all, stopAll := b.SubscribeAll()
+	defer stopCurrent()
+	defer stopAll()
+	b.EmitTo(current, event.Event{Kind: event.ApprovalRequest, SessionPath: "/sessions/a.jsonl"})
+	b.EmitTo(all, event.Event{Kind: event.ApprovalRequest, SessionPath: "/sessions/a.jsonl"})
+	if len(current) != 0 {
+		t.Fatal("current-only subscriber received a stale session replay")
+	}
+	if len(all) != 1 {
+		t.Fatal("all-session subscriber lost a tagged background replay")
+	}
+	b.EmitTo(current, event.Event{Kind: event.ApprovalRequest, SessionPath: "/sessions/b.jsonl"})
+	if len(current) != 1 {
+		t.Fatal("current-only subscriber lost the current session replay")
+	}
+}
+
 func TestBroadcasterEmitsRetryingJSON(t *testing.T) {
 	b := NewBroadcaster()
 	ch, cancel := b.Subscribe()

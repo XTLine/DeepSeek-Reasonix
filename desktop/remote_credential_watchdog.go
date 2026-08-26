@@ -37,6 +37,10 @@ func (d credentialChannelDecision) needsHeal() bool {
 	return !d.HasForward || !d.ProbeOK || d.HealedPort <= 0 || d.ForwardPort != d.HealedPort
 }
 
+func credentialWatchdogEligibleState(state string) bool {
+	return state == "connected" || state == "degraded"
+}
+
 func (m *desktopRemoteManager) startCredentialWatchdogIfEnabled(mh *managedHost, hostID, workspace string) {
 	entry, err := configuredRemoteHost(hostID)
 	if err == nil && entry.CredentialProxyEnabled() {
@@ -99,7 +103,10 @@ func (m *desktopRemoteManager) checkCredentialChannel(mh *managedHost, hostID st
 		state = mh.status.State
 	}
 	m.mu.Unlock()
-	if state != "connected" || mh.client == nil {
+	// A reconnect with one failed forward is deliberately published as
+	// degraded while retaining the live SSH client. That is exactly when the
+	// credential reverse tunnel may need this watchdog's repair path.
+	if !credentialWatchdogEligibleState(state) || mh.client == nil {
 		return
 	}
 	port, has := credentialForwardPort(mh.client, hostID)
