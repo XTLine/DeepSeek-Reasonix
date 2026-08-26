@@ -105,7 +105,11 @@ func (a *App) routeRemoteTabFrame(tabID string, gen uint64, sessionPath, kind st
 		}
 	}
 	foreground := sessionPath == "" || tab.routing.currentPath != "" && sessionPath == tab.routing.currentPath
-	backgroundChanged := changed && !foreground
+	_, knownBackground := tab.routing.running[sessionPath]
+	// A detached turn can finish while background jobs remain. Its later notice
+	// makes /sessions authoritative again, so refresh project-tree rows without
+	// forwarding that background notice to the foreground reducer.
+	backgroundChanged := !foreground && (changed || kind == "notice" && knownBackground)
 	meta := remoteTabMetaLocked(tab)
 	a.remoteTabMu.Unlock()
 	if backgroundChanged {

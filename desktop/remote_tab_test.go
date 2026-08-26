@@ -33,6 +33,7 @@ type fakeServe struct {
 	failNext                       string   // non-empty ⇒ next command endpoint replies 409 with this text
 	failEnter                      string   // non-empty ⇒ next /new or /resume replies 409
 	enterDelay                     time.Duration
+	resumeStarted, resumeRelease   chan struct{}
 	failHistory                    bool // /history replies 500 when set
 	historyStarted, historyRelease chan struct{}
 	failSessions                   bool // /sessions replies 500 when set
@@ -127,6 +128,7 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		fail := fs.failEnter
 		fs.failEnter = ""
 		enterDelay := fs.enterDelay
+		resumeStarted, resumeRelease := fs.resumeStarted, fs.resumeRelease
 		if fail != "" {
 			fs.mu.Unlock()
 			http.Error(w, fail, http.StatusConflict)
@@ -137,6 +139,19 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 			fs.sessions[i].Current = fs.sessions[i].Path == body.Path
 		}
 		fs.mu.Unlock()
+		if resumeStarted != nil {
+			select {
+			case resumeStarted <- struct{}{}:
+			default:
+			}
+		}
+		if resumeRelease != nil {
+			select {
+			case <-resumeRelease:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if enterDelay > 0 {
 			time.Sleep(enterDelay)
 		}
@@ -320,39 +335,6 @@ func seedBridgeTestHost(t *testing.T, hostID string) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-}
-
-// eventLog records every emitRemoteEvent call from any goroutine.
-type eventLog struct {
-	mu     sync.Mutex
-	events []string // "name payload"
-}
-
-func (l *eventLog) add(name string, payload any) {
-	text, _ := json.Marshal(payload)
-	l.mu.Lock()
-	l.events = append(l.events, name+" "+string(text))
-	l.mu.Unlock()
-}
-
-func (l *eventLog) recorded() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	out := make([]string, len(l.events))
-	copy(out, l.events)
-	return out
-}
-
-func (l *eventLog) count(prefix string) int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	n := 0
-	for _, e := range l.events {
-		if strings.HasPrefix(e, prefix) {
-			n++
-		}
-	}
-	return n
 }
 
 func waitForTabState(t *testing.T, a *App, tabID, want string) {

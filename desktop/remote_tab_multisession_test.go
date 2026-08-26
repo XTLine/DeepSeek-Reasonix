@@ -72,6 +72,27 @@ func TestRemoteTabAllSessionEventsRouteOnlyCurrentFrames(t *testing.T) {
 	}
 }
 
+func TestBackgroundCompletionNoticeRefreshesRemoteRows(t *testing.T) {
+	const currentPath = "/sessions/current.jsonl"
+	const backgroundPath = "/sessions/background.jsonl"
+	log := &eventLog{}
+	a := &App{remoteEventHook: log.add, remoteTabs: map[string]*remoteTab{
+		"remote-1": {
+			id: "remote-1", gen: 7,
+			routing: remoteTabSessionRouting{
+				currentPath: currentPath,
+				running:     map[string]bool{backgroundPath: true},
+			},
+		},
+	}}
+	if a.routeRemoteTabFrame("remote-1", 7, backgroundPath, "notice") {
+		t.Fatal("background completion notice was routed to the foreground")
+	}
+	if got := log.count("remote-tab:updated"); got != 1 {
+		t.Fatalf("background completion emitted %d row refreshes, want 1", got)
+	}
+}
+
 func TestFocusOnlyAttachRoutesImmediatePendingPrompt(t *testing.T) {
 	const currentPath = "/sessions/current.jsonl"
 	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "current", Path: currentPath, Current: true}})

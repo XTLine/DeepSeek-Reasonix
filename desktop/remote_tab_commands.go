@@ -134,7 +134,34 @@ func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle 
 	}
 	if target.Path != "" {
 		body, _ := json.Marshal(map[string]string{"path": target.Path})
+		// /resume may reattach a controller already producing frames. Route them
+		// before the request returns so the all-session pump does not discard its
+		// handoff output or prompt replay as background work.
+		previousPath := ""
+		provisionalRoute := false
+		a.remoteTabMu.Lock()
+		current := a.remoteTabs[tabID]
+		if current == tab && current.client == client && current.gen == gen && current.state == "ready" {
+			previousPath = current.routing.currentPath
+			if target.Path != previousPath {
+				current.routing.currentPath = target.Path
+				provisionalRoute = true
+			}
+		}
+		a.remoteTabMu.Unlock()
+		restoreRoute := func() {
+			if !provisionalRoute {
+				return
+			}
+			a.remoteTabMu.Lock()
+			current := a.remoteTabs[tabID]
+			if current == tab && current.client == client && current.gen == gen && current.routing.currentPath == target.Path {
+				current.routing.currentPath = previousPath
+			}
+			a.remoteTabMu.Unlock()
+		}
 		if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
+			restoreRoute()
 			if remoteSessionTransitionBusy(err) {
 				a.transitionRemoteTabState(tabID, gen, "ready", "ready", "Finish the current turn before switching sessions.")
 				return
@@ -150,7 +177,7 @@ func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle 
 			title = name
 		}
 		a.remoteTabMu.Lock()
-		current := a.remoteTabs[tabID]
+		current = a.remoteTabs[tabID]
 		if current != tab || current.client != client || current.gen != gen || current.state != "ready" {
 			a.remoteTabMu.Unlock()
 			return

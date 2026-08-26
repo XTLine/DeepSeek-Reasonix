@@ -143,7 +143,7 @@ func LocateCommand(uploadedBin string) string {
 func SupportsRequiredServeCapabilitiesCommand(pid int) string {
 	return fmt.Sprintf(
 		"BIN=$(readlink /proc/%d/exe 2>/dev/null); "+
-			"if [ -z \"$BIN\" ]; then BIN=$(ps -p %d -o comm= 2>/dev/null | tr -d ' '); fi; "+
+			"if [ -z \"$BIN\" ]; then BIN=$(ps -p %d -o comm= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); fi; "+
 			"if [ -n \"$BIN\" ] && [ -x \"$BIN\" ] && \"$BIN\" serve --help 2>&1 | grep -q -- %s && \"$BIN\" serve --help 2>&1 | grep -q -- %s && \"$BIN\" serve --help 2>&1 | grep -q -- %s; then echo yes; else echo no; fi",
 		pid, pid, shellQuote(serveSessionEventsMarker), shellQuote(serveDetachedHealMarker), shellQuote(serveCapsToken),
 	)

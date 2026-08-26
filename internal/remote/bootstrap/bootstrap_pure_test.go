@@ -181,4 +181,7 @@ func TestSupportsRequiredServeCapabilitiesCommand(t *testing.T) {
 			t.Errorf("capability probe missing %q:\n%s", want, cmd)
 		}
 	}
+	if strings.Contains(cmd, "tr -d ' '") || !strings.Contains(cmd, "sed 's/^[[:space:]]*//;s/[[:space:]]*$//'") {
+		t.Fatalf("capability probe must trim only pathname padding and preserve internal spaces:\n%s", cmd)
+	}
 }

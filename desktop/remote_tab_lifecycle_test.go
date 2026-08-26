@@ -340,6 +340,95 @@ func TestRemoteResumeRejectedKeepsCurrentSessionReady(t *testing.T) {
 	}
 }
 
+func TestRemoteResumeRejectedRestoresForegroundRoute(t *testing.T) {
+	const oldPath = "/old.jsonl"
+	const targetPath = "/target.jsonl"
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "old", Path: oldPath, Current: true},
+		{Name: "target", Path: targetPath},
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{})
+	fs.mu.Lock()
+	fs.failEnter = "session is already leased by another process"
+	fs.mu.Unlock()
+	a.resumeRemoteTabSessionPath(meta.ID, "target", targetPath, "Target")
+	a.remoteTabMu.Lock()
+	got := a.remoteTabs[meta.ID].routing.currentPath
+	a.remoteTabMu.Unlock()
+	if got != oldPath {
+		t.Fatalf("foreground route after rejected resume = %q, want %q", got, oldPath)
+	}
+}
+
+func TestRemoteResumeRoutesTargetFramesBeforePostReturns(t *testing.T) {
+	const oldPath = "/old.jsonl"
+	const targetPath = "/target.jsonl"
+	feed := make(chan string, 1)
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "old", Path: oldPath, Current: true},
+		{Name: "target", Path: targetPath, Running: true},
+	})
+	fs.mu.Lock()
+	fs.eventFrames = []string{`{"kind":"ready","sessionPath":"/old.jsonl"}`}
+	fs.eventFeed = feed
+	fs.resumeStarted = make(chan struct{}, 1)
+	fs.resumeRelease = make(chan struct{})
+	started, release := fs.resumeStarted, fs.resumeRelease
+	fs.mu.Unlock()
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{})
+	done := make(chan struct{})
+	go func() {
+		a.resumeRemoteTabSessionPath(meta.ID, "target", targetPath, "Target")
+		close(done)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("resume request did not start")
+	}
+	feed <- `{"kind":"notice","text":"reattached output","sessionPath":"/target.jsonl"}`
+	deadline := time.Now().Add(time.Second)
+	for log.count("remote-tab:"+meta.ID+":event") < 2 {
+		select {
+		case <-done:
+			t.Fatal("resume returned before the test released its response")
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("target frame was dropped while /resume was pending: %v", log.recorded())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resume did not finish")
+	}
+}
+
 func TestRemoteNewBusyKeepsCurrentSessionReady(t *testing.T) {
 	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "saved", Path: "/saved.jsonl", Title: "Saved", Current: true}})
 	kernel := &fakeRemoteKernel{
