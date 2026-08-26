@@ -166,12 +166,37 @@ func (a *App) commitRemoteTabResume(tabID string, tab *remoteTab, client *http.C
 	return remoteTabMetaLocked(current), true
 }
 
+// commitAndPublishRemoteTabResume keeps the successful HTTP commit, metadata
+// publication, and ready/replay handoff in the same route epoch. Without this
+// fence a newer session_changed adoption could publish between those steps and
+// then be overwritten by the older resume metadata.
+func (a *App) commitAndPublishRemoteTabResume(tabID string, tab *remoteTab, client *http.Client, gen uint64, route remoteTabProvisionalResume, target serveSessionEntry, title string) bool {
+	tab.routeEventMu.Lock()
+	defer tab.routeEventMu.Unlock()
+	meta, committed := a.commitRemoteTabResume(tabID, tab, client, gen, route, target, title)
+	if !committed {
+		return false
+	}
+	a.emitRemoteEvent("remote-tab:updated", meta)
+	a.saveTabsFromRemote()
+	// Frames received while /resume was in flight were held behind the
+	// provisional route. Rehydrate the committed session before replaying its
+	// retained prompts or later live output.
+	a.publishRemoteTabResumeReadyLocked(tabID, tab, client, gen, route)
+	return true
+}
+
 func (a *App) publishRemoteTabResumeReady(tabID string, tab *remoteTab, client *http.Client, gen uint64, route remoteTabProvisionalResume) {
 	// Keep the ready barrier and the complete buffered drain in one ordered
 	// route-publication epoch. A later session adoption waits until every frame
 	// from this snapshot is visible, then publishes its own ready barrier.
 	tab.routeEventMu.Lock()
 	defer tab.routeEventMu.Unlock()
+	a.publishRemoteTabResumeReadyLocked(tabID, tab, client, gen, route)
+}
+
+// publishRemoteTabResumeReadyLocked publishes while tab.routeEventMu is held.
+func (a *App) publishRemoteTabResumeReadyLocked(tabID string, tab *remoteTab, client *http.Client, gen uint64, route remoteTabProvisionalResume) {
 	if !a.transitionRemoteTabState(tabID, gen, "ready", "ready", "") {
 		return
 	}

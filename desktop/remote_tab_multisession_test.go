@@ -73,6 +73,73 @@ func TestRemoteTabAllSessionEventsRouteOnlyCurrentFrames(t *testing.T) {
 	}
 }
 
+func TestNewerTerminalStateOverridesStaleRunningListingRow(t *testing.T) {
+	const currentPath = "/sessions/current.jsonl"
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{
+		Name: "current", Path: currentPath, Current: true, Running: true,
+	}})
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionPath: currentPath})
+
+	fs.mu.Lock()
+	fs.sessionsStarted = make(chan struct{}, 1)
+	fs.sessionsRelease = make(chan struct{})
+	started, release := fs.sessionsStarted, fs.sessionsRelease
+	fs.mu.Unlock()
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	type listingResult struct {
+		sessions []RemoteSessionView
+		err      error
+	}
+	done := make(chan listingResult, 1)
+	go func() {
+		sessions, err := a.RemoteProjectSessions("box", "~/app")
+		done <- listingResult{sessions: sessions, err: err}
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("session listing did not start")
+	}
+	a.remoteTabMu.Lock()
+	gen := a.remoteTabs[meta.ID].gen
+	a.remoteTabMu.Unlock()
+	if !a.routeRemoteTabFrame(meta.ID, gen, currentPath, "turn_done") {
+		t.Fatal("current terminal frame was not routed")
+	}
+	close(release)
+	var result listingResult
+	select {
+	case result = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("session listing did not finish")
+	}
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	for _, session := range result.sessions {
+		if session.Path == currentPath {
+			if session.Running {
+				t.Fatalf("stale running row revived the newer terminal state: %+v", result.sessions)
+			}
+			return
+		}
+	}
+	t.Fatalf("current session missing from listing: %+v", result.sessions)
+}
+
 func TestBackgroundCompletionNoticeRefreshesRemoteRows(t *testing.T) {
 	const currentPath = "/sessions/current.jsonl"
 	const backgroundPath = "/sessions/background.jsonl"

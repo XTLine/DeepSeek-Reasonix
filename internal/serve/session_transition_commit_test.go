@@ -111,3 +111,47 @@ func TestBranchTransitionPublishesMustDeliverRoute(t *testing.T) {
 		t.Fatalf("saturated subscriber lost branch route to %q", newPath)
 	}
 }
+
+func TestForegroundRecoveryPublishesMustDeliverRoute(t *testing.T) {
+	bc := NewBroadcaster()
+	tag := newSessionTagSink(bc)
+	dir := t.TempDir()
+	initialPath := filepath.Join(dir, "old.jsonl")
+	recoveryPath := filepath.Join(dir, "old-recovery.jsonl")
+	ctrl := control.New(control.Options{SessionPath: initialPath})
+	defer ctrl.Close()
+	tag.SetPath(initialPath)
+	bc.SetCurrentSession(initialPath)
+
+	srv := New(ctrl, bc, config.ServeConfig{})
+	srv.RegisterSessionTag(ctrl, tag)
+	all, stop := bc.SubscribeAll()
+	defer stop()
+	for range subscriberBufferSize - subscriberPriorityReserve {
+		bc.Emit(event.Event{Kind: event.Text, Text: "delta", SessionPath: initialPath})
+	}
+	for range subscriberPriorityReserve {
+		bc.Emit(event.Event{Kind: event.Notice, Text: "priority", SessionPath: initialPath})
+	}
+	if got := len(all); got != subscriberBufferSize {
+		t.Fatalf("saturated subscriber length = %d, want %d", got, subscriberBufferSize)
+	}
+
+	if err := srv.sessionRecoveryHandler(ctrl, nil)(control.SessionRecoveryInfo{RecoveryPath: recoveryPath}); err != nil {
+		t.Fatal(err)
+	}
+	recoveryPath = agent.CanonicalSessionPath(recoveryPath)
+	found := false
+	for len(all) > 0 {
+		var frame eventwire.Event
+		if err := json.Unmarshal(<-all, &frame); err != nil {
+			t.Fatal(err)
+		}
+		if frame.Kind == "session_changed" && frame.SessionPath == recoveryPath && frame.SessionCurrent {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("saturated subscriber lost foreground recovery route to %q", recoveryPath)
+	}
+}

@@ -184,16 +184,9 @@ func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle 
 		if title == "" {
 			title = name
 		}
-		meta, committed := a.commitRemoteTabResume(tabID, tab, client, gen, route, target, title)
-		if !committed {
+		if !a.commitAndPublishRemoteTabResume(tabID, tab, client, gen, route, target, title) {
 			return
 		}
-		a.emitRemoteEvent("remote-tab:updated", meta)
-		a.saveTabsFromRemote()
-		// Frames received while /resume was in flight were held behind the
-		// provisional route. The ready publication rehydrates the committed
-		// session before replaying its retained prompts or later live output.
-		a.publishRemoteTabResumeReady(tabID, tab, client, gen, route)
 		a.goSafe("remoteTabResumeStatus", func() { _, _ = a.RemoteTabStatus(tabID) })
 		return
 	}
@@ -268,6 +261,10 @@ func (a *App) SetRemoteTabModel(tabID, ref string) error {
 	workspace := tab.ref.Workspace
 	currentModel := tab.model
 	expectedPath := tab.routing.currentPath
+	expectedPathRevision := tab.routing.pathRevision
+	expectedGen := tab.gen
+	client, base := tab.client, tab.base
+	usable := client != nil && tab.state == "ready"
 	a.remoteTabMu.Unlock()
 	localProxy := a.remoteTabLocalProxy(tabID)
 
@@ -303,6 +300,9 @@ func (a *App) SetRemoteTabModel(tabID, ref string) error {
 		if _, err := resolveProxyProvider(cfg, canonical); err != nil {
 			return err
 		}
+		if !usable {
+			return fmt.Errorf("remote tab %q is not connected", tabID)
+		}
 		rt, err := a.remoteRT()
 		if err != nil {
 			return err
@@ -313,15 +313,32 @@ func (a *App) SetRemoteTabModel(tabID, ref string) error {
 			return err
 		}
 		next = canonical
-	} else if err := a.remoteTabPost(tabID, "/model", map[string]any{"ref": ref}); err != nil {
-		return err
+	} else {
+		if !usable {
+			return fmt.Errorf("remote tab %q is not connected", tabID)
+		}
+		payload, _ := json.Marshal(map[string]any{"ref": ref})
+		ctx, cancel := commandContext(a)
+		defer cancel()
+		if err := servePostForSession(ctx, client, serveURL(base, "/model"), payload, expectedPath); err != nil {
+			return err
+		}
 	}
 
+	tab.routeEventMu.Lock()
+	defer tab.routeEventMu.Unlock()
 	a.remoteTabMu.Lock()
 	current := a.remoteTabs[tabID]
-	if current != tab {
+	if current != tab || current.client != client || current.gen != expectedGen {
 		a.remoteTabMu.Unlock()
 		return fmt.Errorf("remote tab %q closed while switching model", tabID)
+	}
+	if current.routing.pathRevision != expectedPathRevision || current.routing.currentPath != expectedPath {
+		// The fenced request changed the session that was visible when it began,
+		// but another client has since promoted a newer foreground route. Do not
+		// label that newer session with the older session's model response.
+		a.remoteTabMu.Unlock()
+		return nil
 	}
 	current.model = next
 	current.modelSeq = remoteTabModelSeq.Add(1)

@@ -347,13 +347,14 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 		if preferLiveCurrent {
 			current = liveCurrentPath != "" && e.Path == liveCurrentPath
 		}
+		running := remoteSessionRunning(e.Running, liveRunning, e.Path, preferLiveCurrent)
 		view := RemoteSessionView{
 			Name:           e.Name,
 			Path:           e.Path,
 			Title:          title,
 			Turns:          e.Turns,
 			Current:        current,
-			Running:        e.Running || liveRunning[e.Path],
+			Running:        running,
 			LastActivityAt: e.MtimeMilli,
 			Pinned:         remoteSessionPinned(hostID, workspace, e.Name),
 		}
@@ -379,6 +380,17 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 		}
 	}
 	return append(pinned, out...), nil
+}
+
+func remoteSessionRunning(listed bool, live map[string]bool, path string, preferLive bool) bool {
+	if preferLive {
+		if running, ok := live[path]; ok {
+			// A newer terminal frame is authoritative even when its value is
+			// false; OR-ing it with the stale listing row would revive the turn.
+			return running
+		}
+	}
+	return listed || live[path]
 }
 
 func remoteAuthoritativeSessionTitle(hostID, workspace string, current *serveSessionEntry) string {

@@ -597,6 +597,146 @@ func TestRemoteReselectionSuccessCannotOverwriteNewerAdoption(t *testing.T) {
 	}
 }
 
+func TestRemoteResumeCommitPublicationBlocksNewerAdoption(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	const targetPath = "/sessions/target.jsonl"
+	const newerPath = "/sessions/newer.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		session: remoteTabSessionState{path: targetPath},
+		routing: remoteTabSessionRouting{
+			currentPath: targetPath, rehydratingPath: targetPath, pathRevision: 4, running: map[string]bool{},
+		},
+	}
+	metadataEntered := make(chan struct{})
+	releaseMetadata := make(chan struct{})
+	var once sync.Once
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	a.remoteEventHook = func(name string, _ any) {
+		if name == "remote-tab:updated" {
+			once.Do(func() {
+				close(metadataEntered)
+				<-releaseMetadata
+			})
+		}
+	}
+	route := remoteTabProvisionalResume{targetPath: targetPath, active: true}
+	resumeDone := make(chan bool, 1)
+	go func() {
+		resumeDone <- a.commitAndPublishRemoteTabResume(tab.id, tab, client, tab.gen, route, serveSessionEntry{Path: targetPath}, "Target")
+	}()
+	select {
+	case <-metadataEntered:
+	case <-time.After(time.Second):
+		t.Fatal("resume metadata publication did not start")
+	}
+	adoptDone := make(chan struct{})
+	go func() {
+		a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, newerPath, true)
+		close(adoptDone)
+	}()
+	select {
+	case <-adoptDone:
+		t.Fatal("newer adoption overtook the in-flight resume publication")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseMetadata)
+	select {
+	case committed := <-resumeDone:
+		if !committed {
+			t.Fatal("resume commit was unexpectedly rejected")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("resume publication did not finish")
+	}
+	select {
+	case <-adoptDone:
+	case <-time.After(time.Second):
+		t.Fatal("newer adoption remained blocked after resume publication")
+	}
+	a.remoteTabMu.Lock()
+	path := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if path != newerPath {
+		t.Fatalf("foreground route = %q, want newer adoption %q", path, newerPath)
+	}
+}
+
+func TestRemoteModelResponseCannotLabelNewerForegroundSession(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	const oldPath = "/sessions/old.jsonl"
+	const newerPath = "/sessions/newer.jsonl"
+	requestStarted := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	var gotExpectedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/model" {
+			http.NotFound(w, r)
+			return
+		}
+		gotExpectedPath = r.Header.Get(expectedSessionPathHeader)
+		close(requestStarted)
+		<-releaseResponse
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: server.Client(), base: server.URL, gen: 7, model: "old-model",
+		routing: remoteTabSessionRouting{currentPath: oldPath, pathRevision: 2, running: map[string]bool{}},
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	switchDone := make(chan error, 1)
+	go func() { switchDone <- a.SetRemoteTabModel(tab.id, "next-model") }()
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("model request did not start")
+	}
+	a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, newerPath, true)
+	close(releaseResponse)
+	select {
+	case err := <-switchDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("model request did not finish")
+	}
+	if gotExpectedPath != oldPath {
+		t.Fatalf("model request expected path = %q, want %q", gotExpectedPath, oldPath)
+	}
+	a.remoteTabMu.Lock()
+	model, path := tab.model, tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if path != newerPath || model != "old-model" {
+		t.Fatalf("newer foreground session was mislabeled: path=%q model=%q", path, model)
+	}
+}
+
+func TestRemoteAttachResponseCannotOverwriteNewerAdoption(t *testing.T) {
+	const responsePath = "/sessions/response.jsonl"
+	const newerPath = "/sessions/newer.jsonl"
+	tab := &remoteTab{
+		id: "remote-1", gen: 7, topicTitle: "Newer",
+		session: remoteTabSessionState{name: "newer", path: newerPath},
+		routing: remoteTabSessionRouting{currentPath: newerPath, pathRevision: 5, running: map[string]bool{}},
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	committed := a.commitRemoteTabAttachResponse(tab.id, tab, tab.gen, 4, serveSessionEntry{
+		Name: "response", Path: responsePath, Title: "Stale response",
+	}, false)
+	if committed {
+		t.Fatal("stale attach response overwrote a newer route adoption")
+	}
+	a.remoteTabMu.Lock()
+	path, name, title := tab.routing.currentPath, tab.session.name, tab.topicTitle
+	a.remoteTabMu.Unlock()
+	if path != newerPath || name != "newer" || title != "Newer" {
+		t.Fatalf("stale attach response changed newer identity: path=%q name=%q title=%q", path, name, title)
+	}
+}
+
 func TestExternalSessionAdoptionResetsAndSeedsForegroundRuntime(t *testing.T) {
 	const oldPath = "/sessions/old.jsonl"
 	const targetPath = "/sessions/target.jsonl"

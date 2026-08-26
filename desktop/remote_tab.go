@@ -83,6 +83,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	if !opts.NewSession {
 		commitRemoteTabAttachRoute(tab, target.Path, false)
 	}
+	attachPathRevision := tab.routing.pathRevision
 	gen := tab.gen
 	pumpCtx, cancelPump := context.WithCancel(ctx)
 	tab.cancel = cancelPump
@@ -122,20 +123,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 			return false, err
 		}
 	}
-	a.remoteTabMu.Lock()
-	if current := a.remoteTabs[tabID]; current == tab && current.gen == gen {
-		commitRemoteTabAttachRoute(current, target.Path, opts.NewSession)
-		if name := strings.TrimSpace(target.Name); name != "" {
-			current.session.name = name
-		}
-		if title := strings.TrimSpace(target.Title); title != "" {
-			current.topicTitle = title
-		}
-		if current.routing.running == nil {
-			current.routing.running = map[string]bool{}
-		}
-	}
-	a.remoteTabMu.Unlock()
+	a.commitRemoteTabAttachResponse(tabID, tab, gen, attachPathRevision, target, opts.NewSession)
 	if !a.waitRemoteTabStreamStable(callCtx, tabID, gen) {
 		return false, fmt.Errorf("remote tab %q event stream closed during session attach", tabID)
 	}
@@ -151,6 +139,38 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 		return false, fmt.Errorf("remote tab %q event stream closed during session attach", tabID)
 	}
 	return entered, nil
+}
+
+// commitRemoteTabAttachResponse applies an attach response only while it still
+// owns the foreground route. A session_changed frame for a newer adoption is
+// authoritative even when the older /new or /resume response arrives later.
+func (a *App) commitRemoteTabAttachResponse(tabID string, tab *remoteTab, gen, requestPathRevision uint64, target serveSessionEntry, reset bool) bool {
+	tab.routeEventMu.Lock()
+	defer tab.routeEventMu.Unlock()
+	a.remoteTabMu.Lock()
+	defer a.remoteTabMu.Unlock()
+	current := a.remoteTabs[tabID]
+	if current != tab || current.gen != gen {
+		return false
+	}
+	target.Path = strings.TrimSpace(target.Path)
+	if current.routing.pathRevision != requestPathRevision && current.routing.currentPath != target.Path {
+		return false
+	}
+	alreadyAdopted := current.routing.pathRevision != requestPathRevision
+	if !alreadyAdopted {
+		commitRemoteTabAttachRoute(current, target.Path, reset)
+	}
+	if name := strings.TrimSpace(target.Name); name != "" {
+		current.session.name = name
+	}
+	if title := strings.TrimSpace(target.Title); title != "" {
+		current.topicTitle = title
+	}
+	if current.routing.running == nil {
+		current.routing.running = map[string]bool{}
+	}
+	return true
 }
 
 func (a *App) waitRemoteTabStreamStable(ctx context.Context, tabID string, gen uint64) bool {

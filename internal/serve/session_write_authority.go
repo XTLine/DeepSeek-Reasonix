@@ -74,7 +74,12 @@ func (s *Server) sessionRecoveryHandler(ctrl *control.Controller, k *control.Ses
 		if tag := s.tagFor(ctrl); tag != nil {
 			tag.PrimePath(info.RecoveryPath)
 		}
-		s.publishControllerPathIfCurrent(ctrl, info.RecoveryPath)
+		if s.publishControllerPathIfCurrent(ctrl, info.RecoveryPath) {
+			// Recovery changes foreground identity outside the ordinary transition
+			// hook. Publish the same must-deliver route barrier so a saturated
+			// all-session subscriber cannot keep routing later frames to the old path.
+			s.announceSessionChanged(info.RecoveryPath, false)
+		}
 		return nil
 	}
 }
