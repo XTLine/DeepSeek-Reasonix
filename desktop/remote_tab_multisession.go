@@ -19,6 +19,14 @@ type remoteTabSessionRouting struct {
 	pathRevision uint64
 }
 
+func lockRemoteTabRoute(tab *remoteTab) func() {
+	if tab == nil {
+		return func() {}
+	}
+	tab.routeEventMu.Lock()
+	return tab.routeEventMu.Unlock
+}
+
 // enterRemoteSession is the compatibility wrapper used by bridge tests.
 func enterRemoteSession(ctx context.Context, client *http.Client, base string, opts RemoteTabOpenOptions) error {
 	_, err := enterRemoteSessionTarget(ctx, client, base, opts)

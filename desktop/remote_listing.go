@@ -255,6 +255,7 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 	}
 	authoritativeCurrent := singleCurrentServeSession(entries)
 	authoritativeTitle := remoteAuthoritativeSessionTitle(hostID, workspace, authoritativeCurrent)
+	unlockRoute := lockRemoteTabRoute(observedTab)
 	a.remoteTabMu.Lock()
 	liveRunning := map[string]bool{}
 	liveCurrentPath := ""
@@ -299,6 +300,7 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 			a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:state", routeUpdate.ID), RemoteTabStateView{State: "ready"})
 		}
 	}
+	unlockRoute()
 	out := make([]RemoteSessionView, 0, len(entries))
 	pinned := make([]RemoteSessionView, 0, len(entries))
 	hasCurrent := false

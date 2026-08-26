@@ -151,7 +151,14 @@ func (a *App) recordRemoteTabSessionStatus(tabID string, client *http.Client, ge
 	}
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
-	if tab == nil || tab.client != client || tab.gen != gen || tab.runtime.revision != statusSeq {
+	a.remoteTabMu.Unlock()
+	if tab == nil {
+		return false
+	}
+	tab.routeEventMu.Lock()
+	defer tab.routeEventMu.Unlock()
+	a.remoteTabMu.Lock()
+	if a.remoteTabs[tabID] != tab || tab.client != client || tab.gen != gen || tab.runtime.revision != statusSeq {
 		a.remoteTabMu.Unlock()
 		return false
 	}

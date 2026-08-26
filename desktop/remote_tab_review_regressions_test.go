@@ -363,6 +363,58 @@ func TestRemoteRotationResponseCannotOverwriteLaterRouteAdoption(t *testing.T) {
 	}
 }
 
+func TestRemoteStatusAdoptionWaitsForFramePublication(t *testing.T) {
+	const currentPath = "/sessions/current.jsonl"
+	const laterPath = "/sessions/later.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		session: remoteTabSessionState{path: currentPath},
+		routing: remoteTabSessionRouting{currentPath: currentPath, running: map[string]bool{}},
+		runtime: remoteTabRuntimeState{revision: 11},
+	}
+	frameEntered := make(chan struct{})
+	releaseFrame := make(chan struct{})
+	log := &eventLog{}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	a.remoteEventHook = func(name string, payload any) {
+		log.add(name, payload)
+		if name == "remote-tab:"+tab.id+":event" {
+			close(frameEntered)
+			<-releaseFrame
+		}
+	}
+	frameDone := make(chan bool, 1)
+	go func() {
+		frame := json.RawMessage(`{"kind":"text","text":"current-frame","sessionPath":"/sessions/current.jsonl"}`)
+		frameDone <- a.publishRemoteTabFrame(tab.id, tab.gen, currentPath, "text", frame)
+	}()
+	select {
+	case <-frameEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("current frame did not reach publication")
+	}
+	statusDone := make(chan bool, 1)
+	go func() {
+		statusDone <- a.recordRemoteTabSessionStatus(tab.id, client, tab.gen, 11, json.RawMessage(`{"sessionPath":"/sessions/later.jsonl"}`))
+	}()
+	select {
+	case <-statusDone:
+		t.Fatal("status route adoption overtook an in-flight frame publication")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFrame)
+	if !<-frameDone || !<-statusDone {
+		t.Fatal("ordered frame publication or status adoption was rejected")
+	}
+	events := strings.Join(log.recorded(), "\n")
+	frameIndex := strings.Index(events, "current-frame")
+	readyIndex := strings.LastIndex(events, "remote-tab:"+tab.id+":state")
+	if frameIndex < 0 || readyIndex < frameIndex {
+		t.Fatalf("status ready barrier overtook the current frame: %s", events)
+	}
+}
+
 func TestExternalSessionAdoptionResetsAndSeedsForegroundRuntime(t *testing.T) {
 	const oldPath = "/sessions/old.jsonl"
 	const targetPath = "/sessions/target.jsonl"
