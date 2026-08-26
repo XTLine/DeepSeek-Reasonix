@@ -91,6 +91,15 @@ func TestCredentialProviderReloadBudgetScalesWithTrackedServes(t *testing.T) {
 	}
 }
 
+func TestCredentialProviderHealBudgetScalesWithTrackedWorkspaces(t *testing.T) {
+	if got, want := credentialProviderHealBudget(4), 4*30*time.Second; got != want {
+		t.Fatalf("four-workspace heal budget = %s, want %s", got, want)
+	}
+	if got := credentialProviderHealBudget(0); got != 30*time.Second {
+		t.Fatalf("empty-workspace heal budget = %s, want one-workspace floor", got)
+	}
+}
+
 func TestReloadServeProvidersRejectsReplacedHostGeneration(t *testing.T) {
 	var reloadCalls int
 	mux := http.NewServeMux()

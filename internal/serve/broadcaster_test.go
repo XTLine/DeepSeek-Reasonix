@@ -206,3 +206,30 @@ func TestBroadcasterEvictsRecoverableFramesForTerminalEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestBroadcasterPreservesBackgroundJobCompletionNotice(t *testing.T) {
+	b := NewBroadcaster()
+	ch, cancel := b.SubscribeAll()
+	defer cancel()
+	for range subscriberBufferSize - subscriberPriorityReserve {
+		b.Emit(event.Event{Kind: event.Text, Text: "delta"})
+	}
+	for range subscriberPriorityReserve {
+		b.Emit(event.Event{Kind: event.Notice, Text: "priority"})
+	}
+	b.Emit(event.Event{Kind: event.Notice, Code: event.NoticeCodeBackgroundJobFinished, Text: "background task finished"})
+
+	found := false
+	for len(ch) > 0 {
+		var frame eventwire.Event
+		if err := json.Unmarshal(<-ch, &frame); err != nil {
+			t.Fatal(err)
+		}
+		if frame.Kind == "notice" && frame.Code == event.NoticeCodeBackgroundJobFinished {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("slow subscriber lost background-job completion after priority reserve saturation")
+	}
+}
