@@ -99,7 +99,8 @@ func (a *App) reconcileRemoteTabRejectedResume(tabID string, tab *remoteTab, cli
 	defer tab.routeEventMu.Unlock()
 	a.remoteTabMu.Lock()
 	current := a.remoteTabs[tabID]
-	if current != tab || current.client != client || current.gen != gen || current.state != "ready" {
+	if current != tab || current.client != client || current.gen != gen || current.state != "ready" ||
+		current.routing.currentPath != route.targetPath || current.routing.rehydratingPath != route.targetPath {
 		a.remoteTabMu.Unlock()
 		return
 	}

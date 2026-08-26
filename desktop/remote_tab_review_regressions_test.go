@@ -488,6 +488,38 @@ func TestRemoteRejectedResumeReconciliationWaitsForFramePublication(t *testing.T
 	}
 }
 
+func TestRemoteRejectedResumeReconciliationCannotOverwriteNewerAdoption(t *testing.T) {
+	const previousPath = "/sessions/previous.jsonl"
+	const targetPath = "/sessions/target.jsonl"
+	const staleAuthoritativePath = "/sessions/stale-authoritative.jsonl"
+	const newerPath = "/sessions/newer.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		session: remoteTabSessionState{path: targetPath},
+		routing: remoteTabSessionRouting{
+			currentPath: targetPath, rehydratingPath: targetPath, running: map[string]bool{},
+		},
+	}
+	log := &eventLog{}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}, remoteEventHook: log.add}
+	// This route marker arrives after the reconciliation query returned C but
+	// before its caller acquired the route/publication mutex.
+	a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, newerPath, true)
+	eventsBefore := len(log.recorded())
+	route := remoteTabProvisionalResume{targetPath: targetPath, previousPath: previousPath, active: true}
+	a.reconcileRemoteTabRejectedResume(tab.id, tab, client, tab.gen, route, serveSessionEntry{Path: staleAuthoritativePath}, errors.New("resume response lost"))
+	a.remoteTabMu.Lock()
+	currentPath := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if currentPath != newerPath {
+		t.Fatalf("stale reconciliation replaced newer route with %q, want %q", currentPath, newerPath)
+	}
+	if eventsAfter := len(log.recorded()); eventsAfter != eventsBefore {
+		t.Fatalf("stale reconciliation emitted %d events after newer adoption, want 0", eventsAfter-eventsBefore)
+	}
+}
+
 func TestExternalSessionAdoptionResetsAndSeedsForegroundRuntime(t *testing.T) {
 	const oldPath = "/sessions/old.jsonl"
 	const targetPath = "/sessions/target.jsonl"
