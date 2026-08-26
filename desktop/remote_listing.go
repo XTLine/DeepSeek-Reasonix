@@ -162,6 +162,20 @@ func serveSessions(ctx context.Context, client *http.Client, base string) ([]ser
 	return out, nil
 }
 
+func singleCurrentServeSession(entries []serveSessionEntry) *serveSessionEntry {
+	var current *serveSessionEntry
+	for i := range entries {
+		if !entries[i].Current {
+			continue
+		}
+		if current != nil {
+			return nil
+		}
+		current = &entries[i]
+	}
+	return current
+}
+
 // serveClientForRef resolves an HTTP client for a host+workspace WITHOUT
 // waking anything: a one-shot handshake against an already-ready serve
 // registration. A serve that is not running reports an error — query paths
@@ -227,24 +241,39 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 	if err != nil {
 		return nil, err
 	}
+	authoritativeCurrent := singleCurrentServeSession(entries)
 	a.remoteTabMu.Lock()
 	liveRunning := map[string]bool{}
 	liveCurrentPath := ""
+	preferLiveCurrent := false
 	for _, tab := range a.remoteTabs {
 		if tab.ref.HostID != hostID || tab.ref.Workspace != workspace {
 			continue
 		}
-		liveCurrentPath = tab.routing.currentPath
-		// /sessions is authoritative when no newer SSE/status update raced the
-		// request. Replace the cache so a dropped turn_done cannot leave a row
-		// permanently running; a changed revision preserves the newer live view.
+		// Without a newer SSE/status revision, /sessions replaces the running
+		// cache and current route. A raced revision preserves the newer live route
+		// instead of marking both its row and the stale server row current.
 		if tab == observedTab && tab.routing.revision == observedRevision {
 			authoritative := make(map[string]bool, len(entries))
 			for _, entry := range entries {
 				authoritative[entry.Path] = entry.Running
 			}
 			tab.routing.running = authoritative
+			if authoritativeCurrent != nil {
+				path := strings.TrimSpace(authoritativeCurrent.Path)
+				if path != "" && tab.routing.currentPath != path {
+					tab.routing.currentPath = path
+					tab.routing.revision++
+				}
+				tab.session.path = path
+				tab.session.name = strings.TrimSpace(authoritativeCurrent.Name)
+				tab.session.newSession = false
+				tab.session.reset = false
+			}
+		} else {
+			preferLiveCurrent = true
 		}
+		liveCurrentPath = tab.routing.currentPath
 		maps.Copy(liveRunning, tab.routing.running)
 		break
 	}
@@ -257,12 +286,16 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 		if override := remoteSessionTitleOverride(hostID, workspace, e.Name); override != "" {
 			title = override
 		}
+		current := e.Current
+		if preferLiveCurrent {
+			current = liveCurrentPath != "" && e.Path == liveCurrentPath
+		}
 		view := RemoteSessionView{
 			Name:           e.Name,
 			Path:           e.Path,
 			Title:          title,
 			Turns:          e.Turns,
-			Current:        e.Current || (liveCurrentPath != "" && e.Path == liveCurrentPath),
+			Current:        current,
 			Running:        e.Running || liveRunning[e.Path],
 			LastActivityAt: e.MtimeMilli,
 			Pinned:         remoteSessionPinned(hostID, workspace, e.Name),

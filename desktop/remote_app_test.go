@@ -14,10 +14,14 @@ import (
 	"time"
 
 	"reasonix/internal/config"
+	"reasonix/internal/jobs"
 	"reasonix/internal/remote"
 )
 
 func TestReloadServeProvidersCancelsBusyTurn(t *testing.T) {
+	if remoteProviderReloadTimeout <= jobs.DefaultTeardownGrace {
+		t.Fatalf("provider reload timeout = %s, want more than teardown grace", remoteProviderReloadTimeout)
+	}
 	var mu sync.Mutex
 	canceled := false
 	jobsCanceled := false

@@ -165,7 +165,23 @@ func (a *App) reconcileRemoteTabFramePath(tabID string, gen uint64, sessionPath 
 	a.remoteTabMu.Lock()
 	defer a.remoteTabMu.Unlock()
 	tab := a.remoteTabs[tabID]
-	return tab != nil && tab.gen == gen && tab.routing.currentPath == sessionPath
+	if tab == nil || tab.gen != gen {
+		return false
+	}
+	if tab.routing.currentPath == sessionPath {
+		return true
+	}
+	// The authoritative status confirmed another foreground path. Remember
+	// this tag as background so a lossy detached stream does not synchronously
+	// fetch /status for every later token or notice from the same session.
+	if tab.routing.running == nil {
+		tab.routing.running = map[string]bool{}
+	}
+	if _, known := tab.routing.running[sessionPath]; !known {
+		tab.routing.running[sessionPath] = false
+		tab.routing.revision++
+	}
+	return false
 }
 
 func (a *App) routeRemoteTabFrameReconciled(tabID string, gen uint64, sessionPath, kind string) bool {

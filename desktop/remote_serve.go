@@ -19,10 +19,13 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"reasonix/internal/config"
+	"reasonix/internal/jobs"
 	"reasonix/internal/remote/bootstrap"
 	"reasonix/internal/remote/forward"
 	"reasonix/internal/store"
 )
+
+const remoteProviderReloadTimeout = jobs.DefaultTeardownGrace + 15*time.Second
 
 // SwitchCredentialProxyModel stages an immutable desktop proxy route and a
 // matching remote provider credential, then asks Serve to perform its ordinary
@@ -600,7 +603,7 @@ func (m *desktopRemoteManager) reloadServeProviders(ctx context.Context, hostID,
 			continue
 		}
 		client := &http.Client{Jar: jar}
-		callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		callCtx, cancel := context.WithTimeout(ctx, remoteProviderReloadTimeout)
 		err = serveHandshake(callCtx, client, t.base, t.token)
 		if err == nil {
 			err = servePost(callCtx, client, serveURL(t.base, "/providers/reload"), nil)
@@ -661,7 +664,7 @@ func (m *desktopRemoteManager) cancelThenReload(ctx context.Context, client *htt
 			return ctx.Err()
 		case <-timer.C:
 		}
-		callCtx, callCancel := context.WithTimeout(ctx, 15*time.Second)
+		callCtx, callCancel := context.WithTimeout(ctx, remoteProviderReloadTimeout)
 		err = serveHandshake(callCtx, client, base, token)
 		if err == nil {
 			err = servePost(callCtx, client, serveURL(base, "/providers/reload"), nil)

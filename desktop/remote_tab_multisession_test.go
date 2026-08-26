@@ -126,6 +126,54 @@ func TestFocusOnlyAttachRoutesImmediatePendingPrompt(t *testing.T) {
 	}
 }
 
+func TestNamedAttachPublishesResolvedRouteBeforeResume(t *testing.T) {
+	const targetPath = "/sessions/target.jsonl"
+	feed := make(chan string, 1)
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "target", Path: targetPath}})
+	fs.mu.Lock()
+	fs.eventFeed = feed
+	fs.resumeStarted = make(chan struct{}, 1)
+	fs.resumeRelease = make(chan struct{})
+	started, release := fs.resumeStarted, fs.resumeRelease
+	fs.mu.Unlock()
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
+	cleanupRemoteTabPumps(t, a)
+	meta, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{SessionName: "target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("named resume request did not start")
+	}
+	feed <- `{"kind":"approval_request","sessionPath":"/sessions/target.jsonl","approval":{"id":"approval-target"}}`
+	deadline := time.Now().Add(time.Second)
+	for !slices.ContainsFunc(log.recorded(), func(event string) bool {
+		return strings.HasPrefix(event, "remote-tab:"+meta.ID+":event") && strings.Contains(event, "approval-target")
+	}) {
+		if time.Now().After(deadline) {
+			t.Fatalf("named target prompt was dropped while /resume was pending: %v", log.recorded())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	waitForTabState(t, a, meta.ID, "ready")
+}
+
 func TestForegroundRecoveryPathIsReconciledBeforeRoutingFrame(t *testing.T) {
 	const oldPath = "/sessions/current.jsonl"
 	const recoveryPath = "/sessions/current-recovery.jsonl"
@@ -167,6 +215,77 @@ func TestForegroundRecoveryPathIsReconciledBeforeRoutingFrame(t *testing.T) {
 	a.remoteTabMu.Unlock()
 	if got != recoveryPath {
 		t.Fatalf("foreground route = %q, want recovered path %q", got, recoveryPath)
+	}
+}
+
+func TestUnknownBackgroundPathReconcilesStatusOnlyOnce(t *testing.T) {
+	const currentPath = "/sessions/current.jsonl"
+	const backgroundPath = "/sessions/background.jsonl"
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "current", Path: currentPath, Current: true}})
+	fs.mu.Lock()
+	fs.statusPayload = `{"running":false,"sessionName":"current","sessionPath":"/sessions/current.jsonl"}`
+	fs.mu.Unlock()
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{})
+	a.remoteTabMu.Lock()
+	gen := a.remoteTabs[meta.ID].gen
+	a.remoteTabMu.Unlock()
+	countStatusRequests := func() int {
+		count := 0
+		for _, call := range fs.recorded() {
+			if strings.HasPrefix(call, "GET /status") {
+				count++
+			}
+		}
+		return count
+	}
+	before := countStatusRequests()
+	if a.routeRemoteTabFrameReconciled(meta.ID, gen, backgroundPath, "content") {
+		t.Fatal("unknown background frame was routed to the foreground")
+	}
+	if a.routeRemoteTabFrameReconciled(meta.ID, gen, backgroundPath, "notice") {
+		t.Fatal("known background frame was routed to the foreground")
+	}
+	after := countStatusRequests()
+	if after-before != 1 {
+		t.Fatalf("unknown background path triggered %d status requests, want 1", after-before)
+	}
+}
+
+func TestRemoteProjectSessionsAdoptsAuthoritativeCurrentRoute(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "a", Path: "/a.jsonl"}, {Name: "b", Path: "/b.jsonl", Current: true}})
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionName: "b"})
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[meta.ID]
+	tab.routing.currentPath = "/a.jsonl"
+	tab.session.name, tab.session.path = "a", "/a.jsonl"
+	a.remoteTabMu.Unlock()
+	sessions, err := a.RemoteProjectSessions("box", "~/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := slices.DeleteFunc(append([]RemoteSessionView(nil), sessions...), func(session RemoteSessionView) bool { return !session.Current })
+	if len(current) != 1 || current[0].Path != "/b.jsonl" {
+		t.Fatalf("current rows = %+v, want only authoritative session b", current)
+	}
+	a.remoteTabMu.Lock()
+	name, path, route := tab.session.name, tab.session.path, tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if name != "b" || path != "/b.jsonl" || route != "/b.jsonl" {
+		t.Fatalf("adopted identity = %q/%q/%q, want b//b.jsonl//b.jsonl", name, path, route)
 	}
 }
 
