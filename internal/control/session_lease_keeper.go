@@ -243,6 +243,24 @@ func (k *SessionLeaseKeeper) BindControllerAuthority(c *Controller) error {
 	return nil
 }
 
+// BindSessionAuthority issues the held lease's next write generation directly
+// onto a private session candidate. Resume callers use it before publishing
+// that candidate through their controller; binding the controller itself would
+// only update the outgoing executor session that Resume is about to replace.
+func (k *SessionLeaseKeeper) BindSessionAuthority(sess *agent.Session) error {
+	if k == nil || sess == nil {
+		return nil
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	sess.RequireWriteAuthority()
+	if k.lease == nil {
+		sess.ClearWriteAuthority()
+		return agent.ErrSessionWriteAuthorityMissing
+	}
+	return k.lease.Writer().Bind(sess, agent.NextSessionWriteGeneration())
+}
+
 // SetControllerOwnershipBinder lets an owning frontend compose its routing
 // callbacks with lease handoff. The binder follows a controller through
 // Split, RebindDetaching, and Adopt instead of those transfers replacing the

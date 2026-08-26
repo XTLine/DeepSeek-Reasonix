@@ -2,6 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -127,5 +131,107 @@ func TestRemoteAttachRetiringSessionConflictKeepsCurrentReady(t *testing.T) {
 	a.remoteTabMu.Unlock()
 	if state != "ready" || path != currentPath || title != "Current title" {
 		t.Fatalf("soft attach state/path/title = %q/%q/%q, want ready/%q/Current title", state, path, title, currentPath)
+	}
+}
+
+func TestRemoteResumeTransportFailureReconcilesCommittedTarget(t *testing.T) {
+	const oldPath = "/sessions/old.jsonl"
+	const targetPath = "/sessions/target.jsonl"
+	seedBridgeTestHost(t, "box")
+	postCalls := 0
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.Method == http.MethodPost && req.URL.Path == "/resume":
+			postCalls++
+			// Model a response lost after Serve has already committed targetPath.
+			return nil, io.ErrUnexpectedEOF
+		case req.Method == http.MethodGet && req.URL.Path == "/sessions":
+			body := `[{"name":"target","path":"/sessions/target.jsonl","title":"Target","current":true}]`
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+		default:
+			return nil, errors.New("unexpected request")
+		}
+	})}
+	tab := &remoteTab{
+		id: "remote-1", ref: RemoteTabRef{HostID: "box", Workspace: "~/app"}, state: "ready",
+		client: client, base: "http://127.0.0.1:43210", gen: 7,
+		topicTitle: "Old",
+		session:    remoteTabSessionState{name: "old", path: oldPath},
+		routing:    remoteTabSessionRouting{currentPath: oldPath, running: map[string]bool{}},
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	a.resumeRemoteTabSessionPath(tab.id, "target", targetPath, "Target")
+	a.remoteTabMu.Lock()
+	state, path, sessionPath, title := tab.state, tab.routing.currentPath, tab.session.path, tab.topicTitle
+	rehydrating := tab.routing.rehydratingPath
+	a.remoteTabMu.Unlock()
+	if postCalls != 1 || state != "ready" || path != targetPath || sessionPath != targetPath || title != "Target" || rehydrating != "" {
+		t.Fatalf("reconciled resume calls/state/route/session/title/rehydrating = %d/%q/%q/%q/%q/%q", postCalls, state, path, sessionPath, title, rehydrating)
+	}
+}
+
+func TestRemoteResumeReplayStopsAfterLaterSessionAdoption(t *testing.T) {
+	const oldPath = "/sessions/old.jsonl"
+	const targetPath = "/sessions/target.jsonl"
+	const laterPath = "/sessions/later.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		session: remoteTabSessionState{name: "target", path: targetPath},
+		routing: remoteTabSessionRouting{
+			currentPath: targetPath, rehydratingPath: targetPath, running: map[string]bool{},
+			rehydratingFrames: []json.RawMessage{
+				json.RawMessage(`{"kind":"text","text":"target-first","sessionPath":"/sessions/target.jsonl"}`),
+				json.RawMessage(`{"kind":"text","text":"target-second","sessionPath":"/sessions/target.jsonl"}`),
+			},
+		},
+	}
+	log := &eventLog{}
+	adopted := false
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	a.remoteEventHook = func(name string, payload any) {
+		log.add(name, payload)
+		if !adopted && name == "remote-tab:"+tab.id+":event" {
+			data, _ := json.Marshal(payload)
+			if strings.Contains(string(data), "target-first") {
+				adopted = true
+				a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, laterPath, true)
+			}
+		}
+	}
+	route := remoteTabProvisionalResume{targetPath: targetPath, previousPath: oldPath, active: true}
+	a.publishRemoteTabResumeReady(tab.id, tab, client, tab.gen, route)
+	events := strings.Join(log.recorded(), "\n")
+	if !strings.Contains(events, "target-first") || strings.Contains(events, "target-second") {
+		t.Fatalf("replay crossed later adoption barrier: %s", events)
+	}
+	a.remoteTabMu.Lock()
+	path, rehydrating := tab.routing.currentPath, tab.routing.rehydratingPath
+	a.remoteTabMu.Unlock()
+	if path != laterPath || rehydrating != "" {
+		t.Fatalf("later route/rehydration = %q/%q, want %q/empty", path, rehydrating, laterPath)
+	}
+}
+
+func TestExternalSessionAdoptionResetsAndSeedsForegroundRuntime(t *testing.T) {
+	const oldPath = "/sessions/old.jsonl"
+	const targetPath = "/sessions/target.jsonl"
+	tab := &remoteTab{
+		routing: remoteTabSessionRouting{currentPath: oldPath, running: map[string]bool{targetPath: true}},
+		session: remoteTabSessionState{name: "old", path: oldPath},
+		pendingEvents: map[string]json.RawMessage{
+			"approval_request:old": json.RawMessage(`{"kind":"approval_request"}`),
+		},
+		runtime: remoteTabRuntimeState{
+			running: true, turnStartedAt: 99, backgroundJobs: 3,
+			pendingPrompt: true, cancelRequested: true, cancellable: true,
+		},
+	}
+	if !adoptRemoteTabSessionPathLocked(tab, targetPath) {
+		t.Fatal("target session was not adopted")
+	}
+	if len(tab.pendingEvents) != 0 || !tab.runtime.running || tab.runtime.turnStartedAt != 0 ||
+		tab.runtime.backgroundJobs != 0 || tab.runtime.pendingPrompt || tab.runtime.cancelRequested || !tab.runtime.cancellable {
+		t.Fatalf("adopted runtime retained old controller state: %+v pending=%d", tab.runtime, len(tab.pendingEvents))
 	}
 }

@@ -14,10 +14,10 @@ import (
 func (s *Server) commitLoadedResume(w http.ResponseWriter, cur control.SessionAPI, loaded *agent.Session, realPath string) bool {
 	ctrl, concrete := cur.(*control.Controller)
 	if concrete && s.leases != nil {
-		// Issue target authority before Resume mutates the controller. A binding
-		// failure can then restore the former lease without leaving an already
-		// resumed controller behind an unpublished route.
-		if err := s.leases.BindControllerAuthority(ctrl); err != nil {
+		// Issue target authority directly onto the loaded candidate before Resume
+		// replaces the executor session. Rebinding the controller here would only
+		// authorize the outgoing session and leave loaded on the permissive path.
+		if err := s.leases.BindSessionAuthority(loaded); err != nil {
 			_ = s.rebindSessionLease(cur.SessionPath())
 			http.Error(w, "session authority: unable to bind resumed session", http.StatusInternalServerError)
 			return false

@@ -35,6 +35,19 @@ type serveSessionEntry struct {
 	MtimeMilli int64  `json:"mtimeMilli"`
 }
 
+type serveHTTPStatusError struct {
+	url        string
+	statusCode int
+	message    string
+}
+
+func (e *serveHTTPStatusError) Error() string {
+	if e.message != "" {
+		return fmt.Sprintf("%s: status %d: %s", e.url, e.statusCode, e.message)
+	}
+	return fmt.Sprintf("%s: status %d", e.url, e.statusCode)
+}
+
 // RemoteSessionView mirrors one serve /sessions entry on the frontend side.
 type RemoteSessionView struct {
 	Name           string `json:"name"`
@@ -99,10 +112,9 @@ func servePostSessionPath(ctx context.Context, client *http.Client, url string, 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return strings.TrimSpace(resp.Header.Get("X-Reasonix-Session-Path")), nil
 	}
-	if message := strings.TrimSpace(string(data)); message != "" {
-		return "", fmt.Errorf("%s: status %d: %s", url, resp.StatusCode, message)
+	return "", &serveHTTPStatusError{
+		url: url, statusCode: resp.StatusCode, message: strings.TrimSpace(string(data)),
 	}
-	return "", fmt.Errorf("%s: status %d", url, resp.StatusCode)
 }
 
 // serveDo issues a JSON request; the csrf guard rejects non-JSON POSTs.

@@ -175,6 +175,36 @@ func TestSessionLeaseKeeperRecoveryRebindsControllerBeforeReturning(t *testing.T
 	releaseSave()
 }
 
+func TestSessionLeaseKeeperBindsPrivateResumeCandidate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "target.jsonl")
+	outgoing := agent.NewSession("outgoing")
+	ctrl := New(Options{Executor: agent.New(nil, nil, outgoing, agent.Options{}, event.Discard), SessionPath: path, Sink: event.Discard})
+	keeper := NewSessionLeaseKeeper()
+	defer keeper.Release()
+	if err := keeper.Rebind(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := keeper.BindControllerAuthority(ctrl); err != nil {
+		t.Fatal(err)
+	}
+	oldAuthority := outgoing.WriteAuthority()
+	candidate := agent.NewSession("candidate")
+	if err := keeper.BindSessionAuthority(candidate); err != nil {
+		t.Fatalf("BindSessionAuthority: %v", err)
+	}
+	if auth := candidate.WriteAuthority(); auth == nil || !auth.Covers(path) {
+		t.Fatal("private resume candidate was not bound to the held path")
+	}
+	if oldAuthority == nil || oldAuthority.Valid() {
+		t.Fatal("candidate binding did not retire the outgoing write generation")
+	}
+	ctrl.Resume(candidate, path)
+	if got, want := ctrl.WriteAuthorityGeneration(), candidate.WriteAuthority().Generation(); got != want || got == 0 {
+		t.Fatalf("resumed controller authority generation = %d, want %d", got, want)
+	}
+}
+
 func TestSessionLeaseKeeperRebindDetachingTransfersRecoveryCallback(t *testing.T) {
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a.jsonl")
