@@ -582,25 +582,6 @@ func (a *App) RemoteServerLogs(hostID, workspace string, tailLines int) (string,
 	return rt.ServerLogs(a.bootContext(), hostID, workspace, tailLines)
 }
 
-// editUserConfig runs mutate against the user-global config under the edit lock
-// and saves it there. Remote hosts are user-global (pinned in LoadForRoot).
-func editUserConfig(mutate func(*config.Config) error) error {
-	unlock := config.LockUserConfigEdits()
-	defer unlock()
-	path := config.UserConfigPath()
-	if strings.TrimSpace(path) == "" {
-		return fmt.Errorf("cannot resolve user config path")
-	}
-	cfg := config.LoadForEdit(path)
-	if cfg == nil {
-		cfg = config.Default()
-	}
-	if err := mutate(cfg); err != nil {
-		return err
-	}
-	return cfg.SaveTo(path)
-}
-
 // ── desktopRemoteManager: concrete remoteKernel ──
 
 type managedHost struct {

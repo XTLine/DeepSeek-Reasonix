@@ -136,18 +136,8 @@ func (a *App) ListRemoteProjects() ([]RemoteProjectView, error) {
 func (a *App) AddRemoteProject(hostID, workspace string) (RemoteProjectView, error) {
 	hostID = strings.TrimSpace(hostID)
 	workspace = strings.TrimSpace(workspace)
-	// Fast path: already pinned (the common case — OpenRemoteProjectTab
-	// re-registers on every click). A read-only overlap check avoids taking
-	// the config edit lock and rewriting the file per session switch.
-	if cfg, err := config.Load(); err == nil {
-		if merged, ok := resolveOverlappingWorkspace(cfg.Remote.Projects, hostID, workspace); ok {
-			view := remoteProjectEntryToView(config.RemoteProjectEntry{HostID: hostID, Workspace: merged})
-			view.Merged = true
-			return view, nil
-		}
-	}
 	var view RemoteProjectView
-	err := editUserConfig(func(c *config.Config) error {
+	err := editUserConfigIfChanged(func(c *config.Config) (bool, error) {
 		// Overlapping pins on one host collapse into the existing group.
 		// This avoids duplicate serves over the same files and returns the
 		// canonical workspace with Merged set.
@@ -155,25 +145,25 @@ func (a *App) AddRemoteProject(hostID, workspace string) (RemoteProjectView, err
 			workspace = merged
 			stored, retained := c.RemoteProject(hostID, merged)
 			if !retained {
-				return fmt.Errorf("remote project was not retained")
+				return false, fmt.Errorf("remote project was not retained")
 			}
 			view = remoteProjectEntryToView(stored)
 			view.Merged = true
-			return nil
+			return false, nil
 		}
 		entry := config.RemoteProjectEntry{
 			HostID:    hostID,
 			Workspace: workspace,
 		}
 		if err := c.UpsertRemoteProject(entry); err != nil {
-			return err
+			return false, err
 		}
 		stored, ok := c.RemoteProject(entry.HostID, entry.Workspace)
 		if !ok {
-			return fmt.Errorf("remote project was not retained")
+			return false, fmt.Errorf("remote project was not retained")
 		}
 		view = remoteProjectEntryToView(stored)
-		return nil
+		return true, nil
 	})
 	if err != nil {
 		return RemoteProjectView{}, err
@@ -513,7 +503,7 @@ func (a *App) restoreRemoteTabShells(f desktopTabsFile) {
 			state: "disconnected",
 			session: remoteTabSessionState{
 				newSession: strings.TrimSpace(entry.SessionName) == "" && strings.TrimSpace(entry.SessionPath) == "",
-				name: strings.TrimSpace(entry.SessionName), path: strings.TrimSpace(entry.SessionPath),
+				name:       strings.TrimSpace(entry.SessionName), path: strings.TrimSpace(entry.SessionPath),
 			},
 			hostLabel: hostLabel, topicTitle: title, model: model,
 			routing: remoteTabSessionRouting{currentPath: strings.TrimSpace(entry.SessionPath), running: map[string]bool{}},

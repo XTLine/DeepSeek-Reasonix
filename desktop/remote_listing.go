@@ -341,10 +341,12 @@ func (a *App) remoteProjectSessions(ctx context.Context, client *http.Client, ba
 	}
 	out := make([]RemoteSessionView, 0, len(entries))
 	pinned := make([]RemoteSessionView, 0, len(entries))
+	prefs := remotePrefsSnapshot()
 	hasCurrent := false
 	for _, e := range entries {
 		title := strings.TrimSpace(e.Title)
-		if override := remoteSessionTitleOverride(hostID, workspace, e.Name); override != "" {
+		prefKey := remoteSessionPrefKey(hostID, workspace, e.Name)
+		if override := prefs.SessionTitles[prefKey]; override != "" {
 			title = override
 		}
 		current := e.Current
@@ -359,7 +361,7 @@ func (a *App) remoteProjectSessions(ctx context.Context, client *http.Client, ba
 			Current:        current,
 			Running:        e.Running || liveRunning[e.Path],
 			LastActivityAt: e.MtimeMilli,
-			Pinned:         remoteSessionPinned(hostID, workspace, e.Name),
+			Pinned:         remoteSessionPinnedLocked(prefs, prefKey),
 		}
 		hasCurrent = hasCurrent || view.Current
 		if view.Pinned {

@@ -194,16 +194,19 @@ func (a *App) closeCredentialProxy() {
 func (a *App) credentialProxySecret() (string, error) {
 	remotePrefsMu.Lock()
 	defer remotePrefsMu.Unlock()
-	p := remotePrefsForUpdateLocked()
-	if p.CredentialProxySecret == "" {
+	p, err := updateRemotePrefsLocked(func(p *remotePrefs) (bool, error) {
+		if p.CredentialProxySecret != "" {
+			return false, nil
+		}
 		buf := make([]byte, 32)
 		if _, err := rand.Read(buf); err != nil {
-			return "", fmt.Errorf("credential proxy: generate secret: %w", err)
+			return false, fmt.Errorf("credential proxy: generate secret: %w", err)
 		}
 		p.CredentialProxySecret = hex.EncodeToString(buf)
-		if err := remotePrefsSaveLocked(p); err != nil {
-			return "", fmt.Errorf("credential proxy: persist secret: %w", err)
-		}
+		return true, nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("credential proxy: persist secret: %w", err)
 	}
 	return p.CredentialProxySecret, nil
 }

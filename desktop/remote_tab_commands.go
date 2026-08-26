@@ -106,13 +106,9 @@ func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle 
 	}
 	tab.routing.resumeGen++
 	resumeGen := tab.routing.resumeGen
-	previous := remoteTabResumeIdentity{
-		name: tab.session.name, path: tab.session.path,
-		newSession: tab.session.newSession, reset: tab.session.reset,
-		title: tab.topicTitle, routePath: tab.routing.currentPath,
-	}
+	previous := snapshotRemoteTabResumeIdentity(tab)
 	if path := strings.TrimSpace(sessionPath); path != "" {
-		installRemoteTabAttachRoute(tab, path)
+		prepareRemoteTabResumeRouteLocked(tab, path, false)
 	}
 	a.remoteTabMu.Unlock()
 	a.resumeRemoteTabSessionPathGeneration(tabID, resumeGen, name, sessionPath, sessionTitle, &previous)
@@ -123,6 +119,35 @@ type remoteTabResumeIdentity struct {
 	newSession, reset bool
 	title             string
 	routePath         string
+	pendingEvents     map[string]json.RawMessage
+	runtime           remoteTabRuntimeState
+}
+
+func snapshotRemoteTabResumeIdentity(tab *remoteTab) remoteTabResumeIdentity {
+	var pending map[string]json.RawMessage
+	if tab.pendingEvents != nil {
+		pending = make(map[string]json.RawMessage, len(tab.pendingEvents))
+		for key, frame := range tab.pendingEvents {
+			pending[key] = append(json.RawMessage(nil), frame...)
+		}
+	}
+	return remoteTabResumeIdentity{
+		name: tab.session.name, path: tab.session.path,
+		newSession: tab.session.newSession, reset: tab.session.reset,
+		title: tab.topicTitle, routePath: tab.routing.currentPath,
+		pendingEvents: pending, runtime: tab.runtime,
+	}
+}
+
+func prepareRemoteTabResumeRouteLocked(tab *remoteTab, path string, running bool) {
+	if !adoptRemoteTabSessionPathLocked(tab, path) {
+		return
+	}
+	tab.runtime.revision++
+	tab.runtime.running = running || tab.routing.running[tab.routing.currentPath]
+	tab.runtime.turnStartedAt = 0
+	tab.runtime.cancelRequested = false
+	tab.runtime.cancellable = tab.runtime.running || tab.runtime.backgroundJobs > 0
 }
 
 func (a *App) rollbackRemoteTabResume(tabID string, resumeGen uint64, previous *remoteTabResumeIdentity) {
@@ -138,6 +163,10 @@ func (a *App) rollbackRemoteTabResume(tabID string, resumeGen uint64, previous *
 	tab.session.name, tab.session.path = previous.name, previous.path
 	tab.session.newSession, tab.session.reset = previous.newSession, previous.reset
 	tab.topicTitle = previous.title
+	tab.pendingEvents = previous.pendingEvents
+	restoredRuntime := previous.runtime
+	restoredRuntime.revision = max(tab.runtime.revision, previous.runtime.revision) + 1
+	tab.runtime = restoredRuntime
 	if tab.routing.currentPath != previous.routePath {
 		tab.routing.currentPath = previous.routePath
 		tab.routing.revision++
@@ -173,91 +202,97 @@ func (a *App) resumeRemoteTabSessionPathGeneration(tabID string, resumeGen uint6
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	var target serveSessionEntry
-	if sessionPath != "" {
-		target = serveSessionEntry{Name: strings.TrimSpace(name), Path: strings.TrimSpace(sessionPath), Title: strings.TrimSpace(sessionTitle)}
-	} else {
-		entries, err := serveSessions(ctx, client, base)
-		if err != nil {
-			if stillCurrent() {
-				a.rollbackRemoteTabResume(tabID, resumeGen, previous)
-				a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", fmt.Sprintf("Could not open remote session %q: %v", name, err))
-			}
-			return
-		}
-		for _, entry := range entries {
-			if entry.Name == name {
-				target = entry
-				break
-			}
-		}
-	}
-	if target.Path != "" {
-		body, _ := json.Marshal(map[string]string{"path": target.Path})
-		// /resume may reattach a controller already producing frames. Route them
-		// before the request returns so the all-session pump does not discard its
-		// handoff output or prompt replay as background work.
-		a.remoteTabMu.Lock()
-		current := a.remoteTabs[tabID]
-		if current != tab || current.client != client || current.gen != connectionGen || current.routing.resumeGen != resumeGen || current.state != "ready" {
-			a.remoteTabMu.Unlock()
-			return
-		}
-		if current.routing.currentPath != target.Path {
-			installRemoteTabAttachRoute(current, target.Path)
-		}
-		a.remoteTabMu.Unlock()
-		if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
-			if !stillCurrent() {
-				return
-			}
-			if remoteSessionTransitionBusy(err) {
-				a.rollbackRemoteTabResume(tabID, resumeGen, previous)
-				a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", "Finish the current turn before switching sessions.")
-				return
-			}
-			// /resume is an action on an already attached Serve. Any rejection
-			// leaves that current session and event pump usable, so surface the
-			// action error without replacing the ready transcript.
+	target, err := resolveRemoteTabResumeTarget(ctx, client, base, name, sessionPath, sessionTitle)
+	if err != nil {
+		if stillCurrent() {
 			a.rollbackRemoteTabResume(tabID, resumeGen, previous)
-			a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", err.Error())
-			return
+			a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", fmt.Sprintf("Could not open remote session %q: %v", name, err))
 		}
-		title := strings.TrimSpace(target.Title)
-		if title == "" {
-			title = name
-		}
-		a.remoteTabMu.Lock()
-		current = a.remoteTabs[tabID]
-		if current != tab || current.client != client || current.gen != connectionGen || current.routing.resumeGen != resumeGen || current.state != "ready" {
-			a.remoteTabMu.Unlock()
-			return
-		}
-		current.topicTitle = title
-		current.session.reset = false
-		current.session.newSession = false
-		current.session.name = strings.TrimSpace(target.Name)
-		// Close the provisional routing epoch so a listing that began while
-		// /resume was in flight cannot publish its pre-switch snapshot afterward.
-		installRemoteTabAttachRoute(current, target.Path)
-		current.pendingEvents = nil
-		current.runtime.revision++
-		current.runtime.running = target.Running || current.routing.running[target.Path]
-		current.runtime.pendingPrompt = false
-		current.runtime.cancelRequested = false
-		current.runtime.cancellable = current.runtime.running
-		meta := remoteTabMetaLocked(current)
-		a.remoteTabMu.Unlock()
-		a.emitRemoteEvent("remote-tab:updated", meta)
-		a.saveTabsFromRemote()
-		a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", "")
-		a.goSafe("remoteTabResumeStatus", func() { _, _ = a.RemoteTabStatus(tabID) })
 		return
 	}
-	if stillCurrent() {
-		a.rollbackRemoteTabResume(tabID, resumeGen, previous)
-		a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", fmt.Sprintf("remote session %q not found", name))
+	if target.Path == "" {
+		if stillCurrent() {
+			a.rollbackRemoteTabResume(tabID, resumeGen, previous)
+			a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", fmt.Sprintf("remote session %q not found", name))
+		}
+		return
 	}
+	a.resumeRemoteTabResolvedTarget(ctx, tabID, resumeGen, name, base, target, tab, client, connectionGen, previous, stillCurrent)
+}
+
+func (a *App) resumeRemoteTabResolvedTarget(ctx context.Context, tabID string, resumeGen uint64, name, base string, target serveSessionEntry, tab *remoteTab, client *http.Client, connectionGen uint64, previous *remoteTabResumeIdentity, stillCurrent func() bool) {
+	body, _ := json.Marshal(map[string]string{"path": target.Path})
+	// /resume may reattach a controller already producing frames. Route them
+	// before the request returns so the all-session pump does not discard its
+	// handoff output or prompt replay as background work.
+	a.remoteTabMu.Lock()
+	current := a.remoteTabs[tabID]
+	if current != tab || current.client != client || current.gen != connectionGen || current.routing.resumeGen != resumeGen || current.state != "ready" {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	if current.routing.currentPath != target.Path {
+		prepareRemoteTabResumeRouteLocked(current, target.Path, target.Running)
+	}
+	a.remoteTabMu.Unlock()
+	if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
+		if !stillCurrent() {
+			return
+		}
+		if remoteSessionTransitionBusy(err) {
+			a.rollbackRemoteTabResume(tabID, resumeGen, previous)
+			a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", "Finish the current turn before switching sessions.")
+			return
+		}
+		// /resume is an action on an already attached Serve. Any rejection
+		// leaves that current session and event pump usable, so surface the
+		// action error without replacing the ready transcript.
+		a.rollbackRemoteTabResume(tabID, resumeGen, previous)
+		a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", err.Error())
+		return
+	}
+	title := strings.TrimSpace(target.Title)
+	if title == "" {
+		title = name
+	}
+	a.remoteTabMu.Lock()
+	current = a.remoteTabs[tabID]
+	if current != tab || current.client != client || current.gen != connectionGen || current.routing.resumeGen != resumeGen || current.state != "ready" {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	current.topicTitle = title
+	current.session.reset = false
+	current.session.newSession = false
+	current.session.name = strings.TrimSpace(target.Name)
+	// Close the provisional routing epoch so a listing that began while
+	// /resume was in flight cannot publish its pre-switch snapshot afterward.
+	installRemoteTabAttachRoute(current, target.Path)
+	current.runtime.revision++
+	current.runtime.running = current.runtime.running || target.Running || current.routing.running[target.Path]
+	current.runtime.cancellable = current.runtime.cancellable || current.runtime.running
+	meta := remoteTabMetaLocked(current)
+	a.remoteTabMu.Unlock()
+	a.emitRemoteEvent("remote-tab:updated", meta)
+	a.saveTabsFromRemote()
+	a.transitionRemoteTabState(tabID, connectionGen, "ready", "ready", "")
+	a.goSafe("remoteTabResumeStatus", func() { _, _ = a.RemoteTabStatus(tabID) })
+}
+
+func resolveRemoteTabResumeTarget(ctx context.Context, client *http.Client, base, name, sessionPath, sessionTitle string) (serveSessionEntry, error) {
+	if path := strings.TrimSpace(sessionPath); path != "" {
+		return serveSessionEntry{Name: strings.TrimSpace(name), Path: path, Title: strings.TrimSpace(sessionTitle)}, nil
+	}
+	entries, err := serveSessions(ctx, client, base)
+	if err != nil {
+		return serveSessionEntry{}, err
+	}
+	for _, entry := range entries {
+		if entry.Name == name {
+			return entry, nil
+		}
+	}
+	return serveSessionEntry{}, nil
 }
 
 func (a *App) SetRemoteSessionPinned(hostID, workspace, name string, pinned bool) error {

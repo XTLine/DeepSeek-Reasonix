@@ -16,15 +16,11 @@ func (a *App) beginRemoteTabResume(tabID, name, sessionPath, sessionTitle string
 	}
 	tab.routing.resumeGen++
 	resumeGen := tab.routing.resumeGen
-	previous := remoteTabResumeIdentity{
-		name: tab.session.name, path: tab.session.path,
-		newSession: tab.session.newSession, reset: tab.session.reset,
-		title: tab.topicTitle, routePath: tab.routing.currentPath,
-	}
+	previous := snapshotRemoteTabResumeIdentity(tab)
 	tab.session.newSession, tab.session.reset = false, false
 	tab.session.name = strings.TrimSpace(name)
 	if path := strings.TrimSpace(sessionPath); path != "" {
-		installRemoteTabAttachRoute(tab, path)
+		prepareRemoteTabResumeRouteLocked(tab, path, false)
 	}
 	if title := strings.TrimSpace(sessionTitle); title != "" {
 		tab.topicTitle = title

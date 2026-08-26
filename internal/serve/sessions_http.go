@@ -55,7 +55,11 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 		if row.Current {
 			row.Running = controllerHasActiveRuntimeWork(ctrl)
 		}
-		if first, turns := agent.SessionPreview(path); turns > 0 {
+		first, turns, cached := agent.SessionPreviewCached(path)
+		if !cached {
+			first, turns = agent.SessionPreview(path)
+		}
+		if turns > 0 {
 			row.Turns = turns
 			row.Title = s.sessionTitle(r.Context(), entry.Name(), first, mtime.UnixNano())
 		}

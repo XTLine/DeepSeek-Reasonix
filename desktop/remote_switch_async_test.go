@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
@@ -30,9 +31,18 @@ func TestOpenRemoteProjectTabResumeReturnsBeforeServeRoundTrip(t *testing.T) {
 	fs.mu.Lock()
 	fs.resumeStarted, fs.resumeRelease = started, release
 	fs.mu.Unlock()
-	t.Cleanup(func() { select { case <-release: default: close(release) } })
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
 
-	type openResult struct { meta TabMeta; err error }
+	type openResult struct {
+		meta TabMeta
+		err  error
+	}
 	result := make(chan openResult, 1)
 	go func() {
 		meta, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{
@@ -43,9 +53,11 @@ func TestOpenRemoteProjectTabResumeReturnsBeforeServeRoundTrip(t *testing.T) {
 	var switched TabMeta
 	select {
 	case got := <-result:
-		if got.err != nil { t.Fatal(got.err) }
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
 		switched = got.meta
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("open blocked on the held resume round trip")
 	}
 	if want := "box\x00~/app\x00s2"; switched.TopicID != want {
@@ -53,12 +65,32 @@ func TestOpenRemoteProjectTabResumeReturnsBeforeServeRoundTrip(t *testing.T) {
 	}
 	select {
 	case path := <-started:
-		if path != "/remote/sessions/s2.jsonl" { t.Fatalf("resume path = %q, want s2", path) }
-	case <-time.After(2 * time.Second):
+		if path != "/remote/sessions/s2.jsonl" {
+			t.Fatalf("resume path = %q, want s2", path)
+		}
+	case <-time.After(5 * time.Second):
 		t.Fatal("background resume did not reach Serve")
 	}
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[switched.ID]
+	gen := tab.gen
+	route := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if route != "/remote/sessions/s2.jsonl" {
+		t.Fatalf("route while resume is held = %q, want target", route)
+	}
+	if !a.routeRemoteTabFrame(switched.ID, gen, route, "approval_request") {
+		t.Fatal("target frame was rejected while resume request was held")
+	}
+	a.cacheRemotePendingEvent(switched.ID, gen, "approval_request", json.RawMessage(`{"kind":"approval_request","callId":"during-resume"}`))
 	close(release)
 	waitForRemoteSessionIdentity(t, a, meta.ID, "s2", "/remote/sessions/s2.jsonl")
+	a.remoteTabMu.Lock()
+	pending := len(a.remoteTabs[switched.ID].pendingEvents)
+	a.remoteTabMu.Unlock()
+	if pending != 1 {
+		t.Fatalf("pending target event count after resume = %d, want 1", pending)
+	}
 	cleanupRemoteTabPumps(t, a)
 }
 
@@ -84,15 +116,23 @@ func TestOpenRemoteProjectTabLateResumeCannotStompNewerSwitch(t *testing.T) {
 	fs.mu.Lock()
 	fs.resumeStarted, fs.resumeRelease = started, release
 	fs.mu.Unlock()
-	t.Cleanup(func() { select { case <-release: default: close(release) } })
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
 
 	if _, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{SessionName: "s2", SessionPath: "/remote/sessions/s2.jsonl"}); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case path := <-started:
-		if path != "/remote/sessions/s2.jsonl" { t.Fatalf("first resume path = %q, want s2", path) }
-	case <-time.After(2 * time.Second):
+		if path != "/remote/sessions/s2.jsonl" {
+			t.Fatalf("first resume path = %q, want s2", path)
+		}
+	case <-time.After(5 * time.Second):
 		t.Fatal("first resume did not reach Serve")
 	}
 	// Switch again while the first Serve request is held: s3 must win.
@@ -102,8 +142,10 @@ func TestOpenRemoteProjectTabLateResumeCannotStompNewerSwitch(t *testing.T) {
 	close(release)
 	select {
 	case path := <-started:
-		if path != "/remote/sessions/s3.jsonl" { t.Fatalf("second resume path = %q, want s3", path) }
-	case <-time.After(2 * time.Second):
+		if path != "/remote/sessions/s3.jsonl" {
+			t.Fatalf("second resume path = %q, want s3", path)
+		}
+	case <-time.After(5 * time.Second):
 		t.Fatal("newer resume did not reach Serve after the held request completed")
 	}
 	waitForRemoteSessionIdentity(t, a, meta.ID, "s3", "/remote/sessions/s3.jsonl")
@@ -112,13 +154,15 @@ func TestOpenRemoteProjectTabLateResumeCannotStompNewerSwitch(t *testing.T) {
 
 func waitForRemoteSessionIdentity(t *testing.T, a *App, tabID, name, path string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		a.remoteTabMu.Lock()
 		tab := a.remoteTabs[tabID]
 		matches := tab != nil && tab.session.name == name && tab.session.path == path && tab.state == "ready"
 		a.remoteTabMu.Unlock()
-		if matches { return }
+		if matches {
+			return
+		}
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("remote tab %q did not settle on %q at %q", tabID, name, path)
@@ -163,6 +207,48 @@ func TestAddRemoteProjectSkipsConfigRewriteWhenPinned(t *testing.T) {
 	}
 	if string(after) != string(before) {
 		t.Fatalf("config content changed on re-add")
+	}
+}
+
+func TestAddRemoteProjectSerializesNoOpDecisionWithRemoval(t *testing.T) {
+	seedBridgeTestHost(t, "box")
+	if _, err := addRemoteProjectForTest(t, "box", "~/app"); err != nil {
+		t.Fatal(err)
+	}
+
+	unlock := config.LockUserConfigEdits()
+	result := make(chan error, 1)
+	go func() {
+		_, err := addRemoteProjectForTest(t, "box", "~/app")
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		unlock()
+		t.Fatalf("AddRemoteProject bypassed the edit lock: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	path := config.UserConfigPath()
+	cfg := config.LoadForEdit(path)
+	if cfg == nil || !cfg.RemoveRemoteProject("box", "~/app") {
+		unlock()
+		t.Fatal("failed to stage concurrent project removal")
+	}
+	if err := cfg.SaveTo(path); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	unlock()
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.RemoteProject("box", "~/app"); !ok {
+		t.Fatal("successful AddRemoteProject was lost behind a concurrent removal")
 	}
 }
 

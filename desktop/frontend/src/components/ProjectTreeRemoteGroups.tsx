@@ -5,30 +5,12 @@ import { app, onRemoteTabOpened, onRemoteTabUpdated } from "../lib/bridge";
 import type { Translator } from "../lib/i18n";
 import type { ProjectNode, RemoteServerView, RemoteSessionView, RemoteTabRefView } from "../lib/types";
 import type { ToastContextValue } from "../lib/toast";
+import { loadRemoteSessionCache, removeRemoteSessionCache, saveRemoteSessionCache } from "../lib/remoteSessionCache";
 import { useRemoteStore, waitForRemoteConnection } from "../store/remote";
 import type { ContextMenuItem } from "./ContextMenu";
 
 export function remoteProjectKey(ref: RemoteTabRefView): string {
   return `${ref.hostId}\u0000${ref.workspace}`;
-}
-
-const REMOTE_SESSIONS_CACHE_PREFIX = "projectTree:remoteSessions:";
-
-function cacheRemoteSessions(groupKey: string, rows: RemoteSessionView[]) {
-  try {
-    localStorage.setItem(REMOTE_SESSIONS_CACHE_PREFIX + groupKey, JSON.stringify(rows));
-  } catch {
-    // Cache is an optimistic paint only.
-  }
-}
-
-function loadCachedRemoteSessions(groupKey: string): RemoteSessionView[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(REMOTE_SESSIONS_CACHE_PREFIX + groupKey) || "null") as unknown;
-    return Array.isArray(parsed) ? parsed as RemoteSessionView[] : [];
-  } catch {
-    return [];
-  }
 }
 
 export function remoteServeBadgeState(view?: RemoteServerView, busy = false): string {
@@ -172,10 +154,12 @@ export function useRemoteProjectGroups(
     setGroupError((current) => ({ ...current, [key]: "" }));
     try {
       const rows = await app.EnsureRemoteProjectSessions(hostId, workspace);
-      cacheRemoteSessions(key, rows);
+      saveRemoteSessionCache(key, rows);
       setSessions((current) => ({ ...current, [key]: rows }));
       void app.RemoteServerStatus(hostId, workspace).then((view) => useRemoteStore.getState().setServer(view)).catch(() => {});
     } catch (error) {
+      removeRemoteSessionCache(key);
+      setSessions((current) => ({ ...current, [key]: [] }));
       setGroupError((current) => ({ ...current, [key]: error instanceof Error ? error.message : String(error) }));
     } finally {
       groupBusyRef.current.delete(key);
@@ -207,11 +191,11 @@ export function useRemoteProjectGroups(
     void app.RemoteProjectSessions(meta.remote.hostId, meta.remote.workspace)
       .then((rows) => {
         if (sessionLoads.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
-          cacheRemoteSessions(key, rows);
+          saveRemoteSessionCache(key, rows);
           setSessions((current) => ({ ...current, [key]: rows }));
         }
       })
-      .catch(() => {})
+      .catch(() => removeRemoteSessionCache(key))
       .finally(() => {
         if (sessionLoads.current.get(key) === load) sessionLoads.current.delete(key);
       });
@@ -220,7 +204,7 @@ export function useRemoteProjectGroups(
   useEffect(() => {
     const seeded: Record<string, RemoteSessionView[]> = {};
     for (const key of groupKeys) {
-      const rows = loadCachedRemoteSessions(key);
+      const rows = loadRemoteSessionCache(key);
       if (rows.length > 0) seeded[key] = rows;
     }
     if (Object.keys(seeded).length > 0) {
@@ -269,12 +253,13 @@ export function useRemoteProjectGroups(
       void app.RemoteProjectSessions(hostId, workspace)
         .then((rows) => {
           if (sessionLoads.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
-            cacheRemoteSessions(key, rows);
+            saveRemoteSessionCache(key, rows);
             setSessions((current) => ({ ...current, [key]: rows }));
           }
         })
         .catch(() => {
           if (sessionLoads.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
+            removeRemoteSessionCache(key);
             setSessions((current) => ({ ...current, [key]: [] }));
           }
         })
@@ -370,6 +355,7 @@ export function buildRemoteProjectMenuItems(options: RemoteMenuOptions): Context
       onSelect: () => {
         closeMenu();
         void app.RemoveRemoteProject(ref.hostId, ref.workspace).then(() => {
+          removeRemoteSessionCache(remoteProjectKey(ref));
           setRemoteSessions((current) => {
             const next = { ...current };
             delete next[remoteProjectKey(ref)];
