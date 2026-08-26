@@ -115,7 +115,8 @@ func installRemoteTabAttachRoute(tab *remoteTab, path string) {
 }
 
 func commitRemoteTabAttachRoute(tab *remoteTab, path string, reset bool) {
-	if reset {
+	path = strings.TrimSpace(path)
+	if reset || tab.routing.currentPath != path {
 		resetRemoteTabForegroundRuntimeLocked(tab)
 	}
 	installRemoteTabAttachRoute(tab, path)
@@ -183,11 +184,18 @@ func (a *App) adoptRemoteTabFrameCurrent(tabID string, gen uint64, sessionPath s
 		tab.session.reset = true
 		tab.topicTitle = resetTitle
 		resetRemoteTabForegroundRuntimeLocked(tab)
+	} else {
+		// The routing marker has no title. Stop displaying the previous
+		// session's title while the authoritative /sessions row is fetched.
+		tab.topicTitle = remoteWorkspaceName(tab.ref.Workspace)
 	}
 	meta := remoteTabMetaLocked(tab)
 	ready := tab.state == "ready"
 	a.remoteTabMu.Unlock()
 	a.emitRemoteEvent("remote-tab:updated", meta)
+	if !reset {
+		a.goSafe("remoteTabAdoptedTitle", func() { a.refreshRemoteTabTitle(tabID) })
+	}
 	if ready {
 		// The frontend treats ready -> ready as a new surface generation. Emit it
 		// before the triggering frame is forwarded so that frame is buffered until

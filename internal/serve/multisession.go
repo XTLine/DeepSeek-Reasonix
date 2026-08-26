@@ -142,6 +142,7 @@ func (s *Server) forgetSessionTag(ctrl *control.Controller) {
 	s.tagsMu.Lock()
 	delete(s.tags, ctrl)
 	s.tagsMu.Unlock()
+	s.setControllerLeaseOwner(ctrl, nil)
 }
 
 func (s *Server) closeTaggedController(ctrl *control.Controller) {

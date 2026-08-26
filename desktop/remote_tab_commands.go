@@ -410,17 +410,23 @@ func (a *App) RemoteTabSkills(tabID string) (json.RawMessage, error) {
 func (a *App) refreshRemoteTabTitle(tabID string) {
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
-	if tab == nil || tab.titleRefreshInFlight || tab.client == nil {
+	if tab == nil || tab.client == nil {
 		a.remoteTabMu.Unlock()
 		return
 	}
-	tab.titleRefreshInFlight = true
 	client, base, gen, expectedPath := tab.client, tab.base, tab.gen, tab.routing.currentPath
+	if expectedPath == "" || tab.titleRefresh.path == expectedPath {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	tab.titleRefresh.seq++
+	refreshSeq := tab.titleRefresh.seq
+	tab.titleRefresh.path = expectedPath
 	a.remoteTabMu.Unlock()
 	defer func() {
 		a.remoteTabMu.Lock()
-		if current := a.remoteTabs[tabID]; current == tab {
-			current.titleRefreshInFlight = false
+		if current := a.remoteTabs[tabID]; current == tab && current.titleRefresh.seq == refreshSeq {
+			current.titleRefresh.path = ""
 		}
 		a.remoteTabMu.Unlock()
 	}()

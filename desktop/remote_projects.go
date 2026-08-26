@@ -64,8 +64,8 @@ type remoteTab struct {
 	session   remoteTabSessionState
 	hostLabel string
 	// topicTitle starts as the workspace name and adopts the generated title.
-	topicTitle           string
-	titleRefreshInFlight bool
+	topicTitle   string
+	titleRefresh remoteTabTitleRefreshState
 	// model is the desktop-owned current model ref for this remote tab.
 	// modelSeq orders concurrent writes for deterministic proxy registration.
 	model    string
@@ -102,6 +102,11 @@ type remoteTabRuntimeState struct {
 	backgroundJobs  int
 	cancelRequested bool
 	cancellable     bool
+}
+
+type remoteTabTitleRefreshState struct {
+	path string
+	seq  uint64
 }
 
 type remoteTabSessionState struct {
@@ -305,7 +310,7 @@ func (a *App) registerRemoteTabOpen(tab *remoteTab, hostLabel string, opts Remot
 				existing.topicTitle = title
 			}
 			if existing.session.path != "" {
-				existing.routing.currentPath = existing.session.path
+				commitRemoteTabAttachRoute(existing, existing.session.path, false)
 			}
 		}
 		if result.revive {

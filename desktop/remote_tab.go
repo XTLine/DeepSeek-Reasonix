@@ -26,7 +26,8 @@ func remoteSessionTransitionBusy(err error) bool {
 	}
 	message := err.Error()
 	return strings.Contains(message, "while a turn is running") ||
-		strings.Contains(message, "while another session change is in progress")
+		strings.Contains(message, "while another session change is in progress") ||
+		strings.Contains(message, "session is finishing background teardown")
 }
 
 // attachRemoteTabServe starts the event pump before entering the session so
@@ -80,7 +81,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	tab.base = base
 	tab.token = token
 	if !opts.NewSession {
-		installRemoteTabAttachRoute(tab, target.Path)
+		commitRemoteTabAttachRoute(tab, target.Path, false)
 	}
 	gen := tab.gen
 	pumpCtx, cancelPump := context.WithCancel(ctx)

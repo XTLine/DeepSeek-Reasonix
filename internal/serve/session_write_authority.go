@@ -13,6 +13,7 @@ func (s *Server) SetSessionLeases(k *control.SessionLeaseKeeper) error {
 	s.leases = k
 	if k != nil {
 		k.SetControllerOwnershipBinder(func(ctrl *control.Controller, owner *control.SessionLeaseKeeper) {
+			s.setControllerLeaseOwner(ctrl, owner)
 			ctrl.SetOnSessionRecovered(s.sessionRecoveryHandler(ctrl, owner))
 			ctrl.SetOnSessionTransition(s.sessionTransitionHandler(ctrl, owner))
 		})
@@ -49,8 +50,8 @@ func (s *Server) sessionRecoveryHandler(ctrl *control.Controller, k *control.Ses
 		return nil
 	}
 	return func(info control.SessionRecoveryInfo) error {
-		if k != nil {
-			if err := k.HandleSessionRecovered(info); err != nil {
+		if k != nil || s.controllerLeaseOwner(ctrl) != nil {
+			if err := s.handleControllerSessionRecovered(ctrl, k, info); err != nil {
 				return err
 			}
 		}
@@ -63,6 +64,57 @@ func (s *Server) sessionRecoveryHandler(ctrl *control.Controller, k *control.Ses
 		s.publishControllerPathIfCurrent(ctrl, info.RecoveryPath)
 		return nil
 	}
+}
+
+func (s *Server) setControllerLeaseOwner(ctrl *control.Controller, owner *control.SessionLeaseKeeper) {
+	if ctrl == nil {
+		return
+	}
+	s.leaseOwnersMu.Lock()
+	if owner == nil {
+		delete(s.leaseOwners, ctrl)
+	} else {
+		if s.leaseOwners == nil {
+			s.leaseOwners = map[*control.Controller]*control.SessionLeaseKeeper{}
+		}
+		s.leaseOwners[ctrl] = owner
+	}
+	s.leaseOwnersMu.Unlock()
+}
+
+func (s *Server) controllerLeaseOwner(ctrl *control.Controller) *control.SessionLeaseKeeper {
+	if ctrl == nil {
+		return nil
+	}
+	s.leaseOwnersMu.Lock()
+	defer s.leaseOwnersMu.Unlock()
+	return s.leaseOwners[ctrl]
+}
+
+// handleControllerSessionRecovered resolves ownership at invocation time. A
+// controller may have captured its callback immediately before a busy switch
+// transfers it to a detached keeper; the controller/keeper identity check
+// prevents that stale callback from mutating the now-reused foreground keeper.
+func (s *Server) handleControllerSessionRecovered(ctrl *control.Controller, fallback *control.SessionLeaseKeeper, info control.SessionRecoveryInfo) error {
+	owner := s.controllerLeaseOwner(ctrl)
+	if owner == nil {
+		owner = fallback
+	}
+	for range 3 {
+		if owner == nil {
+			return nil
+		}
+		handled, err := owner.HandleSessionRecoveredFor(ctrl, info)
+		if handled {
+			return err
+		}
+		next := s.controllerLeaseOwner(ctrl)
+		if next == nil || next == owner {
+			return fmt.Errorf("bind recovery session: controller ownership changed during handoff")
+		}
+		owner = next
+	}
+	return fmt.Errorf("bind recovery session: controller ownership remained unstable")
 }
 
 // publishControllerPathIfCurrent keeps the controller identity check and its
