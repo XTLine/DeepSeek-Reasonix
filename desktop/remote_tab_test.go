@@ -33,6 +33,7 @@ type fakeServe struct {
 	failNext                       string   // non-empty ⇒ next command endpoint replies 409 with this text
 	failEnter                      string   // non-empty ⇒ next /new or /resume replies 409
 	enterDelay                     time.Duration
+	newStarted, newRelease         chan struct{}
 	resumeStarted, resumeRelease   chan struct{}
 	failHistory                    bool // /history replies 500 when set
 	historyStarted, historyRelease chan struct{}
@@ -131,6 +132,7 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		fs.failEnter = ""
 		enterDelay := fs.enterDelay
 		newSessionPath := fs.newSessionPath
+		newStarted, newRelease := fs.newStarted, fs.newRelease
 		if fail != "" {
 			fs.mu.Unlock()
 			http.Error(w, fail, http.StatusConflict)
@@ -141,6 +143,19 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 			fs.sessions[i].Current = false
 		}
 		fs.mu.Unlock()
+		if newStarted != nil {
+			select {
+			case newStarted <- struct{}{}:
+			default:
+			}
+		}
+		if newRelease != nil {
+			select {
+			case <-newRelease:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if enterDelay > 0 {
 			time.Sleep(enterDelay)
 		}

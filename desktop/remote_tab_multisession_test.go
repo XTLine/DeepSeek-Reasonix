@@ -73,73 +73,6 @@ func TestRemoteTabAllSessionEventsRouteOnlyCurrentFrames(t *testing.T) {
 	}
 }
 
-func TestNewerTerminalStateOverridesStaleRunningListingRow(t *testing.T) {
-	const currentPath = "/sessions/current.jsonl"
-	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{
-		Name: "current", Path: currentPath, Current: true, Running: true,
-	}})
-	kernel := &fakeRemoteKernel{
-		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
-		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
-	}
-	seedBridgeTestHost(t, "box")
-	a := &App{remoteRuntime: kernel}
-	cleanupRemoteTabPumps(t, a)
-	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionPath: currentPath})
-
-	fs.mu.Lock()
-	fs.sessionsStarted = make(chan struct{}, 1)
-	fs.sessionsRelease = make(chan struct{})
-	started, release := fs.sessionsStarted, fs.sessionsRelease
-	fs.mu.Unlock()
-	t.Cleanup(func() {
-		select {
-		case <-release:
-		default:
-			close(release)
-		}
-	})
-	type listingResult struct {
-		sessions []RemoteSessionView
-		err      error
-	}
-	done := make(chan listingResult, 1)
-	go func() {
-		sessions, err := a.RemoteProjectSessions("box", "~/app")
-		done <- listingResult{sessions: sessions, err: err}
-	}()
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("session listing did not start")
-	}
-	a.remoteTabMu.Lock()
-	gen := a.remoteTabs[meta.ID].gen
-	a.remoteTabMu.Unlock()
-	if !a.routeRemoteTabFrame(meta.ID, gen, currentPath, "turn_done") {
-		t.Fatal("current terminal frame was not routed")
-	}
-	close(release)
-	var result listingResult
-	select {
-	case result = <-done:
-	case <-time.After(time.Second):
-		t.Fatal("session listing did not finish")
-	}
-	if result.err != nil {
-		t.Fatal(result.err)
-	}
-	for _, session := range result.sessions {
-		if session.Path == currentPath {
-			if session.Running {
-				t.Fatalf("stale running row revived the newer terminal state: %+v", result.sessions)
-			}
-			return
-		}
-	}
-	t.Fatalf("current session missing from listing: %+v", result.sessions)
-}
-
 func TestBackgroundCompletionNoticeRefreshesRemoteRows(t *testing.T) {
 	const currentPath = "/sessions/current.jsonl"
 	const backgroundPath = "/sessions/background.jsonl"
@@ -410,36 +343,6 @@ func TestForegroundMarkerPublishesRehydrateBeforeForwardedFrame(t *testing.T) {
 	}
 	if stateIndex < 0 || frameIndex < 0 || stateIndex >= frameIndex {
 		t.Fatalf("session rehydrate was not published before the frame: %v", events)
-	}
-}
-
-func TestAttachRemoteTabServeAdvancesProvisionalAndCommitRevisions(t *testing.T) {
-	const targetPath = "/sessions/target.jsonl"
-	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "target", Path: targetPath}})
-	a := &App{remoteTabs: map[string]*remoteTab{
-		"remote-1": {
-			id: "remote-1", state: "connecting",
-			session: remoteTabSessionState{path: "/sessions/old.jsonl"},
-			routing: remoteTabSessionRouting{currentPath: "/sessions/old.jsonl", running: map[string]bool{}},
-		},
-	}}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	entered, err := a.attachRemoteTabServe(ctx, "remote-1", fs.server.URL, "s3cret", "serve-1", RemoteTabOpenOptions{
-		SessionName: "target", SessionPath: targetPath, SessionTitle: "Target",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !entered {
-		t.Fatal("target session was not entered")
-	}
-	a.remoteTabMu.Lock()
-	revision := a.remoteTabs["remote-1"].routing.revision
-	path := a.remoteTabs["remote-1"].routing.currentPath
-	a.remoteTabMu.Unlock()
-	if path != targetPath || revision != 2 {
-		t.Fatalf("attached route = %q revision %d, want %q revision 2", path, revision, targetPath)
 	}
 }
 

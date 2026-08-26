@@ -137,9 +137,7 @@ func TestForegroundRecoveryPublishesMustDeliverRoute(t *testing.T) {
 		t.Fatalf("saturated subscriber length = %d, want %d", got, subscriberBufferSize)
 	}
 
-	if err := srv.sessionRecoveryHandler(ctrl, nil)(control.SessionRecoveryInfo{RecoveryPath: recoveryPath}); err != nil {
-		t.Fatal(err)
-	}
+	srv.publishRecoveredControllerRoute(ctrl, recoveryPath)
 	recoveryPath = agent.CanonicalSessionPath(recoveryPath)
 	found := false
 	for len(all) > 0 {

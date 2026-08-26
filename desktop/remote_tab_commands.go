@@ -261,7 +261,6 @@ func (a *App) SetRemoteTabModel(tabID, ref string) error {
 	workspace := tab.ref.Workspace
 	currentModel := tab.model
 	expectedPath := tab.routing.currentPath
-	expectedPathRevision := tab.routing.pathRevision
 	expectedGen := tab.gen
 	client, base := tab.client, tab.base
 	usable := client != nil && tab.state == "ready"
@@ -333,7 +332,7 @@ func (a *App) SetRemoteTabModel(tabID, ref string) error {
 		a.remoteTabMu.Unlock()
 		return fmt.Errorf("remote tab %q closed while switching model", tabID)
 	}
-	if current.routing.pathRevision != expectedPathRevision || current.routing.currentPath != expectedPath {
+	if current.routing.currentPath != expectedPath {
 		// The fenced request changed the session that was visible when it began,
 		// but another client has since promoted a newer foreground route. Do not
 		// label that newer session with the older session's model response.

@@ -71,16 +71,20 @@ func (s *Server) sessionRecoveryHandler(ctrl *control.Controller, k *control.Ses
 		if err := s.moveDetachedRecovery(ctrl, info.RecoveryPath); err != nil {
 			return err
 		}
-		if tag := s.tagFor(ctrl); tag != nil {
-			tag.PrimePath(info.RecoveryPath)
-		}
-		if s.publishControllerPathIfCurrent(ctrl, info.RecoveryPath) {
-			// Recovery changes foreground identity outside the ordinary transition
-			// hook. Publish the same must-deliver route barrier so a saturated
-			// all-session subscriber cannot keep routing later frames to the old path.
-			s.announceSessionChanged(info.RecoveryPath, false)
-		}
+		info.OnCommit(func() { s.publishRecoveredControllerRoute(ctrl, info.RecoveryPath) })
 		return nil
+	}
+}
+
+func (s *Server) publishRecoveredControllerRoute(ctrl *control.Controller, path string) {
+	if tag := s.tagFor(ctrl); tag != nil {
+		tag.PrimePath(path)
+	}
+	if s.publishControllerPathIfCurrent(ctrl, path) {
+		// Recovery changes foreground identity outside the ordinary transition
+		// hook. Publish the same must-deliver route barrier so a saturated
+		// all-session subscriber cannot keep routing later frames to the old path.
+		s.announceSessionChanged(path, false)
 	}
 }
 

@@ -123,7 +123,9 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 			return false, err
 		}
 	}
-	a.commitRemoteTabAttachResponse(tabID, tab, gen, attachPathRevision, target, opts.NewSession)
+	if !a.commitRemoteTabAttachResponse(tabID, tab, gen, attachPathRevision, target, opts.NewSession) {
+		entered = false
+	}
 	if !a.waitRemoteTabStreamStable(callCtx, tabID, gen) {
 		return false, fmt.Errorf("remote tab %q event stream closed during session attach", tabID)
 	}

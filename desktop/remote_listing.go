@@ -273,68 +273,14 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 	defer done()
 	ctx, cancel := commandContext(a)
 	defer cancel()
-	a.remoteTabMu.Lock()
-	var observedTab *remoteTab
-	var observedRevision uint64
-	for _, tab := range a.remoteTabs {
-		if tab.ref.HostID == hostID && tab.ref.Workspace == workspace {
-			observedTab, observedRevision = tab, tab.routing.revision
-			break
-		}
-	}
-	a.remoteTabMu.Unlock()
-	entries, err := serveSessions(ctx, client, base)
+	listing, err := a.fetchRemoteSessionListing(ctx, client, base, hostID, workspace)
 	if err != nil {
 		return nil, err
 	}
-	authoritativeCurrent := singleCurrentServeSession(entries)
-	authoritativeTitle := remoteAuthoritativeSessionTitle(hostID, workspace, authoritativeCurrent)
-	unlockRoute := lockRemoteTabRoute(observedTab)
-	a.remoteTabMu.Lock()
-	liveRunning := map[string]bool{}
-	liveCurrentPath := ""
-	preferLiveCurrent := false
-	var routeUpdate *TabMeta
-	routeReadyBarrier := false
-	for _, tab := range a.remoteTabs {
-		if tab.ref.HostID != hostID || tab.ref.Workspace != workspace {
-			continue
-		}
-		// Without a newer SSE/status revision, /sessions replaces the running
-		// cache and current route. A raced revision preserves the newer live route
-		// instead of marking both its row and the stale server row current.
-		if tab == observedTab && tab.routing.revision == observedRevision {
-			authoritative := make(map[string]bool, len(entries))
-			for _, entry := range entries {
-				authoritative[entry.Path] = entry.Running
-			}
-			tab.routing.running = authoritative
-			if authoritativeCurrent != nil {
-				path := strings.TrimSpace(authoritativeCurrent.Path)
-				pathChanged := adoptRemoteTabSessionPathLocked(tab, path)
-				tab.session.name = strings.TrimSpace(authoritativeCurrent.Name)
-				if pathChanged {
-					tab.topicTitle = authoritativeTitle
-					meta := remoteTabMetaLocked(tab)
-					routeUpdate = &meta
-					routeReadyBarrier = remoteTabReadyBarrier(tab, true)
-				}
-			}
-		} else {
-			preferLiveCurrent = true
-		}
-		liveCurrentPath = tab.routing.currentPath
-		maps.Copy(liveRunning, tab.routing.running)
-		break
-	}
-	a.remoteTabMu.Unlock()
-	if routeUpdate != nil {
-		a.emitRemoteEvent("remote-tab:updated", *routeUpdate)
-		if routeReadyBarrier {
-			a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:state", routeUpdate.ID), RemoteTabStateView{State: "ready"})
-		}
-	}
-	unlockRoute()
+	entries := listing.entries
+	liveRunning := listing.liveRunning
+	liveCurrentPath := listing.liveCurrentPath
+	preferLiveCurrent := listing.preferLive
 	out := make([]RemoteSessionView, 0, len(entries))
 	pinned := make([]RemoteSessionView, 0, len(entries))
 	hasCurrent := false
@@ -347,14 +293,9 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 		if preferLiveCurrent {
 			current = liveCurrentPath != "" && e.Path == liveCurrentPath
 		}
-		running := remoteSessionRunning(e.Running, liveRunning, e.Path, preferLiveCurrent)
 		view := RemoteSessionView{
-			Name:           e.Name,
-			Path:           e.Path,
-			Title:          title,
-			Turns:          e.Turns,
-			Current:        current,
-			Running:        running,
+			Name: e.Name, Path: e.Path, Title: title, Turns: e.Turns, Current: current,
+			Running:        remoteSessionRunning(e.Running, liveRunning, e.Path, preferLiveCurrent),
 			LastActivityAt: e.MtimeMilli,
 			Pinned:         remoteSessionPinned(hostID, workspace, e.Name),
 		}
@@ -382,11 +323,111 @@ func (a *App) RemoteProjectSessions(hostID, workspace string) ([]RemoteSessionVi
 	return append(pinned, out...), nil
 }
 
+type remoteSessionListing struct {
+	entries         []serveSessionEntry
+	liveRunning     map[string]bool
+	liveCurrentPath string
+	preferLive      bool
+}
+
+func (a *App) fetchRemoteSessionListing(ctx context.Context, client *http.Client, base, hostID, workspace string) (remoteSessionListing, error) {
+	const maxRaceRetries = 2
+
+listingAttempt:
+	for attempt := 0; ; attempt++ {
+		a.remoteTabMu.Lock()
+		var observedTab *remoteTab
+		var observedRevision uint64
+		for _, tab := range a.remoteTabs {
+			if tab.ref.HostID == hostID && tab.ref.Workspace == workspace {
+				observedTab, observedRevision = tab, tab.routing.revision
+				break
+			}
+		}
+		a.remoteTabMu.Unlock()
+		entries, err := serveSessions(ctx, client, base)
+		if err != nil {
+			return remoteSessionListing{}, err
+		}
+		authoritativeCurrent := singleCurrentServeSession(entries)
+		authoritativeTitle := remoteAuthoritativeSessionTitle(hostID, workspace, authoritativeCurrent)
+		unlockRoute := lockRemoteTabRoute(observedTab)
+		a.remoteTabMu.Lock()
+		liveRunning := map[string]bool{}
+		liveCurrentPath := ""
+		preferLiveCurrent := false
+		var routeUpdate *TabMeta
+		routeReadyBarrier := false
+		for _, tab := range a.remoteTabs {
+			if tab.ref.HostID != hostID || tab.ref.Workspace != workspace {
+				continue
+			}
+			// Without a newer SSE/status revision, /sessions replaces the running
+			// cache and current route. A raced revision preserves the newer live route
+			// instead of marking both its row and the stale server row current.
+			authoritativeListing := tab == observedTab && tab.routing.revision == observedRevision
+			if !authoritativeListing && attempt < maxRaceRetries && remoteSessionRunningConflict(entries, tab.routing.running) {
+				a.remoteTabMu.Unlock()
+				unlockRoute()
+				continue listingAttempt
+			}
+			if authoritativeListing {
+				authoritative := make(map[string]bool, len(entries))
+				for _, entry := range entries {
+					authoritative[entry.Path] = entry.Running
+				}
+				tab.routing.running = authoritative
+				if authoritativeCurrent != nil {
+					path := strings.TrimSpace(authoritativeCurrent.Path)
+					pathChanged := adoptRemoteTabSessionPathLocked(tab, path)
+					tab.session.name = strings.TrimSpace(authoritativeCurrent.Name)
+					if pathChanged {
+						tab.topicTitle = authoritativeTitle
+						meta := remoteTabMetaLocked(tab)
+						routeUpdate = &meta
+						routeReadyBarrier = remoteTabReadyBarrier(tab, true)
+					}
+				}
+			} else {
+				preferLiveCurrent = true
+			}
+			liveCurrentPath = tab.routing.currentPath
+			maps.Copy(liveRunning, tab.routing.running)
+			break
+		}
+		a.remoteTabMu.Unlock()
+		if routeUpdate != nil {
+			a.emitRemoteEvent("remote-tab:updated", *routeUpdate)
+			if routeReadyBarrier {
+				a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:state", routeUpdate.ID), RemoteTabStateView{State: "ready"})
+			}
+		}
+		unlockRoute()
+		return remoteSessionListing{
+			entries: entries, liveRunning: liveRunning,
+			liveCurrentPath: liveCurrentPath, preferLive: preferLiveCurrent,
+		}, nil
+	}
+}
+
+func remoteSessionRunningConflict(entries []serveSessionEntry, live map[string]bool) bool {
+	for _, entry := range entries {
+		if running, ok := live[entry.Path]; entry.Running && ok && !running {
+			return true
+		}
+	}
+	return false
+}
+
 func remoteSessionRunning(listed bool, live map[string]bool, path string, preferLive bool) bool {
 	if preferLive {
 		if running, ok := live[path]; ok {
-			// A newer terminal frame is authoritative even when its value is
-			// false; OR-ing it with the stale listing row would revive the turn.
+			// A raced false can mean a completed turn or remaining background jobs.
+			// The bounded refresh resolves the ordinary case; after repeated races,
+			// retain the conservative row rather than hiding active background work.
+			if listed && !running {
+				return true
+			}
 			return running
 		}
 	}

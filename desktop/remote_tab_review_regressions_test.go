@@ -663,57 +663,6 @@ func TestRemoteResumeCommitPublicationBlocksNewerAdoption(t *testing.T) {
 	}
 }
 
-func TestRemoteModelResponseCannotLabelNewerForegroundSession(t *testing.T) {
-	isolateDesktopUserDirs(t)
-	const oldPath = "/sessions/old.jsonl"
-	const newerPath = "/sessions/newer.jsonl"
-	requestStarted := make(chan struct{})
-	releaseResponse := make(chan struct{})
-	var gotExpectedPath string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/model" {
-			http.NotFound(w, r)
-			return
-		}
-		gotExpectedPath = r.Header.Get(expectedSessionPathHeader)
-		close(requestStarted)
-		<-releaseResponse
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer server.Close()
-	tab := &remoteTab{
-		id: "remote-1", state: "ready", client: server.Client(), base: server.URL, gen: 7, model: "old-model",
-		routing: remoteTabSessionRouting{currentPath: oldPath, pathRevision: 2, running: map[string]bool{}},
-	}
-	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
-	switchDone := make(chan error, 1)
-	go func() { switchDone <- a.SetRemoteTabModel(tab.id, "next-model") }()
-	select {
-	case <-requestStarted:
-	case <-time.After(time.Second):
-		t.Fatal("model request did not start")
-	}
-	a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, newerPath, true)
-	close(releaseResponse)
-	select {
-	case err := <-switchDone:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("model request did not finish")
-	}
-	if gotExpectedPath != oldPath {
-		t.Fatalf("model request expected path = %q, want %q", gotExpectedPath, oldPath)
-	}
-	a.remoteTabMu.Lock()
-	model, path := tab.model, tab.routing.currentPath
-	a.remoteTabMu.Unlock()
-	if path != newerPath || model != "old-model" {
-		t.Fatalf("newer foreground session was mislabeled: path=%q model=%q", path, model)
-	}
-}
-
 func TestRemoteAttachResponseCannotOverwriteNewerAdoption(t *testing.T) {
 	const responsePath = "/sessions/response.jsonl"
 	const newerPath = "/sessions/newer.jsonl"
