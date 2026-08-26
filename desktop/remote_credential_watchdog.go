@@ -150,7 +150,7 @@ func (m *desktopRemoteManager) healCredentialChannelWatchdog(watchCtx context.Co
 	workspaces := m.trackedCredentialWorkspaces(hostID, workspace)
 	log.Printf("[remote] credential watchdog: channel broken, re-healing host=%s workspaces=%d", hostID, len(workspaces))
 	_ = c.Forwards().Remove("cred-proxy:" + hostID)
-	healCtx, healCancel := context.WithTimeout(opCtx, 30*time.Second)
+	healCtx, healCancel := context.WithTimeout(opCtx, credentialProviderHealBudget(len(workspaces)))
 	err = healTrackedCredentialProviders(healCtx, workspaces,
 		func(workspace string) (*bootstrap.CredentialProxyOptions, error) {
 			return m.credentialProxySetup(c, hostID, workspace)
@@ -196,6 +196,13 @@ func credentialProviderReloadBudget(targets int) time.Duration {
 		targets = 1
 	}
 	return time.Duration(targets) * remoteProviderReloadTimeout
+}
+
+func credentialProviderHealBudget(targets int) time.Duration {
+	if targets < 1 {
+		targets = 1
+	}
+	return time.Duration(targets) * 30 * time.Second
 }
 
 func healTrackedCredentialProviders(ctx context.Context, workspaces []string, setup func(string) (*bootstrap.CredentialProxyOptions, error), heal func(context.Context, *bootstrap.CredentialProxyOptions) error) error {

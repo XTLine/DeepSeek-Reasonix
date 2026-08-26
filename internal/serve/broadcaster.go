@@ -221,10 +221,12 @@ func eventIsPriority(kind event.Kind) bool {
 // by refetching history. The reserved queue budget protects these frames from
 // deltas; if other priority traffic also exhausts that budget, the newest
 // terminal/routing frame evicts a recoverable queued frame instead of vanishing.
-func eventMustReachSubscriber(kind event.Kind) bool {
+func eventMustReachSubscriber(kind event.Kind, data []byte) bool {
 	switch kind {
 	case event.TurnDone, event.SessionChanged:
 		return true
+	case event.Notice:
+		return wireFrameMustReachSubscriber(data)
 	default:
 		return false
 	}
@@ -242,7 +244,7 @@ func enqueueSubscriberFrame(ch chan []byte, data []byte, kind event.Kind) {
 		// A slow subscriber exhausted even the priority reserve. Ordinary
 		// priority events remain lossy, but lifecycle truth gets one slot by
 		// evicting an older frame while Broadcaster.mu serializes producers.
-		if !eventMustReachSubscriber(kind) || !evictRecoverableSubscriberFrame(ch) {
+		if !eventMustReachSubscriber(kind, data) || !evictRecoverableSubscriberFrame(ch) {
 			return
 		}
 	}
@@ -296,7 +298,8 @@ func wireFrameMustReachSubscriber(data []byte) bool {
 	if json.Unmarshal(data, &frame) != nil {
 		return false
 	}
-	return frame.Kind == "turn_done" || frame.Kind == "session_changed"
+	return frame.Kind == "turn_done" || frame.Kind == "session_changed" ||
+		frame.Kind == "notice" && frame.Code == event.NoticeCodeBackgroundJobFinished
 }
 
 // Subscribe registers a new SSE client and returns its channel plus an

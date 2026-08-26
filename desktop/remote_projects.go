@@ -279,10 +279,11 @@ func (a *App) remoteProjectNodes() ([]ProjectNode, error) {
 // ── Remote project tabs ──
 
 type remoteTabOpenRegistration struct {
-	reuseID    string
-	reuseBlank bool
-	revive     bool
-	retired    []context.CancelFunc
+	reuseID         string
+	reuseBlank      bool
+	revive          bool
+	commitSelection bool
+	retired         []context.CancelFunc
 }
 
 // registerRemoteTabOpen serializes reuse, error-shell retirement, and insert.
@@ -300,21 +301,8 @@ func (a *App) registerRemoteTabOpen(tab *remoteTab, hostLabel string, opts Remot
 		result.reuseID = existing.id
 		result.reuseBlank = existing.session.reset
 		result.revive = existing.state == "disconnected" || existing.state == "serve_down"
-		existing.hostLabel = hostLabel
-		if (result.revive || existing.client == nil) && (opts.NewSession || strings.TrimSpace(opts.SessionName) != "" || strings.TrimSpace(opts.SessionPath) != "") {
-			existing.session.newSession = opts.NewSession
-			existing.session.name = strings.TrimSpace(opts.SessionName)
-			existing.session.path = strings.TrimSpace(opts.SessionPath)
-			if title := strings.TrimSpace(opts.SessionTitle); title != "" {
-				existing.topicTitle = title
-			}
-			if existing.session.path != "" {
-				commitRemoteTabAttachRoute(existing, existing.session.path, false)
-			}
-		}
-		if result.revive {
-			existing.state = "connecting"
-		}
+		result.commitSelection = (result.revive || existing.client == nil) &&
+			(opts.NewSession || strings.TrimSpace(opts.SessionName) != "" || strings.TrimSpace(opts.SessionPath) != "")
 		return result
 	}
 	for id, existing := range a.remoteTabs {
@@ -331,6 +319,40 @@ func (a *App) registerRemoteTabOpen(tab *remoteTab, hostLabel string, opts Remot
 	a.remoteTabs[tab.id] = tab
 	a.remoteTabLayout.order = append(a.remoteTabLayout.order, tab.id)
 	return result
+}
+
+// commitRemoteTabOpenRegistration applies a reused shell's requested identity
+// only after the single-surface visibility transaction has succeeded. Until
+// then the persisted shell and Serve remain aligned on the previous session.
+func (a *App) commitRemoteTabOpenRegistration(registration remoteTabOpenRegistration, hostLabel string, opts RemoteTabOpenOptions) bool {
+	if registration.reuseID == "" {
+		return false
+	}
+	a.remoteTabMu.Lock()
+	defer a.remoteTabMu.Unlock()
+	existing := a.remoteTabs[registration.reuseID]
+	if existing == nil {
+		return false
+	}
+	existing.hostLabel = hostLabel
+	if registration.commitSelection {
+		existing.session.newSession = opts.NewSession
+		existing.session.name = strings.TrimSpace(opts.SessionName)
+		existing.session.path = strings.TrimSpace(opts.SessionPath)
+		if title := strings.TrimSpace(opts.SessionTitle); title != "" {
+			existing.topicTitle = title
+		}
+		if existing.session.newSession {
+			commitRemoteTabAttachRoute(existing, "", true)
+		} else if existing.session.path != "" {
+			commitRemoteTabAttachRoute(existing, existing.session.path, false)
+		}
+	}
+	if registration.revive {
+		existing.state = "connecting"
+		existing.err = ""
+	}
+	return true
 }
 
 // OpenRemoteProjectTab registers the project (idempotent), opens an in-app
@@ -404,6 +426,9 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 			if err != nil {
 				return TabMeta{}, err
 			}
+		}
+		if !a.commitRemoteTabOpenRegistration(registration, host.Name, opts) {
+			return TabMeta{}, fmt.Errorf("remote tab %q closed while opening", registration.reuseID)
 		}
 
 		// Apply the requested session transition only after the visible-surface

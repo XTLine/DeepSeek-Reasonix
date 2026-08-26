@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"reasonix/internal/config"
 )
 
 func TestRemoteTabServeDownSavedSessionClearsPendingBeforeDelayedMarker(t *testing.T) {
@@ -231,5 +233,41 @@ func TestExternalSessionAdoptionResetsAndSeedsForegroundRuntime(t *testing.T) {
 	if len(tab.pendingEvents) != 0 || !tab.runtime.running || tab.runtime.turnStartedAt != 0 ||
 		tab.runtime.backgroundJobs != 0 || tab.runtime.pendingPrompt || tab.runtime.cancelRequested || !tab.runtime.cancellable {
 		t.Fatalf("adopted runtime retained old controller state: %+v pending=%d", tab.runtime, len(tab.pendingEvents))
+	}
+}
+
+func TestRevivedSessionSelectionWaitsForVisibilityCommit(t *testing.T) {
+	seedBridgeTestHost(t, "box")
+	if err := editUserConfig(func(c *config.Config) error { return c.SetDesktopLayoutStyle("workbench") }); err != nil {
+		t.Fatal(err)
+	}
+	const oldPath = "/sessions/old.jsonl"
+	const targetPath = "/sessions/target.jsonl"
+	remote := &remoteTab{
+		id: "remote-1", ref: RemoteTabRef{HostID: "box", Workspace: "~/app"}, state: "disconnected",
+		topicTitle: "Old title",
+		session:    remoteTabSessionState{name: "old", path: oldPath},
+		routing:    remoteTabSessionRouting{currentPath: oldPath, running: map[string]bool{}},
+	}
+	a := &App{
+		tabs: map[string]*WorkspaceTab{
+			"local-1": {ID: "local-1", Ctrl: &snapshotErrorSessionController{err: errors.New("snapshot failed")}},
+		},
+		remoteTabs: map[string]*remoteTab{remote.id: remote},
+	}
+	a.remoteTabLayout.activeID = remote.id
+	a.remoteTabLayout.order = []string{remote.id}
+	_, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{
+		SessionName: "target", SessionPath: targetPath, SessionTitle: "Target title",
+	})
+	if err == nil || !strings.Contains(err.Error(), "snapshot failed") {
+		t.Fatalf("revived open error = %v, want visibility snapshot failure", err)
+	}
+	a.remoteTabMu.Lock()
+	state, name, sessionPath := remote.state, remote.session.name, remote.session.path
+	route, title := remote.routing.currentPath, remote.topicTitle
+	a.remoteTabMu.Unlock()
+	if state != "disconnected" || name != "old" || sessionPath != oldPath || route != oldPath || title != "Old title" {
+		t.Fatalf("failed visibility commit changed revived shell: state=%q name=%q session=%q route=%q title=%q", state, name, sessionPath, route, title)
 	}
 }
