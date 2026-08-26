@@ -415,4 +415,10 @@ func TestCredentialModeConfigRoundTrip(t *testing.T) {
 	if !ok || !entry.CredentialProxyEnabled() {
 		t.Fatalf("credential mode did not round-trip: %+v", entry)
 	}
+	if v := credentialModeView(entry); v != "local-proxy" {
+		t.Fatalf("view mode = %q", v)
+	}
+	if n := normalizeCredentialMode("bogus"); n != "" {
+		t.Fatalf("bogus mode normalized to %q", n)
+	}
 }

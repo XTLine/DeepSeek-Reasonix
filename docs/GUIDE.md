@@ -366,10 +366,7 @@ remote project from the project tree, open the add-project menu and choose
 connects and verifies that the remote OS is supported, then lets you browse and
 choose a workspace before opening an in-app remote session tab. The key-file
 button uses the native file picker so the saved identity is always an absolute
-desktop path. Hosts created by this desktop wizard always use `local-proxy`, so
-provider keys remain on the desktop; an existing host whose credential mode was
-set manually keeps that mode when edited in the desktop. You can also use the
-status-bar chip or the host row's **Remote
+desktop path. You can also use the status-bar chip or the host row's **Remote
 explorer** button to browse and edit files over SFTP, manage port forwards, and
 start/open the remote workspace.
 

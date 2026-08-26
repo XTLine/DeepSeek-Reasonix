@@ -11,6 +11,7 @@ export function mockRemoteHostView(id: string, input: RemoteHostInput, previous?
     proxyJump: input.proxyJump,
     defaultWorkspace: input.defaultWorkspace,
     serveInstall: input.serveInstall,
+    credentialMode: input.credentialMode,
     useSSHConfig: input.useSSHConfig,
     passwordSet: input.password ? true : input.clearPassword ? false : previous?.passwordSet,
     keyPassphraseSet: input.keyPassphrase ? true : input.clearPassphrase ? false : previous?.keyPassphraseSet,

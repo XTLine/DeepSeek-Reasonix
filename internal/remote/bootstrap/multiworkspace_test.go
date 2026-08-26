@@ -60,7 +60,7 @@ func newMultiWS(t *testing.T) *multiWS {
 			}
 			_ = os.WriteFile(m.pathsB.PortFile, []byte("127.0.0.1:44322\n"), 0o600)
 			return ok("222\n")
-		case strings.Contains(cmd, "serve --help"):
+		case strings.Contains(cmd, "readlink /proc/111/exe"), strings.Contains(cmd, "readlink /proc/222/exe"):
 			return ok("yes\n")
 		case strings.Contains(cmd, "ps -p 111"), strings.Contains(cmd, "ps -p 222"):
 			return ok("1\n")

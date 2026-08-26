@@ -96,14 +96,41 @@ func servePost(ctx context.Context, client *http.Client, url string, body []byte
 	return err
 }
 
+const expectedSessionPathHeader = "X-Reasonix-Expected-Session-Path"
+
+// servePostForSession fences a foreground mutation to the session the Desktop
+// tab displayed when the command was issued. Older Serve binaries ignore the
+// optional header and retain their single-session behavior.
+func servePostForSession(ctx context.Context, client *http.Client, url string, body []byte, expectedPath string) error {
+	if body == nil {
+		body = []byte("{}")
+	}
+	resp, err := serveDoForSession(ctx, client, http.MethodPost, url, body, expectedPath)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	return &serveHTTPStatusError{
+		url: url, statusCode: resp.StatusCode, message: strings.TrimSpace(string(data)),
+	}
+}
+
 // servePostSessionPath preserves the ordinary 2xx contract while reading the
 // optional path header returned by session-rotation endpoints. Older Serve
 // binaries omit it and keep their legacy untagged single-session behavior.
 func servePostSessionPath(ctx context.Context, client *http.Client, url string, body []byte) (string, error) {
+	return servePostSessionPathForSession(ctx, client, url, body, "")
+}
+
+func servePostSessionPathForSession(ctx context.Context, client *http.Client, url string, body []byte, expectedPath string) (string, error) {
 	if body == nil {
 		body = []byte("{}")
 	}
-	resp, err := serveDo(ctx, client, http.MethodPost, url, body)
+	resp, err := serveDoForSession(ctx, client, http.MethodPost, url, body, expectedPath)
 	if err != nil {
 		return "", err
 	}
@@ -119,11 +146,18 @@ func servePostSessionPath(ctx context.Context, client *http.Client, url string, 
 
 // serveDo issues a JSON request; the csrf guard rejects non-JSON POSTs.
 func serveDo(ctx context.Context, client *http.Client, method, url string, body []byte) (*http.Response, error) {
+	return serveDoForSession(ctx, client, method, url, body, "")
+}
+
+func serveDoForSession(ctx context.Context, client *http.Client, method, url string, body []byte, expectedPath string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if expectedPath = strings.TrimSpace(expectedPath); expectedPath != "" {
+		req.Header.Set(expectedSessionPathHeader, expectedPath)
+	}
 	return client.Do(req)
 }
 
@@ -293,66 +327,14 @@ func (a *App) EnsureRemoteProjectSessions(hostID, workspace string) ([]RemoteSes
 }
 
 func (a *App) remoteProjectSessions(ctx context.Context, client *http.Client, base, hostID, workspace string) ([]RemoteSessionView, error) {
-	a.remoteTabMu.Lock()
-	var observedTab *remoteTab
-	var observedRevision uint64
-	for _, tab := range a.remoteTabs {
-		if tab.ref.HostID == hostID && tab.ref.Workspace == workspace {
-			observedTab, observedRevision = tab, tab.routing.revision
-			break
-		}
-	}
-	a.remoteTabMu.Unlock()
-	entries, err := serveSessions(ctx, client, base)
+	listing, err := a.fetchRemoteSessionListing(ctx, client, base, hostID, workspace)
 	if err != nil {
 		return nil, err
 	}
-	authoritativeCurrent := singleCurrentServeSession(entries)
-	authoritativeTitle := remoteAuthoritativeSessionTitle(hostID, workspace, authoritativeCurrent)
-	a.remoteTabMu.Lock()
-	liveRunning := map[string]bool{}
-	liveCurrentPath := ""
-	preferLiveCurrent := false
-	var routeUpdate *TabMeta
-	routeReadyBarrier := false
-	for _, tab := range a.remoteTabs {
-		if tab.ref.HostID != hostID || tab.ref.Workspace != workspace {
-			continue
-		}
-		// Without a newer SSE/status revision, /sessions replaces the running
-		// cache and current route. A raced revision preserves the newer live route
-		// instead of marking both its row and the stale server row current.
-		if tab == observedTab && tab.routing.revision == observedRevision {
-			authoritative := make(map[string]bool, len(entries))
-			for _, entry := range entries {
-				authoritative[entry.Path] = entry.Running
-			}
-			tab.routing.running = authoritative
-			if authoritativeCurrent != nil {
-				path := strings.TrimSpace(authoritativeCurrent.Path)
-				pathChanged := adoptRemoteTabSessionPathLocked(tab, path)
-				tab.session.name = strings.TrimSpace(authoritativeCurrent.Name)
-				if pathChanged {
-					tab.topicTitle = authoritativeTitle
-					meta := remoteTabMetaLocked(tab)
-					routeUpdate = &meta
-					routeReadyBarrier = remoteTabReadyBarrier(tab, true)
-				}
-			}
-		} else {
-			preferLiveCurrent = true
-		}
-		liveCurrentPath = tab.routing.currentPath
-		maps.Copy(liveRunning, tab.routing.running)
-		break
-	}
-	a.remoteTabMu.Unlock()
-	if routeUpdate != nil {
-		a.emitRemoteEvent("remote-tab:updated", *routeUpdate)
-		if routeReadyBarrier {
-			a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:state", routeUpdate.ID), RemoteTabStateView{State: "ready"})
-		}
-	}
+	entries := listing.entries
+	liveRunning := listing.liveRunning
+	liveCurrentPath := listing.liveCurrentPath
+	preferLiveCurrent := listing.preferLive
 	out := make([]RemoteSessionView, 0, len(entries))
 	pinned := make([]RemoteSessionView, 0, len(entries))
 	prefs := remotePrefsSnapshot()
@@ -368,12 +350,8 @@ func (a *App) remoteProjectSessions(ctx context.Context, client *http.Client, ba
 			current = liveCurrentPath != "" && e.Path == liveCurrentPath
 		}
 		view := RemoteSessionView{
-			Name:           e.Name,
-			Path:           e.Path,
-			Title:          title,
-			Turns:          e.Turns,
-			Current:        current,
-			Running:        e.Running || liveRunning[e.Path],
+			Name: e.Name, Path: e.Path, Title: title, Turns: e.Turns, Current: current,
+			Running:        remoteSessionRunning(e.Running, liveRunning, e.Path, preferLiveCurrent),
 			LastActivityAt: e.MtimeMilli,
 			Pinned:         remoteSessionPinnedLocked(prefs, prefKey),
 		}
@@ -399,6 +377,124 @@ func (a *App) remoteProjectSessions(ctx context.Context, client *http.Client, ba
 		}
 	}
 	return append(pinned, out...), nil
+}
+
+type remoteSessionListing struct {
+	entries         []serveSessionEntry
+	liveRunning     map[string]bool
+	liveCurrentPath string
+	preferLive      bool
+}
+
+func (a *App) fetchRemoteSessionListing(ctx context.Context, client *http.Client, base, hostID, workspace string) (remoteSessionListing, error) {
+	const maxRaceRetries = 2
+
+listingAttempt:
+	for attempt := 0; ; attempt++ {
+		a.remoteTabMu.Lock()
+		var observedTab *remoteTab
+		var observedRevision uint64
+		for _, tab := range a.remoteTabs {
+			if tab.ref.HostID == hostID && tab.ref.Workspace == workspace {
+				observedTab, observedRevision = tab, tab.routing.revision
+				break
+			}
+		}
+		a.remoteTabMu.Unlock()
+		entries, err := serveSessions(ctx, client, base)
+		if err != nil {
+			return remoteSessionListing{}, err
+		}
+		authoritativeCurrent := singleCurrentServeSession(entries)
+		authoritativeTitle := remoteAuthoritativeSessionTitle(hostID, workspace, authoritativeCurrent)
+		unlockRoute := lockRemoteTabRoute(observedTab)
+		a.remoteTabMu.Lock()
+		liveRunning := map[string]bool{}
+		liveCurrentPath := ""
+		preferLiveCurrent := false
+		var routeUpdate *TabMeta
+		routeReadyBarrier := false
+		for _, tab := range a.remoteTabs {
+			if tab.ref.HostID != hostID || tab.ref.Workspace != workspace {
+				continue
+			}
+			// Without a newer SSE/status revision, /sessions replaces the running
+			// cache and current route. A raced revision preserves the newer live route
+			// instead of marking both its row and the stale server row current.
+			authoritativeListing := tab == observedTab && tab.routing.revision == observedRevision
+			if !authoritativeListing && attempt < maxRaceRetries && remoteSessionRunningConflict(entries, tab.routing.running) {
+				a.remoteTabMu.Unlock()
+				unlockRoute()
+				continue listingAttempt
+			}
+			if authoritativeListing {
+				authoritative := make(map[string]bool, len(entries))
+				for _, entry := range entries {
+					authoritative[entry.Path] = entry.Running
+				}
+				tab.routing.running = authoritative
+				if authoritativeCurrent != nil {
+					path := strings.TrimSpace(authoritativeCurrent.Path)
+					pathChanged := adoptRemoteTabSessionPathLocked(tab, path)
+					tab.session.name = strings.TrimSpace(authoritativeCurrent.Name)
+					if pathChanged {
+						tab.topicTitle = authoritativeTitle
+						meta := remoteTabMetaLocked(tab)
+						routeUpdate = &meta
+						routeReadyBarrier = remoteTabReadyBarrier(tab, true)
+					}
+				}
+			} else {
+				preferLiveCurrent = true
+			}
+			liveCurrentPath = tab.routing.currentPath
+			maps.Copy(liveRunning, tab.routing.running)
+			break
+		}
+		a.remoteTabMu.Unlock()
+		if routeUpdate != nil {
+			a.emitRemoteEvent("remote-tab:updated", *routeUpdate)
+			if routeReadyBarrier {
+				a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:state", routeUpdate.ID), RemoteTabStateView{State: "ready"})
+			}
+		}
+		unlockRoute()
+		return remoteSessionListing{
+			entries: entries, liveRunning: liveRunning,
+			liveCurrentPath: liveCurrentPath, preferLive: preferLiveCurrent,
+		}, nil
+	}
+}
+
+func remoteSessionRunningConflict(entries []serveSessionEntry, live map[string]bool) bool {
+	listedPaths := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		listedPaths[entry.Path] = struct{}{}
+		if running, ok := live[entry.Path]; entry.Running && ok && !running {
+			return true
+		}
+	}
+	for path, running := range live {
+		if _, listed := listedPaths[path]; !running && !listed {
+			return true
+		}
+	}
+	return false
+}
+
+func remoteSessionRunning(listed bool, live map[string]bool, path string, preferLive bool) bool {
+	if preferLive {
+		if running, ok := live[path]; ok {
+			// A raced false can mean a completed turn or remaining background jobs.
+			// The bounded refresh resolves the ordinary case; after repeated races,
+			// retain the conservative row rather than hiding active background work.
+			if listed && !running {
+				return true
+			}
+			return running
+		}
+	}
+	return listed || live[path]
 }
 
 func remoteAuthoritativeSessionTitle(hostID, workspace string, current *serveSessionEntry) string {

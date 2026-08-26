@@ -29,9 +29,11 @@ type fakeServe struct {
 	cookieOnNew                    bool
 	sessions                       []serveSessionEntry
 	calls                          []string // "METHOD /path body" per command request
+	expectedPaths                  []string // foreground command fence headers
 	failNext                       string   // non-empty ⇒ next command endpoint replies 409 with this text
 	failEnter                      string   // non-empty ⇒ next /new or /resume replies 409
 	enterDelay                     time.Duration
+	newStarted, newRelease         chan struct{}
 	resumeStarted                  chan string
 	resumeRelease                  chan struct{}
 	failHistory                    bool // /history replies 500 when set
@@ -87,6 +89,12 @@ func (fs *fakeServe) recorded() []string {
 	return out
 }
 
+func (fs *fakeServe) recordedExpectedPaths() []string {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	return append([]string(nil), fs.expectedPaths...)
+}
+
 func (fs *fakeServe) record(method, path, body string) {
 	fs.mu.Lock()
 	fs.calls = append(fs.calls, method+" "+path+" "+body)
@@ -126,6 +134,7 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		fs.failEnter = ""
 		enterDelay := fs.enterDelay
 		newSessionPath := fs.newSessionPath
+		newStarted, newRelease := fs.newStarted, fs.newRelease
 		if fail != "" {
 			fs.mu.Unlock()
 			http.Error(w, fail, http.StatusConflict)
@@ -136,6 +145,19 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 			fs.sessions[i].Current = false
 		}
 		fs.mu.Unlock()
+		if newStarted != nil {
+			select {
+			case newStarted <- struct{}{}:
+			default:
+			}
+		}
+		if newRelease != nil {
+			select {
+			case <-newRelease:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if enterDelay > 0 {
 			time.Sleep(enterDelay)
 		}
@@ -156,27 +178,26 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 		fail := fs.failEnter
 		fs.failEnter = ""
 		enterDelay := fs.enterDelay
+		resumeStarted, resumeRelease := fs.resumeStarted, fs.resumeRelease
 		if fail != "" {
 			fs.mu.Unlock()
 			http.Error(w, fail, http.StatusConflict)
 			return
 		}
 		fs.resumePath = body.Path
-		started, release := fs.resumeStarted, fs.resumeRelease
 		for i := range fs.sessions {
 			fs.sessions[i].Current = fs.sessions[i].Path == body.Path
 		}
 		fs.mu.Unlock()
-		if started != nil {
+		if resumeStarted != nil {
 			select {
-			case started <- body.Path:
-			case <-r.Context().Done():
-				return
+			case resumeStarted <- body.Path:
+			default:
 			}
 		}
-		if release != nil {
+		if resumeRelease != nil {
 			select {
-			case <-release:
+			case <-resumeRelease:
 			case <-r.Context().Done():
 				return
 			}
@@ -260,6 +281,7 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 			data, _ := io.ReadAll(io.LimitReader(r.Body, 4<<10))
 			fs.record(r.Method, path, string(data))
 			fs.mu.Lock()
+			fs.expectedPaths = append(fs.expectedPaths, r.Header.Get(expectedSessionPathHeader))
 			fail := fs.failNext
 			fs.failNext = ""
 			if path == "/cancel" && fs.statusAfterCancel != "" {
@@ -284,9 +306,13 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 	snapshot := func(path, payload string) {
 		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 			fs.record(r.Method, path, "")
+			responsePayload := payload
 			if path == "/history" {
 				fs.mu.Lock()
-				fail, historyBody := fs.failHistory, fs.historyBody
+				fail := fs.failHistory
+				if fs.historyBody != "" {
+					responsePayload = fs.historyBody
+				}
 				started, release := fs.historyStarted, fs.historyRelease
 				fs.mu.Unlock()
 				if started != nil {
@@ -303,12 +329,9 @@ func newFakeServe(t *testing.T, token string, sessions []serveSessionEntry) *fak
 					http.Error(w, "gone", http.StatusInternalServerError)
 					return
 				}
-				if historyBody != "" {
-					payload = historyBody
-				}
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(payload))
+			_, _ = w.Write([]byte(responsePayload))
 		})
 	}
 	snapshot("/history", `[{"role":"user","content":"hi"}]`)
@@ -716,6 +739,7 @@ func TestSetModelForTabRemoteOwnsModelOnDesktop(t *testing.T) {
 	}
 
 	fs := newFakeServe(t, "s3cret", nil)
+	fs.newSessionPath = "/remote/sessions/model-switch.jsonl"
 	kernel := &fakeRemoteKernel{
 		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
 		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
@@ -728,7 +752,7 @@ func TestSetModelForTabRemoteOwnsModelOnDesktop(t *testing.T) {
 	if err := a.SetModelForTab(meta.ID, "deepseek/deepseek-v4-pro"); err != nil {
 		t.Fatalf("SetModelForTab: %v", err)
 	}
-	if len(kernel.switchProxyCalls) != 1 || kernel.switchProxyCalls[0] != [4]string{"box", "~/app", "deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"} {
+	if len(kernel.switchProxyCalls) != 1 || kernel.switchProxyCalls[0] != [5]string{"box", "~/app", "deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro", fs.newSessionPath} {
 		t.Fatalf("credential proxy switch calls = %+v", kernel.switchProxyCalls)
 	}
 	for _, c := range fs.recorded() {

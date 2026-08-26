@@ -19,6 +19,7 @@ const blankInput: RemoteHostInput = {
   proxyJump: "",
   defaultWorkspace: "",
   serveInstall: "npm",
+  credentialMode: "remote",
   useSSHConfig: false,
 };
 
@@ -165,6 +166,7 @@ export function RemoteConnectWizard({
       proxyJump: saved.proxyJump,
       defaultWorkspace: saved.defaultWorkspace,
       serveInstall: saved.serveInstall,
+      credentialMode: saved.credentialMode || "remote",
       useSSHConfig: saved.useSSHConfig,
     });
     setAuthMode(saved.identityFile ? "key" : "password");
@@ -501,6 +503,27 @@ export function RemoteConnectWizard({
                       onClick={() => set("serveInstall", "npm")}
                     >
                       {t("remoteWizard.downloadRemote")}
+                    </button>
+                  </div>
+                </div>
+                <div className="remote-wizard__field">
+                  <span>{t("remote.host.credentialMode")}</span>
+                  <div className="provider-add-segmented remote-wizard__seg" role="group" aria-label={t("remote.host.credentialMode")}>
+                    <button
+                      type="button"
+                      className={`provider-add-segmented__item${form.credentialMode !== "local-proxy" ? " provider-add-segmented__item--active" : ""}`}
+                      disabled={busy}
+                      onClick={() => set("credentialMode", "remote")}
+                    >
+                      {t("remote.host.credentialModeRemote")}
+                    </button>
+                    <button
+                      type="button"
+                      className={`provider-add-segmented__item${form.credentialMode === "local-proxy" ? " provider-add-segmented__item--active" : ""}`}
+                      disabled={busy}
+                      onClick={() => set("credentialMode", "local-proxy")}
+                    >
+                      {t("remote.host.credentialModeLocalProxy")}
                     </button>
                   </div>
                 </div>

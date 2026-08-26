@@ -9,6 +9,8 @@ import (
 // reaches the right serve endpoint with the mapped body.
 func TestRemoteTabCommandsForwardedToServe(t *testing.T) {
 	fs := newFakeServe(t, "s3cret", nil)
+	const currentPath = "/sessions/current.jsonl"
+	fs.newSessionPath = currentPath
 	kernel := &fakeRemoteKernel{
 		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
 		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
@@ -61,6 +63,11 @@ func TestRemoteTabCommandsForwardedToServe(t *testing.T) {
 	for _, step := range steps {
 		if err := step.call(); err != nil {
 			t.Fatalf("%s: %v", step.name, err)
+		}
+	}
+	for i, got := range fs.recordedExpectedPaths() {
+		if got != currentPath {
+			t.Fatalf("command %d expected-session header = %q, want %q", i, got, currentPath)
 		}
 	}
 	if !slices.Equal(profileDrained, []string{"approval-1"}) {

@@ -419,6 +419,26 @@ type SessionRecoveryInfo struct {
 	Existing     bool
 	Reason       string
 	Meta         agent.BranchMeta
+	commit       *sessionRecoveryCommit
+}
+
+// OnCommit defers publication work until the controller has installed the
+// recovery path and rebound all path-scoped state.
+func (i SessionRecoveryInfo) OnCommit(fn func()) {
+	if i.commit != nil && fn != nil {
+		i.commit.hooks = append(i.commit.hooks, fn)
+	}
+}
+
+type sessionRecoveryCommit struct {
+	hooks []func()
+}
+
+func (c *sessionRecoveryCommit) publish() {
+	for _, hook := range c.hooks {
+		hook()
+	}
+	c.hooks = nil
 }
 
 type externalFolderToolRefs interface {
@@ -4053,12 +4073,14 @@ func (c *Controller) recoverShutdownSnapshot(path string, saveErr error) (string
 }
 
 func (c *Controller) commitRecoveredSession(originalPath, reason string, info agent.RecoveryBranchInfo) error {
+	commit := &sessionRecoveryCommit{}
 	recoveryInfo := SessionRecoveryInfo{
 		OriginalPath: originalPath,
 		RecoveryPath: info.Path,
 		Existing:     info.Existing,
 		Reason:       reason,
 		Meta:         info.Meta,
+		commit:       commit,
 	}
 	if onSessionRecovered := c.sessionRecoveredHandler(); onSessionRecovered != nil {
 		if err := onSessionRecovered(recoveryInfo); err != nil {
@@ -4075,6 +4097,7 @@ func (c *Controller) commitRecoveredSession(originalPath, reason string, info ag
 	c.setActiveJobSession(info.Path)
 	c.rebindCheckpoints(info.Path)
 	c.transplantInFlightTurnMarker(originalPath, info.Path)
+	commit.publish()
 	return nil
 }
 

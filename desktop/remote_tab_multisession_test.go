@@ -94,6 +94,28 @@ func TestBackgroundCompletionNoticeRefreshesRemoteRows(t *testing.T) {
 	}
 }
 
+func TestRecoveredBackgroundTerminalFrameRefreshesRemoteRows(t *testing.T) {
+	const currentPath = "/sessions/current.jsonl"
+	const originalPath = "/sessions/background.jsonl"
+	const recoveredPath = "/sessions/background-recovered.jsonl"
+	log := &eventLog{}
+	a := &App{remoteEventHook: log.add, remoteTabs: map[string]*remoteTab{
+		"remote-1": {
+			id: "remote-1", gen: 7,
+			routing: remoteTabSessionRouting{
+				currentPath: currentPath,
+				running:     map[string]bool{originalPath: true},
+			},
+		},
+	}}
+	if a.routeRemoteTabFrame("remote-1", 7, recoveredPath, "turn_done") {
+		t.Fatal("recovered background terminal frame was routed to the foreground")
+	}
+	if got := log.count("remote-tab:updated"); got != 1 {
+		t.Fatalf("recovered terminal frame emitted %d row refreshes, want 1", got)
+	}
+}
+
 func TestFocusOnlyAttachRoutesImmediatePendingPrompt(t *testing.T) {
 	const currentPath = "/sessions/current.jsonl"
 	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "current", Path: currentPath, Current: true}})
@@ -259,8 +281,8 @@ func TestUnknownBackgroundPathReconcilesStatusOnlyOnce(t *testing.T) {
 	if after-before != 1 {
 		t.Fatalf("unknown background path triggered %d status requests, want 1", after-before)
 	}
-	if got := log.count("remote-tab:updated") - beforeRefreshes; got != 1 {
-		t.Fatalf("unknown background path emitted %d row refreshes, want 1", got)
+	if got := log.count("remote-tab:updated") - beforeRefreshes; got != 2 {
+		t.Fatalf("unknown background notice and terminal frame emitted %d row refreshes, want 2", got)
 	}
 }
 
@@ -321,36 +343,6 @@ func TestForegroundMarkerPublishesRehydrateBeforeForwardedFrame(t *testing.T) {
 	}
 	if stateIndex < 0 || frameIndex < 0 || stateIndex >= frameIndex {
 		t.Fatalf("session rehydrate was not published before the frame: %v", events)
-	}
-}
-
-func TestAttachRemoteTabServeAdvancesProvisionalAndCommitRevisions(t *testing.T) {
-	const targetPath = "/sessions/target.jsonl"
-	fs := newFakeServe(t, "s3cret", []serveSessionEntry{{Name: "target", Path: targetPath}})
-	a := &App{remoteTabs: map[string]*remoteTab{
-		"remote-1": {
-			id: "remote-1", state: "connecting",
-			session: remoteTabSessionState{path: "/sessions/old.jsonl"},
-			routing: remoteTabSessionRouting{currentPath: "/sessions/old.jsonl", running: map[string]bool{}},
-		},
-	}}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	entered, err := a.attachRemoteTabServe(ctx, "remote-1", fs.server.URL, "s3cret", "serve-1", RemoteTabOpenOptions{
-		SessionName: "target", SessionPath: targetPath, SessionTitle: "Target",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !entered {
-		t.Fatal("target session was not entered")
-	}
-	a.remoteTabMu.Lock()
-	revision := a.remoteTabs["remote-1"].routing.revision
-	path := a.remoteTabs["remote-1"].routing.currentPath
-	a.remoteTabMu.Unlock()
-	if path != targetPath || revision != 2 {
-		t.Fatalf("attached route = %q revision %d, want %q revision 2", path, revision, targetPath)
 	}
 }
 

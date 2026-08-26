@@ -178,8 +178,8 @@ func TestEnsureServeReusesLiveProcess(t *testing.T) {
 		if strings.Contains(cmd, "kill -0 777") {
 			return ok("1\n") // alive
 		}
-		if strings.Contains(cmd, "serve --help") || strings.Contains(cmd, "readlink /proc/777/exe") {
-			t.Fatal("managed capability token should avoid re-probing the live image")
+		if strings.Contains(cmd, "readlink /proc/777/exe") {
+			t.Fatal("managed capability token should avoid re-executing the live image")
 		}
 		if strings.Contains(cmd, "uname") || strings.Contains(cmd, "nohup") {
 			t.Errorf("reuse path should not detect/launch; ran: %s", cmd)

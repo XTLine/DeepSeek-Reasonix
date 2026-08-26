@@ -23,7 +23,7 @@ func (s *Server) modelSwitch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.switchModel(r.Context(), ref); err != nil {
+	if err := s.switchModelExpected(r.Context(), ref, r.Header.Get(expectedSessionPathHeader)); err != nil {
 		http.Error(w, err.Error(), runtimeSwitchErrorStatus(err))
 		return
 	}
@@ -40,8 +40,8 @@ func (s *Server) submitModelCommand(w http.ResponseWriter, r *http.Request, inpu
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return true
 	}
-	if err := s.switchModel(r.Context(), ref); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := s.switchModelExpected(r.Context(), ref, r.Header.Get(expectedSessionPathHeader)); err != nil {
+		http.Error(w, err.Error(), runtimeSwitchErrorStatus(err))
 		return true
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -98,7 +98,7 @@ func (s *Server) effortSwitch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing effort level", http.StatusBadRequest)
 		return
 	}
-	if err := s.switchEffort(r.Context(), strings.TrimSpace(body.Level)); err != nil {
+	if err := s.switchEffortExpected(r.Context(), strings.TrimSpace(body.Level), r.Header.Get(expectedSessionPathHeader)); err != nil {
 		http.Error(w, err.Error(), runtimeSwitchErrorStatus(err))
 		return
 	}
@@ -123,6 +123,9 @@ func (s *Server) qualityFloorSwitch(w http.ResponseWriter, r *http.Request) {
 	}
 	s.bindMu.Lock()
 	defer s.bindMu.Unlock()
+	if !s.validateExpectedSessionLocked(w, r) {
+		return
+	}
 	ctrl := s.ctl()
 	if controllerHasActiveRuntimeWork(ctrl) {
 		http.Error(w, "cannot change quality floor while active work or background jobs are running", http.StatusConflict)

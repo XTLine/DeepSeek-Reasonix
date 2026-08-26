@@ -154,8 +154,9 @@ type fakeRemoteKernel struct {
 	ensureToken       string
 	ensureErr         error
 	ensureCalls       int
+	snapshotMiss      bool
 	switchProxyErr    error
-	switchProxyCalls  [][4]string
+	switchProxyCalls  [][5]string
 	platformErr       error
 	platformChecks    []string
 	stoppedWorkspaces []string
@@ -163,7 +164,6 @@ type fakeRemoteKernel struct {
 	secretCalls       []remoteSecretAnswer
 	secretPromptIDs   []string
 	closed            bool
-	snapshotMiss      bool // ServeSnapshot reports nothing even with a ready ensureView (serve down, EnsureServer can boot it)
 }
 
 func TestRemoteConnectionErrorDetailsPreserveHostKeyMismatch(t *testing.T) {
@@ -244,8 +244,8 @@ func (f *fakeRemoteKernel) EnsureServer(context.Context, string, string) (Remote
 	f.ensureCalls++
 	return f.ensureView, f.ensureToken, f.ensureErr
 }
-func (f *fakeRemoteKernel) SwitchCredentialProxyModel(_ context.Context, hostID, workspace, currentRef, nextRef string) error {
-	f.switchProxyCalls = append(f.switchProxyCalls, [4]string{hostID, workspace, currentRef, nextRef})
+func (f *fakeRemoteKernel) SwitchCredentialProxyModel(_ context.Context, hostID, workspace, currentRef, nextRef, expectedPath string) error {
+	f.switchProxyCalls = append(f.switchProxyCalls, [5]string{hostID, workspace, currentRef, nextRef, expectedPath})
 	return f.switchProxyErr
 }
 func (f *fakeRemoteKernel) StopServer(_ string, workspace string) error {
@@ -422,7 +422,7 @@ func TestUpdateHostStopsCredentialWatchdogWhenLocalProxyDisabled(t *testing.T) {
 	t.Setenv("HOME", home)
 	if err := editUserConfig(func(c *config.Config) error {
 		return c.UpsertRemoteHost(config.RemoteHostEntry{
-			Name: "box", Host: "10.0.0.9", Port: 22, User: "dev", CredentialMode: "remote",
+			Name: "box", Host: "10.0.0.9", Port: 22, User: "dev", CredentialMode: "local-proxy",
 		})
 	}); err != nil {
 		t.Fatal(err)
@@ -436,7 +436,7 @@ func TestUpdateHostStopsCredentialWatchdogWhenLocalProxyDisabled(t *testing.T) {
 	mgr.hosts["box"] = mh
 
 	if _, err := mgr.UpdateHost("box", RemoteHostInput{
-		Label: "box", Host: "10.0.0.9", Port: 22, User: "dev", ServeInstall: "auto",
+		Label: "box", Host: "10.0.0.9", Port: 22, User: "dev", ServeInstall: "auto", CredentialMode: "remote",
 	}); err != nil {
 		t.Fatal(err)
 	}

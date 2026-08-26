@@ -100,6 +100,7 @@ export interface RemoteHostView {
   proxyJump: string;
   defaultWorkspace: string;
   serveInstall: string;
+  credentialMode: string;
   useSSHConfig: boolean;
   passwordSet?: boolean;
   keyPassphraseSet?: boolean;
@@ -114,6 +115,7 @@ export interface RemoteHostInput {
   proxyJump: string;
   defaultWorkspace: string;
   serveInstall: string;
+  credentialMode: string;
   useSSHConfig: boolean;
   password?: string;
   keyPassphrase?: string;

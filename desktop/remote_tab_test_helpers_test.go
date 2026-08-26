@@ -29,19 +29,6 @@ func (s *swapHook) add(name string, payload any) {
 	}
 }
 
-// currentResumeGen reads a tab's live resume generation for direct resume
-// calls in tests.
-func currentResumeGen(t *testing.T, a *App, tabID string) uint64 {
-	t.Helper()
-	a.remoteTabMu.Lock()
-	defer a.remoteTabMu.Unlock()
-	tab := a.remoteTabs[tabID]
-	if tab == nil {
-		t.Fatalf("remote tab %s vanished", tabID)
-	}
-	return tab.routing.resumeGen
-}
-
 func waitForTabState(t *testing.T, a *App, tabID, want string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

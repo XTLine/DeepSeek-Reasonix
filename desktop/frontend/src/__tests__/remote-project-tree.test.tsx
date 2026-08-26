@@ -30,7 +30,7 @@ const contentMenuSource = readFileSync(resolve(here, "../components/ComposerCont
 const remoteIntegrationSource = readFileSync(resolve(here, "../lib/useRemoteComposerIntegration.ts"), "utf8");
 const topicbarMenuSource = readFileSync(resolve(here, "../components/TopicbarMoreMenuContent.tsx"), "utf8");
 const bridgeSource = readFileSync(resolve(here, "../lib/remoteProjectBridge.ts"), "utf8");
-const remoteOpenSource = readFileSync(resolve(here, "../../../remote_tab_open_session.go"), "utf8");
+const remoteOpenSource = readFileSync(resolve(here, "../../../remote_projects.go"), "utf8");
 
 ok(
   /remoteSession: \{ hostId: node\.remote!\.hostId, workspace: node\.remote!\.workspace, name: row\.name, path: row\.path, title: row\.title \}/.test(remoteSource) &&
@@ -203,7 +203,7 @@ ok(
   "remote groups render retryable connect/error rows instead of going silent",
 );
 ok(
-  /tab\.routing\.resumeGen\+\+[\s\S]*?a\.goSafe\("remoteTabResume"/.test(remoteOpenSource),
+  /existing\.selectionRevision\+\+[\s\S]*?a\.goSafe\("remoteTabResume"[\s\S]*?restoreRejectedRemoteTabOpenSelection/.test(remoteOpenSource),
   "session switches resume in the background behind a generation guard",
 );
 

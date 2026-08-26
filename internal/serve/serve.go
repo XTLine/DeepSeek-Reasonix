@@ -99,8 +99,6 @@ func (s *Server) SetControllerBuildOptions(opts boot.Options) {
 	s.buildOptions = opts
 }
 
-const sessionPathHeader = "X-Reasonix-Session-Path"
-
 // New builds a Server. bc must be the controller's event sink.
 // serveCfg controls authentication (none, token, or password).
 func New(ctrl control.SessionAPI, bc *Broadcaster, serveCfg config.ServeConfig) *Server {
@@ -211,8 +209,15 @@ func titleProviderConfig(entry *config.ProviderEntry) provider.Config {
 // /new, /fork), preserving the old "second switch waits" semantics without
 // pinning s.mu.
 func (s *Server) switchModel(ctx context.Context, ref string) error {
+	return s.switchModelExpected(ctx, ref, "")
+}
+
+func (s *Server) switchModelExpected(ctx context.Context, ref, expectedPath string) error {
 	s.bindMu.Lock()
 	defer s.bindMu.Unlock()
+	if err := s.expectedSessionPathErrorLocked(expectedPath); err != nil {
+		return err
+	}
 	return s.switchModelLocked(ctx, ref)
 }
 
@@ -434,8 +439,17 @@ func (s *Server) rebuild(ctx context.Context, old *control.Controller, ref strin
 }
 
 // switchEffort persists a new reasoning-effort level for the active provider and
-// rebuilds via switchModel (which serializes on bindMu).
+// rebuilds the controller in the same bindMu epoch.
 func (s *Server) switchEffort(ctx context.Context, level string) error {
+	return s.switchEffortExpected(ctx, level, "")
+}
+
+func (s *Server) switchEffortExpected(ctx context.Context, level, expectedPath string) error {
+	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
+	if err := s.expectedSessionPathErrorLocked(expectedPath); err != nil {
+		return err
+	}
 	cur := s.ctl()
 	if controllerHasActiveRuntimeWork(cur) {
 		return fmt.Errorf("cannot change effort while active work or background jobs are running")
@@ -476,7 +490,7 @@ func (s *Server) switchEffort(ctx context.Context, level string) error {
 	}(); err != nil {
 		return err
 	}
-	return s.switchModel(ctx, entry.Name+"/"+entry.Model)
+	return s.switchModelLocked(ctx, entry.Name+"/"+entry.Model)
 }
 
 func controllerHasActiveRuntimeWork(ctrl control.SessionAPI) bool {
@@ -530,28 +544,28 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /context", s.context)
 	mux.HandleFunc("POST /submit", s.submit)
 	s.registerInboxRoutes(mux)
-	mux.HandleFunc("POST /cancel", s.cancel)
-	mux.HandleFunc("POST /approve", s.approve)
-	mux.HandleFunc("POST /plan-decision", s.planDecision)
-	mux.HandleFunc("POST /plan", s.plan)
+	mux.HandleFunc("POST /cancel", s.foregroundMutation(s.cancel))
+	mux.HandleFunc("POST /approve", s.foregroundMutation(s.approve))
+	mux.HandleFunc("POST /plan-decision", s.foregroundMutation(s.planDecision))
+	mux.HandleFunc("POST /plan", s.foregroundMutation(s.plan))
 	mux.HandleFunc("POST /composer-profile", s.composerProfile)
-	mux.HandleFunc("POST /compact", s.compact)
+	mux.HandleFunc("POST /compact", s.foregroundMutation(s.compact))
 	mux.HandleFunc("POST /new", s.newSession)
 	mux.HandleFunc("POST /clear", s.clearSession)
 	mux.HandleFunc("POST /rewind", s.rewind)
 	mux.HandleFunc("POST /fork", s.fork)
-	mux.HandleFunc("POST /summarize", s.summarize)
-	mux.HandleFunc("POST /tool-approval-mode", s.toolApprovalMode)
+	mux.HandleFunc("POST /summarize", s.foregroundMutation(s.summarize))
+	mux.HandleFunc("POST /tool-approval-mode", s.foregroundMutation(s.toolApprovalMode))
 	mux.HandleFunc("POST /providers/reload", s.providersReload)
-	mux.HandleFunc("POST /auto-approve-tools", s.autoApproveTools)
-	mux.HandleFunc("POST /bypass", s.bypass)
-	mux.HandleFunc("POST /goal", s.goal)
-	mux.HandleFunc("POST /goal/pause", s.goalPause)
-	mux.HandleFunc("POST /goal/resume", s.goalResume)
-	mux.HandleFunc("POST /jobs/cancel", s.jobsCancel)
-	mux.HandleFunc("POST /answer", s.answer)
+	mux.HandleFunc("POST /auto-approve-tools", s.foregroundMutation(s.autoApproveTools))
+	mux.HandleFunc("POST /bypass", s.foregroundMutation(s.bypass))
+	mux.HandleFunc("POST /goal", s.foregroundMutation(s.goal))
+	mux.HandleFunc("POST /goal/pause", s.foregroundMutation(s.goalPause))
+	mux.HandleFunc("POST /goal/resume", s.foregroundMutation(s.goalResume))
+	mux.HandleFunc("POST /jobs/cancel", s.foregroundMutation(s.jobsCancel))
+	mux.HandleFunc("POST /answer", s.foregroundMutation(s.answer))
 	mux.HandleFunc("POST /resume", s.resume)
-	mux.HandleFunc("POST /forget", s.forget)
+	mux.HandleFunc("POST /forget", s.foregroundMutation(s.forget))
 	mux.HandleFunc("GET /checkpoints", s.checkpoints)
 	mux.HandleFunc("GET /branches", s.branches)
 	mux.HandleFunc("GET /models", s.models)
@@ -559,7 +573,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /effort", s.effortSwitch)
 	mux.HandleFunc("POST /quality-floor", s.qualityFloorSwitch)
 	mux.HandleFunc("POST /extensions/reload", s.reloadExtensionsHTTP)
-	mux.HandleFunc("POST /extension-form", s.submitExtensionForm)
+	mux.HandleFunc("POST /extension-form", s.foregroundMutation(s.submitExtensionForm))
 	mux.HandleFunc("GET /status", s.status)
 	mux.HandleFunc("GET /sessions", s.sessions)
 	mux.HandleFunc("GET /commands", s.commands)
@@ -730,8 +744,8 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(trimmed, "/effort ") {
 		level := strings.TrimSpace(strings.TrimPrefix(trimmed, "/effort"))
 		if level != "" {
-			if err := s.switchEffort(r.Context(), level); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+			if err := s.switchEffortExpected(r.Context(), level, r.Header.Get(expectedSessionPathHeader)); err != nil {
+				http.Error(w, err.Error(), runtimeSwitchErrorStatus(err))
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
@@ -744,6 +758,10 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	// published replacement. This closes the check/build/swap race where a
 	// request could otherwise start on cur after reload's initial busy check.
 	s.bindMu.Lock()
+	if !s.validateExpectedSessionLocked(w, r) {
+		s.bindMu.Unlock()
+		return
+	}
 	ctrl := s.ctl()
 	// Fix false 202 while a turn is active: SubmitHTTPFormat silently drops
 	// concurrent input. Clients must use POST /inbox/items for durable follow-up.
@@ -863,6 +881,8 @@ func historyMessages(msgs []provider.Message) []historyMessage {
 // if the client sends If-None-Match with the current ETag, the server returns
 // 304 Not Modified with no body, saving bandwidth on reconnects.
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
+	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
 	writeJSONCached(w, r, historyMessages(s.ctl().History()))
 }
 
@@ -912,7 +932,7 @@ func corsMiddleware(next http.Handler, origin string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, "+expectedSessionPathHeader)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -973,6 +993,9 @@ func (s *Server) fork(w http.ResponseWriter, r *http.Request) {
 	// Taken after body decoding so a slow client cannot hold the binding lock.
 	s.bindMu.Lock()
 	defer s.bindMu.Unlock()
+	if !s.validateExpectedSessionLocked(w, r) {
+		return
+	}
 	path, err := s.ctl().ForkNamed(body.Turn, body.Name)
 	if err != nil {
 		if control.IsSessionRotationBusy(err) {
@@ -1304,6 +1327,10 @@ func currentModelRef(c control.SessionAPI) string {
 // status returns a combined status snapshot. The desktop's runtime-only path
 // skips provider balance IO while retaining all reconciliation fields.
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
+	// Session rotations publish the controller path and executor Session while
+	// holding bindMu. Read the combined snapshot in that same binding epoch so
+	// callers can never pair a newly published path with the outgoing history.
+	s.bindMu.Lock()
 	runtimeOnly := r.URL.Query().Get("runtime") == "1" || r.URL.Query().Get("lite") == "1"
 	ctrl := s.ctl()
 	used, window := ctrl.ContextSnapshot()
@@ -1328,9 +1355,10 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if ctrl.Goal() != "" {
 		sess["goalRuntime"] = ctrl.GoalRuntime()
 	}
-	if path := strings.TrimSpace(ctrl.SessionPath()); path != "" && store.IsSessionTranscriptName(filepath.Base(path)) {
-		sess["sessionName"] = strings.TrimSuffix(filepath.Base(path), ".jsonl")
-		sess["sessionPath"] = agent.CanonicalSessionPath(path)
+	sessionPath := strings.TrimSpace(ctrl.SessionPath())
+	if sessionPath != "" && store.IsSessionTranscriptName(filepath.Base(sessionPath)) {
+		sess["sessionName"] = strings.TrimSuffix(filepath.Base(sessionPath), ".jsonl")
+		sess["sessionPath"] = agent.CanonicalSessionPath(sessionPath)
 	}
 	if cfg, err := config.Load(); err == nil {
 		if entry, ok := cfg.ResolveModel(currentModelRef(ctrl)); ok {
@@ -1357,6 +1385,13 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if u := ctrl.LastUsage(); u != nil {
 		sess["lastUsage"] = u
 	}
+	sess["sessionCostQuote"] = s.bc.SessionCostQuoteFor(agent.CanonicalSessionPath(sessionPath))
+	if j := ctrl.Jobs(); len(j) > 0 {
+		sess["jobs"] = j
+	}
+	// Balance can perform provider IO and does not participate in session
+	// identity. Release the binding epoch before that optional slow request.
+	s.bindMu.Unlock()
 	if !runtimeOnly {
 		if b, err := ctrl.Balance(r.Context()); err == nil && b != nil {
 			if cfg, loadErr := config.Load(); loadErr == nil && cfg.DisplayCurrencyPref() == "" {
@@ -1372,10 +1407,6 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		} else if err != nil {
 			slog.Warn("serve: balance fetch failed", "err", err)
 		}
-	}
-	sess["sessionCostQuote"] = s.bc.SessionCostQuoteFor(agent.CanonicalSessionPath(ctrl.SessionPath()))
-	if j := ctrl.Jobs(); len(j) > 0 {
-		sess["jobs"] = j
 	}
 	writeJSON(w, sess)
 }

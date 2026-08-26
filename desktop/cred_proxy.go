@@ -344,3 +344,22 @@ func (a *App) applyCredentialProxyModel(hostID, workspace, ref string) (credenti
 	proxy.setRoute(token, up.url, up.apiKey, up.model, up.kind)
 	return credentialProxyRouteInfo{token: token, model: up.model, kind: up.kind, port: port}, nil
 }
+
+// credentialModeView returns the host entry's normalized credential mode for
+// views ("" reads as "remote" — the default).
+func credentialModeView(h config.RemoteHostEntry) string {
+	if h.CredentialProxyEnabled() {
+		return "local-proxy"
+	}
+	return "remote"
+}
+
+// normalizeCredentialMode validates an input credential mode.
+func normalizeCredentialMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "local-proxy":
+		return "local-proxy"
+	default:
+		return ""
+	}
+}

@@ -152,6 +152,42 @@ func TestOpenRemoteProjectTabLateResumeCannotStompNewerSwitch(t *testing.T) {
 	cleanupRemoteTabPumps(t, a)
 }
 
+func TestOpenRemoteProjectTabRejectedResumeRestoresPreviousIdentity(t *testing.T) {
+	const oldPath = "/remote/sessions/s1.jsonl"
+	const targetPath = "/remote/sessions/s2.jsonl"
+	fs := newFakeServe(t, "s3cret", []serveSessionEntry{
+		{Name: "s1", Path: oldPath, Title: "First", Turns: 1, Current: true},
+		{Name: "s2", Path: targetPath, Title: "Second", Turns: 1},
+	})
+	kernel := &fakeRemoteKernel{
+		statuses:    []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
+		ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionName: "s1", SessionPath: oldPath, SessionTitle: "First"})
+
+	fs.mu.Lock()
+	fs.failEnter = "session is already leased by another process"
+	fs.mu.Unlock()
+	if _, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{
+		SessionName: "s2", SessionPath: targetPath, SessionTitle: "Second",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForRemoteTabError(t, a, meta.ID, "already leased")
+
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[meta.ID]
+	name, path, route, title := tab.session.name, tab.session.path, tab.routing.currentPath, tab.topicTitle
+	a.remoteTabMu.Unlock()
+	if name != "s1" || path != oldPath || route != oldPath || title != "First" {
+		t.Fatalf("rejected async resume kept target identity: name/path/route/title = %q/%q/%q/%q", name, path, route, title)
+	}
+}
+
 func waitForRemoteSessionIdentity(t *testing.T, a *App, tabID, name, path string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

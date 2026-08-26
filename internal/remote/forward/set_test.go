@@ -343,5 +343,4 @@ func TestRemoteForwardAcceptExitMarksDown(t *testing.T) {
 	}
 }
 
-
 var _ = fmt.Sprintf

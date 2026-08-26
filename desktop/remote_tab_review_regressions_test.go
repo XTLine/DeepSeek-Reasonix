@@ -5,7 +5,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -173,6 +175,7 @@ func TestRemoteResumeTransportFailureReconcilesCommittedTarget(t *testing.T) {
 }
 
 func TestRemoteResumeReplayStopsAfterLaterSessionAdoption(t *testing.T) {
+	const oldPath = "/sessions/old.jsonl"
 	const targetPath = "/sessions/target.jsonl"
 	const laterPath = "/sessions/later.jsonl"
 	client := &http.Client{}
@@ -188,22 +191,57 @@ func TestRemoteResumeReplayStopsAfterLaterSessionAdoption(t *testing.T) {
 		},
 	}
 	log := &eventLog{}
-	adopted := false
 	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	firstFrameEntered := make(chan struct{})
+	releaseFirstFrame := make(chan struct{})
+	var firstFrameOnce sync.Once
 	a.remoteEventHook = func(name string, payload any) {
 		log.add(name, payload)
-		if !adopted && name == "remote-tab:"+tab.id+":event" {
+		if name == "remote-tab:"+tab.id+":event" {
 			data, _ := json.Marshal(payload)
 			if strings.Contains(string(data), "target-first") {
-				adopted = true
-				a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, laterPath, true)
+				firstFrameOnce.Do(func() { close(firstFrameEntered) })
+				<-releaseFirstFrame
 			}
 		}
 	}
-	a.publishRemoteTabResumeReady(tab.id, tab, client, tab.gen, targetPath)
+	route := remoteTabProvisionalResume{targetPath: targetPath, previousPath: oldPath, active: true}
+	resumeDone := make(chan struct{})
+	go func() {
+		a.publishRemoteTabResumeReady(tab.id, tab, client, tab.gen, route)
+		close(resumeDone)
+	}()
+	select {
+	case <-firstFrameEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first replay frame did not reach publication")
+	}
+	adoptDone := make(chan struct{})
+	go func() {
+		a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, laterPath, true)
+		close(adoptDone)
+	}()
+	select {
+	case <-adoptDone:
+		t.Fatal("later route adoption overtook an in-flight frame publication")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirstFrame)
+	select {
+	case <-adoptDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("later route adoption did not complete after publication")
+	}
+	select {
+	case <-resumeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("resume replay did not stop after later adoption")
+	}
 	events := strings.Join(log.recorded(), "\n")
-	if !strings.Contains(events, "target-first") || strings.Contains(events, "target-second") {
-		t.Fatalf("replay crossed later adoption barrier: %s", events)
+	secondFrame := strings.Index(events, "target-second")
+	laterReady := strings.LastIndex(events, "remote-tab:"+tab.id+":state")
+	if !strings.Contains(events, "target-first") || secondFrame < 0 || laterReady < secondFrame {
+		t.Fatalf("later adoption overtook the ordered replay: %s", events)
 	}
 	a.remoteTabMu.Lock()
 	path, rehydrating := tab.routing.currentPath, tab.routing.rehydratingPath
@@ -239,7 +277,7 @@ func TestRemoteResumeReplaysPromptArrivingDuringDrain(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		a.publishRemoteTabResumeReady(tab.id, tab, client, tab.gen, targetPath)
+		a.publishRemoteTabResumeReady(tab.id, tab, client, tab.gen, remoteTabProvisionalResume{targetPath: targetPath, active: true})
 		close(done)
 	}()
 	select {
@@ -274,6 +312,377 @@ func TestRemoteResumeReplaysPromptArrivingDuringDrain(t *testing.T) {
 	a.remoteTabMu.Unlock()
 	if pending != 1 || rehydrating != "" {
 		t.Fatalf("post-drain pending/rehydrating = %d/%q, want 1/empty", pending, rehydrating)
+	}
+}
+
+func TestRemoteRotationResponseCannotOverwriteLaterRouteAdoption(t *testing.T) {
+	const oldPath = "/sessions/old.jsonl"
+	const responsePath = "/sessions/response.jsonl"
+	const laterPath = "/sessions/later.jsonl"
+	requestEntered := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/new" {
+			http.NotFound(w, r)
+			return
+		}
+		close(requestEntered)
+		<-releaseResponse
+		w.Header().Set("X-Reasonix-Session-Path", responsePath)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: server.Client(), base: server.URL, gen: 7,
+		session: remoteTabSessionState{name: "old", path: oldPath},
+		routing: remoteTabSessionRouting{currentPath: oldPath, running: map[string]bool{}},
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	done := make(chan error, 1)
+	go func() { done <- a.rotateRemoteTabSession(tab.id, "/new") }()
+	select {
+	case <-requestEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("rotation request did not reach Serve")
+	}
+	a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, laterPath, true)
+	close(releaseResponse)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rotation did not finish")
+	}
+	a.remoteTabMu.Lock()
+	path, sessionPath := tab.routing.currentPath, tab.session.path
+	a.remoteTabMu.Unlock()
+	if path != laterPath || sessionPath == responsePath {
+		t.Fatalf("stale rotation response replaced later route: routing/session = %q/%q, want later route %q", path, sessionPath, laterPath)
+	}
+}
+
+func TestRemoteStatusAdoptionWaitsForFramePublication(t *testing.T) {
+	const currentPath = "/sessions/current.jsonl"
+	const laterPath = "/sessions/later.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		session: remoteTabSessionState{path: currentPath},
+		routing: remoteTabSessionRouting{currentPath: currentPath, running: map[string]bool{}},
+		runtime: remoteTabRuntimeState{revision: 11},
+	}
+	frameEntered := make(chan struct{})
+	releaseFrame := make(chan struct{})
+	log := &eventLog{}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	a.remoteEventHook = func(name string, payload any) {
+		log.add(name, payload)
+		if name == "remote-tab:"+tab.id+":event" {
+			close(frameEntered)
+			<-releaseFrame
+		}
+	}
+	frameDone := make(chan bool, 1)
+	go func() {
+		frame := json.RawMessage(`{"kind":"text","text":"current-frame","sessionPath":"/sessions/current.jsonl"}`)
+		frameDone <- a.publishRemoteTabFrame(tab.id, tab.gen, currentPath, "text", frame)
+	}()
+	select {
+	case <-frameEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("current frame did not reach publication")
+	}
+	statusDone := make(chan bool, 1)
+	go func() {
+		statusDone <- a.recordRemoteTabSessionStatus(tab.id, client, tab.gen, 11, json.RawMessage(`{"sessionPath":"/sessions/later.jsonl"}`))
+	}()
+	select {
+	case <-statusDone:
+		t.Fatal("status route adoption overtook an in-flight frame publication")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFrame)
+	if !<-frameDone || !<-statusDone {
+		t.Fatal("ordered frame publication or status adoption was rejected")
+	}
+	events := strings.Join(log.recorded(), "\n")
+	frameIndex := strings.Index(events, "current-frame")
+	readyIndex := strings.LastIndex(events, "remote-tab:"+tab.id+":state")
+	if frameIndex < 0 || readyIndex < frameIndex {
+		t.Fatalf("status ready barrier overtook the current frame: %s", events)
+	}
+	a.remoteTabMu.Lock()
+	adoptedPath := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if adoptedPath != laterPath {
+		t.Fatalf("status route = %q, want %q", adoptedPath, laterPath)
+	}
+}
+
+func TestRemoteRejectedResumeReconciliationWaitsForFramePublication(t *testing.T) {
+	const previousPath = "/sessions/previous.jsonl"
+	const targetPath = "/sessions/target.jsonl"
+	const authoritativePath = "/sessions/authoritative.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		session: remoteTabSessionState{path: targetPath},
+		routing: remoteTabSessionRouting{
+			currentPath: targetPath, rehydratingPath: targetPath, running: map[string]bool{},
+		},
+	}
+	frameEntered := make(chan struct{})
+	releaseFrame := make(chan struct{})
+	log := &eventLog{}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	a.remoteEventHook = func(name string, payload any) {
+		log.add(name, payload)
+		if name == "remote-tab:"+tab.id+":event" {
+			close(frameEntered)
+			<-releaseFrame
+		}
+	}
+	frameDone := make(chan bool, 1)
+	go func() {
+		frame := json.RawMessage(`{"kind":"text","text":"target-frame","sessionPath":"/sessions/target.jsonl"}`)
+		frameDone <- a.publishRemoteTabFrameForRoute(tab.id, tab, client, tab.gen, targetPath, true, "text", frame)
+	}()
+	select {
+	case <-frameEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("target frame did not reach publication")
+	}
+	reconcileDone := make(chan struct{})
+	go func() {
+		route := remoteTabProvisionalResume{targetPath: targetPath, previousPath: previousPath, active: true}
+		a.reconcileRemoteTabRejectedResume(tab.id, tab, client, tab.gen, route, serveSessionEntry{Path: authoritativePath}, errors.New("resume response lost"))
+		close(reconcileDone)
+	}()
+	select {
+	case <-reconcileDone:
+		t.Fatal("ambiguous-resume reconciliation overtook an in-flight frame")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFrame)
+	if !<-frameDone {
+		t.Fatal("target frame was rejected before authoritative reconciliation")
+	}
+	select {
+	case <-reconcileDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ambiguous-resume reconciliation did not complete")
+	}
+	events := strings.Join(log.recorded(), "\n")
+	frameIndex := strings.Index(events, "target-frame")
+	readyIndex := strings.LastIndex(events, "remote-tab:"+tab.id+":state")
+	if frameIndex < 0 || readyIndex < frameIndex {
+		t.Fatalf("authoritative ready barrier overtook the target frame: %s", events)
+	}
+	a.remoteTabMu.Lock()
+	currentPath := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if currentPath != authoritativePath {
+		t.Fatalf("reconciled route = %q, want %q", currentPath, authoritativePath)
+	}
+}
+
+func TestRemoteRejectedResumeReconciliationCannotOverwriteNewerAdoption(t *testing.T) {
+	const previousPath = "/sessions/previous.jsonl"
+	const targetPath = "/sessions/target.jsonl"
+	const staleAuthoritativePath = "/sessions/stale-authoritative.jsonl"
+	const newerPath = "/sessions/newer.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		session: remoteTabSessionState{path: targetPath},
+		routing: remoteTabSessionRouting{
+			currentPath: targetPath, rehydratingPath: targetPath, running: map[string]bool{},
+		},
+	}
+	log := &eventLog{}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}, remoteEventHook: log.add}
+	// This route marker arrives after the reconciliation query returned C but
+	// before its caller acquired the route/publication mutex.
+	a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, newerPath, true)
+	eventsBefore := len(log.recorded())
+	route := remoteTabProvisionalResume{targetPath: targetPath, previousPath: previousPath, active: true}
+	a.reconcileRemoteTabRejectedResume(tab.id, tab, client, tab.gen, route, serveSessionEntry{Path: staleAuthoritativePath}, errors.New("resume response lost"))
+	a.remoteTabMu.Lock()
+	currentPath := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if currentPath != newerPath {
+		t.Fatalf("stale reconciliation replaced newer route with %q, want %q", currentPath, newerPath)
+	}
+	if eventsAfter := len(log.recorded()); eventsAfter != eventsBefore {
+		t.Fatalf("stale reconciliation emitted %d events after newer adoption, want 0", eventsAfter-eventsBefore)
+	}
+}
+
+func TestRemoteRejectedResumeReconcilesReselectedCurrentSession(t *testing.T) {
+	const currentPath = "/sessions/current.jsonl"
+	const authoritativePath = "/sessions/authoritative.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		session: remoteTabSessionState{path: currentPath},
+		routing: remoteTabSessionRouting{currentPath: currentPath, pathRevision: 9, running: map[string]bool{}},
+	}
+	log := &eventLog{}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}, remoteEventHook: log.add}
+	route := a.beginRemoteTabProvisionalResume(tab.id, tab, client, tab.gen, currentPath)
+	if route.active || route.pathRevision != 9 {
+		t.Fatalf("reselection route = %+v, want inactive revision 9", route)
+	}
+	a.reconcileRemoteTabRejectedResume(tab.id, tab, client, tab.gen, route, serveSessionEntry{Path: authoritativePath}, errors.New("resume response lost"))
+	a.remoteTabMu.Lock()
+	got := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if got != authoritativePath {
+		t.Fatalf("reselected current route = %q, want authoritative %q", got, authoritativePath)
+	}
+	if log.count("remote-tab:"+tab.id+":state") != 1 {
+		t.Fatalf("authoritative reconciliation did not publish one ready barrier: %v", log.recorded())
+	}
+}
+
+func TestRemoteRejectedResumeRollbackCannotMarkNewerRouteErrored(t *testing.T) {
+	const previousPath = "/sessions/previous.jsonl"
+	const targetPath = "/sessions/target.jsonl"
+	const newerPath = "/sessions/newer.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		session: remoteTabSessionState{path: previousPath},
+		routing: remoteTabSessionRouting{currentPath: previousPath, running: map[string]bool{}},
+	}
+	log := &eventLog{}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}, remoteEventHook: log.add}
+	route := a.beginRemoteTabProvisionalResume(tab.id, tab, client, tab.gen, targetPath)
+	a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, newerPath, true)
+	eventsBefore := len(log.recorded())
+	a.reconcileRemoteTabRejectedResume(tab.id, tab, client, tab.gen, route, serveSessionEntry{Path: previousPath}, errors.New("resume response lost"))
+	a.remoteTabMu.Lock()
+	got := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if got != newerPath {
+		t.Fatalf("stale rollback replaced newer route with %q, want %q", got, newerPath)
+	}
+	if eventsAfter := len(log.recorded()); eventsAfter != eventsBefore {
+		t.Fatalf("stale rollback emitted %d events after newer adoption, want 0", eventsAfter-eventsBefore)
+	}
+}
+
+func TestRemoteReselectionSuccessCannotOverwriteNewerAdoption(t *testing.T) {
+	const previousPath = "/sessions/previous.jsonl"
+	const newerPath = "/sessions/newer.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		session: remoteTabSessionState{path: previousPath},
+		routing: remoteTabSessionRouting{currentPath: previousPath, pathRevision: 3, running: map[string]bool{}},
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	route := a.beginRemoteTabProvisionalResume(tab.id, tab, client, tab.gen, previousPath)
+	a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, newerPath, true)
+	if _, committed := a.commitRemoteTabResume(tab.id, tab, client, tab.gen, route, serveSessionEntry{Path: previousPath}, "Previous"); committed {
+		t.Fatal("late reselection success overwrote a newer route")
+	}
+	a.remoteTabMu.Lock()
+	got := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if got != newerPath {
+		t.Fatalf("late reselection changed route to %q, want %q", got, newerPath)
+	}
+}
+
+func TestRemoteResumeCommitPublicationBlocksNewerAdoption(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	const targetPath = "/sessions/target.jsonl"
+	const newerPath = "/sessions/newer.jsonl"
+	client := &http.Client{}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, gen: 7,
+		session: remoteTabSessionState{path: targetPath},
+		routing: remoteTabSessionRouting{
+			currentPath: targetPath, rehydratingPath: targetPath, pathRevision: 4, running: map[string]bool{},
+		},
+	}
+	metadataEntered := make(chan struct{})
+	releaseMetadata := make(chan struct{})
+	var once sync.Once
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	a.remoteEventHook = func(name string, _ any) {
+		if name == "remote-tab:updated" {
+			once.Do(func() {
+				close(metadataEntered)
+				<-releaseMetadata
+			})
+		}
+	}
+	route := remoteTabProvisionalResume{targetPath: targetPath, active: true}
+	resumeDone := make(chan bool, 1)
+	go func() {
+		resumeDone <- a.commitAndPublishRemoteTabResume(tab.id, tab, client, tab.gen, route, serveSessionEntry{Path: targetPath}, "Target")
+	}()
+	select {
+	case <-metadataEntered:
+	case <-time.After(time.Second):
+		t.Fatal("resume metadata publication did not start")
+	}
+	adoptDone := make(chan struct{})
+	go func() {
+		a.adoptRemoteTabFrameCurrent(tab.id, tab.gen, newerPath, true)
+		close(adoptDone)
+	}()
+	select {
+	case <-adoptDone:
+		t.Fatal("newer adoption overtook the in-flight resume publication")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseMetadata)
+	select {
+	case committed := <-resumeDone:
+		if !committed {
+			t.Fatal("resume commit was unexpectedly rejected")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("resume publication did not finish")
+	}
+	select {
+	case <-adoptDone:
+	case <-time.After(time.Second):
+		t.Fatal("newer adoption remained blocked after resume publication")
+	}
+	a.remoteTabMu.Lock()
+	path := tab.routing.currentPath
+	a.remoteTabMu.Unlock()
+	if path != newerPath {
+		t.Fatalf("foreground route = %q, want newer adoption %q", path, newerPath)
+	}
+}
+
+func TestRemoteAttachResponseCannotOverwriteNewerAdoption(t *testing.T) {
+	const responsePath = "/sessions/response.jsonl"
+	const newerPath = "/sessions/newer.jsonl"
+	tab := &remoteTab{
+		id: "remote-1", gen: 7, topicTitle: "Newer",
+		session: remoteTabSessionState{name: "newer", path: newerPath},
+		routing: remoteTabSessionRouting{currentPath: newerPath, pathRevision: 5, running: map[string]bool{}},
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	committed := a.commitRemoteTabAttachResponse(tab.id, tab, tab.gen, 4, serveSessionEntry{
+		Name: "response", Path: responsePath, Title: "Stale response",
+	}, false)
+	if committed {
+		t.Fatal("stale attach response overwrote a newer route adoption")
+	}
+	a.remoteTabMu.Lock()
+	path, name, title := tab.routing.currentPath, tab.session.name, tab.topicTitle
+	a.remoteTabMu.Unlock()
+	if path != newerPath || name != "newer" || title != "Newer" {
+		t.Fatalf("stale attach response changed newer identity: path=%q name=%q title=%q", path, name, title)
 	}
 }
 

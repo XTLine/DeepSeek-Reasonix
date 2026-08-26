@@ -590,7 +590,6 @@ func TestRemoteTabNewSessionResetsServeSession(t *testing.T) {
 	}
 
 	// Resuming a listed session clears the blank and restores it as current.
-	stateEventsBefore := log.count("remote-tab:" + meta.ID + ":state")
 	if _, err := a.OpenRemoteProjectTab("box", "~/app", RemoteTabOpenOptions{SessionName: "s1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -613,22 +612,18 @@ func TestRemoteTabNewSessionResetsServeSession(t *testing.T) {
 	title := a.remoteTabs[meta.ID].topicTitle
 	a.remoteTabMu.Unlock()
 	if reset {
-		t.Fatal("sessionReset must clear after a resume")
-	}
-	deadline = time.Now().Add(2 * time.Second)
-	for title != "Serve title" && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
+		waitForRemoteSessionIdentity(t, a, meta.ID, "s1", sessions[0].Path)
 		a.remoteTabMu.Lock()
+		reset = a.remoteTabs[meta.ID].session.reset
 		title = a.remoteTabs[meta.ID].topicTitle
 		a.remoteTabMu.Unlock()
+	}
+	if reset {
+		t.Fatal("sessionReset must clear after a resume")
 	}
 	if title != "Serve title" {
 		t.Fatalf("topicTitle after resume = %q, want the serve title", title)
 	}
-	// The title is published before the asynchronous resume persists the tab.
-	// Wait for its post-save ready barrier so TempDir cleanup cannot race that
-	// final desktop-tabs.json write under repeated/race execution.
-	waitForRemoteEventCount(t, log, "remote-tab:"+meta.ID+":state", stateEventsBefore+1)
 }
 
 // TestRenameRemoteProjectSession pins the desktop-owned title chain: the

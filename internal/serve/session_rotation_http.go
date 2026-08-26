@@ -38,20 +38,23 @@ func (s *Server) plan(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) clearSession(w http.ResponseWriter, _ *http.Request) {
-	s.clearSessionCommand(w, false)
+func (s *Server) clearSession(w http.ResponseWriter, r *http.Request) {
+	s.clearSessionCommand(w, r, false)
 }
 
-func (s *Server) clearSessionFromSubmit(w http.ResponseWriter, _ *http.Request) {
-	s.clearSessionCommand(w, true)
+func (s *Server) clearSessionFromSubmit(w http.ResponseWriter, r *http.Request) {
+	s.clearSessionCommand(w, r, true)
 }
 
-func (s *Server) clearSessionCommand(w http.ResponseWriter, emitNotice bool) {
+func (s *Server) clearSessionCommand(w http.ResponseWriter, r *http.Request, emitNotice bool) {
 	// Clear rotates the session path just like /new, but also removes the old
 	// transcript artifacts. Keep controller mutation and lease rebinding under
 	// one binding lock so remote clients never observe split ownership.
 	s.bindMu.Lock()
 	defer s.bindMu.Unlock()
+	if !s.validateExpectedSessionLocked(w, r) {
+		return
+	}
 	if err := s.ctl().ClearSession(); err != nil {
 		if control.IsSessionRotationBusy(err) {
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -89,6 +92,9 @@ func (s *Server) newSessionFromSubmit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) newSessionCommand(w http.ResponseWriter, r *http.Request, emitNotice bool) {
 	s.bindMu.Lock()
 	defer s.bindMu.Unlock()
+	if !s.validateExpectedSessionLocked(w, r) {
+		return
+	}
 	cur := s.ctl()
 	if controllerHasActiveRuntimeWork(cur) {
 		curCtrl, ok := cur.(*control.Controller)

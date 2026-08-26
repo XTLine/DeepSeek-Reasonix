@@ -61,6 +61,7 @@ let hosts: RemoteHostView[] = [{
   proxyJump: "",
   defaultWorkspace: "/srv/app",
   serveInstall: "auto",
+  credentialMode: "remote",
   useSSHConfig: false,
   passwordSet: true,
   keyPassphraseSet: true,
@@ -126,18 +127,23 @@ await act(async () => {
 });
 ok(document.body.textContent?.includes("saved password will be removed") === true, "explicit clear action is staged until Save");
 
-// Credential mode: the desktop no longer offers a choice — no select in the
-// form, and the update payload carries no field (desktop onboarding is
-// local-proxy only; the backend decides and preserves hand-set modes).
+// Credential mode: the host form offers remote | local-proxy and the choice
+// rides the UpdateRemoteHost payload.
 {
   const modeSelect = Array.from(document.querySelectorAll<HTMLSelectElement>("select"))
     .find((sel) => Array.from(sel.options).some((opt) => opt.value === "local-proxy"));
-  ok(!modeSelect, "edit form no longer offers the credential-mode select");
+  ok(Boolean(modeSelect), "edit form offers the credential-mode select");
+  const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLSelectElement.prototype, "value")?.set;
+  await act(async () => {
+    setter?.call(modeSelect, "local-proxy");
+    modeSelect?.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    await flush();
+  });
   await act(async () => {
     button("Save")?.click();
     await flush();
   });
-  ok(recordedUpdates.length === 1 && !("credentialMode" in (recordedUpdates[0] ?? {})), "save carries no credential mode");
+  ok(recordedUpdates.length === 1 && recordedUpdates[0].credentialMode === "local-proxy", `save carries the chosen credential mode (got ${JSON.stringify(recordedUpdates.map((u) => u.credentialMode))})`);
 }
 
 await act(async () => {

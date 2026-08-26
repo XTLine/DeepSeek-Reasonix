@@ -41,9 +41,20 @@ func (s *Server) sessionTransitionHandler(ctrl *control.Controller, k *control.S
 			if tag := s.tagFor(ctrl); tag != nil {
 				tag.PrimePath(path)
 			}
-			s.publishControllerPathIfCurrent(ctrl, path)
+			if s.publishControllerPathIfCurrent(ctrl, path) && branchTransitionNeedsRouteEvent(info.Reason) {
+				s.announceSessionChanged(path, false)
+			}
 		})
 		return nil
+	}
+}
+
+func branchTransitionNeedsRouteEvent(reason string) bool {
+	switch reason {
+	case "fork", "branch", "switch":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -60,11 +71,20 @@ func (s *Server) sessionRecoveryHandler(ctrl *control.Controller, k *control.Ses
 		if err := s.moveDetachedRecovery(ctrl, info.RecoveryPath); err != nil {
 			return err
 		}
-		if tag := s.tagFor(ctrl); tag != nil {
-			tag.PrimePath(info.RecoveryPath)
-		}
-		s.publishControllerPathIfCurrent(ctrl, info.RecoveryPath)
+		info.OnCommit(func() { s.publishRecoveredControllerRoute(ctrl, info.RecoveryPath) })
 		return nil
+	}
+}
+
+func (s *Server) publishRecoveredControllerRoute(ctrl *control.Controller, path string) {
+	if tag := s.tagFor(ctrl); tag != nil {
+		tag.PrimePath(path)
+	}
+	if s.publishControllerPathIfCurrent(ctrl, path) {
+		// Recovery changes foreground identity outside the ordinary transition
+		// hook. Publish the same must-deliver route barrier so a saturated
+		// all-session subscriber cannot keep routing later frames to the old path.
+		s.announceSessionChanged(path, false)
 	}
 }
 

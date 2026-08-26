@@ -257,7 +257,6 @@ eq(
   "logical topic stays active when the representative path is not the open file",
 );
 
-
 for (const status of ["thinking", "streaming", "waiting_confirmation", "background_job"] as const) {
   eq(
     projectTreeTopicArchiveBlocked({ ...completedTopic, status, running: true }),

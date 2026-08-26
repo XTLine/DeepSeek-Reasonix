@@ -32,6 +32,9 @@ func (s *Server) rewind(w http.ResponseWriter, r *http.Request) {
 	// lease handoff with every other session-path-changing endpoint.
 	s.bindMu.Lock()
 	defer s.bindMu.Unlock()
+	if !s.validateExpectedSessionLocked(w, r) {
+		return
+	}
 	if err := s.ctl().Rewind(body.Turn, scope); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
