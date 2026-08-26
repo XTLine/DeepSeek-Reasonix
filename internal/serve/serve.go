@@ -257,7 +257,7 @@ func (s *Server) switchModelLocked(ctx context.Context, ref string) error {
 		}
 	}
 	newCtrl.AdoptHistory(carried, newPath)
-	tag.SetPath(newCtrl.SessionPath())
+	tag.PrimePath(newCtrl.SessionPath())
 	newCtrl.SetOnSessionRecovered(s.sessionRecoveryHandler(newCtrl, s.leases))
 	// A rebuild must not force the user to re-approve tools already granted
 	// this session, or re-trust Plan-mode read-only commands already trusted
@@ -286,7 +286,7 @@ func (s *Server) switchModelLocked(ctx context.Context, ref string) error {
 		}
 	}
 	activePath := newCtrl.SessionPath()
-	tag.SetPath(activePath)
+	tag.PrimePath(activePath)
 	if err := s.rebindSessionLeaseFor(activePath, newCtrl); err != nil {
 		s.closeTaggedController(newCtrl)
 		if errors.Is(err, agent.ErrSessionLeaseHeld) {
@@ -311,6 +311,7 @@ func (s *Server) switchModelLocked(ctx context.Context, ref string) error {
 		s.closeTaggedController(newCtrl)
 		return fmt.Errorf("switch model: session changed during switch")
 	}
+	tag.Activate()
 	s.refreshProviderSetup(currentModelRef(newCtrl))
 
 	// Off-lock: tear down the old controller. Close can block up to 15s.
@@ -379,6 +380,9 @@ func (s *Server) reloadExtensions(ctx context.Context) error {
 		s.closeTaggedController(newCtrl)
 		return fmt.Errorf("reload extensions: session changed during reload")
 	}
+	if tag := s.tagFor(newCtrl); tag != nil {
+		tag.Activate()
+	}
 	s.refreshProviderSetup(currentModelRef(newCtrl))
 
 	cur.Close()
@@ -388,7 +392,7 @@ func (s *Server) reloadExtensions(ctx context.Context) error {
 
 func (s *Server) rebuild(ctx context.Context, old *control.Controller, ref string) (*control.Controller, error) {
 	tag := newSessionTagSink(s.bc)
-	tag.SetPath(old.SessionPath())
+	tag.PrimePath(old.SessionPath())
 	opts := boot.Options{
 		Model:         ref,
 		Sink:          tag,
@@ -1160,6 +1164,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		s.setControllerPath(ctrl, realPath)
 	}
 	s.bc.ResetSessionPath(realPath)
+	s.announceSessionChanged(realPath)
 	w.WriteHeader(http.StatusNoContent)
 	s.replayPendingPromptsBroadcast()
 }

@@ -126,10 +126,10 @@ const (
 	// TurnStatusChanged is a content-free lifecycle transition such as
 	// waiting_user, cancelling, or returning to in_progress after an answer.
 	TurnStatusChanged
-	// PromptAnswered records that a durable Ask/approval item was answered and
-	// the same turn resumed. ItemID carries the stable prompt id; answer content
-	// remains in its purpose-built decision receipt rather than diagnostics.
+	// PromptAnswered records that a durable Ask/approval item was answered and the same turn resumed; ItemID carries the stable prompt id and answer content remains in its purpose-built decision receipt.
 	PromptAnswered
+	// SessionChanged is a content-free Serve routing barrier for all-session clients.
+	SessionChanged
 	// KindCount is a sentinel one past the last real Kind. New event kinds must
 	// be inserted above it so completeness tests cover them automatically.
 	KindCount

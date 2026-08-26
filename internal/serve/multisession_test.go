@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,7 @@ import (
 	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/event"
+	"reasonix/internal/eventwire"
 	"reasonix/internal/provider"
 )
 
@@ -425,6 +427,48 @@ func TestBuildTaggedInheritsWorkspacePlacement(t *testing.T) {
 	}
 	if got.MaxSteps != 7 || got.MaxStepsKey != "--max-steps" || got.AgentPreset != "delivery" {
 		t.Fatalf("process build options = max:%d key:%q preset:%q, want 7/--max-steps/delivery", got.MaxSteps, got.MaxStepsKey, got.AgentPreset)
+	}
+}
+
+func TestSessionTagSinkBuffersUntilReplacementCommit(t *testing.T) {
+	bc := NewBroadcaster()
+	all, stop := bc.SubscribeAll()
+	defer stop()
+	tag := NewSessionTagSink(bc)
+	path := filepath.Join(t.TempDir(), "replacement.jsonl")
+
+	tag.Emit(event.Event{Kind: event.Notice, Text: "booted"})
+	tag.PrimePath(path)
+	if len(all) != 0 {
+		t.Fatal("replacement boot event leaked before publication committed")
+	}
+	tag.Activate()
+	if len(all) != 1 {
+		t.Fatalf("activation flushed %d frames, want 1", len(all))
+	}
+	var frame eventwire.Event
+	if err := json.Unmarshal(<-all, &frame); err != nil {
+		t.Fatal(err)
+	}
+	if frame.Kind != "notice" || frame.SessionPath != agent.CanonicalSessionPath(path) {
+		t.Fatalf("activated boot frame = %+v", frame)
+	}
+}
+
+func TestBuildTaggedFailureDiscardsBufferedBootEvents(t *testing.T) {
+	bc := NewBroadcaster()
+	all, stop := bc.SubscribeAll()
+	defer stop()
+	server := New(control.New(control.Options{}), bc, config.ServeConfig{})
+	server.buildControllerWithOptions = func(_ context.Context, _ string, opts boot.Options) (*control.Controller, error) {
+		opts.Sink.Emit(event.Event{Kind: event.Notice, Text: "booting replacement"})
+		return nil, errors.New("build failed")
+	}
+	if _, _, err := server.buildTagged(context.Background(), "provider/model", false); err == nil {
+		t.Fatal("buildTagged unexpectedly succeeded")
+	}
+	if len(all) != 0 {
+		t.Fatal("failed replacement leaked a buffered boot event")
 	}
 }
 

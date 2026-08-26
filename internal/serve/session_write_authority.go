@@ -37,7 +37,7 @@ func (s *Server) sessionTransitionHandler(ctrl *control.Controller, k *control.S
 		}
 		path := agent.CanonicalSessionPath(info.TargetPath)
 		if tag := s.tagFor(ctrl); tag != nil {
-			tag.SetPath(path)
+			tag.PrimePath(path)
 		}
 		s.publishControllerPathIfCurrent(ctrl, path)
 		return nil
@@ -58,7 +58,7 @@ func (s *Server) sessionRecoveryHandler(ctrl *control.Controller, k *control.Ses
 			return err
 		}
 		if tag := s.tagFor(ctrl); tag != nil {
-			tag.SetPath(info.RecoveryPath)
+			tag.PrimePath(info.RecoveryPath)
 		}
 		s.publishControllerPathIfCurrent(ctrl, info.RecoveryPath)
 		return nil

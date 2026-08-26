@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"reasonix/internal/agent"
@@ -21,8 +21,11 @@ import (
 // turns alive without sending a background session's frames to the foreground
 // browser.
 type sessionTagSink struct {
-	bc   *Broadcaster
-	path atomic.Pointer[string]
+	bc      *Broadcaster
+	mu      sync.Mutex
+	path    string
+	active  bool
+	pending []event.Event
 }
 
 func newSessionTagSink(bc *Broadcaster) *sessionTagSink {
@@ -38,22 +41,62 @@ func NewSessionTagSink(bc *Broadcaster) *SessionTagSink {
 }
 
 func (s *sessionTagSink) SetPath(path string) {
-	if path != "" {
-		path = agent.CanonicalSessionPath(path)
-	}
-	s.path.Store(&path)
+	s.mu.Lock()
+	s.path = canonicalSessionPath(path)
+	s.activateLocked()
+	s.mu.Unlock()
 }
 
-func (s *sessionTagSink) Path() string {
-	if p := s.path.Load(); p != nil {
-		return *p
+// PrimePath assigns a replacement controller's route without publishing boot
+// events. Activate is called only after the controller swap fully commits.
+func (s *sessionTagSink) PrimePath(path string) {
+	s.mu.Lock()
+	s.path = canonicalSessionPath(path)
+	s.mu.Unlock()
+}
+
+func canonicalSessionPath(path string) string {
+	if path != "" {
+		return agent.CanonicalSessionPath(path)
 	}
 	return ""
 }
 
+func (s *sessionTagSink) Activate() {
+	s.mu.Lock()
+	s.activateLocked()
+	s.mu.Unlock()
+}
+
+func (s *sessionTagSink) activateLocked() {
+	if s.active {
+		return
+	}
+	s.active = true
+	for _, e := range s.pending {
+		if s.path != "" {
+			e.SessionPath = s.path
+		}
+		s.bc.Emit(e)
+	}
+	s.pending = nil
+}
+
+func (s *sessionTagSink) Path() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.path
+}
+
 func (s *sessionTagSink) Emit(e event.Event) {
-	if path := s.Path(); path != "" {
-		e.SessionPath = path
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active {
+		s.pending = append(s.pending, e)
+		return
+	}
+	if s.path != "" {
+		e.SessionPath = s.path
 	}
 	s.bc.Emit(e)
 }
@@ -361,7 +404,7 @@ func (s *Server) busyDetach(ctx context.Context, cur *control.Controller, target
 			return err
 		}
 	}
-	tag.SetPath(targetPath)
+	tag.PrimePath(targetPath)
 	newCtrl.EnableInteractiveApproval()
 	newCtrl.SetOnSessionRecovered(s.sessionRecoveryHandler(newCtrl, s.leases))
 	if s.leases != nil {
@@ -386,8 +429,13 @@ func (s *Server) busyDetach(ctx context.Context, cur *control.Controller, target
 		s.rollbackDetach(demoted, cur)
 		return err
 	}
+	tag.Activate()
 	s.bc.ResetSessionPath(targetPath)
 	return nil
+}
+
+func (s *Server) announceSessionChanged(path string) {
+	s.bc.Emit(event.Event{Kind: event.SessionChanged, SessionPath: path})
 }
 
 var errReplacedDuringBind = &replacedDuringBindError{}
@@ -409,6 +457,7 @@ func (s *Server) rollbackDetach(demoted *control.SessionLeaseKeeper, ctrl *contr
 func (s *Server) resumeActiveSession(w http.ResponseWriter, r *http.Request, cur control.SessionAPI, realPath string) bool {
 	if agent.CanonicalSessionPath(cur.SessionPath()) == agent.CanonicalSessionPath(realPath) {
 		s.bc.SetCurrentSession(realPath)
+		s.announceSessionChanged(realPath)
 		w.WriteHeader(http.StatusNoContent)
 		return true
 	}
@@ -417,6 +466,7 @@ func (s *Server) resumeActiveSession(w http.ResponseWriter, r *http.Request, cur
 			s.renderBindError(w, err)
 			return true
 		}
+		s.announceSessionChanged(realPath)
 		w.WriteHeader(http.StatusNoContent)
 		s.replayPendingPromptsBroadcast()
 		return true
@@ -444,6 +494,7 @@ func (s *Server) resumeActiveSession(w http.ResponseWriter, r *http.Request, cur
 		s.renderBindError(w, err)
 		return true
 	}
+	s.announceSessionChanged(realPath)
 	w.WriteHeader(http.StatusNoContent)
 	s.replayPendingPromptsBroadcast()
 	return true

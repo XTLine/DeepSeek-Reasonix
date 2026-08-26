@@ -590,6 +590,7 @@ var kindNames = map[event.Kind]string{
 	event.ToolResultPreview:       "tool_result_preview",
 	event.TurnStatusChanged:       "turn_status",
 	event.PromptAnswered:          "prompt_answered",
+	event.SessionChanged:          "session_changed",
 }
 
 // ContextMaintenance is the JSON form of event.ContextMaintenance.

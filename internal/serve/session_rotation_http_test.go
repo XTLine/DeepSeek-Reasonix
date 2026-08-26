@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"reasonix/internal/config"
 	"reasonix/internal/control"
+	"reasonix/internal/eventwire"
 )
 
 func TestServePlanDecisionValidatesRequest(t *testing.T) {
@@ -23,6 +25,43 @@ func TestServePlanDecisionValidatesRequest(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("plan decision missing id = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServeSilentRotationsPublishSessionChanged(t *testing.T) {
+	for _, endpoint := range []string{"/clear", "/new"} {
+		t.Run(endpoint, func(t *testing.T) {
+			bc := NewBroadcaster()
+			ctrl := control.New(control.Options{Sink: bc, SessionDir: t.TempDir()})
+			ctrl.EnsureSessionPath()
+			oldPath := ctrl.SessionPath()
+			server := New(ctrl, bc, config.ServeConfig{})
+			all, stop := bc.SubscribeAll()
+			defer stop()
+			httpServer := httptest.NewServer(server.Handler())
+			defer httpServer.Close()
+
+			resp, err := http.Post(httpServer.URL+endpoint, "application/json", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusNoContent {
+				t.Fatalf("%s status = %d, want 204", endpoint, resp.StatusCode)
+			}
+			var frame eventwire.Event
+			select {
+			case data := <-all:
+				if err := json.Unmarshal(data, &frame); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				t.Fatalf("%s emitted no routing barrier", endpoint)
+			}
+			if frame.Kind != "session_changed" || !frame.SessionCurrent || frame.SessionPath == "" || frame.SessionPath == oldPath {
+				t.Fatalf("%s routing frame = %+v, old path %q", endpoint, frame, oldPath)
+			}
+		})
 	}
 }
 

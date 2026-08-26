@@ -142,11 +142,35 @@ func TestBroadcasterDropsSlowSubscriber(t *testing.T) {
 	b := NewBroadcaster()
 	ch, cancel := b.Subscribe()
 	defer cancel()
-	// Overfill far past the 64-slot buffer without reading; Emit must not block.
+	// Overfill far past the subscriber buffer without reading; Emit must not block.
 	for range 1000 {
 		b.Emit(event.Event{Kind: event.Text, Text: "x"})
 	}
 	if len(ch) == 0 {
 		t.Error("expected some buffered frames")
+	}
+}
+
+func TestBroadcasterReservesCapacityForTerminalFrames(t *testing.T) {
+	b := NewBroadcaster()
+	ch, cancel := b.SubscribeAll()
+	defer cancel()
+	for range subscriberBufferSize * 10 {
+		b.Emit(event.Event{Kind: event.Text, Text: "delta"})
+	}
+	b.Emit(event.Event{Kind: event.TurnDone})
+
+	found := false
+	for len(ch) > 0 {
+		var frame eventwire.Event
+		if err := json.Unmarshal(<-ch, &frame); err != nil {
+			t.Fatal(err)
+		}
+		if frame.Kind == "turn_done" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("slow subscriber lost the terminal frame after a delta flood")
 	}
 }

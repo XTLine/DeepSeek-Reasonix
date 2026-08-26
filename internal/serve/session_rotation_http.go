@@ -71,6 +71,7 @@ func (s *Server) clearSessionCommand(w http.ResponseWriter, emitNotice bool) {
 	}
 	path := s.ctl().SessionPath()
 	w.Header().Set(sessionPathHeader, path)
+	s.announceSessionChanged(path)
 	if emitNotice {
 		s.bc.Emit(event.Event{Kind: event.Notice, Text: "context cleared", SessionPath: path})
 	}
@@ -101,6 +102,7 @@ func (s *Server) newSessionCommand(w http.ResponseWriter, r *http.Request, emitN
 		}
 		path := s.ctl().SessionPath()
 		w.Header().Set(sessionPathHeader, path)
+		s.announceSessionChanged(path)
 		if emitNotice {
 			s.bc.Emit(event.Event{Kind: event.Notice, Text: "new session", SessionPath: path})
 		}
@@ -126,6 +128,7 @@ func (s *Server) newSessionCommand(w http.ResponseWriter, r *http.Request, emitN
 	}
 	path := cur.SessionPath()
 	w.Header().Set(sessionPathHeader, path)
+	s.announceSessionChanged(path)
 	if emitNotice {
 		s.bc.Emit(event.Event{Kind: event.Notice, Text: "new session", SessionPath: path})
 	}
