@@ -458,6 +458,10 @@ CLI/TUI 文本输入可通过 `[ui].cursor_shape` 设置光标形状，支持 `u
 
 ### 桌面端 GUI
 
+桌面端 Todo 面板会同时依据 `todo_write` 和所属标签页的运行态显示状态：真实执行时为「进行中」，
+等待审批或回答时为「等待输入」，回合空闲或恢复历史后为「待继续」。后者提供「继续」按钮；发送前
+会再次核对创建该按钮的标签页，因此快速切换标签页不会把旧待办误发到另一个会话。
+
 桌面端快捷键在 **设置 → 快捷键** 中管理。选择可配置的行后按下新的组合键，Reasonix 会为桌面端保存该绑定。
 撤销、重做等标准编辑快捷键会以锁定行展示，因为 WebView 的原生文本历史依赖这些平台组合键。
 如果新组合键和已有动作冲突，会拒绝保存，避免一个快捷键触发两个动作。按 `?` 或点击 topic bar
@@ -1089,11 +1093,15 @@ server 无法在这里提升权限。严格只读边界比独立 Planner 更窄�
 Reasonix 使用**事实驱动执行**。普通请求一律进入 executor，没有自动任务模式；
 唯一的会话角色是质量底线（standard/delivery），事实仍可能高于它。Plan、Goal、permission、sandbox 与任务合同是互相独立的状态。
 
-Standard 和 Delivery 都在可见模型回合结束后停止。readiness 缺口只作为可恢复结果返回，
-不会再触发隐藏的后续模型请求。Delivery 展示现有的「继续检查」入口，只有用户主动点击后
-才会启动恢复回合；Standard 的验证、复核和签收缺口仍作为完成提示处理。Goal 和已批准
-Plan 继续由各自状态机控制连续执行；provider 层的流中断/截断恢复与 final-readiness 恢复
-相互独立。历史 canonical Todo 继续显示，但不会被普通回合隐式变成新的自动任务。
+Standard 和 Delivery 都不会执行通用的隐藏 final-readiness 重试。Delivery 把 readiness 缺口
+作为可恢复结果返回并展示现有的「继续检查」入口，只有用户主动点击后才会启动恢复回合；
+Standard 的验证、复核和签收缺口仍作为完成提示处理。除此之外，Standard 有一个同一前台
+`Agent.Run` 内的 Todo 一致性保护：可信宿主确认用户要求执行、当前回合成功写入唯一
+`in_progress` Todo 且写工具可用时，会追加一次固定续做提示；只有产生新的宿主 receipt 才允许
+第二次，并且最多两次。Plan、Goal、Delivery、只读、恢复、取消和已有排队用户输入都会禁用该
+保护。Goal 和已批准 Plan 继续由各自状态机控制连续执行；provider 层的流中断/截断恢复与
+final-readiness 恢复相互独立。历史 canonical Todo 继续显示，但空闲时标记为「待继续」而不是
+「进行中」；用户点击「继续」只会发送到当前可见会话，不会把历史 Todo 隐式变成后台任务。
 
 所有任务共享同一套 provider 可见核心工具面（直接读/bash/编辑/写入、后台 shell
 生命周期工具，以及稳定的 `use_capability` 代理）。可选工具（搜索、MCP、skills、

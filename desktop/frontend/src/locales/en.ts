@@ -2952,7 +2952,9 @@ export const en = {
   "todo.dismiss": "Dismiss the task list",
   "todo.pending": "Pending",
   "todo.inProgress": "In progress",
+  "todo.paused": "Ready to continue",
   "todo.completed": "Completed",
+  "todo.continue": "Continue",
 
   // slash menu tags
   "slash.project": "project",

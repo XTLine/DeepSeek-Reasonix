@@ -85,6 +85,7 @@ import {
   scopedTodoDismissalKey,
   shouldShowTodoPanel,
   todoBatchKey,
+  todoContinueTarget,
   todoDismissalKey,
   todoPanelScope,
 } from "./lib/todoVisibility";
@@ -2108,6 +2109,21 @@ export default function App() {
     });
     if (!remoteSurfaceActive && activeTabId && todoBatch) void app.DismissTodoBatchForTab(activeTabId, todoBatch).catch(() => undefined);
   }, [activeTabId, remoteSurfaceActive, scopedTodoKey, todoBatch]);
+  const handleTodoContinue = useCallback(() => {
+    const targetTabId = todoContinueTarget(activeTabId, activeTabIdRef.current, {
+      ready: remoteSurfaceActive ? remoteComposerReady : controllerReady,
+      readOnly: Boolean(activeTab?.readOnly),
+      running: visibleRuntimeState.running,
+      pendingPrompt: visibleRuntimeState.pendingPrompt,
+    });
+    if (!targetTabId) return;
+    const prompt = t("todo.continue");
+    if (remoteSurfaceActive) {
+      void remoteSend(prompt);
+      return;
+    }
+    void sendToTab(targetTabId, prompt);
+  }, [activeTab?.readOnly, activeTabId, controllerReady, remoteComposerReady, remoteSend, remoteSurfaceActive, sendToTab, t, visibleRuntimeState.pendingPrompt, visibleRuntimeState.running]);
 
   const sessionTitle = topicTitle(activeTab);
   const exportItems = remoteSurfaceActive ? remoteSession.transcript.items : state.items;
@@ -4944,6 +4960,9 @@ export default function App() {
                 key={scopedTodoBatch}
                 stateKey={scopedTodoBatch}
                 todos={todos}
+                running={visibleRuntimeState.running}
+                pendingPrompt={visibleRuntimeState.pendingPrompt}
+                onContinue={activeTabId && !activeTab?.readOnly && (remoteSurfaceActive ? remoteComposerReady : controllerReady) ? handleTodoContinue : undefined}
                 onDismiss={dismissTodos}
               />
             )}

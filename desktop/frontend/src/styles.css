@@ -21565,6 +21565,14 @@ body > .mermaid-diagram--fullscreen {
   border-color: color-mix(in srgb, var(--accent) 32%, var(--border-soft));
   color: var(--accent);
 }
+.todobar__status--waiting {
+  border-color: color-mix(in srgb, var(--warn) 32%, var(--border-soft));
+  color: var(--warn);
+}
+.todobar__status--paused {
+  border-color: color-mix(in srgb, var(--fg-dim) 32%, var(--border-soft));
+  color: var(--fg-dim);
+}
 .todobar__text {
   min-width: 0;
 }
@@ -21574,6 +21582,11 @@ body > .mermaid-diagram--fullscreen {
 }
 .todobar__item--in_progress .todobar__text {
   color: var(--fg);
+  font-weight: 500;
+}
+.todobar__item--waiting .todobar__text,
+.todobar__item--paused .todobar__text {
+  color: var(--fg-dim);
   font-weight: 500;
 }
 .todobar__item--pending .todobar__text {

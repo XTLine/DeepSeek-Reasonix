@@ -2955,7 +2955,9 @@ export const zh: Record<DictKey, string> = {
   "todo.dismiss": "关闭待办列表",
   "todo.pending": "待处理",
   "todo.inProgress": "进行中",
+  "todo.paused": "待继续",
   "todo.completed": "已完成",
+  "todo.continue": "继续",
 
   // 斜杠菜单标签
   "slash.project": "项目",

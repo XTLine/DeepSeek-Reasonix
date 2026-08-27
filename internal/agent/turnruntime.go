@@ -28,6 +28,11 @@ type turnRuntime struct {
 	trackingTodoProgress bool
 	todoStallRounds      int
 	seenTodoProgress     map[string]struct{}
+	// standardTodoContinuations is the bounded same-Run repair for a Standard
+	// execution turn that wrote an active todo and then tried to stop. The
+	// fingerprint gates the optional second nudge on new host-observed work.
+	standardTodoContinuations int
+	standardTodoProgress      string
 
 	executorHandoff bool
 	input           string

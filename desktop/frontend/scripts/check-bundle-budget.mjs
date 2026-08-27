@@ -129,7 +129,11 @@ console.log("\nbundle budgets");
 // keep disconnected state out of the mounted surface. The merged production
 // path measures 445.614 KiB; retain 0.086 KiB of bounded build/toolchain
 // headroom with the smallest existing decimal ratchet.
-const initialJSBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 445.7 : 445.7;
+// Runtime-aware Todo presentation plus exact-tab continuation adds 0.3 KiB gzip
+// to the always-mounted footer path. Keep the state/routing guard with a narrow
+// ratchet rather than showing idle restored work as actively running. The
+// combined path measures 445.9 KiB; retain 0.1 KiB of toolchain headroom.
+const initialJSBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 446.0 : 446.0;
 assertBudget("initial JavaScript gzip", initialJSGzip, initialJSBudgetKiB * 1024);
 assertBudget("largest initial JavaScript chunk gzip", largestInitialJS, 280 * 1024);
 // Render-blocking CSS is intentionally absent: styles.css loads deferred via
@@ -202,6 +206,9 @@ const rawInitialBytes = [...initialJS, ...initialCSS, ...appShellCSS]
 // restored-shell activation and disconnected-state revival path measures
 // 2404.898 KiB; retain 0.102 KiB of bounded headroom alongside the gzip
 // ratchet above.
-const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_405.0 : 2_405.0;
+// Runtime-aware Todo status and exact-tab continuation then add to the same
+// initial path. The combined payload measures 2406.2 KiB; retain 0.1 KiB of
+// raw/toolchain headroom for both owners.
+const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_406.3 : 2_406.3;
 assertBudget("initial raw JavaScript and CSS", rawInitialBytes, rawInitialBudgetKiB * 1024);
 assertBudget("largest initial JavaScript chunk raw", largestInitialJSRaw, 1_000 * 1024);

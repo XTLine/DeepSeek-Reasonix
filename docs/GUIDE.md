@@ -576,6 +576,12 @@ setting does not change desktop or web text fields.
 
 ### Desktop GUI
 
+The Desktop Todo shelf derives its label from both `todo_write` and the owning
+tab's runtime: active work is **In progress**, an approval or question is
+**Waiting for input**, and an idle/restored current item is **Ready to continue**.
+The latter exposes a **Continue** action that rechecks the captured tab before
+sending, so a rapid tab switch cannot route stale work into another session.
+
 Desktop shortcuts are managed from **Settings → Shortcuts**. Pick a configurable
 row, press a new key combination, and Reasonix saves it for the desktop app.
 Standard editing shortcuts such as Undo and Redo are shown as locked rows because
@@ -1421,14 +1427,20 @@ Reasonix uses **fact-driven execution**. Ordinary requests always enter the
 executor. There is no automatic task mode. The one session role is the quality floor: standard (default) or delivery; facts can still raise it. Planner,
 Goal, permission, sandbox, and the task contract are independent states.
 
-Standard and Delivery stop after the visible model turn. Readiness gaps are
-reported as a recoverable result and never trigger a hidden follow-up request.
-Delivery exposes the existing `Continue checks` action; the user must activate
-it before another recovery turn starts. Standard keeps verification, review and
-sign-off gaps as completion attention, while Goal and approved Plan retain their
-own state-machine continuation. Historical canonical todos remain visible, and
-provider-level stream/truncation recovery remains independent of final-readiness
-recovery.
+Standard and Delivery do not perform general hidden final-readiness retries.
+Delivery returns readiness gaps as recoverable results and exposes the existing
+`Continue checks` action; the user must activate it before another recovery turn
+starts. Standard keeps verification, review and sign-off gaps as completion
+attention. Separately, a Standard execution turn that successfully writes one
+current `in_progress` todo may continue inside the same foreground `Agent.Run`
+when the trusted host knows the user asked for execution. This repair is excluded
+from Plan, Goal, Delivery, read-only, recovery, cancellation, and queued-user-work
+boundaries. It sends one fixed continuation prompt, permits a second only after a
+new host receipt, and never exceeds two prompts. Goal and approved Plan retain
+their own state-machine continuation. Historical canonical todos remain visible
+but idle ones render as Ready to continue rather than In progress; their Continue
+action targets the exact visible session. Provider-level stream/truncation
+recovery remains independent of final-readiness recovery.
 
 Every task shares the same provider-visible core tool surface: direct
 read/bash/edit/write, background-shell lifecycle tools, `ask`/`compress` when

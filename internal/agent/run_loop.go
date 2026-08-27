@@ -593,6 +593,10 @@ func (a *Agent) handleFinalResponse(ctx context.Context, state *turnRuntime, tex
 		a.contextManager().ObserveUsage(usage)
 		return true, nil
 	}
+	if a.continueStandardTodo(ctx, state) {
+		a.contextManager().ObserveUsage(usage)
+		return true, nil
+	}
 	if readiness.applies || a.turn.readinessRecovered {
 		event.RecordReadinessAudit(a.svc.sink, readiness.audit(evidence.ReadinessAllowed, a.turn.readinessRecovered))
 	}
