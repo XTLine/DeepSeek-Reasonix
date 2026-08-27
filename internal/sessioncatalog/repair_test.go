@@ -26,6 +26,16 @@ func TestRepairResultPreservesDirectoryProjectionUntilReconcile(t *testing.T) {
 	// revision or projection mutation from this assertion.
 	lock := catalog.directoryLock(target.Path)
 	lock.Lock()
+	_, state, _, err := agent.LoadSessionDisplayMessages(leaf)
+	if err != nil {
+		lock.Unlock()
+		t.Fatal(err)
+	}
+	applied, err := agent.UpdateSessionListingProjectionIfCurrent(leaf, "", "repaired preview", 2, false, state)
+	if err != nil || !applied {
+		lock.Unlock()
+		t.Fatalf("publish repaired source projection: applied=%v err=%v", applied, err)
+	}
 	revision := catalog.Status().Revision
 	if err := catalog.applyRepairResult(ctx, leaf, "repaired preview", 2, true); err != nil {
 		lock.Unlock()

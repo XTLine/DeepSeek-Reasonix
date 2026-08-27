@@ -26,6 +26,14 @@ const now = 10_000;
 saveRemoteSessionCache(key, rows, now);
 ok(loadRemoteSessionCache(key, now + 1)[0]?.name === "one", "restores a current versioned snapshot");
 
+saveRemoteSessionCache(key, [
+  { name: "", path: "/sessions/transient-blank.jsonl", title: "", turns: 0, current: true },
+  ...rows,
+], now);
+const withoutBlank = loadRemoteSessionCache(key, now + 1);
+ok(withoutBlank.length === 1 && withoutBlank[0]?.name === "one",
+  "does not persist a transient blank session with a generated path");
+
 ok(loadRemoteSessionCache(key, now + REMOTE_SESSION_CACHE_TTL_MS + 1).length === 0, "expires stale snapshots");
 ok(localStorage.length === 0, "removes an expired snapshot from storage");
 

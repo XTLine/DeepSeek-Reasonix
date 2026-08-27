@@ -51,10 +51,11 @@ export function removeRemoteSessionCache(groupKey: string): void {
 export function saveRemoteSessionCache(groupKey: string, rows: RemoteSessionView[], now = Date.now()): void {
   try {
     if (typeof localStorage === "undefined") return;
+    const durableRows = rows.filter((row) => row.name.trim() !== "");
     const envelope: RemoteSessionCacheEnvelope = {
       version: REMOTE_SESSION_CACHE_VERSION,
       savedAt: now,
-      rows,
+      rows: durableRows,
     };
     localStorage.setItem(cacheKey(groupKey), JSON.stringify(envelope));
   } catch {

@@ -324,8 +324,7 @@ func preserveBranchMetaPersistence(next *BranchMeta, existing BranchMeta) {
 		next.Revision = existing.Revision
 		next.ContentDigest = existing.ContentDigest
 		next.WriterID = existing.WriterID
-		next.ListingRevision = existing.ListingRevision
-		next.ListingContentDigest = existing.ListingContentDigest
+		preserveBranchMetaListingProjection(next, existing)
 		return
 	}
 	if existing.Revision == next.Revision {
@@ -335,13 +334,19 @@ func preserveBranchMetaPersistence(next *BranchMeta, existing BranchMeta) {
 		if strings.TrimSpace(next.WriterID) == "" {
 			next.WriterID = existing.WriterID
 		}
-		if next.ListingRevision == 0 {
-			next.ListingRevision = existing.ListingRevision
-		}
-		if strings.TrimSpace(next.ListingContentDigest) == "" {
-			next.ListingContentDigest = existing.ListingContentDigest
+		if next.ListingRevision == 0 && existing.ListingRevision != 0 ||
+			strings.TrimSpace(next.ListingContentDigest) == "" && strings.TrimSpace(existing.ListingContentDigest) != "" {
+			preserveBranchMetaListingProjection(next, existing)
 		}
 	}
+}
+
+func preserveBranchMetaListingProjection(next *BranchMeta, existing BranchMeta) {
+	next.SchemaVersion = existing.SchemaVersion
+	next.Turns = existing.Turns
+	next.Preview = existing.Preview
+	next.ListingRevision = existing.ListingRevision
+	next.ListingContentDigest = existing.ListingContentDigest
 }
 
 func EnsureBranchMeta(sessionPath string) (BranchMeta, error) {
