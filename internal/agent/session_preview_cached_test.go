@@ -15,7 +15,7 @@ import (
 // decode on the same files.
 func seedPreviewSessions(t *testing.T, dir string, n, turns int) {
 	t.Helper()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		path := filepath.Join(dir, fmt.Sprintf("preview-session-%03d.jsonl", i))
 		f, err := os.Create(path)
 		if err != nil {
@@ -23,7 +23,7 @@ func seedPreviewSessions(t *testing.T, dir string, n, turns int) {
 		}
 		enc := json.NewEncoder(f)
 		var msgs []provider.Message
-		for turn := 0; turn < turns; turn++ {
+		for turn := range turns {
 			u := provider.Message{Role: provider.RoleUser, Content: fmt.Sprintf("turn %d: help me refactor the cold-start path for host %d", turn, i)}
 			a := provider.Message{Role: provider.RoleAssistant, Content: "assistant answer"}
 			msgs = append(msgs, u, a)
@@ -52,7 +52,7 @@ func seedPreviewSessions(t *testing.T, dir string, n, turns int) {
 func TestSessionPreviewCachedMatchesDecode(t *testing.T) {
 	dir := t.TempDir()
 	seedPreviewSessions(t, dir, 3, 4)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		p := filepath.Join(dir, fmt.Sprintf("preview-session-%03d.jsonl", i))
 		wantPreview, wantTurns := SessionPreview(p)
 		gotPreview, gotTurns, ok := SessionPreviewCached(p)
