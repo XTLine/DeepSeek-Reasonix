@@ -298,6 +298,54 @@ func TestEnsureServeUpgradeFailurePreservesOutdatedProcess(t *testing.T) {
 	}
 }
 
+func TestEnsureServeTokenStageFailurePreservesOutdatedProcess(t *testing.T) {
+	skipOnWindows(t)
+	root := t.TempDir()
+	paths := pathsFor(root, root)
+	if err := os.MkdirAll(paths.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := MarshalState(ServeState{PID: 777, Addr: "127.0.0.1:5000", Workspace: root, TokenFile: paths.TokenFile})
+	if err := os.WriteFile(paths.StateJSON, state, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.TokenFile, []byte("existing-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(paths.TokenFile+".next", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(paths.TokenFile+".next", "block-rename"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conn := newFakeConn(t, root, func(cmd string) (remote.ExecResult, error) {
+		switch {
+		case strings.Contains(cmd, "kill -TERM 777"):
+			t.Fatal("outdated Serve was stopped before the token was staged")
+		case strings.Contains(cmd, "kill -0 777"):
+			return ok("1\n")
+		case strings.Contains(cmd, "readlink /proc/777/exe"):
+			return ok("no\n")
+		case strings.Contains(cmd, "uname"):
+			return ok("Linux x86_64\n")
+		case strings.Contains(cmd, "command -v reasonix"):
+			return ok("/usr/bin/reasonix\nreasonix v9.9.0\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
+		case strings.Contains(cmd, "nohup"):
+			t.Fatal("replacement launched after token staging failed")
+		}
+		return ok("")
+	})
+
+	_, err := EnsureServe(context.Background(), conn, Options{Workspace: "~"})
+	if err == nil || !strings.Contains(err.Error(), "stage token") {
+		t.Fatalf("staging error = %v, want token staging failure", err)
+	}
+	token, readErr := os.ReadFile(paths.TokenFile)
+	if readErr != nil || string(token) != "existing-token\n" {
+		t.Fatalf("token after staging failure = %q, %v", token, readErr)
+	}
+}
+
 func TestEnsureServeRetirementFailurePreservesExistingToken(t *testing.T) {
 	skipOnWindows(t)
 	root := t.TempDir()

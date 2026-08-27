@@ -287,6 +287,56 @@ func TestRemoteTabResumeRequeuesSelectionWhenReadinessDrops(t *testing.T) {
 	}
 }
 
+func TestRemoteTabReadinessLossPreservesNewerQueuedSelection(t *testing.T) {
+	const oldPath = "/sessions/old.jsonl"
+	const firstPath = "/sessions/first.jsonl"
+	const secondPath = "/sessions/second.jsonl"
+	ref := RemoteTabRef{HostID: "box", Workspace: "~/app"}
+	previous := &remoteTabOpenSelection{
+		session: remoteTabSessionState{name: "old", path: oldPath}, topicTitle: "Old",
+		currentPath: oldPath, revision: 1,
+	}
+	firstPending := &remoteTabPendingOpenSelection{
+		name: "first", path: firstPath, title: "First", revision: 1,
+		identityCommitted: true, previous: previous,
+	}
+	tab := &remoteTab{
+		id: "remote-1", ref: ref, state: "ready", selectionRevision: 1,
+		session: remoteTabSessionState{name: "first", path: firstPath}, topicTitle: "First",
+		routing:          remoteTabSessionRouting{currentPath: firstPath, running: map[string]bool{}},
+		pendingSelection: firstPending,
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+
+	tab.sessionMu.Lock()
+	a.resumeRemoteTabOpenAsync(tab.id, "first", firstPath, "First", previous)
+	deadline := time.Now().Add(2 * time.Second)
+	for tab.selectionMu.TryLock() {
+		tab.selectionMu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("first selection did not acquire the lifecycle lock")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	secondOpts := RemoteTabOpenOptions{SessionName: "second", SessionPath: secondPath, SessionTitle: "Second"}
+	second := a.registerRemoteTabOpen(&remoteTab{id: "unused-second", ref: ref}, "Box", secondOpts)
+	if !a.commitRemoteTabOpenRegistration(&second, "Box", secondOpts) {
+		t.Fatal("newer selection was not queued")
+	}
+	a.remoteTabMu.Lock()
+	tab.state = "reconnecting"
+	a.remoteTabMu.Unlock()
+	tab.sessionMu.Unlock()
+	a.remoteTabTasks.Wait()
+
+	a.remoteTabMu.Lock()
+	pending := tab.pendingSelection
+	a.remoteTabMu.Unlock()
+	if pending != second.selection || !pending.deferred || pending.path != secondPath || pending.revision != 0 {
+		t.Fatalf("readiness loss replaced newer selection: %+v", pending)
+	}
+}
+
 func TestRemoteTabNewSessionSupersedesDeferredCachedSelection(t *testing.T) {
 	const oldPath = "/sessions/old.jsonl"
 	const targetPath = "/sessions/target.jsonl"

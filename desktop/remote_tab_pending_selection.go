@@ -37,6 +37,14 @@ func consumeQueuedRemoteTabOpenSelectionLocked(tab *remoteTab, revision uint64) 
 	tab.pendingSelection = nil
 }
 
+func requeueRemoteTabOpenSelectionLocked(tab *remoteTab, selection *remoteTabPendingOpenSelection) {
+	pending := tab.pendingSelection
+	if pending != nil && (pending.revision == 0 || pending.revision > selection.revision) {
+		return
+	}
+	tab.pendingSelection = selection
+}
+
 // applyPendingRemoteTabOpenSelection commits only the newest deferred intent
 // once the shell reaches ready, then uses the normal transition path.
 func (a *App) applyPendingRemoteTabOpenSelection(tabID string) {

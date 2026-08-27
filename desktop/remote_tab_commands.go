@@ -122,10 +122,10 @@ func (a *App) resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPat
 	}
 	if tab.client == nil || tab.state != "ready" {
 		if selectionRevision != 0 && (tab.state == "connecting" || tab.state == "reconnecting") {
-			tab.pendingSelection = &remoteTabPendingOpenSelection{
+			requeueRemoteTabOpenSelectionLocked(tab, &remoteTabPendingOpenSelection{
 				name: strings.TrimSpace(name), path: strings.TrimSpace(sessionPath), title: strings.TrimSpace(sessionTitle),
 				revision: selectionRevision, deferred: true, identityCommitted: true, previous: previous,
-			}
+			})
 			a.remoteTabMu.Unlock()
 			return true
 		}
