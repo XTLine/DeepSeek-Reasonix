@@ -38,7 +38,18 @@ func seedPreviewSessions(t *testing.T, dir string, n, turns int) {
 			t.Fatal(err)
 		}
 		preview, previewTurns := SessionPreviewFromMessages(msgs)
-		meta := BranchMeta{Turns: previewTurns, Preview: preview, SchemaVersion: BranchMetaCountsVersion}
+		digest, err := digestSessionMessages(msgs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		meta := BranchMeta{
+			Turns:         previewTurns,
+			Preview:       preview,
+			SchemaVersion: BranchMetaCountsVersion,
+			Revision:      1,
+			ContentDigest: digestString(digest),
+		}
+		stampSessionListingProjection(&meta)
 		if err := saveBranchMeta(path, meta, false); err != nil {
 			t.Fatal(err)
 		}
@@ -78,5 +89,54 @@ func TestSessionPreviewCachedMatchesDecode(t *testing.T) {
 	}
 	if _, turns := SessionPreview(stale); turns != 1 {
 		t.Fatalf("decode fallback sees turns=%d, want 1", turns)
+	}
+}
+
+func TestSessionPreviewCachedRejectsProjectionFromPreviousTranscriptGeneration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "advanced.jsonl")
+	oldMessages := []provider.Message{{Role: provider.RoleUser, Content: "old preview"}}
+	writeSessionFile(t, path, oldMessages)
+	oldDigest, err := digestSessionMessages(oldMessages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := BranchMeta{
+		Preview:       "old preview",
+		Turns:         1,
+		SchemaVersion: BranchMetaCountsVersion,
+		Revision:      1,
+		ContentDigest: digestString(oldDigest),
+	}
+	stampSessionListingProjection(&meta)
+	if err := saveBranchMeta(path, meta, false); err != nil {
+		t.Fatal(err)
+	}
+
+	newMessages := []provider.Message{
+		{Role: provider.RoleUser, Content: "new preview"},
+		{Role: provider.RoleAssistant, Content: "answer"},
+		{Role: provider.RoleUser, Content: "follow up"},
+	}
+	writeSessionFile(t, path, newMessages)
+	newDigest, err := digestSessionMessages(newMessages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateBranchMeta(path, false, func(current *BranchMeta) error {
+		// Simulate a durable transcript revision followed by the warn-only
+		// listing projection write failing. The old binding must remain stale.
+		current.Revision = 2
+		current.ContentDigest = digestString(newDigest)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if preview, turns, ok := SessionPreviewCached(path); ok {
+		t.Fatalf("previous-generation projection reported fresh: preview=%q turns=%d", preview, turns)
+	}
+	if preview, turns := SessionPreview(path); preview != "new preview" || turns != 2 {
+		t.Fatalf("decode fallback=(%q,%d), want (%q,2)", preview, turns, "new preview")
 	}
 }

@@ -798,6 +798,7 @@ func (s *Session) saveRecoveryBranchMeta(path string, opts RecoveryBranchOptions
 	if strings.TrimSpace(meta.ContentDigest) == "" {
 		meta.ContentDigest = digest
 	}
+	stampSessionListingProjection(&meta)
 	if strings.TrimSpace(meta.WriterID) == "" {
 		meta.WriterID = SessionWriterID()
 	}
@@ -1530,37 +1531,6 @@ type SessionInfo struct {
 	ParentID       string
 }
 
-// SessionOrderInfo is the lightweight sidecar/mtime ordering record shared by
-// session pickers and prompt-history navigation. It intentionally avoids reading
-// JSONL content; callers that need previews can layer that on afterwards.
-type SessionOrderInfo struct {
-	Path              string
-	CreatedAt         time.Time
-	LastActivityAt    time.Time
-	ModTime           time.Time // compatibility alias for LastActivityAt
-	Scope             string
-	WorkspaceRoot     string
-	TopicID           string
-	TopicTitle        string
-	CustomTitle       string
-	Recovered         bool
-	RecoveryReason    string
-	RecoveryDigest    string
-	ParentID          string
-	RecoveryPreferred bool
-	// Turns and Preview are the cached listing fields from the sidecar; SchemaVersion
-	// >= agent.BranchMetaCountsVersion means they were recorded from content and can
-	// be trusted (even Turns == 0). ListSessions uses them to skip the whole-file decode.
-	Turns         int
-	Preview       string
-	SchemaVersion int
-	// Revision and ContentDigest bind a listing backfill to the transcript
-	// generation it decoded. They are sidecar-only compare-and-apply guards and
-	// are not exposed through SessionInfo.
-	Revision      int64
-	ContentDigest string
-}
-
 // CleanupPendingMeta records that a session was logically removed but still has
 // artifacts waiting for a background job to unwind before physical cleanup.
 type CleanupPendingMeta struct {
@@ -2090,6 +2060,8 @@ func ListSessionOrder(dir string) ([]SessionOrderInfo, error) {
 		schemaVersion := 0
 		revision := int64(0)
 		contentDigest := ""
+		listingRevision := int64(0)
+		listingContentDigest := ""
 		if meta, ok, err := LoadBranchMeta(full); err == nil && ok {
 			if !meta.CreatedAt.IsZero() {
 				createdAt = meta.CreatedAt
@@ -2112,6 +2084,8 @@ func ListSessionOrder(dir string) ([]SessionOrderInfo, error) {
 			schemaVersion = meta.SchemaVersion
 			revision = meta.Revision
 			contentDigest = meta.ContentDigest
+			listingRevision = meta.ListingRevision
+			listingContentDigest = meta.ListingContentDigest
 		}
 		// Old recovery files may lack Recovered meta; filename still proves
 		// automatic recovery lineage for catalog folding.
@@ -2124,25 +2098,27 @@ func ListSessionOrder(dir string) ([]SessionOrderInfo, error) {
 			}
 		}
 		out = append(out, SessionOrderInfo{
-			Path:              full,
-			CreatedAt:         createdAt,
-			LastActivityAt:    lastActivityAt,
-			ModTime:           lastActivityAt,
-			Scope:             scope,
-			WorkspaceRoot:     workspaceRoot,
-			TopicID:           topicID,
-			TopicTitle:        topicTitle,
-			CustomTitle:       customTitle,
-			Recovered:         recovered,
-			RecoveryReason:    recoveryReason,
-			RecoveryDigest:    recoveryDigest,
-			ParentID:          parentID,
-			RecoveryPreferred: recoveryPreferred,
-			Turns:             turns,
-			Preview:           preview,
-			SchemaVersion:     schemaVersion,
-			Revision:          revision,
-			ContentDigest:     contentDigest,
+			Path:                 full,
+			CreatedAt:            createdAt,
+			LastActivityAt:       lastActivityAt,
+			ModTime:              lastActivityAt,
+			Scope:                scope,
+			WorkspaceRoot:        workspaceRoot,
+			TopicID:              topicID,
+			TopicTitle:           topicTitle,
+			CustomTitle:          customTitle,
+			Recovered:            recovered,
+			RecoveryReason:       recoveryReason,
+			RecoveryDigest:       recoveryDigest,
+			ParentID:             parentID,
+			RecoveryPreferred:    recoveryPreferred,
+			Turns:                turns,
+			Preview:              preview,
+			SchemaVersion:        schemaVersion,
+			Revision:             revision,
+			ContentDigest:        contentDigest,
+			ListingRevision:      listingRevision,
+			ListingContentDigest: listingContentDigest,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -2167,7 +2143,7 @@ func ListSessions(dir string) ([]SessionInfo, error) {
 	var out []SessionInfo
 	for _, session := range ordered {
 		preview, turns := session.Preview, session.Turns
-		if sessionListingCountsNeedRefresh(session.SchemaVersion, turns) {
+		if !sessionListingProjectionFresh(session.SchemaVersion, turns, session.Revision, session.ListingRevision, session.ContentDigest, session.ListingContentDigest) {
 			if !sessionArtifactsHaveContent(session.Path) {
 				continue
 			}

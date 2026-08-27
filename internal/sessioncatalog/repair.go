@@ -105,12 +105,7 @@ func (c *Catalog) repairSession(workerCtx context.Context, path string) {
 		return
 	}
 	preview, turns := agent.SessionPreviewFromMessages(msgs)
-	if err := agent.UpdateBranchMeta(path, false, func(meta *agent.BranchMeta) error {
-		meta.Preview = preview
-		meta.Turns = turns
-		meta.SchemaVersion = agent.BranchMetaCountsVersion
-		return nil
-	}); err != nil {
+	if err := agent.UpdateSessionMeta(path, "", preview, turns, false); err != nil {
 		return
 	}
 	if ctx.Err() != nil || workerCtx.Err() != nil {

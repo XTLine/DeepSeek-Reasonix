@@ -77,8 +77,9 @@ ok(
     /eligibleSessionKeys\.current\.has\(key\)/.test(remoteSource) &&
     /filter\(\(\[key\]\) => retained\.has\(key\)\)/.test(remoteSource) &&
     /acceptRemoteSessionRows\(key, rows\)/.test(remoteSource) &&
+    /catch\(\(\) => \{[\s\S]*?sessionLoads\.current\.get\(key\) === load && eligibleSessionKeys\.current\.has\(key\)[\s\S]*?removeRemoteSessionCache\(key\)/.test(remoteSource) &&
     /setGroupError\(\(current\) => current\[key\] \? \{ \.\.\.current, \[key\]: "" \} : current\)/.test(remoteSource),
-  "session fetches deduplicate in flight, discard stale results, and clear recovered group errors",
+  "session fetches fence stale success/failure results and clear recovered group errors",
 );
 ok(
   /useComposerModeActions\(\{[\s\S]*?remote: remoteSurfaceActive/.test(appSource) &&

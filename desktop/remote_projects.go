@@ -165,7 +165,10 @@ func (a *App) registerRemoteTabOpen(tab *remoteTab, hostLabel string, opts Remot
 		result.reuseID = existing.id
 		result.reuseBlank = existing.session.reset
 		result.revive = existing.state == "disconnected" || existing.state == "serve_down"
-		result.commitSelection = opts.NewSession || strings.TrimSpace(opts.SessionName) != "" || strings.TrimSpace(opts.SessionPath) != ""
+		// A ready tab keeps its current route until /new succeeds. Revived shells
+		// still need the requested blank identity committed before bootstrap so
+		// their first attach enters the requested session.
+		result.commitSelection = strings.TrimSpace(opts.SessionName) != "" || strings.TrimSpace(opts.SessionPath) != "" || opts.NewSession && result.revive
 		if strings.TrimSpace(opts.SessionName) != "" || strings.TrimSpace(opts.SessionPath) != "" {
 			result.previousSelection = &remoteTabOpenSelection{
 				session: existing.session, topicTitle: existing.topicTitle,

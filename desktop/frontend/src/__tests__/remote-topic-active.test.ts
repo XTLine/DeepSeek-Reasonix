@@ -21,7 +21,7 @@ function eq(actual: unknown, expected: unknown, label: string) {
 
 eq(topicIsActive(remoteTopic, "project", "~/app", remoteTopic.topicId, remoteTopic.sessionPath), true,
   "matching remote identity is active");
-eq(topicIsActive(remoteTopic, "project", "~/app", "box\u0000~/app\u0000s2", "/remote/sessions/s2.jsonl"), false,
-  "another remote identity stays inactive");
-eq(topicIsActive(remoteTopic, "project", "~/app", "", remoteTopic.sessionPath), true,
-  "session path bridges the pre-hydration identity gap");
+eq(topicIsActive(remoteTopic, "project", "~/app", "other-host\u0000~/app\u0000s1", remoteTopic.sessionPath), false,
+  "the same absolute path on another host stays inactive");
+eq(topicIsActive(remoteTopic, "project", "~/app", "", remoteTopic.sessionPath), false,
+  "remote rows never use an unqualified path-only fallback");

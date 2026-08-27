@@ -339,6 +339,9 @@ func indexedSessionTopicTitle(sessionTitles map[string]string, info agent.Sessio
 	if title := topicTitleFromText(sessionTitles[filepath.Base(info.Path)]); title != "" {
 		return title
 	}
+	if !info.ListingProjectionFresh() {
+		return ""
+	}
 	return topicTitleFromText(info.Preview)
 }
 

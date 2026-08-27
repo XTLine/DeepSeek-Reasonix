@@ -20,6 +20,7 @@ func persistSessionListingProjection(path string, msgs []provider.Message) {
 		meta.Preview = preview
 		meta.Turns = turns
 		meta.SchemaVersion = BranchMetaCountsVersion
+		stampSessionListingProjection(meta)
 		return nil
 	}); err != nil {
 		// JSONL/event log already committed. Listing metadata is a repairable

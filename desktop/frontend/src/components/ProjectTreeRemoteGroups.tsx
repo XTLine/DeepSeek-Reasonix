@@ -204,7 +204,11 @@ export function useRemoteProjectGroups(
           acceptRemoteSessionRows(key, rows);
         }
       })
-      .catch(() => removeRemoteSessionCache(key))
+      .catch(() => {
+        if (sessionLoads.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
+          removeRemoteSessionCache(key);
+        }
+      })
       .finally(() => {
         if (sessionLoads.current.get(key) === load) sessionLoads.current.delete(key);
       });

@@ -299,6 +299,10 @@ func (c *Catalog) IndexSessionPath(ctx context.Context, target DirectoryTarget, 
 		order.Turns = meta.Turns
 		order.Preview = meta.Preview
 		order.SchemaVersion = meta.SchemaVersion
+		order.Revision = meta.Revision
+		order.ContentDigest = meta.ContentDigest
+		order.ListingRevision = meta.ListingRevision
+		order.ListingContentDigest = meta.ListingContentDigest
 	}
 	if order.CreatedAt.IsZero() {
 		order.CreatedAt = info.ModTime()
@@ -329,8 +333,8 @@ func recordFromOrder(target DirectoryTarget, info agent.SessionOrderInfo) Sessio
 		scope, root = target.Scope, target.WorkspaceRoot
 	}
 	turnsState := TurnsValid
-	if info.SchemaVersion < agent.BranchMetaCountsVersion && info.Turns == 0 {
-		turnsState = TurnsUnknown
+	if !info.ListingProjectionFresh() {
+		turnsState, info.Preview, info.Turns = TurnsUnknown, "", 0
 	}
 	contentFingerprint := fileFingerprint(info.Path)
 	metaFingerprint := fileFingerprint(agent.BranchMetaPath(info.Path))

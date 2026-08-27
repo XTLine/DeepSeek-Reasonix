@@ -620,6 +620,9 @@ func TestRemoteNewBusyKeepsCurrentSessionReady(t *testing.T) {
 	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{SessionName: "saved"})
 	a.remoteTabMu.Lock()
 	previousTitle := a.remoteTabs[meta.ID].topicTitle
+	previousSession := a.remoteTabs[meta.ID].session
+	previousRoute := a.remoteTabs[meta.ID].routing.currentPath
+	previousRuntime := a.remoteTabs[meta.ID].runtime
 	a.remoteTabMu.Unlock()
 	fs.mu.Lock()
 	fs.failEnter = "cannot start a new session while a turn is running"
@@ -630,9 +633,13 @@ func TestRemoteNewBusyKeepsCurrentSessionReady(t *testing.T) {
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[meta.ID]
 	state, message, title, client := tab.state, tab.err, tab.topicTitle, tab.client
+	session, route, runtime := tab.session, tab.routing.currentPath, tab.runtime
 	a.remoteTabMu.Unlock()
 	if state != "ready" || message != "" || title != previousTitle || client == nil {
 		t.Fatalf("busy new-session state/error/title/client = %q/%q/%q/%v, want ready current attachment", state, message, title, client)
+	}
+	if session != previousSession || route != previousRoute || runtime != previousRuntime {
+		t.Fatalf("busy new-session changed current identity/runtime: session=%+v route=%q runtime=%+v", session, route, runtime)
 	}
 }
 
