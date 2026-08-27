@@ -515,22 +515,24 @@ func (a *App) refreshRemoteTabTitle(tabID string) {
 		if !entry.Current || expectedPath != "" && strings.TrimSpace(entry.Path) != strings.TrimSpace(expectedPath) {
 			continue
 		}
+		tab.routeEventMu.Lock()
+		a.remoteTabMu.Lock()
+		current := a.remoteTabs[tabID]
+		if current != tab || current.client != client || current.gen != gen || current.routing.currentPath != expectedPath {
+			a.remoteTabMu.Unlock()
+			tab.routeEventMu.Unlock()
+			return
+		}
 		title := strings.TrimSpace(entry.Title)
-		// A manual rename made while the row was the synthetic blank is
-		// keyed by an empty session name. Once Serve exposes the durable
-		// name, move that preference before choosing the displayed title.
+		// Fence preference migration with the same client, generation, and route
+		// transaction that adopts the durable session identity. A stale listing
+		// response must not move the synthetic blank's title or pin.
 		if override, migrateErr := migrateRemoteSessionTitleOverride(tab.ref.HostID, tab.ref.Workspace, entry.Name); migrateErr == nil && override != "" {
 			title = override
 		} else if override := remoteSessionTitleOverride(tab.ref.HostID, tab.ref.Workspace, entry.Name); override != "" {
 			title = override
 		}
 		if title == "" {
-			return
-		}
-		tab.routeEventMu.Lock()
-		a.remoteTabMu.Lock()
-		current := a.remoteTabs[tabID]
-		if current != tab || current.client != client || current.gen != gen || current.routing.currentPath != expectedPath {
 			a.remoteTabMu.Unlock()
 			tab.routeEventMu.Unlock()
 			return
