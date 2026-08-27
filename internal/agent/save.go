@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"hash"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -112,10 +113,11 @@ const (
 )
 
 type snapshotWriteDecision struct {
-	revision   int64
-	upToDate   bool
-	appendFrom int
-	appendOnly bool
+	revision         int64
+	reservedRevision int64
+	upToDate         bool
+	appendFrom       int
+	appendOnly       bool
 	// repairLog is set when the on-disk event log was damaged (torn tail with
 	// a lost suffix, or nothing decodable): the safe write shape is a full
 	// rewrite that also compacts the log back to a healthy single event.
@@ -342,7 +344,7 @@ func (s *Session) saveLocked(path string, mode sessionSaveMode) error {
 			// that failure deferred to, and skipping here would strand the
 			// ledger on the old digest forever. Record now, reproducing
 			// the state the interrupted save would have left.
-			revision, err := recordSessionContentRevision(path, digest, decision.revision)
+			revision, err := recordSessionContentRevision(path, digest, decision.revision, decision.reservedRevision)
 			if err != nil {
 				return err
 			}
@@ -399,7 +401,7 @@ func (s *Session) saveLocked(path string, mode sessionSaveMode) error {
 		if err != nil {
 			slog.Warn("session: keeping save after display read-model append failure", "path", path, "err", err)
 		}
-		revision, err := recordSessionContentRevision(path, digest, decision.revision)
+		revision, err := recordSessionContentRevision(path, digest, decision.revision, decision.reservedRevision)
 		if err != nil {
 			return err
 		}
@@ -462,7 +464,7 @@ func (s *Session) saveLocked(path string, mode sessionSaveMode) error {
 	if err := writeSessionMessages(path, msgs); err != nil {
 		return err
 	}
-	revision, err := recordSessionContentRevision(path, digest, baseRevision)
+	revision, err := recordSessionContentRevision(path, digest, baseRevision, decision.reservedRevision)
 	if err != nil {
 		return err
 	}
@@ -1024,7 +1026,7 @@ func sessionContentRevision(path string) (int64, string, error) {
 	return meta.Revision, strings.TrimSpace(meta.ContentDigest), nil
 }
 
-func recordSessionContentRevision(path string, digest [sha256.Size]byte, baseRevision int64) (int64, error) {
+func recordSessionContentRevision(path string, digest [sha256.Size]byte, baseRevision, reservedRevision int64) (int64, error) {
 	// Revision allocation is a read-modify-write transaction. Holding only the
 	// final SaveBranchMeta lock would still let another writer replace the
 	// sidecar between our read and write, so keep the ledger lock across the
@@ -1047,10 +1049,19 @@ func recordSessionContentRevision(path string, digest [sha256.Size]byte, baseRev
 	if !ok {
 		meta = BranchMeta{ID: BranchID(path)}
 	}
-	if meta.Revision < baseRevision {
-		meta.Revision = baseRevision
+	if reservedRevision > 0 {
+		if reservedRevision != baseRevision+1 || meta.Revision != reservedRevision || meta.SchemaVersion != 0 {
+			return 0, fmt.Errorf("session revision reservation changed: base=%d reserved=%d current=%d schema=%d", baseRevision, reservedRevision, meta.Revision, meta.SchemaVersion)
+		}
+	} else {
+		if meta.Revision < baseRevision {
+			meta.Revision = baseRevision
+		}
+		if meta.Revision == math.MaxInt64 {
+			return 0, fmt.Errorf("session revision exhausted")
+		}
+		meta.Revision++
 	}
-	meta.Revision++
 	meta.ContentDigest = digestString(digest)
 	meta.WriterID = SessionWriterID()
 	if err := saveBranchMeta(path, meta, false); err != nil {

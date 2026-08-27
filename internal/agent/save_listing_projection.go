@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 
 	"reasonix/internal/provider"
@@ -16,9 +17,11 @@ func (s *Session) classifySnapshotWriteForCommit(path string, msgs []provider.Me
 	}
 	// Invalidate before any transcript mutation or stale-ledger repair so an
 	// interrupted commit cannot leave the previous listing self-certified.
-	if err := invalidateSessionListingProjection(path); err != nil {
+	reservedRevision, err := invalidateSessionListingProjection(path)
+	if err != nil {
 		return decision, fmt.Errorf("invalidate session listing projection: %w", err)
 	}
+	decision.reservedRevision = reservedRevision
 	return decision, nil
 }
 
@@ -33,21 +36,27 @@ func (s *Session) markPersistedWithListing(path string, digest [sha256.Size]byte
 // transcript commit begins. If the transcript lands but its revision ledger
 // does not, readers must decode/repair instead of certifying the previous
 // generation's preview from an internally consistent but stale sidecar.
-func invalidateSessionListingProjection(path string) error {
+func invalidateSessionListingProjection(path string) (int64, error) {
+	if !sessionArtifactsHaveContent(path) {
+		// A brand-new session has no prior projection to reuse. It also needs to
+		// retain the historical first committed revision of one.
+		return 0, nil
+	}
+	var reservedRevision int64
 	err := UpdateBranchMeta(path, false, func(meta *BranchMeta) error {
-		// Preserve the old values for diagnostics and cheap retry repair; the
-		// schema gate alone is enough to keep every current/legacy reader from
-		// treating them as authoritative during the commit window.
+		// Reserve the next transcript generation so stale whole-sidecar writers
+		// preserve this invalidation. The transcript commit finalizes the same
+		// revision, keeping the WAL and content ledger in one generation.
+		if meta.Revision == math.MaxInt64 {
+			return fmt.Errorf("session revision exhausted")
+		}
+		meta.Revision++
+		reservedRevision = meta.Revision
+		meta.WriterID = SessionWriterID()
 		meta.SchemaVersion = 0
 		return nil
 	})
-	if err == nil || sessionArtifactsHaveContent(path) {
-		return err
-	}
-	// A brand-new session has no prior projection to reuse. Preserve transcript-
-	// first durability when malformed metadata cannot be invalidated; the later
-	// ledger update still reports that error after the bytes land.
-	return nil
+	return reservedRevision, err
 }
 
 func persistSessionListingProjection(path string, msgs []provider.Message, revision int64, contentDigest string) {

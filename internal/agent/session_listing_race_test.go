@@ -157,3 +157,45 @@ func TestPersistSessionListingProjectionStampsCommittedTranscriptGeneration(t *t
 		t.Fatalf("matching projection was not stamped: %+v", meta)
 	}
 }
+
+func TestSessionListingInvalidationSurvivesStaleWholeMetadataWriter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	session := NewSession("system")
+	session.Add(provider.Message{Role: provider.RoleUser, Content: "old question"})
+	if err := session.SaveSnapshot(path); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+	stale, ok, err := LoadBranchMeta(path)
+	if err != nil || !ok {
+		t.Fatalf("LoadBranchMeta stale: ok=%v err=%v", ok, err)
+	}
+	if !sessionListingProjectionFresh(stale.SchemaVersion, stale.Turns, stale.Revision, stale.ListingRevision, stale.ContentDigest, stale.ListingContentDigest) {
+		t.Fatalf("initial projection is not fresh: %+v", stale)
+	}
+
+	reservedRevision, err := invalidateSessionListingProjection(path)
+	if err != nil {
+		t.Fatalf("invalidateSessionListingProjection: %v", err)
+	}
+	if reservedRevision != stale.Revision+1 {
+		t.Fatalf("reserved revision = %d, want %d", reservedRevision, stale.Revision+1)
+	}
+	stale.ParentID = "renamed-parent"
+	if err := SaveBranchMetaPreserveUpdated(path, stale); err != nil {
+		t.Fatalf("stale whole metadata write: %v", err)
+	}
+
+	current, ok, err := LoadBranchMeta(path)
+	if err != nil || !ok {
+		t.Fatalf("LoadBranchMeta current: ok=%v err=%v", ok, err)
+	}
+	if current.Revision != reservedRevision || current.ContentDigest != stale.ContentDigest {
+		t.Fatalf("invalidation generation/digest = %d/%q, want %d/%q", current.Revision, current.ContentDigest, reservedRevision, stale.ContentDigest)
+	}
+	if current.SchemaVersion != 0 || sessionListingProjectionFresh(current.SchemaVersion, current.Turns, current.Revision, current.ListingRevision, current.ContentDigest, current.ListingContentDigest) {
+		t.Fatalf("stale writer restored certified projection: %+v", current)
+	}
+	if current.ParentID != "renamed-parent" {
+		t.Fatalf("unrelated metadata update was lost: ParentID=%q", current.ParentID)
+	}
+}
