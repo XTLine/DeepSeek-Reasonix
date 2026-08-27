@@ -211,3 +211,52 @@ func TestRemoteTabNewSessionSupersedesDeferredCachedSelection(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+func TestRemoteTabNewSessionRestoresRouteFromCommittedDeferredSelection(t *testing.T) {
+	const oldPath = "/sessions/old.jsonl"
+	const targetPath = "/sessions/target.jsonl"
+	const freshPath = "/sessions/fresh.jsonl"
+	ref := RemoteTabRef{HostID: "box", Workspace: "~/app"}
+	previous := &remoteTabOpenSelection{
+		session: remoteTabSessionState{name: "old", path: oldPath}, topicTitle: "Old",
+		currentPath: oldPath, revision: 1,
+	}
+	tab := &remoteTab{
+		id: "remote-1", ref: ref, state: "reconnecting", selectionRevision: 1,
+		session: remoteTabSessionState{name: "target", path: targetPath}, topicTitle: "Target",
+		routing: remoteTabSessionRouting{currentPath: targetPath, running: map[string]bool{}},
+		pendingSelection: &remoteTabPendingOpenSelection{
+			name: "target", path: targetPath, title: "Target", revision: 1,
+			deferred: true, identityCommitted: true, previous: previous,
+		},
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	opts := RemoteTabOpenOptions{NewSession: true}
+	registration := a.registerRemoteTabOpen(&remoteTab{id: "unused", ref: ref}, "Box", opts)
+	if !a.commitRemoteTabOpenRegistration(registration, "Box", opts) {
+		t.Fatal("New Session did not reuse the reconnecting tab")
+	}
+	if tab.session.path != oldPath || tab.routing.currentPath != oldPath || tab.pendingSelection == nil || !tab.pendingSelection.newSession {
+		t.Fatalf("supersession left session/route/pending = %q/%q/%+v", tab.session.path, tab.routing.currentPath, tab.pendingSelection)
+	}
+
+	expectedPath := make(chan string, 1)
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		expectedPath <- req.Header.Get(expectedSessionPathHeader)
+		header := make(http.Header)
+		header.Set("X-Reasonix-Session-Path", freshPath)
+		return &http.Response{StatusCode: http.StatusNoContent, Header: header, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+	})}
+	a.remoteTabMu.Lock()
+	tab.state, tab.client, tab.base = "ready", client, "http://127.0.0.1:43210"
+	a.remoteTabMu.Unlock()
+	a.applyPendingRemoteTabOpenSelection(tab.id)
+	select {
+	case got := <-expectedPath:
+		if got != oldPath {
+			t.Fatalf("/new expected-session path = %q, want authoritative %q", got, oldPath)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("deferred New Session did not reach Serve")
+	}
+}

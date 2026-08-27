@@ -97,3 +97,28 @@ func TestTopicMigrationMarkerIncludesAuthoritativeEventLog(t *testing.T) {
 		t.Fatalf("new event log %q must invalidate marker", filepath.Base(eventPath))
 	}
 }
+
+func TestRepairIndexedTopicDecodesStaleListingProjection(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	dir := config.SessionDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := writeLegacySession(t, dir, "stale-projection.jsonl", "authoritative first prompt", time.Now())
+	preview, _ := agent.SessionPreview(sessionPath)
+	wantTitle := topicTitleFromText(preview)
+	topicID := "legacy_stale_projection"
+	if err := agent.SaveBranchMetaPreserveUpdated(sessionPath, agent.BranchMeta{
+		ID: agent.BranchID(sessionPath), Scope: "global", TopicID: topicID,
+		Revision: 7, ContentDigest: "pre-upgrade-digest", SchemaVersion: agent.BranchMetaCountsVersion,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	markTopicMigrationDone(dir)
+	if repaired := migrateLegacySessionsIntoGlobalTopics(dir); len(repaired) != 1 || repaired[0] != topicID {
+		t.Fatalf("repaired topics = %v, want %q", repaired, topicID)
+	}
+	if got := loadTopicTitle("", topicID); got != wantTitle {
+		t.Fatalf("repaired title = %q, want transcript preview title %q", got, wantTitle)
+	}
+}

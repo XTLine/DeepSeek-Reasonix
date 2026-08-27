@@ -340,7 +340,11 @@ func indexedSessionTopicTitle(sessionTitles map[string]string, info agent.Sessio
 		return title
 	}
 	if !info.ListingProjectionFresh() {
-		return ""
+		// Pre-upgrade sidecars can identify the transcript generation without the
+		// newer listing fields. This one-shot repair must decode the transcript
+		// rather than certify a generic title from a stale projection.
+		preview, _ := agent.SessionPreview(info.Path)
+		return topicTitleFromText(preview)
 	}
 	return topicTitleFromText(info.Preview)
 }

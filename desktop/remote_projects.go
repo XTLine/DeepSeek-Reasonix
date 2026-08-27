@@ -212,6 +212,15 @@ func (a *App) commitRemoteTabOpenRegistration(registration remoteTabOpenRegistra
 	}
 	existing.hostLabel = hostLabel
 	if registration.selection != nil {
+		// A ready selection can commit its provisional identity before /resume
+		// observes a reconnect. If New Session supersedes that deferred resume,
+		// restore the Serve-authoritative route before fencing /new.
+		pending := existing.pendingSelection
+		if registration.selection.newSession && pending != nil && pending.identityCommitted && pending.previous != nil {
+			restoreRemoteTabOpenSelectionLocked(existing, pending.previous)
+			registration.previousSelection = pending.previous
+			registration.reuseBlank = pending.previous.session.reset
+		}
 		existing.selectionRevision++
 		registration.selection.revision = existing.selectionRevision
 		registration.selection.reuseBlank = registration.reuseBlank
@@ -408,6 +417,14 @@ func (a *App) restoreRejectedRemoteTabOpenSelection(tabID string, previous *remo
 		a.remoteTabMu.Unlock()
 		return
 	}
+	restoreRemoteTabOpenSelectionLocked(current, previous)
+	meta := remoteTabMetaLocked(current)
+	a.remoteTabMu.Unlock()
+	a.emitRemoteEvent("remote-tab:updated", meta)
+	a.saveTabsFromRemote()
+}
+
+func restoreRemoteTabOpenSelectionLocked(current *remoteTab, previous *remoteTabOpenSelection) {
 	current.session = previous.session
 	current.topicTitle = previous.topicTitle
 	current.routing.currentPath = previous.currentPath
@@ -419,10 +436,6 @@ func (a *App) restoreRejectedRemoteTabOpenSelection(tabID string, previous *remo
 	restoredRuntime := previous.runtime
 	restoredRuntime.revision = max(current.runtime.revision, previous.runtime.revision) + 1
 	current.runtime = restoredRuntime
-	meta := remoteTabMetaLocked(current)
-	a.remoteTabMu.Unlock()
-	a.emitRemoteEvent("remote-tab:updated", meta)
-	a.saveTabsFromRemote()
 }
 
 // restoreRemoteTabShells rebuilds disconnected registry entries from the
@@ -478,9 +491,10 @@ func (a *App) restoreRemoteTabShells(f desktopTabsFile) {
 			id: id, ref: RemoteTabRef{HostID: hostID, Workspace: ws},
 			state: "disconnected",
 			session: remoteTabSessionState{
-				newSession: sessionName == "" && sessionPath == "",
+				newSession: entry.SessionReset || sessionName == "" && sessionPath == "",
 				name:       sessionName,
 				path:       sessionPath,
+				reset:      entry.SessionReset,
 			},
 			hostLabel: hostLabel, topicTitle: title, model: model,
 			routing: remoteTabSessionRouting{currentPath: sessionPath, running: map[string]bool{}},

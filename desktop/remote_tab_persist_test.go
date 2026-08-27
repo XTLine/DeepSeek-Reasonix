@@ -130,7 +130,7 @@ func TestRemoteTabRestoreBuildsDisconnectedShells(t *testing.T) {
 	f := desktopTabsFile{
 		RemoteTabs: []desktopRemoteTabEntry{
 			{ID: "r-1", HostID: "box", Workspace: "~/app", TopicTitle: "Fix bug", SessionName: "s1", SessionPath: "/remote/sessions/s1.jsonl"},
-			{ID: "r-2", HostID: "box", Workspace: "~/web"},
+			{ID: "r-2", HostID: "box", Workspace: "~/web", SessionPath: "/remote/sessions/blank.jsonl", SessionReset: true},
 			{ID: "", HostID: "box", Workspace: "~/skip"},
 			{ID: "local-1", HostID: "box", Workspace: "~/dup"},
 		},
@@ -158,11 +158,27 @@ func TestRemoteTabRestoreBuildsDisconnectedShells(t *testing.T) {
 	if tab := a.remoteTabs["r-1"]; tab.session.newSession || tab.session.name != "s1" || tab.session.path != "/remote/sessions/s1.jsonl" {
 		t.Fatalf("restored session identity = %+v", tab.session)
 	}
+	if tab := a.remoteTabs["r-2"]; !tab.session.newSession || !tab.session.reset || tab.session.path != "/remote/sessions/blank.jsonl" {
+		t.Fatalf("restored blank session identity = %+v", tab.session)
+	}
 	if got := strings.Join(a.remoteTabLayout.order, ","); got != "r-2,r-1" {
 		t.Fatalf("restored remote order = %q, want r-2,r-1", got)
 	}
 	if a.remoteTabLayout.activeID != "" {
 		t.Fatalf("remoteActiveTabID = %q, want local startup surface", a.remoteTabLayout.activeID)
+	}
+}
+
+func TestRemoteTabBlankSessionPersistsResetState(t *testing.T) {
+	tab := &remoteTab{
+		id: "blank", ref: RemoteTabRef{HostID: "box", Workspace: "~/app"},
+		session: remoteTabSessionState{newSession: true, path: "/remote/sessions/blank.jsonl", reset: true},
+		routing: remoteTabSessionRouting{currentPath: "/remote/sessions/blank.jsonl", running: map[string]bool{}},
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}, remoteTabLayout: remoteTabLayoutState{order: []string{tab.id}}}
+	entries, _, _, _ := a.remoteTabsFileEntries(nil)
+	if len(entries) != 1 || !entries[0].SessionReset || entries[0].SessionPath != tab.session.path {
+		t.Fatalf("persisted blank entry = %+v", entries)
 	}
 }
 
