@@ -145,7 +145,8 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 		return Result{State: st, Token: tok, Reused: true, CredentialConfigChanged: credentialChanged}, nil
 	}
 
-	// 5. Generate token, write it 0600, and launch detached serve.
+	// 5. Retire any incompatible Serve before publishing its replacement token;
+	// otherwise a failed retirement leaves the live process inaccessible.
 	freshToken, err := generateToken()
 	if err != nil {
 		return Result{}, err
@@ -153,13 +154,13 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 	if err := fs.MkdirAll(ctx, paths.Dir); err != nil {
 		return Result{}, err
 	}
-	if err := fs.WriteFileAtomic(ctx, paths.TokenFile, []byte(freshToken+"\n"), 0o600); err != nil {
-		return Result{}, fmt.Errorf("bootstrap: write token: %w", err)
-	}
 	// Retire an incompatible Serve only after its replacement is ready to launch
 	// inside the lock, so preparation failures do not interrupt existing work.
 	if err := retireIncompatibleServe(ctx, conn, fs, paths, workspace, requireLaunchArgs); err != nil {
 		return Result{}, err
+	}
+	if err := fs.WriteFileAtomic(ctx, paths.TokenFile, []byte(freshToken+"\n"), 0o600); err != nil {
+		return Result{}, fmt.Errorf("bootstrap: write token: %w", err)
 	}
 	opts.progress("launch", "")
 	launchRes, err := conn.Exec(ctx, LaunchCommand(bin, workspace, paths, opts.CredentialProxy))
