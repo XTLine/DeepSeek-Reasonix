@@ -229,7 +229,7 @@ func singleCurrentServeSession(entries []serveSessionEntry) *serveSessionEntry {
 func (a *App) serveClientForRef(hostID, workspace string) (*http.Client, string, func(), error) {
 	a.remoteTabMu.Lock()
 	for _, tab := range a.remoteTabs {
-		if tab.ref.HostID == hostID && tab.ref.Workspace == workspace && tab.client != nil {
+		if tab.ref.HostID == hostID && tab.ref.Workspace == workspace && tab.state == "ready" && tab.client != nil {
 			client, base := tab.client, tab.base
 			a.remoteTabMu.Unlock()
 			return client, base, func() {}, nil

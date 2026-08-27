@@ -1733,7 +1733,7 @@ export function ProjectTree({
               if (folderDisclosure.canExpand) {
                 const willExpand = !expanded.has(key);
                 toggleExpand(key, node);
-                if (node.remote && willExpand && !remoteSessions[remoteProjectKey(node.remote)]?.length) {
+                if (node.remote && willExpand) {
                   void ensureRemoteGroupSessions(node.remote.hostId, node.remote.workspace);
                 }
               }

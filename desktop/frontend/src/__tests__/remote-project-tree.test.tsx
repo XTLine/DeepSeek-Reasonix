@@ -195,8 +195,8 @@ ok(
   "a group click cold-starts the serve through the deduped ensure listing",
 );
 ok(
-  /if \(!\(cached && cached\.length > 0\)\) \{\s*ensureRemoteGroupSessions\(node\.remote\.hostId, node\.remote\.workspace\);/.test(source),
-  "the ensure path fires on any expand without cached rows (stale serve state cannot block it)",
+  /if \(node\.remote && willExpand\) \{\s*void ensureRemoteGroupSessions\(node\.remote\.hostId, node\.remote\.workspace\);/.test(source),
+  "an explicit expand refreshes remote rows even when an optimistic cache exists",
 );
 ok(
   /project-tree__remote-status/.test(remoteSource) && /projectTree\.remoteConnectFailed/.test(remoteSource),

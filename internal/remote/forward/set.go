@@ -301,19 +301,33 @@ func (s *Set) acceptRemote(r *runner, ln net.Listener) {
 
 func (s *Set) stopRunner(r *runner, closeLocal bool) {
 	close(r.stop)
-	if r.remote != nil {
-		_ = r.remote.Close()
-		r.remote = nil
+
+	// acceptRemote also retires r.remote/r.up when Accept exits. Move the
+	// active listener and state out under the same lock so Remove/Replace/Close
+	// cannot race that deferred cleanup.
+	s.mu.Lock()
+	remote := r.remote
+	r.remote = nil
+	local := r.local
+	wasUp := r.up
+	r.up = false
+	s.mu.Unlock()
+
+	if remote != nil {
+		_ = remote.Close()
 	}
-	if closeLocal && r.local != nil {
-		_ = r.local.Close()
+	if closeLocal && local != nil {
+		_ = local.Close()
 	}
 	r.acceptWG.Wait()
 	if closeLocal {
-		r.local = nil
+		s.mu.Lock()
+		if r.local == local {
+			r.local = nil
+		}
+		s.mu.Unlock()
 	}
-	if r.up {
-		r.up = false
+	if wasUp {
 		s.emit(Event{Spec: r.spec, Up: false})
 	}
 }
