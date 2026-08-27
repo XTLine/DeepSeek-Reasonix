@@ -130,14 +130,19 @@ func TestRemoteTabTitleRefreshMigratesPreferencesWithoutHoldingRegistryLock(t *t
 		time.Sleep(time.Millisecond)
 	}
 
-	registryAvailable := make(chan struct{})
+	registryAvailable := make(chan bool, 1)
 	go func() {
 		a.remoteTabMu.Lock()
+		registered := a.remoteTabs[meta.ID] != nil
 		a.remoteTabMu.Unlock()
-		close(registryAvailable)
+		registryAvailable <- registered
 	}()
 	select {
-	case <-registryAvailable:
+	case registered := <-registryAvailable:
+		if !registered {
+			unlockPrefs()
+			t.Fatal("remote tab disappeared during preference migration")
+		}
 	case <-time.After(250 * time.Millisecond):
 		unlockPrefs()
 		<-registryAvailable
