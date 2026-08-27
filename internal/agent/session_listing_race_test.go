@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"crypto/sha256"
 	"path/filepath"
 	"testing"
 
@@ -88,5 +89,71 @@ func TestSessionListingBackfillRejectsChangedTranscriptGeneration(t *testing.T) 
 	}
 	if meta.SchemaVersion != branchMetaCountsInitialVersion || meta.Revision != 2 || meta.ContentDigest != "new" {
 		t.Fatalf("stale backfill crossed transcript generation: %+v", meta)
+	}
+}
+
+func TestPersistSessionListingProjectionRejectsAdvancedTranscriptGeneration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "20260101-000000-deepseek-chat.jsonl")
+	writeSessionFile(t, path, []provider.Message{
+		{Role: provider.RoleUser, Content: "new question"},
+		{Role: provider.RoleAssistant, Content: "new answer"},
+	})
+	newDigest := sha256.Sum256([]byte("new transcript"))
+	if err := SaveBranchMeta(path, BranchMeta{
+		ID:                   BranchID(path),
+		Revision:             2,
+		ContentDigest:        digestString(newDigest),
+		SchemaVersion:        BranchMetaCountsVersion,
+		Preview:              "new question",
+		Turns:                1,
+		ListingRevision:      2,
+		ListingContentDigest: digestString(newDigest),
+	}); err != nil {
+		t.Fatalf("SaveBranchMeta: %v", err)
+	}
+
+	oldDigest := sha256.Sum256([]byte("old transcript"))
+	persistSessionListingProjection(path, []provider.Message{
+		{Role: provider.RoleUser, Content: "stale question"},
+		{Role: provider.RoleAssistant, Content: "stale answer"},
+	}, 1, digestString(oldDigest))
+
+	meta, ok, err := LoadBranchMeta(path)
+	if err != nil || !ok {
+		t.Fatalf("LoadBranchMeta: ok=%v err=%v", ok, err)
+	}
+	if meta.Revision != 2 || meta.ContentDigest != digestString(newDigest) ||
+		meta.Preview != "new question" || meta.Turns != 1 ||
+		meta.ListingRevision != 2 || meta.ListingContentDigest != digestString(newDigest) {
+		t.Fatalf("stale projection crossed transcript generation: %+v", meta)
+	}
+}
+
+func TestPersistSessionListingProjectionStampsCommittedTranscriptGeneration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "20260101-000000-deepseek-chat.jsonl")
+	digest := sha256.Sum256([]byte("committed transcript"))
+	if err := SaveBranchMeta(path, BranchMeta{
+		ID:            BranchID(path),
+		Revision:      3,
+		ContentDigest: digestString(digest),
+	}); err != nil {
+		t.Fatalf("SaveBranchMeta: %v", err)
+	}
+
+	persistSessionListingProjection(path, []provider.Message{
+		{Role: provider.RoleUser, Content: "committed question"},
+		{Role: provider.RoleAssistant, Content: "committed answer"},
+	}, 3, digestString(digest))
+
+	meta, ok, err := LoadBranchMeta(path)
+	if err != nil || !ok {
+		t.Fatalf("LoadBranchMeta: ok=%v err=%v", ok, err)
+	}
+	if meta.Preview != "committed question" || meta.Turns != 1 ||
+		meta.SchemaVersion != BranchMetaCountsVersion ||
+		meta.ListingRevision != 3 || meta.ListingContentDigest != digestString(digest) {
+		t.Fatalf("matching projection was not stamped: %+v", meta)
 	}
 }

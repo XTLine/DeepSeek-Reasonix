@@ -13,6 +13,15 @@ export function remoteProjectKey(ref: RemoteTabRefView): string {
   return `${ref.hostId}\u0000${ref.workspace}`;
 }
 
+export function activeRemoteProjectAncestorKeys(
+  nodes: ProjectNode[],
+  activeRemote: RemoteTabRefView,
+  nodeKey: (node: ProjectNode, index: number) => string,
+): string[] {
+  const activeKey = remoteProjectKey(activeRemote);
+  return nodes.flatMap((node, index) => node.remote && remoteProjectKey(node.remote) === activeKey ? [nodeKey(node, index)] : []);
+}
+
 export function remoteServeBadgeState(view?: RemoteServerView, busy = false): string {
   if (busy) return "serve-busy";
   if (view?.state === "ready") return "serve-ready";
@@ -118,6 +127,7 @@ export function useRemoteProjectGroups(
   const [groupBusy, setGroupBusy] = useState<Record<string, boolean>>({});
   const [groupError, setGroupError] = useState<Record<string, string>>({});
   const sessionLoads = useRef(new Map<string, number>());
+  const sessionLoadGenerations = useRef(new Map<string, number>());
   const eligibleSessionKeys = useRef(new Set<string>());
   const groupBusyRef = useRef(new Set<string>());
   const nextLoad = useRef(0);
@@ -163,15 +173,24 @@ export function useRemoteProjectGroups(
     groupBusyRef.current.add(key);
     setGroupBusy((current) => ({ ...current, [key]: true }));
     setGroupError((current) => ({ ...current, [key]: "" }));
+    // Explicit ensures and passive listings share one last-start-wins order.
+    // In particular, a passive request that began before this cold start must
+    // not be allowed to overwrite the authoritative rows returned here.
+    const load = ++nextLoad.current;
+    sessionLoads.current.set(key, load);
+    sessionLoadGenerations.current.set(key, load);
     try {
       const rows = await app.EnsureRemoteProjectSessions(hostId, workspace);
+      if (sessionLoadGenerations.current.get(key) !== load) return;
       acceptRemoteSessionRows(key, rows);
       void app.RemoteServerStatus(hostId, workspace).then((view) => useRemoteStore.getState().setServer(view)).catch(() => {});
     } catch (error) {
+      if (sessionLoadGenerations.current.get(key) !== load) return;
       removeRemoteSessionCache(key);
       setSessions((current) => ({ ...current, [key]: [] }));
       setGroupError((current) => ({ ...current, [key]: error instanceof Error ? error.message : String(error) }));
     } finally {
+      if (sessionLoads.current.get(key) === load) sessionLoads.current.delete(key);
       groupBusyRef.current.delete(key);
       setGroupBusy((current) => ({ ...current, [key]: false }));
     }
@@ -198,14 +217,15 @@ export function useRemoteProjectGroups(
     if (!groupKeys.includes(key) || !eligibleSessionKeys.current.has(key)) return;
     const load = ++nextLoad.current;
     sessionLoads.current.set(key, load);
+    sessionLoadGenerations.current.set(key, load);
     void app.RemoteProjectSessions(meta.remote.hostId, meta.remote.workspace)
       .then((rows) => {
-        if (sessionLoads.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
+        if (sessionLoadGenerations.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
           acceptRemoteSessionRows(key, rows);
         }
       })
       .catch(() => {
-        if (sessionLoads.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
+        if (sessionLoadGenerations.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
           removeRemoteSessionCache(key);
         }
       })
@@ -252,8 +272,11 @@ export function useRemoteProjectGroups(
     for (const key of sessionLoads.current.keys()) {
       if (!eligible.has(key)) sessionLoads.current.delete(key);
     }
+    const retained = new Set(groupKeys);
+    for (const key of sessionLoadGenerations.current.keys()) {
+      if (!retained.has(key)) sessionLoadGenerations.current.delete(key);
+    }
     setSessions((current) => {
-      const retained = new Set(groupKeys);
       if (Object.keys(current).every((key) => retained.has(key))) return current;
       const next = Object.fromEntries(Object.entries(current).filter(([key]) => retained.has(key)));
       return next;
@@ -263,14 +286,15 @@ export function useRemoteProjectGroups(
       const [hostId, workspace] = key.split("\u0000");
       const load = ++nextLoad.current;
       sessionLoads.current.set(key, load);
+      sessionLoadGenerations.current.set(key, load);
       void app.RemoteProjectSessions(hostId, workspace)
         .then((rows) => {
-          if (sessionLoads.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
+          if (sessionLoadGenerations.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
             acceptRemoteSessionRows(key, rows);
           }
         })
         .catch(() => {
-          if (sessionLoads.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
+          if (sessionLoadGenerations.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
             removeRemoteSessionCache(key);
             setSessions((current) => ({ ...current, [key]: [] }));
           }

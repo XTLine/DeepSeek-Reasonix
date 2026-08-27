@@ -6,6 +6,8 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { activeRemoteProjectAncestorKeys } from "../components/ProjectTreeRemoteGroups";
+import type { ProjectNode } from "../lib/types";
 
 let passed = 0;
 let failed = 0;
@@ -31,6 +33,15 @@ const remoteIntegrationSource = readFileSync(resolve(here, "../lib/useRemoteComp
 const topicbarMenuSource = readFileSync(resolve(here, "../components/TopicbarMoreMenuContent.tsx"), "utf8");
 const bridgeSource = readFileSync(resolve(here, "../lib/remoteProjectBridge.ts"), "utf8");
 const remoteOpenSource = readFileSync(resolve(here, "../../../remote_projects.go"), "utf8");
+
+const sameWorkspaceRemoteTree: ProjectNode[] = [
+  { key: "remote-host-a", kind: "project", label: "A", remote: { hostId: "host-a", workspace: "/repo" }, children: [] },
+  { key: "remote-host-b", kind: "project", label: "B", remote: { hostId: "host-b", workspace: "/repo" }, children: [] },
+];
+ok(
+  JSON.stringify(activeRemoteProjectAncestorKeys(sameWorkspaceRemoteTree, { hostId: "host-b", workspace: "/repo" }, (node) => node.key ?? "")) === JSON.stringify(["remote-host-b"]),
+  "active remote group expansion uses host-qualified identity instead of local workspace fallback",
+);
 
 ok(
   /remoteSession: \{ hostId: node\.remote!\.hostId, workspace: node\.remote!\.workspace, name: row\.name, path: row\.path, title: row\.title \}/.test(remoteSource) &&
@@ -74,10 +85,11 @@ ok(
 );
 ok(
   /sessionLoads\.current\.has\(key\)/.test(remoteSource) &&
+    /sessionLoadGenerations\.current\.set\(key, load\)/.test(remoteSource) &&
     /eligibleSessionKeys\.current\.has\(key\)/.test(remoteSource) &&
     /filter\(\(\[key\]\) => retained\.has\(key\)\)/.test(remoteSource) &&
     /acceptRemoteSessionRows\(key, rows\)/.test(remoteSource) &&
-    /catch\(\(\) => \{[\s\S]*?sessionLoads\.current\.get\(key\) === load && eligibleSessionKeys\.current\.has\(key\)[\s\S]*?removeRemoteSessionCache\(key\)/.test(remoteSource) &&
+    /catch\(\(\) => \{[\s\S]*?sessionLoadGenerations\.current\.get\(key\) === load && eligibleSessionKeys\.current\.has\(key\)[\s\S]*?removeRemoteSessionCache\(key\)/.test(remoteSource) &&
     /setGroupError\(\(current\) => current\[key\] \? \{ \.\.\.current, \[key\]: "" \} : current\)/.test(remoteSource),
   "session fetches fence stale success/failure results and clear recovered group errors",
 );
@@ -195,12 +207,18 @@ ok(
 );
 ok(
   /app\.EnsureRemoteProjectSessions\(hostId, workspace\)/.test(remoteSource) &&
-    /if \(groupBusyRef\.current\.has\(key\)\) return;/.test(remoteSource),
-  "a group click cold-starts the serve through the deduped ensure listing",
+    /if \(groupBusyRef\.current\.has\(key\)\) return;/.test(remoteSource) &&
+    /sessionLoadGenerations\.current\.set\(key, load\);[\s\S]*?EnsureRemoteProjectSessions\(hostId, workspace\)[\s\S]*?sessionLoadGenerations\.current\.get\(key\) !== load/.test(remoteSource),
+  "a group click cold-starts the serve through the deduped, generation-fenced ensure listing",
 );
 ok(
   /if \(node\.remote && willExpand\) \{\s*void ensureRemoteGroupSessions\(node\.remote\.hostId, node\.remote\.workspace\);/.test(source),
   "an explicit expand refreshes remote rows even when an optimistic cache exists",
+);
+ok(
+  /activeRemoteProjectAncestorKeys\(treeWithRemoteSessions, activeRemote, projectNodeKey\)/.test(source) &&
+    /defaultExpandedProjectTreeKeys\(treeWithRemoteSessions, activeScope, activeWorkspaceRoot, activeTopicId, activeSessionPath\)/.test(source),
+  "active remote ancestors come from the merged tree and host-qualified group identity",
 );
 ok(
   /project-tree__remote-status/.test(remoteSource) && /projectTree\.remoteConnectFailed/.test(remoteSource),
