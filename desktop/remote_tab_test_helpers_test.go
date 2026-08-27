@@ -2,32 +2,9 @@ package main
 
 import (
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
-
-// swapHook keeps the App-level event hook immutable while tests replace its
-// target concurrently with background emissions.
-type swapHook struct {
-	mu sync.Mutex
-	fn func(name string, payload any)
-}
-
-func (s *swapHook) set(fn func(name string, payload any)) {
-	s.mu.Lock()
-	s.fn = fn
-	s.mu.Unlock()
-}
-
-func (s *swapHook) add(name string, payload any) {
-	s.mu.Lock()
-	fn := s.fn
-	s.mu.Unlock()
-	if fn != nil {
-		fn(name, payload)
-	}
-}
 
 func waitForTabState(t *testing.T, a *App, tabID, want string) {
 	t.Helper()

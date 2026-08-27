@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -87,9 +88,7 @@ func remotePrefsSnapshot() remotePrefs {
 
 func cloneStringMap(src map[string]string) map[string]string {
 	dst := make(map[string]string, len(src))
-	for key, value := range src {
-		dst[key] = value
-	}
+	maps.Copy(dst, src)
 	return dst
 }
 
