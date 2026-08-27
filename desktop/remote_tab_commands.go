@@ -111,14 +111,14 @@ func (a *App) resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPat
 	tab := a.remoteTabs[tabID]
 	a.remoteTabMu.Unlock()
 	if tab == nil {
-		return false
+		return true
 	}
 	tab.sessionMu.Lock()
 	defer tab.sessionMu.Unlock()
 	a.remoteTabMu.Lock()
 	if a.remoteTabs[tabID] != tab || (selectionRevision != 0 && tab.selectionRevision != selectionRevision) {
 		a.remoteTabMu.Unlock()
-		return false
+		return true
 	}
 	if tab.client == nil || tab.state != "ready" {
 		if selectionRevision != 0 && (tab.state == "connecting" || tab.state == "reconnecting") {
@@ -163,7 +163,9 @@ func (a *App) resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPat
 			var statusErr *serveHTTPStatusError
 			if errors.As(err, &statusErr) {
 				if !a.rollbackRemoteTabProvisionalResume(tabID, tab, client, gen, route) {
-					return false
+					// A newer route already superseded this request. Its identity is
+					// authoritative, so the open-selection rollback must not run.
+					return true
 				}
 				if remoteSessionTransitionBusy(err) {
 					a.transitionRemoteTabState(tabID, gen, "ready", "ready", "Finish the current turn before switching sessions.")
@@ -186,11 +188,10 @@ func (a *App) resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPat
 				if startRetry := a.reconnectRemoteTabGeneration(tabID, gen); startRetry {
 					a.goSafe("remoteTabResumeReattach", func() { a.reattachRemoteTab(tabID) })
 				}
-				return false
+				return true
 			}
 			if current.Path != target.Path {
-				a.reconcileRemoteTabRejectedResume(tabID, tab, client, gen, route, current, err)
-				return false
+				return a.reconcileRemoteTabRejectedResume(tabID, tab, client, gen, route, current, err)
 			}
 			if target.Name == "" {
 				target.Name = current.Name
@@ -205,10 +206,12 @@ func (a *App) resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPat
 			title = name
 		}
 		if !a.commitAndPublishRemoteTabResume(tabID, tab, client, gen, route, target, title) {
-			return false
+			// A newer route won the publication fence; never restore the older
+			// selection over it.
+			return true
 		}
 		a.goSafe("remoteTabResumeStatus", func() { _, _ = a.RemoteTabStatus(tabID) })
-		return false
+		return true
 	}
 	a.transitionRemoteTabState(tabID, gen, "ready", "ready", fmt.Sprintf("remote session %q not found", name))
 	return false
@@ -515,50 +518,78 @@ func (a *App) refreshRemoteTabTitle(tabID string) {
 		if !entry.Current || expectedPath != "" && strings.TrimSpace(entry.Path) != strings.TrimSpace(expectedPath) {
 			continue
 		}
-		tab.routeEventMu.Lock()
-		a.remoteTabMu.Lock()
-		current := a.remoteTabs[tabID]
-		if current != tab || current.client != client || current.gen != gen || current.routing.currentPath != expectedPath {
-			a.remoteTabMu.Unlock()
-			tab.routeEventMu.Unlock()
+		entry.Name = strings.TrimSpace(entry.Name)
+		entry.Path = strings.TrimSpace(entry.Path)
+		if !a.adoptRemoteTabTitleListing(tabID, tab, client, gen, expectedPath, entry) {
 			return
 		}
-		title := strings.TrimSpace(entry.Title)
-		// Fence preference migration with the same client, generation, and route
-		// transaction that adopts the durable session identity. A stale listing
-		// response must not move the synthetic blank's title or pin.
-		if override, migrateErr := migrateRemoteSessionTitleOverride(tab.ref.HostID, tab.ref.Workspace, entry.Name); migrateErr == nil && override != "" {
-			title = override
-		} else if override := remoteSessionTitleOverride(tab.ref.HostID, tab.ref.Workspace, entry.Name); override != "" {
-			title = override
+
+		override, migrateErr := migrateRemoteSessionTitleOverride(tab.ref.HostID, tab.ref.Workspace, entry.Name)
+		if migrateErr != nil || override == "" {
+			override = remoteSessionTitleOverride(tab.ref.HostID, tab.ref.Workspace, entry.Name)
 		}
-		if title == "" {
-			a.remoteTabMu.Unlock()
-			tab.routeEventMu.Unlock()
-			return
+		if override != "" {
+			a.applyRemoteTabTitleOverride(tabID, tab, client, gen, entry, override)
 		}
-		changed := current.topicTitle != title
-		identityChanged := current.session.name != entry.Name || current.session.path != entry.Path || current.session.reset || current.session.newSession
-		if changed {
-			current.topicTitle = title
-		}
-		current.session.reset = false
-		current.session.newSession = false
-		current.session.name = entry.Name
-		current.session.path = entry.Path
-		if current.routing.currentPath != entry.Path {
-			current.routing.currentPath = entry.Path
-			current.routing.pathRevision++
-			current.routing.revision++
-		}
-		meta := remoteTabMetaLocked(current)
-		a.remoteTabMu.Unlock()
-		if changed || identityChanged {
-			a.emitRemoteEvent("remote-tab:updated", meta)
-			a.saveTabsFromRemote()
-		}
-		tab.routeEventMu.Unlock()
 		return
+	}
+}
+
+func (a *App) adoptRemoteTabTitleListing(tabID string, tab *remoteTab, client *http.Client, gen uint64, expectedPath string, entry serveSessionEntry) bool {
+	tab.routeEventMu.Lock()
+	defer tab.routeEventMu.Unlock()
+	a.remoteTabMu.Lock()
+	current := a.remoteTabs[tabID]
+	if current != tab || current.client != client || current.gen != gen || current.routing.currentPath != expectedPath {
+		a.remoteTabMu.Unlock()
+		return false
+	}
+	// Linearize the durable identity before migrating the synthetic blank's
+	// preferences. Preference I/O runs later without either application lock.
+	title := strings.TrimSpace(entry.Title)
+	changed := title != "" && current.topicTitle != title
+	identityChanged := current.session.name != entry.Name || current.session.path != entry.Path || current.session.reset || current.session.newSession
+	if changed {
+		current.topicTitle = title
+	}
+	current.session.reset = false
+	current.session.newSession = false
+	current.session.name = entry.Name
+	current.session.path = entry.Path
+	if current.routing.currentPath != entry.Path {
+		current.routing.currentPath = entry.Path
+		current.routing.pathRevision++
+		current.routing.revision++
+	}
+	meta := remoteTabMetaLocked(current)
+	a.remoteTabMu.Unlock()
+	if changed || identityChanged {
+		a.emitRemoteEvent("remote-tab:updated", meta)
+		a.saveTabsFromRemote()
+	}
+	return true
+}
+
+func (a *App) applyRemoteTabTitleOverride(tabID string, tab *remoteTab, client *http.Client, gen uint64, entry serveSessionEntry, override string) {
+	tab.routeEventMu.Lock()
+	defer tab.routeEventMu.Unlock()
+	a.remoteTabMu.Lock()
+	current := a.remoteTabs[tabID]
+	if current != tab || current.client != client || current.gen != gen ||
+		current.session.name != entry.Name || current.session.path != entry.Path ||
+		current.routing.currentPath != entry.Path {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	changed := current.topicTitle != override
+	if changed {
+		current.topicTitle = override
+	}
+	meta := remoteTabMetaLocked(current)
+	a.remoteTabMu.Unlock()
+	if changed {
+		a.emitRemoteEvent("remote-tab:updated", meta)
+		a.saveTabsFromRemote()
 	}
 }
 

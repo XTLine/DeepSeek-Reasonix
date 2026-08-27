@@ -222,6 +222,12 @@ ok(
   "active remote ancestors come from the merged tree and host-qualified group identity",
 );
 ok(
+  /markActive\(treeWithRemoteSessions\)/.test(source) &&
+    /markNodeRead, treeWithRemoteSessions\]\);/.test(source) &&
+    !/markActive\(tree\);/.test(source),
+  "active synthesized remote rows are marked read when the merged session tree arrives",
+);
+ok(
   /project-tree__remote-status/.test(remoteSource) && /projectTree\.remoteConnectFailed/.test(remoteSource),
   "remote groups render retryable connect/error rows instead of going silent",
 );

@@ -551,8 +551,8 @@ export function ProjectTree({
         markActive(asArray(node.children));
       }
     };
-    markActive(tree);
-  }, [activeScope, activeSessionPath, activeTopicId, activeWorkspaceRoot, markNodeRead, tree]);
+    markActive(treeWithRemoteSessions);
+  }, [activeScope, activeSessionPath, activeTopicId, activeWorkspaceRoot, markNodeRead, treeWithRemoteSessions]);
 
   useEffect(() => {
     try {

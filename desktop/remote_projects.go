@@ -392,8 +392,8 @@ func (a *App) resumeRemoteTabOpenAsync(tabID, name, sessionPath, sessionTitle st
 		revision = selection.revision
 	}
 	a.goSafe("remoteTabResume", func() {
-		deferred := a.resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPath, sessionTitle, revision, selection)
-		if !deferred {
+		handled := a.resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPath, sessionTitle, revision, selection)
+		if !handled {
 			a.restoreRejectedRemoteTabOpenSelection(tabID, selection)
 		}
 	})
