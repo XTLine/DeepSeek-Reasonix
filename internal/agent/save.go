@@ -2180,6 +2180,13 @@ func SessionPreview(path string) (string, int) {
 	return previewSession(path)
 }
 
+// SessionPreviewWithError returns the same preview and user-turn count as
+// SessionPreview, but preserves read and decode failures for callers that must
+// not persist a fallback derived from an unreadable transcript.
+func SessionPreviewWithError(path string) (string, int, error) {
+	return previewSessionWithError(path)
+}
+
 // SessionPreviewFromMessages computes the same preview line and user-turn count
 // as previewSession, but from an in-memory message slice. Session.Save writes
 // exactly these messages to the .jsonl, so this is byte-for-byte equivalent to

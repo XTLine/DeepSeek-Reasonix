@@ -33,6 +33,9 @@ const remoteIntegrationSource = readFileSync(resolve(here, "../lib/useRemoteComp
 const topicbarMenuSource = readFileSync(resolve(here, "../components/TopicbarMoreMenuContent.tsx"), "utf8");
 const bridgeSource = readFileSync(resolve(here, "../lib/remoteProjectBridge.ts"), "utf8");
 const remoteOpenSource = readFileSync(resolve(here, "../../../remote_projects.go"), "utf8");
+const explicitEnsureSource = remoteSource.match(
+  /const ensureRemoteGroupSessions[\s\S]*?\n  const openRemoteWindow/,
+)?.[0] ?? "";
 
 const sameWorkspaceRemoteTree: ProjectNode[] = [
   { key: "remote-host-a", kind: "project", label: "A", remote: { hostId: "host-a", workspace: "/repo" }, children: [] },
@@ -93,6 +96,12 @@ ok(
     /recordRemoteSessionLoadError[\s\S]*?setGroupError/.test(remoteSource) &&
     /setGroupError\(\(current\) => current\[key\] \? \{ \.\.\.current, \[key\]: "" \} : current\)/.test(remoteSource),
   "session fetches fence stale results, retain rows on passive failures, and clear recovered group errors",
+);
+ok(
+  /catch \(error\) \{[\s\S]*?recordRemoteSessionLoadError\(key, error\)/.test(explicitEnsureSource) &&
+    !/removeRemoteSessionCache\(key\)/.test(explicitEnsureSource) &&
+    !/setSessions\(/.test(explicitEnsureSource),
+  "an explicit session refresh preserves the last successful rows and cache when Serve fails",
 );
 ok(
   /useComposerModeActions\(\{[\s\S]*?remote: remoteSurfaceActive/.test(appSource) &&

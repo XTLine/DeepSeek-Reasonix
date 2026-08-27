@@ -269,15 +269,13 @@ func repairIndexedSessionTopicsWithGate(dir string, repairDone func(string) bool
 		if !legacySessionScopeMatchesMigrationTarget(meta, scope, workspaceRoot) {
 			continue
 		}
+		title, titleChanged, err := repairedIndexedSessionTopicTitle(dir, &sessionTitles, topicTitles, topicID, info, meta)
+		if err != nil {
+			deferred = true
+			continue
+		}
 		repairedTopicIDs = append(repairedTopicIDs, topicID)
-		if strings.TrimSpace(topicTitles[topicID]) == "" {
-			if sessionTitles == nil {
-				sessionTitles = loadSessionTitles(dir)
-			}
-			title := indexedSessionTopicTitle(sessionTitles, info, meta)
-			if title == "" {
-				title = defaultTopicTitle
-			}
+		if titleChanged {
 			topicTitles[topicID] = title
 			titlesChanged = true
 		}
@@ -321,24 +319,47 @@ func repairIndexedSessionTopicsWithGate(dir string, repairDone func(string) bool
 	return nil
 }
 
-func indexedSessionTopicTitle(sessionTitles map[string]string, info agent.SessionOrderInfo, meta agent.BranchMeta) string {
+func repairedIndexedSessionTopicTitle(dir string, sessionTitles *map[string]string, topicTitles map[string]string, topicID string, info agent.SessionOrderInfo, meta agent.BranchMeta) (string, bool, error) {
+	if strings.TrimSpace(topicTitles[topicID]) != "" {
+		return "", false, nil
+	}
+	if *sessionTitles == nil {
+		*sessionTitles = loadSessionTitles(dir)
+	}
+	title, err := indexedSessionTopicTitle(*sessionTitles, info, meta)
+	if err != nil {
+		// The transcript is still the authority when its listing projection is
+		// stale. Leave the topic untouched so a later pass can retry instead of
+		// certifying a permanent default title.
+		return "", false, err
+	}
+	if title == "" {
+		title = defaultTopicTitle
+	}
+	return title, true, nil
+}
+
+func indexedSessionTopicTitle(sessionTitles map[string]string, info agent.SessionOrderInfo, meta agent.BranchMeta) (string, error) {
 	if title := topicTitleFromText(meta.TopicTitle); title != "" {
-		return title
+		return title, nil
 	}
 	if title := topicTitleFromText(info.TopicTitle); title != "" {
-		return title
+		return title, nil
 	}
 	if title := topicTitleFromText(sessionTitles[filepath.Base(info.Path)]); title != "" {
-		return title
+		return title, nil
 	}
 	if !info.ListingProjectionFresh() {
 		// Pre-upgrade sidecars can identify the transcript generation without the
 		// newer listing fields. This one-shot repair must decode the transcript
 		// rather than certify a generic title from a stale projection.
-		preview, _ := agent.SessionPreview(info.Path)
-		return topicTitleFromText(preview)
+		preview, _, err := agent.SessionPreviewWithError(info.Path)
+		if err != nil {
+			return "", err
+		}
+		return topicTitleFromText(preview), nil
 	}
-	return topicTitleFromText(info.Preview)
+	return topicTitleFromText(info.Preview), nil
 }
 
 func sessionOrderInfoIsAutomaticRecovery(info agent.SessionOrderInfo) bool {

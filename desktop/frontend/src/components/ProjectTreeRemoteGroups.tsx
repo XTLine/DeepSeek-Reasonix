@@ -196,15 +196,13 @@ export function useRemoteProjectGroups(
       void app.RemoteServerStatus(hostId, workspace).then((view) => useRemoteStore.getState().setServer(view)).catch(() => {});
     } catch (error) {
       if (sessionLoadGenerations.current.get(key) !== load) return;
-      removeRemoteSessionCache(key);
-      setSessions((current) => ({ ...current, [key]: [] }));
-      setGroupError((current) => ({ ...current, [key]: error instanceof Error ? error.message : String(error) }));
+      recordRemoteSessionLoadError(key, error);
     } finally {
       if (sessionLoads.current.get(key) === load) sessionLoads.current.delete(key);
       groupBusyRef.current.delete(key);
       setGroupBusy((current) => ({ ...current, [key]: false }));
     }
-  }, [acceptRemoteSessionRows]);
+  }, [acceptRemoteSessionRows, recordRemoteSessionLoadError]);
 
   const openRemoteWindow = useCallback(async (ref: RemoteTabRefView) => {
     try {

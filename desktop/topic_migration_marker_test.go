@@ -122,3 +122,53 @@ func TestRepairIndexedTopicDecodesStaleListingProjection(t *testing.T) {
 		t.Fatalf("repaired title = %q, want transcript preview title %q", got, wantTitle)
 	}
 }
+
+func TestRepairIndexedTopicDefersUnreadableTranscriptWithoutPersistingFallback(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	dir := config.SessionDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := writeLegacySession(t, dir, "temporarily-unreadable.jsonl", "original prompt", time.Now())
+	topicID := "legacy_temporarily_unreadable"
+	if err := agent.SaveBranchMetaPreserveUpdated(sessionPath, agent.BranchMeta{
+		ID: agent.BranchID(sessionPath), Scope: "global", TopicID: topicID,
+		Revision: 7, ContentDigest: "pre-upgrade-digest", SchemaVersion: agent.BranchMetaCountsVersion,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sessionPath, []byte("{not-json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	markTopicMigrationDone(dir)
+
+	if repaired := migrateLegacySessionsIntoGlobalTopics(dir); len(repaired) != 0 {
+		t.Fatalf("unreadable transcript repaired topics = %v, want none", repaired)
+	}
+	if topicIndexRepairDone(dir) {
+		t.Fatal("unreadable transcript must leave the repair marker open for retry")
+	}
+	if got := loadTopicTitle("", topicID); got != "" {
+		t.Fatalf("unreadable transcript persisted fallback title %q", got)
+	}
+	if got := loadTopicTitleSource("", topicID); got != "" {
+		t.Fatalf("unreadable transcript persisted fallback title source %q", got)
+	}
+	if containsDesktopString(loadProjectsFile().GlobalTopics, topicID) {
+		t.Fatal("unreadable transcript was added to the topic index")
+	}
+
+	const recoveredPrompt = "recovered authoritative prompt"
+	if err := os.WriteFile(sessionPath, []byte("{\"role\":\"user\",\"content\":\""+recoveredPrompt+"\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if repaired := migrateLegacySessionsIntoGlobalTopics(dir); len(repaired) != 1 || repaired[0] != topicID {
+		t.Fatalf("retry repaired topics = %v, want %q", repaired, topicID)
+	}
+	if got, want := loadTopicTitle("", topicID), topicTitleFromText(recoveredPrompt); got != want {
+		t.Fatalf("retry title = %q, want %q", got, want)
+	}
+	if !topicIndexRepairDone(dir) {
+		t.Fatal("successful retry should complete the repair marker")
+	}
+}
