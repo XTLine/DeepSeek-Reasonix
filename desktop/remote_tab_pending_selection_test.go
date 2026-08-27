@@ -260,3 +260,41 @@ func TestRemoteTabNewSessionRestoresRouteFromCommittedDeferredSelection(t *testi
 		t.Fatal("deferred New Session did not reach Serve")
 	}
 }
+
+func TestRemoteTabDeferredNewSessionRechecksCurrentBlankState(t *testing.T) {
+	const oldPath = "/sessions/old.jsonl"
+	const freshPath = "/sessions/fresh.jsonl"
+	requested := make(chan struct{}, 1)
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost || req.URL.Path != "/new" {
+			t.Fatalf("request = %s %s, want POST /new", req.Method, req.URL.Path)
+		}
+		requested <- struct{}{}
+		header := make(http.Header)
+		header.Set("X-Reasonix-Session-Path", freshPath)
+		return &http.Response{StatusCode: http.StatusNoContent, Header: header, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+	})}
+	tab := &remoteTab{
+		id: "remote-1", state: "ready", client: client, base: "http://127.0.0.1:43210",
+		session:           remoteTabSessionState{name: "old", path: oldPath, reset: false},
+		routing:           remoteTabSessionRouting{currentPath: oldPath, running: map[string]bool{}},
+		selectionRevision: 1,
+		pendingSelection: &remoteTabPendingOpenSelection{
+			newSession: true, reuseBlank: true, revision: 1, deferred: true,
+		},
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+	a.applyPendingRemoteTabOpenSelection(tab.id)
+
+	select {
+	case <-requested:
+	case <-time.After(2 * time.Second):
+		t.Fatal("deferred New Session was discarded using the stale blank snapshot")
+	}
+	a.remoteTabMu.Lock()
+	path, reset := tab.routing.currentPath, tab.session.reset
+	a.remoteTabMu.Unlock()
+	if path != freshPath || !reset {
+		t.Fatalf("rotated state path/reset = %q/%v, want %q/true", path, reset, freshPath)
+	}
+}

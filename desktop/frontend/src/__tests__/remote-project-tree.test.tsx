@@ -89,9 +89,10 @@ ok(
     /eligibleSessionKeys\.current\.has\(key\)/.test(remoteSource) &&
     /filter\(\(\[key\]\) => retained\.has\(key\)\)/.test(remoteSource) &&
     /acceptRemoteSessionRows\(key, rows\)/.test(remoteSource) &&
-    /catch\(\(\) => \{[\s\S]*?sessionLoadGenerations\.current\.get\(key\) === load && eligibleSessionKeys\.current\.has\(key\)[\s\S]*?removeRemoteSessionCache\(key\)/.test(remoteSource) &&
+    /catch\(\(error\) => \{[\s\S]*?sessionLoadGenerations\.current\.get\(key\) === load && eligibleSessionKeys\.current\.has\(key\)[\s\S]*?recordRemoteSessionLoadError\(key, error\)/.test(remoteSource) &&
+    /recordRemoteSessionLoadError[\s\S]*?setGroupError/.test(remoteSource) &&
     /setGroupError\(\(current\) => current\[key\] \? \{ \.\.\.current, \[key\]: "" \} : current\)/.test(remoteSource),
-  "session fetches fence stale success/failure results and clear recovered group errors",
+  "session fetches fence stale results, retain rows on passive failures, and clear recovered group errors",
 );
 ok(
   /useComposerModeActions\(\{[\s\S]*?remote: remoteSurfaceActive/.test(appSource) &&

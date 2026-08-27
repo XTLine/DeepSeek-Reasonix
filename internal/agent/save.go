@@ -325,7 +325,7 @@ func (s *Session) saveLocked(path string, mode sessionSaveMode) error {
 	}
 	repairLog := false
 	ownedRewrite := mode == sessionSaveRewrite || mode == sessionSaveRewriteCompact
-	decision, err := s.classifySnapshotWrite(path, msgs, digest, version, ownedRewrite)
+	decision, err := s.classifySnapshotWriteForCommit(path, msgs, digest, version, ownedRewrite, mode)
 	if err != nil {
 		return err
 	}

@@ -147,6 +147,16 @@ export function useRemoteProjectGroups(
     setGroupError((current) => current[key] ? { ...current, [key]: "" } : current);
   }, []);
 
+  const recordRemoteSessionLoadError = useCallback((key: string, error: unknown) => {
+    // Passive refreshes must not turn a transient Serve failure into an
+    // authoritative empty listing. Keep the last successful rows/cache while
+    // surfacing a retry when the group has no rows to render.
+    setGroupError((current) => ({
+      ...current,
+      [key]: error instanceof Error ? error.message : String(error),
+    }));
+  }, []);
+
   const openRemoteProject = useCallback(async (
     ref: RemoteTabRefView,
     opts?: { newSession?: boolean; sessionName?: string; sessionPath?: string; sessionTitle?: string; focus?: boolean },
@@ -224,15 +234,15 @@ export function useRemoteProjectGroups(
           acceptRemoteSessionRows(key, rows);
         }
       })
-      .catch(() => {
+      .catch((error) => {
         if (sessionLoadGenerations.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
-          removeRemoteSessionCache(key);
+          recordRemoteSessionLoadError(key, error);
         }
       })
       .finally(() => {
         if (sessionLoads.current.get(key) === load) sessionLoads.current.delete(key);
       });
-  }), [acceptRemoteSessionRows, groupKeys]);
+  }), [acceptRemoteSessionRows, groupKeys, recordRemoteSessionLoadError]);
 
   useEffect(() => {
     const seeded: Record<string, RemoteSessionView[]> = {};
@@ -293,17 +303,16 @@ export function useRemoteProjectGroups(
             acceptRemoteSessionRows(key, rows);
           }
         })
-        .catch(() => {
+        .catch((error) => {
           if (sessionLoadGenerations.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
-            removeRemoteSessionCache(key);
-            setSessions((current) => ({ ...current, [key]: [] }));
+            recordRemoteSessionLoadError(key, error);
           }
         })
         .finally(() => {
           if (sessionLoads.current.get(key) === load) sessionLoads.current.delete(key);
         });
     }
-  }, [acceptRemoteSessionRows, expanded, groupKeys, projects, query, revision, statuses]);
+  }, [acceptRemoteSessionRows, expanded, groupKeys, projects, query, recordRemoteSessionLoadError, revision, statuses]);
 
   return {
     openRemoteProject,

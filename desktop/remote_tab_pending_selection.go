@@ -53,9 +53,13 @@ func (a *App) applyPendingRemoteTabOpenSelection(tabID string) {
 		return
 	}
 	if selection.newSession {
+		// Recheck the authoritative state at application time. The tab may have
+		// earned content while the shell was reconnecting, so reuseBlank from
+		// registration is only a snapshot and cannot discard this newer intent.
+		reuseCurrentBlank := current.session.reset
 		a.remoteTabMu.Unlock()
 		tab.routeEventMu.Unlock()
-		if selection.reuseBlank {
+		if reuseCurrentBlank {
 			return
 		}
 		if err := a.resetRemoteTabSession(tabID); err != nil {
