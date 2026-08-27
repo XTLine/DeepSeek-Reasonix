@@ -209,6 +209,7 @@ func (a *App) publishRemoteTabAttachedReady(tabID string, gen uint64) bool {
 	tab.err = ""
 	a.remoteTabMu.Unlock()
 	a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:state", tabID), RemoteTabStateView{State: "ready"})
+	a.applyPendingRemoteTabOpenSelection(tabID)
 	return true
 }
 

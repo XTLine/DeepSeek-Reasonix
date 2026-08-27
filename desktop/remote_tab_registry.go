@@ -455,5 +455,6 @@ func (a *App) reattachRemoteTabOnce(tabID string) bool {
 		a.retireRemoteTabGeneration(tabID, gen)
 		return false
 	}
+	a.goSafe("remoteTabDeferredSelection", func() { a.applyPendingRemoteTabOpenSelection(tabID) })
 	return true
 }

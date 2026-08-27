@@ -95,6 +95,7 @@ type remoteTab struct {
 	// selectionRevision fences async OpenRemoteProjectTab resumes so an older
 	// rejected request cannot restore metadata over a newer user selection.
 	selectionRevision uint64
+	pendingSelection  *remoteTabPendingOpenSelection
 }
 
 type remoteTabRuntimeState struct {
@@ -137,6 +138,7 @@ type remoteTabOpenRegistration struct {
 	reuseBlank        bool
 	revive            bool
 	commitSelection   bool
+	selection         *remoteTabPendingOpenSelection
 	previousSelection *remoteTabOpenSelection
 	retired           []context.CancelFunc
 }
@@ -170,6 +172,7 @@ func (a *App) registerRemoteTabOpen(tab *remoteTab, hostLabel string, opts Remot
 		// their first attach enters the requested session.
 		result.commitSelection = strings.TrimSpace(opts.SessionName) != "" || strings.TrimSpace(opts.SessionPath) != "" || opts.NewSession && result.revive
 		if strings.TrimSpace(opts.SessionName) != "" || strings.TrimSpace(opts.SessionPath) != "" {
+			result.selection = newRemoteTabPendingOpenSelection(opts)
 			result.previousSelection = &remoteTabOpenSelection{
 				session: existing.session, topicTitle: existing.topicTitle,
 				currentPath: existing.routing.currentPath,
@@ -210,6 +213,13 @@ func (a *App) commitRemoteTabOpenRegistration(registration remoteTabOpenRegistra
 	existing.hostLabel = hostLabel
 	if registration.commitSelection {
 		existing.selectionRevision++
+		if registration.selection != nil && (existing.state == "connecting" || existing.state == "reconnecting") {
+			registration.selection.revision = existing.selectionRevision
+			registration.selection.deferred = true
+			existing.pendingSelection = registration.selection
+			return true
+		}
+		existing.pendingSelection = nil
 		existing.session.newSession = opts.NewSession
 		existing.session.name = strings.TrimSpace(opts.SessionName)
 		existing.session.path = strings.TrimSpace(opts.SessionPath)
@@ -312,6 +322,8 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 		if registration.revive {
 			a.emitRemoteTabState(registration.reuseID, "connecting", "")
 			a.goSafe("remoteTabServe", func() { a.bootstrapRemoteTab(registration.reuseID, hostID, workspace) })
+		} else if registration.selection != nil && registration.selection.deferred {
+			// The reconnect/attach path applies the latest selection after ready.
 		} else if name := strings.TrimSpace(opts.SessionName); name != "" || strings.TrimSpace(opts.SessionPath) != "" {
 			a.resumeRemoteTabOpenAsync(registration.reuseID, name, opts.SessionPath, opts.SessionTitle, registration.previousSelection)
 		} else {
@@ -352,15 +364,19 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 }
 
 func (a *App) resumeRemoteTabOpenAsync(tabID, name, sessionPath, sessionTitle string, selection *remoteTabOpenSelection) {
+	revision := uint64(0)
 	if selection != nil {
-		a.remoteTabMu.Lock()
-		if current := a.remoteTabs[tabID]; current != nil {
-			selection.revision = current.selectionRevision
+		if selection.revision == 0 {
+			a.remoteTabMu.Lock()
+			if current := a.remoteTabs[tabID]; current != nil {
+				selection.revision = current.selectionRevision
+			}
+			a.remoteTabMu.Unlock()
 		}
-		a.remoteTabMu.Unlock()
+		revision = selection.revision
 	}
 	a.goSafe("remoteTabResume", func() {
-		a.resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle)
+		a.resumeRemoteTabSessionPathForSelection(tabID, name, sessionPath, sessionTitle, revision)
 		a.restoreRejectedRemoteTabOpenSelection(tabID, selection)
 	})
 }

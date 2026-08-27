@@ -99,6 +99,10 @@ func (a *App) resumeRemoteTabSession(tabID, name string) {
 }
 
 func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle string) {
+	a.resumeRemoteTabSessionPathForSelection(tabID, name, sessionPath, sessionTitle, 0)
+}
+
+func (a *App) resumeRemoteTabSessionPathForSelection(tabID, name, sessionPath, sessionTitle string, selectionRevision uint64) {
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
 	a.remoteTabMu.Unlock()
@@ -108,7 +112,8 @@ func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle 
 	tab.sessionMu.Lock()
 	defer tab.sessionMu.Unlock()
 	a.remoteTabMu.Lock()
-	if a.remoteTabs[tabID] != tab || tab.client == nil || tab.state != "ready" {
+	if a.remoteTabs[tabID] != tab || tab.client == nil || tab.state != "ready" ||
+		selectionRevision != 0 && tab.selectionRevision != selectionRevision {
 		a.remoteTabMu.Unlock()
 		return
 	}
