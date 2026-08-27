@@ -232,7 +232,7 @@ ok(
   "remote groups render retryable connect/error rows instead of going silent",
 );
 ok(
-  /existing\.selectionRevision\+\+[\s\S]*?a\.goSafe\("remoteTabResume"[\s\S]*?restoreRejectedRemoteTabOpenSelection/.test(remoteOpenSource),
+  /existing\.selectionRevision\+\+[\s\S]*?a\.goRemoteTabSafe\("remoteTabResume"[\s\S]*?restoreRejectedRemoteTabOpenSelection/.test(remoteOpenSource),
   "session switches resume in the background behind a generation guard",
 );
 
