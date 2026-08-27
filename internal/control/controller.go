@@ -3899,11 +3899,20 @@ func (c *Controller) snapshotWithDurability(markActivity, forceRewrite, shutdown
 	// like SetBranchModelPreserveUpdated. The single write subsumes the old
 	// EnsureBranchMeta / SetBranchModel / TouchBranchMeta sequence.
 	preview, turns := agent.SessionPreviewFromMessages(s.Snapshot())
-	if err := agent.UpdateSessionMeta(path, modelRef, preview, turns, markActivity); err != nil {
+	if err := updateSessionListingProjection(s, path, modelRef, preview, turns, markActivity); err != nil {
 		return transcriptDurable, err
 	}
 	c.extensionSessionPayloadEvent(extension.PointSessionSave, savePayload)
 	return transcriptDurable, nil
+}
+
+func updateSessionListingProjection(s *agent.Session, path, modelRef, preview string, turns int, markActivity bool) error {
+	persisted, ok := s.PersistedState(path)
+	if !ok {
+		return fmt.Errorf("session persistence baseline missing after save")
+	}
+	_, err := agent.UpdateSessionListingProjectionIfCurrent(path, modelRef, preview, turns, markActivity, persisted)
+	return err
 }
 
 func (c *Controller) recoverExternallyRemovedSession(path string, saveErr error) (string, error) {

@@ -4,26 +4,30 @@ import (
 	"strings"
 )
 
-// remoteTabPendingOpenSelection retains a cached-session click while the
-// existing shell is still attaching. The local identity must not advance
-// until Serve can accept the matching /resume request.
+// remoteTabPendingOpenSelection retains the newest session-selection intent
+// while an existing shell is still attaching. The local identity must not
+// advance until Serve can accept the matching /resume or /new request.
 type remoteTabPendingOpenSelection struct {
-	name     string
-	path     string
-	title    string
-	revision uint64
-	deferred bool
+	name              string
+	path              string
+	title             string
+	newSession        bool
+	reuseBlank        bool
+	revision          uint64
+	deferred          bool
+	identityCommitted bool
+	previous          *remoteTabOpenSelection
 }
 
 func newRemoteTabPendingOpenSelection(opts RemoteTabOpenOptions) *remoteTabPendingOpenSelection {
 	return &remoteTabPendingOpenSelection{
 		name: strings.TrimSpace(opts.SessionName), path: strings.TrimSpace(opts.SessionPath),
-		title: strings.TrimSpace(opts.SessionTitle),
+		title: strings.TrimSpace(opts.SessionTitle), newSession: opts.NewSession,
 	}
 }
 
-// applyPendingRemoteTabOpenSelection commits only the newest deferred click
-// once the shell reaches ready, then uses the normal resume/rollback path.
+// applyPendingRemoteTabOpenSelection commits only the newest deferred intent
+// once the shell reaches ready, then uses the normal transition path.
 func (a *App) applyPendingRemoteTabOpenSelection(tabID string) {
 	a.tabSelectionMu.Lock()
 	defer a.tabSelectionMu.Unlock()
@@ -48,27 +52,46 @@ func (a *App) applyPendingRemoteTabOpenSelection(tabID string) {
 		tab.routeEventMu.Unlock()
 		return
 	}
-	previous := &remoteTabOpenSelection{
-		session: current.session, topicTitle: current.topicTitle,
-		currentPath: current.routing.currentPath,
-		pending:     cloneRemotePendingEvents(current.pendingEvents), runtime: current.runtime,
-		revision: selection.revision,
+	if selection.newSession {
+		a.remoteTabMu.Unlock()
+		tab.routeEventMu.Unlock()
+		if selection.reuseBlank {
+			return
+		}
+		if err := a.resetRemoteTabSession(tabID); err != nil {
+			a.emitRemoteTabState(tabID, "ready", err.Error())
+		}
+		return
 	}
-	current.session.newSession = false
-	current.session.name = selection.name
-	current.session.path = selection.path
-	if selection.title != "" {
-		current.topicTitle = selection.title
+	previous := selection.previous
+	identityChanged := !selection.identityCommitted
+	if previous == nil {
+		previous = &remoteTabOpenSelection{
+			session: current.session, topicTitle: current.topicTitle,
+			currentPath: current.routing.currentPath,
+			pending:     cloneRemotePendingEvents(current.pendingEvents), runtime: current.runtime,
+			revision: selection.revision,
+		}
 	}
-	if selection.path != "" {
-		commitRemoteTabAttachRoute(current, selection.path, false)
+	if identityChanged {
+		current.session.newSession = false
+		current.session.name = selection.name
+		current.session.path = selection.path
+		if selection.title != "" {
+			current.topicTitle = selection.title
+		}
+		if selection.path != "" {
+			commitRemoteTabAttachRoute(current, selection.path, false)
+		}
 	}
 	current.err = ""
 	meta := remoteTabMetaLocked(current)
 	a.remoteTabMu.Unlock()
 	tab.routeEventMu.Unlock()
 
-	a.emitRemoteEvent("remote-tab:updated", meta)
-	a.saveTabsFromRemote()
+	if identityChanged {
+		a.emitRemoteEvent("remote-tab:updated", meta)
+		a.saveTabsFromRemote()
+	}
 	a.resumeRemoteTabOpenAsync(tabID, selection.name, selection.path, selection.title, previous)
 }

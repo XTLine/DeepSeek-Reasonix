@@ -26,14 +26,22 @@ func (a *App) SetActiveTab(tabID string) error {
 		}
 		a.remoteTabLayout.activeID = tabID
 		revive := tab.state == "disconnected"
+		terminalState, terminalErr := "", ""
 		if revive {
 			tab.state = "connecting"
+		} else if tab.state == "error" || tab.state == "serve_down" {
+			terminalState, terminalErr = tab.state, tab.err
 		}
 		hostID, workspace := tab.ref.HostID, tab.ref.Workspace
 		a.remoteTabMu.Unlock()
 		if revive {
 			a.emitRemoteTabState(tabID, "connecting", "")
 			a.goSafe("remoteTabServe", func() { a.bootstrapRemoteTab(tabID, hostID, workspace) })
+		} else if terminalState != "" {
+			// A restored shell can fail before its React surface subscribes. Re-publish
+			// the authoritative terminal state on activation so the recovery UI does
+			// not remain on an inferred connecting placeholder.
+			a.emitRemoteTabState(tabID, terminalState, terminalErr)
 		}
 		a.saveTabsFromRemote()
 		return nil

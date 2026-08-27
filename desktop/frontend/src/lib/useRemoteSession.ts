@@ -283,14 +283,6 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
     let historyReconcilePromise: Promise<void> | null = null;
     let historyReconcileAfterCurrent = false;
     let connectionGeneration = 0;
-    // Restored shells can publish ready while SetActiveTab is still resolving,
-    // before the state subscription below is installed. Start the retrying
-    // authoritative snapshot read as well as the backend revival so that a
-    // missed ready publication cannot strand the surface on connecting.
-    if (revivedFromShell) {
-      void app.SetActiveTab(tabId).catch(() => undefined);
-    }
-
     // Reconcile durable history after a turn settles without advancing
     // surfaceGeneration. Serve's broadcaster is intentionally bounded, so a
     // slow subscriber can miss intermediate tool/text frames even when it
@@ -493,6 +485,12 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
         setTranscript((prev) => (prev.running || prev.turnActive ? reducer(prev, { type: "turn_interrupted" }) : prev));
       }
     });
+    // Subscribe before activating a restored shell. SetActiveTab republishes
+    // terminal bootstrap states, while the snapshot loop covers a ready event
+    // that completed before this surface mounted.
+    if (revivedFromShell) {
+      void app.SetActiveTab(tabId).catch(() => undefined);
+    }
     const offEvent = onRemoteTabEvent(tabId, (raw) => {
       if (cancelled) return;
       const event = (raw ?? {}) as WireEvent;

@@ -102,20 +102,35 @@ func (a *App) resumeRemoteTabSessionPath(tabID, name, sessionPath, sessionTitle 
 	a.resumeRemoteTabSessionPathForSelection(tabID, name, sessionPath, sessionTitle, 0)
 }
 
-func (a *App) resumeRemoteTabSessionPathForSelection(tabID, name, sessionPath, sessionTitle string, selectionRevision uint64) {
+func (a *App) resumeRemoteTabSessionPathForSelection(tabID, name, sessionPath, sessionTitle string, selectionRevision uint64) bool {
+	return a.resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPath, sessionTitle, selectionRevision, nil)
+}
+
+func (a *App) resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPath, sessionTitle string, selectionRevision uint64, previous *remoteTabOpenSelection) bool {
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
 	a.remoteTabMu.Unlock()
 	if tab == nil {
-		return
+		return false
 	}
 	tab.sessionMu.Lock()
 	defer tab.sessionMu.Unlock()
 	a.remoteTabMu.Lock()
-	if a.remoteTabs[tabID] != tab || tab.client == nil || tab.state != "ready" ||
-		selectionRevision != 0 && tab.selectionRevision != selectionRevision {
+	if a.remoteTabs[tabID] != tab || (selectionRevision != 0 && tab.selectionRevision != selectionRevision) {
 		a.remoteTabMu.Unlock()
-		return
+		return false
+	}
+	if tab.client == nil || tab.state != "ready" {
+		if selectionRevision != 0 && (tab.state == "connecting" || tab.state == "reconnecting") {
+			tab.pendingSelection = &remoteTabPendingOpenSelection{
+				name: strings.TrimSpace(name), path: strings.TrimSpace(sessionPath), title: strings.TrimSpace(sessionTitle),
+				revision: selectionRevision, deferred: true, identityCommitted: true, previous: previous,
+			}
+			a.remoteTabMu.Unlock()
+			return true
+		}
+		a.remoteTabMu.Unlock()
+		return false
 	}
 	client, base, gen := tab.client, tab.base, tab.gen
 	a.remoteTabMu.Unlock()
@@ -129,7 +144,7 @@ func (a *App) resumeRemoteTabSessionPathForSelection(tabID, name, sessionPath, s
 		entries, err := serveSessions(ctx, client, base)
 		if err != nil {
 			a.transitionRemoteTabState(tabID, gen, "ready", "ready", fmt.Sprintf("Could not open remote session %q: %v", name, err))
-			return
+			return false
 		}
 		for _, entry := range entries {
 			if entry.Name == name {
@@ -148,16 +163,16 @@ func (a *App) resumeRemoteTabSessionPathForSelection(tabID, name, sessionPath, s
 			var statusErr *serveHTTPStatusError
 			if errors.As(err, &statusErr) {
 				if !a.rollbackRemoteTabProvisionalResume(tabID, tab, client, gen, route) {
-					return
+					return false
 				}
 				if remoteSessionTransitionBusy(err) {
 					a.transitionRemoteTabState(tabID, gen, "ready", "ready", "Finish the current turn before switching sessions.")
-					return
+					return false
 				}
 				// A received HTTP rejection is definitive: Serve did not commit the
 				// target, so the previous ready route remains authoritative.
 				a.transitionRemoteTabState(tabID, gen, "ready", "ready", err.Error())
-				return
+				return false
 			}
 			// A transport failure is ambiguous: Serve may have committed the
 			// resume before the tunnel lost its response. Query its current route
@@ -171,11 +186,11 @@ func (a *App) resumeRemoteTabSessionPathForSelection(tabID, name, sessionPath, s
 				if startRetry := a.reconnectRemoteTabGeneration(tabID, gen); startRetry {
 					a.goSafe("remoteTabResumeReattach", func() { a.reattachRemoteTab(tabID) })
 				}
-				return
+				return false
 			}
 			if current.Path != target.Path {
 				a.reconcileRemoteTabRejectedResume(tabID, tab, client, gen, route, current, err)
-				return
+				return false
 			}
 			if target.Name == "" {
 				target.Name = current.Name
@@ -190,12 +205,13 @@ func (a *App) resumeRemoteTabSessionPathForSelection(tabID, name, sessionPath, s
 			title = name
 		}
 		if !a.commitAndPublishRemoteTabResume(tabID, tab, client, gen, route, target, title) {
-			return
+			return false
 		}
 		a.goSafe("remoteTabResumeStatus", func() { _, _ = a.RemoteTabStatus(tabID) })
-		return
+		return false
 	}
 	a.transitionRemoteTabState(tabID, gen, "ready", "ready", fmt.Sprintf("remote session %q not found", name))
+	return false
 }
 
 func (a *App) SetRemoteSessionPinned(hostID, workspace, name string, pinned bool) error {

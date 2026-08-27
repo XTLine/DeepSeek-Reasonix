@@ -171,7 +171,7 @@ func (a *App) registerRemoteTabOpen(tab *remoteTab, hostLabel string, opts Remot
 		// still need the requested blank identity committed before bootstrap so
 		// their first attach enters the requested session.
 		result.commitSelection = strings.TrimSpace(opts.SessionName) != "" || strings.TrimSpace(opts.SessionPath) != "" || opts.NewSession && result.revive
-		if strings.TrimSpace(opts.SessionName) != "" || strings.TrimSpace(opts.SessionPath) != "" {
+		if strings.TrimSpace(opts.SessionName) != "" || strings.TrimSpace(opts.SessionPath) != "" || opts.NewSession {
 			result.selection = newRemoteTabPendingOpenSelection(opts)
 			result.previousSelection = &remoteTabOpenSelection{
 				session: existing.session, topicTitle: existing.topicTitle,
@@ -211,15 +211,22 @@ func (a *App) commitRemoteTabOpenRegistration(registration remoteTabOpenRegistra
 		return false
 	}
 	existing.hostLabel = hostLabel
-	if registration.commitSelection {
+	if registration.selection != nil {
 		existing.selectionRevision++
-		if registration.selection != nil && (existing.state == "connecting" || existing.state == "reconnecting") {
-			registration.selection.revision = existing.selectionRevision
+		registration.selection.revision = existing.selectionRevision
+		registration.selection.reuseBlank = registration.reuseBlank
+		registration.selection.previous = registration.previousSelection
+		if registration.previousSelection != nil {
+			registration.previousSelection.revision = existing.selectionRevision
+		}
+		if existing.state == "connecting" || existing.state == "reconnecting" {
 			registration.selection.deferred = true
 			existing.pendingSelection = registration.selection
 			return true
 		}
 		existing.pendingSelection = nil
+	}
+	if registration.commitSelection {
 		existing.session.newSession = opts.NewSession
 		existing.session.name = strings.TrimSpace(opts.SessionName)
 		existing.session.path = strings.TrimSpace(opts.SessionPath)
@@ -376,8 +383,10 @@ func (a *App) resumeRemoteTabOpenAsync(tabID, name, sessionPath, sessionTitle st
 		revision = selection.revision
 	}
 	a.goSafe("remoteTabResume", func() {
-		a.resumeRemoteTabSessionPathForSelection(tabID, name, sessionPath, sessionTitle, revision)
-		a.restoreRejectedRemoteTabOpenSelection(tabID, selection)
+		deferred := a.resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPath, sessionTitle, revision, selection)
+		if !deferred {
+			a.restoreRejectedRemoteTabOpenSelection(tabID, selection)
+		}
 	})
 }
 
