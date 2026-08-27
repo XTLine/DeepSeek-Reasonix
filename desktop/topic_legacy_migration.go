@@ -169,11 +169,8 @@ func migrateLegacySessionsIntoGlobalTopicsWithGates(dir string, migrationDone, r
 	// saves, so a concurrent DeleteTopic of an unrelated topic must not have
 	// its title written back by this migration batch.
 	pruneDeletedTopicEntries(topicTitles, topicSources)
-	if topicTitles != nil {
-		_ = saveTopicTitles(topicTitleRoot, topicTitles)
-	}
-	if topicSources != nil {
-		_ = saveTopicTitleSources(topicTitleRoot, topicSources)
+	if topicTitles != nil || topicSources != nil {
+		_ = saveTopicTitleIndex(topicTitleRoot, topicTitles, topicSources)
 	}
 	invalidateTopicSessionIndex(dir)
 	if !deferred {
@@ -311,13 +308,8 @@ func repairIndexedSessionTopicsWithGate(dir string, repairDone func(string) bool
 		if err := prependTopicsInProjectsFile(workspaceRoot, repairedTopicIDs, false); err != nil {
 			deferred = true
 		}
-		if titlesChanged {
-			if err := saveTopicTitles(topicTitleRoot, topicTitles); err != nil {
-				deferred = true
-			}
-		}
-		if sourcesChanged {
-			if err := saveTopicTitleSources(topicTitleRoot, topicSources); err != nil {
+		if titlesChanged || sourcesChanged {
+			if err := saveTopicTitleIndex(topicTitleRoot, topicTitles, topicSources); err != nil {
 				deferred = true
 			}
 		}

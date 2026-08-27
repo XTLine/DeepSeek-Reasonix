@@ -284,6 +284,7 @@ export function ProjectTree({
     setWorkbenchHeaderMenu(null);
   }, []);
   const topicLoadSeqRef = useRef<Record<string, number>>({});
+  const topicLoadErrorRef = useRef<Record<string, string>>({});
   const refreshRef = useRef<ProjectTreeRefresh>(async () => {});
   const { trashingTopics, trashingSessions, currentArchiveTombstones, trashTopic, trashSession } = useProjectTreeArchiveController({
     treeRef, topicLoadSeqRef, topicPageStateRef, updateTopicPageState, refreshRef,
@@ -351,6 +352,7 @@ export function ProjectTree({
         sortMode,
       });
       if (topicLoadSeqRef.current[key] !== seq) return;
+      delete topicLoadErrorRef.current[key];
       if (!projectTreeTopicPageIsFresh(topicRevisionRef.current, key, page.revision)) {
         updateTopicPageState(key, { ...topicPageStateRef.current[key], loading: false });
         return;
@@ -372,11 +374,16 @@ export function ProjectTree({
       updateTopicPageState(key, preserveCompletePage
         ? { ...topicPageStateRef.current[key], loading: false }
         : { nextCursor: page.nextCursor, loading: false });
-    } catch {
+    } catch (error) {
       if (topicLoadSeqRef.current[key] !== seq) return;
       updateTopicPageState(key, { ...topicPageStateRef.current[key], loading: false });
+      const message = error instanceof Error ? error.message : String(error);
+      if (topicLoadErrorRef.current[key] !== message) {
+        topicLoadErrorRef.current[key] = message;
+        showToast(message, "error", { durationMs: 6000 });
+      }
     }
-  }, [applyRuntimeProjection, creationTopics, currentArchiveTombstones, query, timeFilter, updateTopicPageState]);
+  }, [applyRuntimeProjection, creationTopics, currentArchiveTombstones, query, showToast, timeFilter, updateTopicPageState]);
   loadProjectTopicsRef.current = loadProjectTopics;
 
   const selectWorkbenchSortMode = useCallback((sortMode: WorkbenchSortMode) => {

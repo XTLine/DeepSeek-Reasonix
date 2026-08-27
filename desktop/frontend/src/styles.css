@@ -25609,13 +25609,13 @@ body > .mermaid-diagram--fullscreen {
   white-space: nowrap;
 }
 
-.transcript-selection-action button:hover,
-.transcript-selection-action button:focus-visible {
+.transcript-selection-action button:not(:disabled):hover,
+.transcript-selection-action button:not(:disabled):focus-visible {
   background: var(--sidebar-hover);
   outline: none;
 }
 
-.transcript-selection-action button:focus-visible {
+.transcript-selection-action button:not(:disabled):focus-visible {
   box-shadow: var(--focus-ring);
 }
 

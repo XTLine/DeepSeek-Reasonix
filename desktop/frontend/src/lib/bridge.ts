@@ -1402,7 +1402,6 @@ function mockExternalOpenerIconDataURL(color: string, label: string): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="${color}"/><text x="32" y="40" text-anchor="middle" font-family="system-ui" font-size="25" font-weight="700" fill="white">${label}</text></svg>`;
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
-
 function makeMockApp(): AppBindings {
   const scenario = mockScenario();
   const remoteProjects = createMockRemoteProjects();
@@ -1914,6 +1913,7 @@ function makeMockApp(): AppBindings {
         { key: "topic_bench_reported_long_turn", kind: "topic", label: "bench:reported-long-turn", root: "~/projects/reasonix", topicId: "topic_bench_reported_long_turn", projectColor: "amber", turns: 1, lastActivityAt: mockNow - 300_000 },
         { key: "topic_bench_geometry_contract", kind: "topic", label: "bench:geometry-229", root: "~/projects/reasonix", topicId: "topic_bench_geometry_contract", projectColor: "amber", turns: 1, lastActivityAt: mockNow - 330_000 },
         { key: "topic_bench_storm", kind: "topic", label: "bench:storm-40t", root: "~/projects/reasonix", topicId: "topic_bench_storm", projectColor: "red", turns: 40, lastActivityAt: mockNow - 360_000 },
+        { key: "topic_bench_selection_table", kind: "topic", label: "bench:selection-table", root: "~/projects/reasonix", topicId: "topic_bench_selection_table" },
       ],
     },
   ] : [
