@@ -407,9 +407,10 @@ func waitForRemoteEventCount(t *testing.T, log *eventLog, prefix string, want in
 	}
 }
 
-// cleanupRemoteTabPumps cancels every open tab's SSE pump when the test
-// ends. Without this the long-lived /events connection keeps the httptest
-// server's Close waiting forever.
+// cleanupRemoteTabPumps cancels every open tab's SSE pump and waits for all
+// bridge tasks to return. Waiting matters on Windows: an async resume can
+// publish its final tab snapshot after the assertion succeeds, racing the
+// temporary user directory's cleanup.
 func cleanupRemoteTabPumps(t *testing.T, a *App) {
 	t.Helper()
 	t.Cleanup(func() {
@@ -420,6 +421,13 @@ func cleanupRemoteTabPumps(t *testing.T, a *App) {
 			}
 		}
 		a.remoteTabMu.Unlock()
+		done := make(chan struct{})
+		go func() { a.remoteTabTasks.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("remote tab tasks did not stop after pump cancellation")
+		}
 	})
 }
 

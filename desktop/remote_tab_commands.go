@@ -186,7 +186,7 @@ func (a *App) resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPat
 				// Do not publish either transcript from an unconfirmed generation.
 				// A fresh attach resolves Serve's current session before ready.
 				if startRetry := a.reconnectRemoteTabGeneration(tabID, gen); startRetry {
-					a.goSafe("remoteTabResumeReattach", func() { a.reattachRemoteTab(tabID) })
+					a.goRemoteTabSafe("remoteTabResumeReattach", func() { a.reattachRemoteTab(tabID) })
 				}
 				return true
 			}
@@ -210,7 +210,7 @@ func (a *App) resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPat
 			// selection over it.
 			return true
 		}
-		a.goSafe("remoteTabResumeStatus", func() { _, _ = a.RemoteTabStatus(tabID) })
+		a.goRemoteTabSafe("remoteTabResumeStatus", func() { _, _ = a.RemoteTabStatus(tabID) })
 		return true
 	}
 	a.transitionRemoteTabState(tabID, gen, "ready", "ready", fmt.Sprintf("remote session %q not found", name))

@@ -54,13 +54,13 @@ func (a *App) publishRemoteTabFrameForRouteLocked(tabID string, tab, expectedTab
 	}
 	a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:event", tabID), frame)
 	if refreshRuntime {
-		a.goSafe("remoteTabRuntimeStatus", func() { _, _ = a.RemoteTabStatus(tabID) })
+		a.goRemoteTabSafe("remoteTabRuntimeStatus", func() { _, _ = a.RemoteTabStatus(tabID) })
 	}
 	if kind == "turn_done" {
 		// Capture the durable session name immediately, closing the window
 		// where a replacement Serve could otherwise lose a just-finished
 		// conversation before the slower generated-title refresh runs.
-		a.goSafe("remoteTabTitle", func() {
+		a.goRemoteTabSafe("remoteTabTitle", func() {
 			_, _ = a.RemoteTabStatus(tabID)
 			// The serve generates the session title from the finished
 			// conversation; pick it up shortly after the turn settles.

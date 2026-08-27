@@ -524,6 +524,7 @@ func TestRemoteResumeBuffersTargetFramesUntilPostCommit(t *testing.T) {
 	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{})
 	eventPrefix := "remote-tab:" + meta.ID + ":event"
 	readyPrefix := "remote-tab:" + meta.ID + ":state"
+	waitForRemoteEventCount(t, log, readyPrefix, 2)
 	eventsBefore, readyBefore := log.count(eventPrefix), log.count(readyPrefix)
 	done := make(chan struct{})
 	go func() {

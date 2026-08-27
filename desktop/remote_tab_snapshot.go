@@ -227,7 +227,7 @@ func (a *App) recordRemoteTabSessionStatus(tabID string, client *http.Client, ge
 		a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:state", tabID), RemoteTabStateView{State: "ready"})
 	}
 	if pathChanged {
-		a.goSafe("remoteTabStatusTitle", func() { a.refreshRemoteTabTitle(tabID) })
+		a.goRemoteTabSafe("remoteTabStatusTitle", func() { a.refreshRemoteTabTitle(tabID) })
 	}
 	return true
 }

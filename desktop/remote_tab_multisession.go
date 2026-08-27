@@ -218,7 +218,7 @@ func (a *App) adoptRemoteTabFrameCurrent(tabID string, gen uint64, sessionPath s
 	a.remoteTabMu.Unlock()
 	a.emitRemoteEvent("remote-tab:updated", meta)
 	if !reset {
-		a.goSafe("remoteTabAdoptedTitle", func() { a.refreshRemoteTabTitle(tabID) })
+		a.goRemoteTabSafe("remoteTabAdoptedTitle", func() { a.refreshRemoteTabTitle(tabID) })
 	}
 	if ready {
 		// The frontend treats ready -> ready as a new surface generation. Emit it

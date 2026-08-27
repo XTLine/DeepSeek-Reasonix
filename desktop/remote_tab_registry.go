@@ -320,7 +320,7 @@ func (a *App) resumeRemoteTabs(hostID string) {
 	}
 	a.remoteTabMu.Unlock()
 	for _, tabID := range tabIDs {
-		a.goSafe("remoteTabReattach", func() { a.reattachRemoteTab(tabID) })
+		a.goRemoteTabSafe("remoteTabReattach", func() { a.reattachRemoteTab(tabID) })
 	}
 }
 
@@ -422,7 +422,7 @@ func (a *App) reattachRemoteTabOnce(tabID string) bool {
 	a.remoteTabMu.Unlock()
 
 	opened := make(chan error, 1)
-	a.goSafe("remoteTabPump", func() { a.remoteTabPump(pumpCtx, tabID, gen, opened) })
+	a.goRemoteTabSafe("remoteTabPump", func() { a.remoteTabPump(pumpCtx, tabID, gen, opened) })
 	select {
 	case err := <-opened:
 		if err != nil {
@@ -456,6 +456,6 @@ func (a *App) reattachRemoteTabOnce(tabID string) bool {
 		a.retireRemoteTabGeneration(tabID, gen)
 		return false
 	}
-	a.goSafe("remoteTabDeferredSelection", func() { a.applyPendingRemoteTabOpenSelection(tabID) })
+	a.goRemoteTabSafe("remoteTabDeferredSelection", func() { a.applyPendingRemoteTabOpenSelection(tabID) })
 	return true
 }

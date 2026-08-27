@@ -344,6 +344,7 @@ type App struct {
 	remoteTabMu     sync.Mutex
 	remoteTabs      map[string]*remoteTab
 	remoteTabLayout remoteTabLayoutState
+	remoteTabTasks  sync.WaitGroup
 	// remoteTabModelMu makes the caller's current-model snapshot, the remote
 	// Serve rebuild, and the tab metadata commit one transaction. Without it,
 	// overlapping switches could roll remote config back to a stale model.

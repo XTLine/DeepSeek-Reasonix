@@ -4598,7 +4598,7 @@ func TestListSessionsUsesPinnedSessionOwnerBeforeStaleRuntimeDir(t *testing.T) {
 	app.activeTabID = tab.ID
 	installSessionCatalogForTest(t, app, sessionDirA, "project", projectA)
 	t.Cleanup(oldCtrl.Close)
-	sessions := app.ListSessions()
+	sessions := listSessionsAfterPinnedOwnerReconcile(t, app, sessionDirA, projectA)
 	if len(sessions) == 0 {
 		t.Fatal("ListSessions() returned no sessions")
 	}

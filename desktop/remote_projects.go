@@ -337,7 +337,7 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 		// current conversation untouched so retrying the navigation is safe.
 		if registration.revive {
 			a.emitRemoteTabState(registration.reuseID, "connecting", "")
-			a.goSafe("remoteTabServe", func() { a.bootstrapRemoteTab(registration.reuseID, hostID, workspace) })
+			a.goRemoteTabSafe("remoteTabServe", func() { a.bootstrapRemoteTab(registration.reuseID, hostID, workspace) })
 		} else if registration.selection != nil && registration.selection.deferred {
 			// The reconnect/attach path applies the latest selection after ready.
 		} else if name := strings.TrimSpace(opts.SessionName); name != "" || strings.TrimSpace(opts.SessionPath) != "" {
@@ -373,7 +373,7 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 		}
 	}
 	a.activateRemoteTab(tabID, meta)
-	a.goSafe("remoteTabServe", func() { a.bootstrapRemoteTab(tabID, hostID, workspace) })
+	a.goRemoteTabSafe("remoteTabServe", func() { a.bootstrapRemoteTab(tabID, hostID, workspace) })
 	// Persist after activation so the file records the highlighted remote id.
 	a.saveTabsFromRemote()
 	return meta, nil
@@ -391,7 +391,7 @@ func (a *App) resumeRemoteTabOpenAsync(tabID, name, sessionPath, sessionTitle st
 		}
 		revision = selection.revision
 	}
-	a.goSafe("remoteTabResume", func() {
+	a.goRemoteTabSafe("remoteTabResume", func() {
 		handled := a.resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPath, sessionTitle, revision, selection)
 		if !handled {
 			a.restoreRejectedRemoteTabOpenSelection(tabID, selection)
