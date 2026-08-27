@@ -69,7 +69,7 @@ func TestRegisterRemoteTabOpenReviveCarriesSelectedTitle(t *testing.T) {
 	if existing.topicTitle != "Old title" || existing.routing.currentPath != "/sessions/old.jsonl" {
 		t.Fatalf("registration changed identity before visibility commit: title=%q path=%q", existing.topicTitle, existing.routing.currentPath)
 	}
-	if !a.commitRemoteTabOpenRegistration(registration, "Box", RemoteTabOpenOptions{
+	if !a.commitRemoteTabOpenRegistration(&registration, "Box", RemoteTabOpenOptions{
 		SessionName: "selected", SessionPath: "/sessions/selected.jsonl", SessionTitle: "Selected title",
 	}) {
 		t.Fatal("commitRemoteTabOpenRegistration rejected the reused shell")

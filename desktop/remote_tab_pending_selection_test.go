@@ -101,6 +101,55 @@ func TestRemoteTabDeferredResumeRejectsSupersededSelectionRevision(t *testing.T)
 	}
 }
 
+func TestReadyTabRapidSelectionsRollbackToServeAuthoritativeSnapshot(t *testing.T) {
+	const oldPath = "/sessions/old.jsonl"
+	const firstPath = "/sessions/first.jsonl"
+	const secondPath = "/sessions/second.jsonl"
+	requests := 0
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusConflict, Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader("busy")), Request: req,
+		}, nil
+	})}
+	ref := RemoteTabRef{HostID: "box", Workspace: "~/app"}
+	tab := &remoteTab{
+		id: "remote-1", ref: ref, state: "ready", client: client, base: "http://127.0.0.1:43210", gen: 7,
+		session: remoteTabSessionState{name: "old", path: oldPath}, topicTitle: "Old",
+		routing: remoteTabSessionRouting{currentPath: oldPath, running: map[string]bool{}},
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+
+	firstOpts := RemoteTabOpenOptions{SessionName: "first", SessionPath: firstPath, SessionTitle: "First"}
+	first := a.registerRemoteTabOpen(&remoteTab{id: "unused-first", ref: ref}, "Box", firstOpts)
+	if !a.commitRemoteTabOpenRegistration(&first, "Box", firstOpts) || tab.pendingSelection == nil {
+		t.Fatal("first ready selection was not retained until its resume started")
+	}
+	secondOpts := RemoteTabOpenOptions{SessionName: "second", SessionPath: secondPath, SessionTitle: "Second"}
+	second := a.registerRemoteTabOpen(&remoteTab{id: "unused-second", ref: ref}, "Box", secondOpts)
+	if !a.commitRemoteTabOpenRegistration(&second, "Box", secondOpts) {
+		t.Fatal("second ready selection was not committed")
+	}
+	if second.previousSelection == nil || second.previousSelection.currentPath != oldPath {
+		t.Fatalf("second rollback snapshot = %+v, want Serve-authoritative %q", second.previousSelection, oldPath)
+	}
+
+	if handled := a.resumeRemoteTabSessionPathForOpenSelection(tab.id, "first", firstPath, "First", first.selection.revision, first.previousSelection); !handled {
+		t.Fatal("superseded first selection requested rollback")
+	}
+	if requests != 0 {
+		t.Fatalf("superseded first selection sent %d Serve requests", requests)
+	}
+	if handled := a.resumeRemoteTabSessionPathForOpenSelection(tab.id, "second", secondPath, "Second", second.selection.revision, second.previousSelection); handled {
+		t.Fatal("rejected second selection was treated as committed")
+	}
+	a.restoreRejectedRemoteTabOpenSelection(tab.id, second.previousSelection)
+	if requests != 1 || tab.routing.currentPath != oldPath || tab.session.path != oldPath || tab.topicTitle != "Old" {
+		t.Fatalf("rejected rapid selection left requests/route/session/title = %d/%q/%q/%q", requests, tab.routing.currentPath, tab.session.path, tab.topicTitle)
+	}
+}
+
 func TestRemoteTabResumeRequeuesSelectionWhenReadinessDrops(t *testing.T) {
 	const oldPath = "/sessions/old.jsonl"
 	const targetPath = "/sessions/target.jsonl"
@@ -233,7 +282,7 @@ func TestRemoteTabNewSessionRestoresRouteFromCommittedDeferredSelection(t *testi
 	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
 	opts := RemoteTabOpenOptions{NewSession: true}
 	registration := a.registerRemoteTabOpen(&remoteTab{id: "unused", ref: ref}, "Box", opts)
-	if !a.commitRemoteTabOpenRegistration(registration, "Box", opts) {
+	if !a.commitRemoteTabOpenRegistration(&registration, "Box", opts) {
 		t.Fatal("New Session did not reuse the reconnecting tab")
 	}
 	if tab.session.path != oldPath || tab.routing.currentPath != oldPath || tab.pendingSelection == nil || !tab.pendingSelection.newSession {

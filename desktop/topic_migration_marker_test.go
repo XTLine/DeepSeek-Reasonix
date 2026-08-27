@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,5 +171,47 @@ func TestRepairIndexedTopicDefersUnreadableTranscriptWithoutPersistingFallback(t
 	}
 	if !topicIndexRepairDone(dir) {
 		t.Fatal("successful retry should complete the repair marker")
+	}
+}
+
+func TestRepairIndexedTopicDefersUnreadableTitleSidecar(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	dir := config.SessionDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := writeLegacySession(t, dir, "custom-title.jsonl", "transcript fallback", time.Now())
+	topicID := "legacy_custom_title"
+	if err := agent.SaveBranchMetaPreserveUpdated(sessionPath, agent.BranchMeta{
+		ID: agent.BranchID(sessionPath), Scope: "global", TopicID: topicID,
+		Revision: 7, ContentDigest: "pre-upgrade-digest", SchemaVersion: agent.BranchMetaCountsVersion,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sessionTitlesPath(dir), []byte("{not-json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	markTopicMigrationDone(dir)
+
+	if repaired := migrateLegacySessionsIntoGlobalTopics(dir); len(repaired) != 0 {
+		t.Fatalf("unreadable title sidecar repaired topics = %v, want none", repaired)
+	}
+	if topicIndexRepairDone(dir) || loadTopicTitle("", topicID) != "" || loadTopicTitleSource("", topicID) != "" || containsDesktopString(loadProjectsFile().GlobalTopics, topicID) {
+		t.Fatal("unreadable title sidecar finalized indexed-topic repair")
+	}
+
+	const customTitle = "Recovered custom title"
+	titleJSON, err := json.Marshal(map[string]string{filepath.Base(sessionPath): customTitle})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sessionTitlesPath(dir), titleJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if repaired := migrateLegacySessionsIntoGlobalTopics(dir); len(repaired) != 1 || repaired[0] != topicID {
+		t.Fatalf("restored title sidecar repaired topics = %v, want %q", repaired, topicID)
+	}
+	if got, want := loadTopicTitle("", topicID), topicTitleFromText(customTitle); got != want {
+		t.Fatalf("restored custom title = %q, want %q", got, want)
 	}
 }

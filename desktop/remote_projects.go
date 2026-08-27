@@ -200,7 +200,7 @@ func (a *App) registerRemoteTabOpen(tab *remoteTab, hostLabel string, opts Remot
 // commitRemoteTabOpenRegistration applies a reused shell's requested identity
 // only after the single-surface visibility transaction has succeeded. Until
 // then the persisted shell and Serve remain aligned on the previous session.
-func (a *App) commitRemoteTabOpenRegistration(registration remoteTabOpenRegistration, hostLabel string, opts RemoteTabOpenOptions) bool {
+func (a *App) commitRemoteTabOpenRegistration(registration *remoteTabOpenRegistration, hostLabel string, opts RemoteTabOpenOptions) bool {
 	if registration.reuseID == "" {
 		return false
 	}
@@ -212,11 +212,11 @@ func (a *App) commitRemoteTabOpenRegistration(registration remoteTabOpenRegistra
 	}
 	existing.hostLabel = hostLabel
 	if registration.selection != nil {
-		// A ready selection can commit its provisional identity before /resume
-		// observes a reconnect. If New Session supersedes that deferred resume,
-		// restore the Serve-authoritative route before fencing /new.
+		// A ready selection commits its provisional identity before its async
+		// /resume starts. If another click wins first, restore the snapshot Serve
+		// still owns before committing the newer provisional identity.
 		pending := existing.pendingSelection
-		if registration.selection.newSession && pending != nil && pending.identityCommitted && pending.previous != nil {
+		if pending != nil && pending.identityCommitted && pending.previous != nil {
 			restoreRemoteTabOpenSelectionLocked(existing, pending.previous)
 			registration.previousSelection = pending.previous
 			registration.reuseBlank = pending.previous.session.reset
@@ -246,6 +246,10 @@ func (a *App) commitRemoteTabOpenRegistration(registration remoteTabOpenRegistra
 			commitRemoteTabAttachRoute(existing, "", true)
 		} else if existing.session.path != "" {
 			commitRemoteTabAttachRoute(existing, existing.session.path, false)
+		}
+		if existing.state == "ready" {
+			registration.selection.identityCommitted = true
+			existing.pendingSelection = registration.selection
 		}
 		existing.err = ""
 	}
@@ -328,7 +332,7 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 				return TabMeta{}, err
 			}
 		}
-		if !a.commitRemoteTabOpenRegistration(registration, host.Name, opts) {
+		if !a.commitRemoteTabOpenRegistration(&registration, host.Name, opts) {
 			return TabMeta{}, fmt.Errorf("remote tab %q closed while opening", registration.reuseID)
 		}
 

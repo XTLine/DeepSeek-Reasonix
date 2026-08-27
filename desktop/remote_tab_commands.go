@@ -132,6 +132,7 @@ func (a *App) resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPat
 		a.remoteTabMu.Unlock()
 		return false
 	}
+	consumeQueuedRemoteTabOpenSelectionLocked(tab, selectionRevision)
 	client, base, gen := tab.client, tab.base, tab.gen
 	a.remoteTabMu.Unlock()
 

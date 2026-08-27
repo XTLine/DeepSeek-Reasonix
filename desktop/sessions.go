@@ -67,23 +67,6 @@ func desktopSessionDir(root string) string {
 	return config.SessionDir()
 }
 
-// loadSessionTitles reads the basename→title map (missing/corrupt → empty).
-func loadSessionTitles(dir string) map[string]string {
-	m := map[string]string{}
-	b, err := readFileWithTimeout(sessionTitlesPath(dir), topicFileReadTimeout)
-	if err != nil {
-		return m
-	}
-	_ = json.Unmarshal(b, &m)
-	// Older builds could persist titles polluted with internal wrappers
-	// (memory-compiler contracts, transient blocks) — clean at the read
-	// boundary; UserPreviewText is a no-op on clean titles (#5666).
-	for key, title := range m {
-		m[key] = agent.UserPreviewText(title)
-	}
-	return m
-}
-
 func loadSessionTitlesForUpdate(dir string) (map[string]string, error) {
 	return loadStringMapForUpdate(sessionTitlesPath(dir))
 }

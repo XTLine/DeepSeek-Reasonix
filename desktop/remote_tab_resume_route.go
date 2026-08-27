@@ -52,13 +52,9 @@ func (a *App) beginRemoteTabProvisionalResume(tabID string, tab *remoteTab, clie
 	current.routing.rehydratingPath = route.targetPath
 	current.routing.rehydratingFrames = nil
 	current.routing.revision++
-	current.pendingEvents = nil
-	current.runtime.revision++
+	resetRemoteTabForegroundRuntimeLocked(current)
 	current.runtime.running = current.routing.running[route.targetPath]
-	current.runtime.turnStartedAt = 0
-	current.runtime.pendingPrompt = false
-	current.runtime.cancelRequested = false
-	current.runtime.cancellable = current.runtime.running || current.runtime.backgroundJobs > 0
+	current.runtime.cancellable = current.runtime.running
 	return route
 }
 

@@ -324,7 +324,11 @@ func repairedIndexedSessionTopicTitle(dir string, sessionTitles *map[string]stri
 		return "", false, nil
 	}
 	if *sessionTitles == nil {
-		*sessionTitles = loadSessionTitles(dir)
+		var err error
+		*sessionTitles, err = loadSessionTitlesWithError(dir)
+		if err != nil {
+			return "", false, err
+		}
 	}
 	title, err := indexedSessionTopicTitle(*sessionTitles, info, meta)
 	if err != nil {

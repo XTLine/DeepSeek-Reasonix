@@ -26,6 +26,17 @@ func newRemoteTabPendingOpenSelection(opts RemoteTabOpenOptions) *remoteTabPendi
 	}
 }
 
+// consumeQueuedRemoteTabOpenSelectionLocked retires the ready-tab handoff once
+// its resume goroutine has acquired sessionMu and passed the revision fence.
+// Until then a newer click must be able to recover Serve's still-authoritative
+// pre-selection snapshot. Caller holds remoteTabMu.
+func consumeQueuedRemoteTabOpenSelectionLocked(tab *remoteTab, revision uint64) {
+	if revision == 0 || tab.pendingSelection == nil || tab.pendingSelection.deferred || tab.pendingSelection.revision != revision {
+		return
+	}
+	tab.pendingSelection = nil
+}
+
 // applyPendingRemoteTabOpenSelection commits only the newest deferred intent
 // once the shell reaches ready, then uses the normal transition path.
 func (a *App) applyPendingRemoteTabOpenSelection(tabID string) {
