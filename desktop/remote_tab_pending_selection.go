@@ -27,9 +27,9 @@ func newRemoteTabPendingOpenSelection(opts RemoteTabOpenOptions) *remoteTabPendi
 }
 
 // consumeQueuedRemoteTabOpenSelectionLocked retires the ready-tab handoff once
-// its resume goroutine has acquired sessionMu and passed the revision fence.
-// Until then a newer click must be able to recover Serve's still-authoritative
-// pre-selection snapshot. Caller holds remoteTabMu.
+// its resume goroutine passes the revision fence. selectionMu keeps newer
+// registrations out until this request and any rollback finish. Caller holds
+// remoteTabMu.
 func consumeQueuedRemoteTabOpenSelectionLocked(tab *remoteTab, revision uint64) {
 	if revision == 0 || tab.pendingSelection == nil || tab.pendingSelection.deferred || tab.pendingSelection.revision != revision {
 		return
@@ -51,14 +51,17 @@ func (a *App) applyPendingRemoteTabOpenSelection(tabID string) {
 	tab.routeEventMu.Lock()
 	a.remoteTabMu.Lock()
 	current := a.remoteTabs[tabID]
-	if current != tab || current.state != "ready" || current.pendingSelection == nil {
+	if current != tab || current.state != "ready" || current.pendingSelection == nil || !current.pendingSelection.deferred {
 		a.remoteTabMu.Unlock()
 		tab.routeEventMu.Unlock()
 		return
 	}
 	selection := current.pendingSelection
 	current.pendingSelection = nil
-	if current.selectionRevision != selection.revision {
+	if selection.revision == 0 {
+		current.selectionRevision++
+		selection.revision = current.selectionRevision
+	} else if current.selectionRevision != selection.revision {
 		a.remoteTabMu.Unlock()
 		tab.routeEventMu.Unlock()
 		return
@@ -99,6 +102,10 @@ func (a *App) applyPendingRemoteTabOpenSelection(tabID string) {
 			commitRemoteTabAttachRoute(current, selection.path, false)
 		}
 	}
+	selection.deferred = false
+	selection.identityCommitted = true
+	selection.previous = previous
+	current.pendingSelection = selection
 	current.err = ""
 	meta := remoteTabMetaLocked(current)
 	a.remoteTabMu.Unlock()
@@ -109,4 +116,74 @@ func (a *App) applyPendingRemoteTabOpenSelection(tabID string) {
 		a.saveTabsFromRemote()
 	}
 	a.resumeRemoteTabOpenAsync(tabID, selection.name, selection.path, selection.title, previous)
+}
+
+func (a *App) resumeRemoteTabOpenAsync(tabID, name, sessionPath, sessionTitle string, selection *remoteTabOpenSelection) {
+	revision := uint64(0)
+	if selection != nil {
+		if selection.revision == 0 {
+			a.remoteTabMu.Lock()
+			if current := a.remoteTabs[tabID]; current != nil {
+				selection.revision = current.selectionRevision
+			}
+			a.remoteTabMu.Unlock()
+		}
+		revision = selection.revision
+	}
+	a.goRemoteTabSafe("remoteTabResume", func() {
+		a.remoteTabMu.Lock()
+		tab := a.remoteTabs[tabID]
+		a.remoteTabMu.Unlock()
+		if tab == nil {
+			return
+		}
+		func() {
+			tab.selectionMu.Lock()
+			defer tab.selectionMu.Unlock()
+			handled := a.resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPath, sessionTitle, revision, selection)
+			if !handled {
+				a.restoreRejectedRemoteTabOpenSelection(tabID, selection)
+			}
+		}()
+		a.applyPendingRemoteTabOpenSelection(tabID)
+	})
+}
+
+func (a *App) restoreRejectedRemoteTabOpenSelection(tabID string, previous *remoteTabOpenSelection) {
+	if previous == nil {
+		return
+	}
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	a.remoteTabMu.Unlock()
+	if tab == nil {
+		return
+	}
+	tab.routeEventMu.Lock()
+	defer tab.routeEventMu.Unlock()
+	a.remoteTabMu.Lock()
+	current := a.remoteTabs[tabID]
+	if current != tab || current.selectionRevision != previous.revision || current.state != "ready" || strings.TrimSpace(current.err) == "" {
+		a.remoteTabMu.Unlock()
+		return
+	}
+	restoreRemoteTabOpenSelectionLocked(current, previous)
+	meta := remoteTabMetaLocked(current)
+	a.remoteTabMu.Unlock()
+	a.emitRemoteEvent("remote-tab:updated", meta)
+	a.saveTabsFromRemote()
+}
+
+func restoreRemoteTabOpenSelectionLocked(current *remoteTab, previous *remoteTabOpenSelection) {
+	current.session = previous.session
+	current.topicTitle = previous.topicTitle
+	current.routing.currentPath = previous.currentPath
+	current.routing.pathRevision++
+	current.routing.revision++
+	current.routing.rehydratingPath = ""
+	current.routing.rehydratingFrames = nil
+	current.pendingEvents = cloneRemotePendingEvents(previous.pending)
+	restoredRuntime := previous.runtime
+	restoredRuntime.revision = max(current.runtime.revision, previous.runtime.revision) + 1
+	current.runtime = restoredRuntime
 }

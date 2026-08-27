@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -148,6 +149,95 @@ func TestReadyTabRapidSelectionsRollbackToServeAuthoritativeSnapshot(t *testing.
 	if requests != 1 || tab.routing.currentPath != oldPath || tab.session.path != oldPath || tab.topicTitle != "Old" {
 		t.Fatalf("rejected rapid selection left requests/route/session/title = %d/%q/%q/%q", requests, tab.routing.currentPath, tab.session.path, tab.topicTitle)
 	}
+}
+
+func TestReadyTabInFlightSelectionsSerializeThroughDefinitiveRollback(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	const oldPath = "/sessions/old.jsonl"
+	const firstPath = "/sessions/first.jsonl"
+	const secondPath = "/sessions/second.jsonl"
+	firstStarted := make(chan struct{}, 1)
+	releaseFirst := make(chan struct{})
+	secondStarted := make(chan struct{}, 1)
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var payload struct {
+			Path string `json:"path"`
+		}
+		_ = json.NewDecoder(req.Body).Decode(&payload)
+		switch payload.Path {
+		case firstPath:
+			firstStarted <- struct{}{}
+			<-releaseFirst
+		case secondPath:
+			secondStarted <- struct{}{}
+		default:
+			t.Fatalf("unexpected resume path %q", payload.Path)
+		}
+		return &http.Response{
+			StatusCode: http.StatusConflict, Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader("busy")), Request: req,
+		}, nil
+	})}
+	ref := RemoteTabRef{HostID: "box", Workspace: "~/app"}
+	tab := &remoteTab{
+		id: "remote-1", ref: ref, state: "ready", client: client, base: "http://127.0.0.1:43210", gen: 7,
+		session: remoteTabSessionState{name: "old", path: oldPath}, topicTitle: "Old",
+		routing: remoteTabSessionRouting{currentPath: oldPath, running: map[string]bool{}},
+	}
+	a := &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}
+
+	firstOpts := RemoteTabOpenOptions{SessionName: "first", SessionPath: firstPath, SessionTitle: "First"}
+	first := a.registerRemoteTabOpen(&remoteTab{id: "unused-first", ref: ref}, "Box", firstOpts)
+	if !a.commitRemoteTabOpenRegistration(&first, "Box", firstOpts) {
+		t.Fatal("first ready selection was not committed")
+	}
+	a.resumeRemoteTabOpenAsync(tab.id, "first", firstPath, "First", first.previousSelection)
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first resume did not start")
+	}
+
+	secondOpts := RemoteTabOpenOptions{SessionName: "second", SessionPath: secondPath, SessionTitle: "Second"}
+	second := a.registerRemoteTabOpen(&remoteTab{id: "unused-second", ref: ref}, "Box", secondOpts)
+	if !a.commitRemoteTabOpenRegistration(&second, "Box", secondOpts) {
+		t.Fatal("second selection was not queued")
+	}
+	a.remoteTabMu.Lock()
+	queued, sessionPath := tab.pendingSelection, tab.session.path
+	a.remoteTabMu.Unlock()
+	if queued != second.selection || !queued.deferred || sessionPath != firstPath {
+		t.Fatalf("in-flight selection queue/session = %+v/%q, want deferred second/%q", queued, sessionPath, firstPath)
+	}
+	select {
+	case <-secondStarted:
+		t.Fatal("second resume started before the first resolved")
+	default:
+	}
+	close(releaseFirst)
+	select {
+	case <-secondStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("queued second resume did not start after first rollback")
+	}
+	if second.selection.previous == nil || second.selection.previous.currentPath != oldPath {
+		t.Fatalf("second rollback snapshot = %+v, want authoritative %q", second.selection.previous, oldPath)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		a.remoteTabMu.Lock()
+		path, sessionPath, title, pending := tab.routing.currentPath, tab.session.path, tab.topicTitle, tab.pendingSelection
+		a.remoteTabMu.Unlock()
+		if path == oldPath && sessionPath == oldPath && title == "Old" && pending == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("rejected in-flight selections left route/session/title/pending = %q/%q/%q/%+v", path, sessionPath, title, pending)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	a.remoteTabTasks.Wait()
 }
 
 func TestRemoteTabResumeRequeuesSelectionWhenReadinessDrops(t *testing.T) {

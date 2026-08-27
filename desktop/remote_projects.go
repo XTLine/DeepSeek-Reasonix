@@ -54,7 +54,8 @@ type RemoteTabStateView struct {
 
 // remoteTab is one open remote project tab.
 type remoteTab struct {
-	sessionMu sync.Mutex
+	selectionMu sync.Mutex // orders resume outcomes and queued registrations
+	sessionMu   sync.Mutex
 	// routeEventMu orders foreground-route adoption with route-scoped frames.
 	// It stays separate from remoteTabMu so frontend callbacks run unlocked;
 	// lock order is routeEventMu, then App.remoteTabMu.
@@ -205,13 +206,42 @@ func (a *App) commitRemoteTabOpenRegistration(registration *remoteTabOpenRegistr
 		return false
 	}
 	a.remoteTabMu.Lock()
-	defer a.remoteTabMu.Unlock()
 	existing := a.remoteTabs[registration.reuseID]
 	if existing == nil {
+		a.remoteTabMu.Unlock()
+		return false
+	}
+	a.remoteTabMu.Unlock()
+	if !existing.selectionMu.TryLock() {
+		a.remoteTabMu.Lock()
+		defer a.remoteTabMu.Unlock()
+		if a.remoteTabs[registration.reuseID] != existing {
+			return false
+		}
+		existing.hostLabel = hostLabel
+		if registration.selection != nil {
+			registration.selection.deferred = true
+			registration.selection.revision = 0
+			registration.selection.identityCommitted = false
+			registration.selection.previous = nil
+			existing.pendingSelection = registration.selection
+		}
+		return true
+	}
+	defer existing.selectionMu.Unlock()
+	a.remoteTabMu.Lock()
+	defer a.remoteTabMu.Unlock()
+	if a.remoteTabs[registration.reuseID] != existing {
 		return false
 	}
 	existing.hostLabel = hostLabel
 	if registration.selection != nil {
+		registration.reuseBlank = existing.session.reset
+		registration.previousSelection = &remoteTabOpenSelection{
+			session: existing.session, topicTitle: existing.topicTitle,
+			currentPath: existing.routing.currentPath,
+			pending:     cloneRemotePendingEvents(existing.pendingEvents), runtime: existing.runtime,
+		}
 		// A ready selection commits its provisional identity before its async
 		// /resume starts. If another click wins first, restore the snapshot Serve
 		// still owns before committing the newer provisional identity.
@@ -381,65 +411,6 @@ func (a *App) OpenRemoteProjectTab(hostID, workspace string, opts RemoteTabOpenO
 	// Persist after activation so the file records the highlighted remote id.
 	a.saveTabsFromRemote()
 	return meta, nil
-}
-
-func (a *App) resumeRemoteTabOpenAsync(tabID, name, sessionPath, sessionTitle string, selection *remoteTabOpenSelection) {
-	revision := uint64(0)
-	if selection != nil {
-		if selection.revision == 0 {
-			a.remoteTabMu.Lock()
-			if current := a.remoteTabs[tabID]; current != nil {
-				selection.revision = current.selectionRevision
-			}
-			a.remoteTabMu.Unlock()
-		}
-		revision = selection.revision
-	}
-	a.goRemoteTabSafe("remoteTabResume", func() {
-		handled := a.resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPath, sessionTitle, revision, selection)
-		if !handled {
-			a.restoreRejectedRemoteTabOpenSelection(tabID, selection)
-		}
-	})
-}
-
-func (a *App) restoreRejectedRemoteTabOpenSelection(tabID string, previous *remoteTabOpenSelection) {
-	if previous == nil {
-		return
-	}
-	a.remoteTabMu.Lock()
-	tab := a.remoteTabs[tabID]
-	a.remoteTabMu.Unlock()
-	if tab == nil {
-		return
-	}
-	tab.routeEventMu.Lock()
-	defer tab.routeEventMu.Unlock()
-	a.remoteTabMu.Lock()
-	current := a.remoteTabs[tabID]
-	if current != tab || current.selectionRevision != previous.revision || current.state != "ready" || strings.TrimSpace(current.err) == "" {
-		a.remoteTabMu.Unlock()
-		return
-	}
-	restoreRemoteTabOpenSelectionLocked(current, previous)
-	meta := remoteTabMetaLocked(current)
-	a.remoteTabMu.Unlock()
-	a.emitRemoteEvent("remote-tab:updated", meta)
-	a.saveTabsFromRemote()
-}
-
-func restoreRemoteTabOpenSelectionLocked(current *remoteTab, previous *remoteTabOpenSelection) {
-	current.session = previous.session
-	current.topicTitle = previous.topicTitle
-	current.routing.currentPath = previous.currentPath
-	current.routing.pathRevision++
-	current.routing.revision++
-	current.routing.rehydratingPath = ""
-	current.routing.rehydratingFrames = nil
-	current.pendingEvents = cloneRemotePendingEvents(previous.pending)
-	restoredRuntime := previous.runtime
-	restoredRuntime.revision = max(current.runtime.revision, previous.runtime.revision) + 1
-	current.runtime = restoredRuntime
 }
 
 // restoreRemoteTabShells rebuilds disconnected registry entries from the
