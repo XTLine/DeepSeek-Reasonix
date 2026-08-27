@@ -41,6 +41,15 @@ localStorage.setItem("projectTree:remoteSessions:" + key, JSON.stringify({
 ok(loadRemoteSessionCache(key, now).length === 0, "rejects malformed optional row fields");
 ok(localStorage.length === 0, "removes a malformed versioned snapshot");
 
+localStorage.setItem("projectTree:remoteSessions:" + key, JSON.stringify({
+  version: 1,
+  savedAt: now,
+  rows: [{ name: "empty" }],
+}));
+const empty = loadRemoteSessionCache(key, now);
+ok(empty.length === 1 && empty[0]?.title === "" && empty[0]?.turns === 0,
+  "normalizes Go-omitted zero-value title and turns");
+
 saveRemoteSessionCache(key, rows, now);
 removeRemoteSessionCache(key);
 ok(loadRemoteSessionCache(key, now).length === 0, "explicit removal clears an unpinned project cache");

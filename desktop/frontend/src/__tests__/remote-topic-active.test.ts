@@ -1,17 +1,18 @@
 // Run: tsx src/__tests__/remote-topic-active.test.ts
 
 import { topicIsActive } from "../components/ProjectTree";
+import { mergeRemoteSessionsIntoTree } from "../components/ProjectTreeRemoteGroups";
+import type { Translator } from "../lib/i18n";
 import type { ProjectNode } from "../lib/types";
 
-const remoteTopic: ProjectNode = {
-  key: "remote-session-box-s1",
-  kind: "topic",
-  label: "First chat",
-  root: "~/app",
-  topicId: "box\u0000~/app\u0000s1",
-  sessionPath: "/remote/sessions/s1.jsonl",
-  remoteSession: { hostId: "box", workspace: "~/app", name: "s1", path: "/remote/sessions/s1.jsonl", title: "First chat" },
+const remoteProject: ProjectNode = {
+  key: "project_remote_box_app", kind: "project", label: "app",
+  root: "remote-project:box:~/app", remote: { hostId: "box", workspace: "~/app" },
 };
+const remoteTopic = mergeRemoteSessionsIntoTree([remoteProject], {
+  "box\u0000~/app": [{ name: "s1", title: "First chat", turns: 1, path: "/remote/sessions/s1.jsonl" }],
+}, ((key: string) => key) as Translator)[0]?.children?.[0];
+if (!remoteTopic) throw new Error("remote topic was not synthesized");
 
 function eq(actual: unknown, expected: unknown, label: string) {
   if (actual !== expected) throw new Error(`${label}: expected ${String(expected)}, got ${String(actual)}`);

@@ -14,21 +14,30 @@ function cacheKey(groupKey: string): string {
   return REMOTE_SESSIONS_CACHE_PREFIX + groupKey;
 }
 
-function validRows(value: unknown): value is RemoteSessionView[] {
-  return Array.isArray(value) && value.every((row) => {
-    if (!row || typeof row !== "object") return false;
+function parseRows(value: unknown): RemoteSessionView[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const rows: RemoteSessionView[] = [];
+  for (const row of value) {
+    if (!row || typeof row !== "object") return undefined;
     const candidate = row as Partial<RemoteSessionView>;
-    return typeof candidate.name === "string"
-      && typeof candidate.title === "string"
-      && typeof candidate.turns === "number"
-      && Number.isFinite(candidate.turns)
+    if (typeof candidate.name !== "string") return undefined;
+    const valid = (candidate.title === undefined || typeof candidate.title === "string")
+      && (candidate.turns === undefined || typeof candidate.turns === "number" && Number.isFinite(candidate.turns))
       && (candidate.path === undefined || typeof candidate.path === "string")
       && (candidate.current === undefined || typeof candidate.current === "boolean")
       && (candidate.running === undefined || typeof candidate.running === "boolean")
       && (candidate.lastActivityAt === undefined
         || typeof candidate.lastActivityAt === "number" && Number.isFinite(candidate.lastActivityAt))
       && (candidate.pinned === undefined || typeof candidate.pinned === "boolean");
-  });
+    if (!valid) return undefined;
+    rows.push({
+      ...candidate,
+      name: candidate.name,
+      title: candidate.title ?? "",
+      turns: candidate.turns ?? 0,
+    });
+  }
+  return rows;
 }
 
 export function removeRemoteSessionCache(groupKey: string): void {
@@ -59,16 +68,17 @@ export function loadRemoteSessionCache(groupKey: string, now = Date.now()): Remo
     const raw = localStorage.getItem(cacheKey(groupKey));
     if (!raw) return [];
     const parsed = JSON.parse(raw) as Partial<RemoteSessionCacheEnvelope> | null;
+    const rows = parseRows(parsed?.rows);
     const fresh = parsed?.version === REMOTE_SESSION_CACHE_VERSION
       && typeof parsed.savedAt === "number"
       && parsed.savedAt <= now
       && now - parsed.savedAt <= REMOTE_SESSION_CACHE_TTL_MS
-      && validRows(parsed.rows);
+      && rows !== undefined;
     if (!fresh) {
       removeRemoteSessionCache(groupKey);
       return [];
     }
-    return parsed.rows!;
+    return rows;
   } catch {
     removeRemoteSessionCache(groupKey);
     return [];

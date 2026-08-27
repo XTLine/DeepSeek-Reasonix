@@ -475,11 +475,11 @@ await act(async () => { __emitMockRemoteTab("tab-remote-1", "state", { state: "d
 
 await act(async () => root.unmount());
 
-let restoredShellState = "";
-function RestoredShellProbe() { restoredShellState = useRemoteSession("tab-restored-shell", "disconnected").state; return null; }
+let restoredShellProbe: RemoteSessionApi | undefined;
+function RestoredShellProbe() { restoredShellProbe = useRemoteSession("tab-restored-shell", "disconnected"); return null; }
 const restoredShellRoot = createRoot(document.getElementById("root")!);
 await act(async () => { restoredShellRoot.render(<RestoredShellProbe />); await flush(); });
-ok(restoredShellState === "connecting", "restored disconnected shells mount as connecting");
+ok(restoredShellProbe?.state === "ready" && restoredShellProbe.hydrated, "restored shells recover through the authoritative snapshot when the ready event is missed");
 ok(tape.includes("setActive:tab-restored-shell"), "restored disconnected shells trigger backend revival");
 await act(async () => restoredShellRoot.unmount());
 

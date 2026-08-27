@@ -39,8 +39,9 @@ ok(
   "session rows open the matching in-app remote session",
 );
 ok(
-  /rows\.map\(\(row\): ProjectNode =>/.test(remoteSource) && /mergeRemoteSessionsIntoTree\(tree, remoteSessions, t\)/.test(source),
-  "remote group children render from the fetched session list",
+  /rows\.map\(\(row\): ProjectNode =>/.test(remoteSource) && /mergeRemoteSessionsIntoTree\(tree, remoteSessions, t\)/.test(source) &&
+    /root: node\.remote!\.workspace/.test(remoteSource) && /sessionPath: row\.path/.test(remoteSource),
+  "remote group children render with the active workspace and session identity",
 );
 ok(
   /app\.RemoteProjectSessions\(hostId, workspace\)/.test(remoteSource),
@@ -74,8 +75,10 @@ ok(
 ok(
   /sessionLoads\.current\.has\(key\)/.test(remoteSource) &&
     /eligibleSessionKeys\.current\.has\(key\)/.test(remoteSource) &&
-    /filter\(\(\[key\]\) => retained\.has\(key\)\)/.test(remoteSource),
-  "session fetches deduplicate in flight and discard disconnected or stale group results",
+    /filter\(\(\[key\]\) => retained\.has\(key\)\)/.test(remoteSource) &&
+    /acceptRemoteSessionRows\(key, rows\)/.test(remoteSource) &&
+    /setGroupError\(\(current\) => current\[key\] \? \{ \.\.\.current, \[key\]: "" \} : current\)/.test(remoteSource),
+  "session fetches deduplicate in flight, discard stale results, and clear recovered group errors",
 );
 ok(
   /useComposerModeActions\(\{[\s\S]*?remote: remoteSurfaceActive/.test(appSource) &&

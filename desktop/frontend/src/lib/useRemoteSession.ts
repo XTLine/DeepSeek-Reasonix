@@ -283,10 +283,10 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
     let historyReconcilePromise: Promise<void> | null = null;
     let historyReconcileAfterCurrent = false;
     let connectionGeneration = 0;
-    // Never start the snapshot retry loop on a shell with no connection: the
-    // ready transition triggers the first hydration instead. (initial is
-    // deliberately not a dependency — only the mount-time snapshot matters.)
-    const skipHydrate = revivedFromShell;
+    // Restored shells can publish ready while SetActiveTab is still resolving,
+    // before the state subscription below is installed. Start the retrying
+    // authoritative snapshot read as well as the backend revival so that a
+    // missed ready publication cannot strand the surface on connecting.
     if (revivedFromShell) {
       void app.SetActiveTab(tabId).catch(() => undefined);
     }
@@ -468,7 +468,7 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
       }
     };
     hydrateRef.current = { tabId, run: hydrate };
-    if (!skipHydrate) void hydrateLoop();
+    void hydrateLoop();
 
     const offState = onRemoteTabState(tabId, (s) => {
       if (cancelled) return;

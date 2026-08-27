@@ -33,7 +33,9 @@ export function mergeRemoteSessionsIntoTree(
       key: `remote-session-${node.remote!.hostId}-${node.remote!.workspace}-${row.name}`,
       kind: "topic",
       label: row.title || row.name || t("projectTree.newTopic"),
+      root: node.remote!.workspace,
       topicId: `${node.remote!.hostId}\u0000${node.remote!.workspace}\u0000${row.name}`,
+      sessionPath: row.path,
       turns: row.turns,
       running: row.running,
       lastActivityAt: row.lastActivityAt,
@@ -126,6 +128,15 @@ export function useRemoteProjectGroups(
     [projects],
   );
 
+  const acceptRemoteSessionRows = useCallback((key: string, rows: RemoteSessionView[]) => {
+    saveRemoteSessionCache(key, rows);
+    setSessions((current) => ({ ...current, [key]: rows }));
+    // A passive refresh can recover after an explicit ensure failed. Once an
+    // authoritative listing succeeds, the old connection error no longer
+    // describes this group (including when the successful result is empty).
+    setGroupError((current) => current[key] ? { ...current, [key]: "" } : current);
+  }, []);
+
   const openRemoteProject = useCallback(async (
     ref: RemoteTabRefView,
     opts?: { newSession?: boolean; sessionName?: string; sessionPath?: string; sessionTitle?: string; focus?: boolean },
@@ -154,8 +165,7 @@ export function useRemoteProjectGroups(
     setGroupError((current) => ({ ...current, [key]: "" }));
     try {
       const rows = await app.EnsureRemoteProjectSessions(hostId, workspace);
-      saveRemoteSessionCache(key, rows);
-      setSessions((current) => ({ ...current, [key]: rows }));
+      acceptRemoteSessionRows(key, rows);
       void app.RemoteServerStatus(hostId, workspace).then((view) => useRemoteStore.getState().setServer(view)).catch(() => {});
     } catch (error) {
       removeRemoteSessionCache(key);
@@ -165,7 +175,7 @@ export function useRemoteProjectGroups(
       groupBusyRef.current.delete(key);
       setGroupBusy((current) => ({ ...current, [key]: false }));
     }
-  }, []);
+  }, [acceptRemoteSessionRows]);
 
   const openRemoteWindow = useCallback(async (ref: RemoteTabRefView) => {
     try {
@@ -191,15 +201,14 @@ export function useRemoteProjectGroups(
     void app.RemoteProjectSessions(meta.remote.hostId, meta.remote.workspace)
       .then((rows) => {
         if (sessionLoads.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
-          saveRemoteSessionCache(key, rows);
-          setSessions((current) => ({ ...current, [key]: rows }));
+          acceptRemoteSessionRows(key, rows);
         }
       })
       .catch(() => removeRemoteSessionCache(key))
       .finally(() => {
         if (sessionLoads.current.get(key) === load) sessionLoads.current.delete(key);
       });
-  }), [groupKeys]);
+  }), [acceptRemoteSessionRows, groupKeys]);
 
   useEffect(() => {
     const seeded: Record<string, RemoteSessionView[]> = {};
@@ -253,8 +262,7 @@ export function useRemoteProjectGroups(
       void app.RemoteProjectSessions(hostId, workspace)
         .then((rows) => {
           if (sessionLoads.current.get(key) === load && eligibleSessionKeys.current.has(key)) {
-            saveRemoteSessionCache(key, rows);
-            setSessions((current) => ({ ...current, [key]: rows }));
+            acceptRemoteSessionRows(key, rows);
           }
         })
         .catch(() => {
@@ -267,7 +275,7 @@ export function useRemoteProjectGroups(
           if (sessionLoads.current.get(key) === load) sessionLoads.current.delete(key);
         });
     }
-  }, [expanded, groupKeys, projects, query, revision, statuses]);
+  }, [acceptRemoteSessionRows, expanded, groupKeys, projects, query, revision, statuses]);
 
   return {
     openRemoteProject,
