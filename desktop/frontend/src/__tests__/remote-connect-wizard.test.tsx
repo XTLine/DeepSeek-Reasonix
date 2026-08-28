@@ -228,19 +228,31 @@ ok(document.activeElement === hostInput, "Tab from the last action wraps to the 
     await Promise.resolve();
   });
 }
-// ── Saved-host suggestion: focus → dropdown → prefill ──
+// ── Saved-host suggestion: arrow toggle → dropdown → prefill ──
+const toggleArrow = () => document.querySelector<HTMLButtonElement>(".remote-wizard__suggest-toggle");
+ok(Boolean(toggleArrow()), "host field exposes the saved-connections arrow");
+ok(toggleArrow()?.getAttribute("aria-haspopup") === "listbox", "arrow advertises its listbox popup");
+ok(toggleArrow()?.getAttribute("aria-expanded") === "false", "arrow starts collapsed");
 await act(async () => {
   hostInput?.dispatchEvent(new dom.window.Event("focusin", { bubbles: true }));
   hostInput?.dispatchEvent(new dom.window.Event("focus", { bubbles: false }));
   await Promise.resolve();
 });
-const suggestion = document.querySelector<HTMLButtonElement>(".remote-wizard__suggest-list button");
-ok(Boolean(suggestion), "focusing the host input lists saved SSH connections");
+ok(!document.querySelector(".remote-wizard__suggest-list"), "focusing the host input alone no longer opens the list");
 await act(async () => {
-  suggestion?.dispatchEvent(new dom.window.Event("mousedown", { bubbles: true, cancelable: true }));
+  toggleArrow()?.click();
+  await Promise.resolve();
+});
+ok(Boolean(document.querySelector(".remote-wizard__suggest-list")), "clicking the arrow lists saved SSH connections");
+ok(toggleArrow()?.getAttribute("aria-expanded") === "true", "arrow reflects the expanded state");
+ok((document.querySelector(".remote-wizard__suggest-head")?.textContent ?? "").toLowerCase().includes("ssh"), "dropdown leads with the saved-connections caption");
+const suggestion = document.querySelector<HTMLButtonElement>(".remote-wizard__suggest-list button");
+await act(async () => {
+  suggestion?.click();
   await Promise.resolve();
 });
 ok(hostInput?.value === "192.168.1.10", "picking a suggestion prefills the host");
+ok(!document.querySelector(".remote-wizard__suggest-list"), "picking a suggestion closes the list");
 const keyInput = [...document.querySelectorAll<HTMLInputElement>("input")].find((i) => i.value.includes("id_ed25519"));
 ok(Boolean(keyInput), "saved key auth switches the form to key mode with the identity file");
 await act(async () => {
@@ -251,36 +263,89 @@ ok(tape.includes("PickRemoteIdentityFile"), "identity-file action uses the nativ
 ok(keyInput?.value === "/home/dev/.ssh/id_wizard", "native picker returns the absolute identity-file path");
 
 {
+  const listButtons = () => [...document.querySelectorAll<HTMLButtonElement>(".remote-wizard__suggest-list button")];
   await act(async () => {
     if (hostInput) setInput(hostInput, "");
     await Promise.resolve();
   });
   await act(async () => {
-    hostInput?.dispatchEvent(new dom.window.Event("focusin", { bubbles: true }));
-    hostInput?.dispatchEvent(new dom.window.Event("focus", { bubbles: false }));
+    toggleArrow()?.click();
     await Promise.resolve();
   });
-  const listed = [...document.querySelectorAll<HTMLButtonElement>(".remote-wizard__suggest-list button")].find((b) => b.textContent?.includes("pw-box"));
+  const listed = listButtons().find((b) => b.textContent?.includes("pw-box"));
   await act(async () => {
-    listed?.dispatchEvent(new dom.window.Event("mousedown", { bubbles: true, cancelable: true }));
+    listed?.click();
     await Promise.resolve();
   });
   const passwordInput = document.querySelector<HTMLInputElement>(".remote-wizard__field input[type='password']");
   ok((passwordInput?.placeholder ?? "").toLowerCase().includes("saved") || (passwordInput?.placeholder ?? "").includes("已保存"), "saved password host keeps a keep-existing placeholder");
+  // Typed text no longer filters the list: reopen with a filled host field
+  // and every saved connection must still be offered.
   await act(async () => {
-    if (hostInput) setInput(hostInput, "");
+    if (hostInput) setInput(hostInput, "10.0.0.8");
     await Promise.resolve();
   });
   await act(async () => {
-    hostInput?.dispatchEvent(new dom.window.Event("focusin", { bubbles: true }));
-    hostInput?.dispatchEvent(new dom.window.Event("focus", { bubbles: false }));
+    toggleArrow()?.click();
     await Promise.resolve();
   });
-  const gpuSuggestion = [...document.querySelectorAll<HTMLButtonElement>(".remote-wizard__suggest-list button")].find((b) => b.textContent?.includes("gpu-box"));
+  {
+    const labels = listButtons().map((b) => b.textContent ?? "");
+    ok(labels.some((l) => l.includes("gpu-box")) && labels.some((l) => l.includes("pw-box")), "typing in the host field does not filter the dropdown");
+  }
   await act(async () => {
-    gpuSuggestion?.dispatchEvent(new dom.window.Event("mousedown", { bubbles: true, cancelable: true }));
+    hostInput?.dispatchEvent(new dom.window.Event("pointerdown", { bubbles: true }));
     await Promise.resolve();
   });
+  ok(Boolean(document.querySelector(".remote-wizard__suggest-list")), "a pointer press on the host field keeps the list open");
+  await act(async () => {
+    document.body.dispatchEvent(new dom.window.Event("pointerdown", { bubbles: true }));
+    await Promise.resolve();
+  });
+  ok(!document.querySelector(".remote-wizard__suggest-list"), "a pointer press outside the field closes the list");
+  await act(async () => {
+    toggleArrow()?.click();
+    await Promise.resolve();
+  });
+  await act(async () => {
+    document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await Promise.resolve();
+  });
+  ok(!document.querySelector(".remote-wizard__suggest-list"), "Escape closes the open list");
+  ok(!tape.includes("close"), "Escape with the list open keeps the wizard open");
+  await act(async () => {
+    toggleArrow()?.click();
+    await Promise.resolve();
+  });
+  await act(async () => {
+    toggleArrow()?.click();
+    await Promise.resolve();
+  });
+  ok(!document.querySelector(".remote-wizard__suggest-list"), "clicking the open arrow toggles the list shut");
+  // No saved hosts at all: no arrow, no list.
+  {
+    const restored = useRemoteStore.getState().hosts.slice();
+    await act(async () => {
+      useRemoteStore.getState().setHosts([]);
+      await Promise.resolve();
+    });
+    ok(!document.querySelector(".remote-wizard__suggest-toggle"), "no saved hosts hides the arrow entirely");
+    await act(async () => {
+      useRemoteStore.getState().setHosts(restored);
+      await Promise.resolve();
+    });
+    ok(Boolean(document.querySelector(".remote-wizard__suggest-toggle")), "the arrow returns once hosts exist again");
+  }
+  await act(async () => {
+    toggleArrow()?.click();
+    await Promise.resolve();
+  });
+  const gpuSuggestion = listButtons().find((b) => b.textContent?.includes("gpu-box"));
+  await act(async () => {
+    gpuSuggestion?.click();
+    await Promise.resolve();
+  });
+  ok(hostInput?.value === "192.168.1.10", "picking gpu-box from the reopened list restores its host");
 }
 // ── Next: first connect fails; the wizard stays on the connecting step ──
 await act(async () => {
