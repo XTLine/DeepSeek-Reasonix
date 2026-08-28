@@ -9055,6 +9055,9 @@ body > .mermaid-diagram--fullscreen {
   margin: 0 auto 10px;
   animation: shelf-in var(--dur-slow) var(--ease-out) both;
 }
+.todo-exit {
+  animation: shelf-in 240ms 900ms ease reverse both;
+}
 @keyframes shelf-in {
   from {
     opacity: 0;
