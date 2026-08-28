@@ -2064,11 +2064,11 @@ export default function App() {
   // not advance the canonical panel state. Incomplete lists are always shown so
   // a stale local dismissal cannot hide work that still blocks final readiness;
   // every new list starts collapsed while its header keeps showing live progress
-  // and the current task; completed lists can then be dismissed. The dismissal
-  // key is still based on stable todo content/state so history reloads do not
-  // resurrect the same finished list under a different event id. The batch key
-  // ignores status so progress in the same list is not a new batch. Dismissal
-  // is scoped per session/topic/tab and also persisted on the session sidecar.
+  // and the current task. Live completion briefly shows 3/3 before retirement;
+  // restored completed lists stay in transcript only. The dismissal key is
+  // still based on stable todo content/state so history reloads do not
+  // resurrect the same finished list. The status-agnostic batch key prevents
+  // false new batches; dismissal remains session-scoped and sidecar-persisted.
   const todoEntry = useMemo(() => {
     for (let i = visibleRuntimeState.items.length - 1; i >= 0; i--) {
       const it = visibleRuntimeState.items[i];

@@ -87,7 +87,7 @@ assert.equal(
 assert.equal(
   shouldShowTodoPanel("todo-final", null, completedTodos),
   true,
-  "a completed todo list stays visible in collapsed form until the user dismisses it",
+  "a completed batch remains mounted so TodoPanel can distinguish restore from a live transition",
 );
 assert.equal(
   shouldShowTodoPanel("todo-active", null, [{ content: "Run tests", status: "in_progress" }]),
