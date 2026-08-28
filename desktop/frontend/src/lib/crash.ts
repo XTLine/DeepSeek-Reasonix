@@ -817,6 +817,9 @@ export function shouldReportGlobalCrashEvent(e: GlobalCrashEventLike): boolean {
   if (e.defaultPrevented) return false;
   if (globalCrashEventMessages(e).some((message) => RESIZE_OBSERVER_LOOP_MESSAGE_RE.test(message))) return false;
   if (globalCrashEventMessages(e).some((message) => /Minified React error #520\b/.test(message))) return false;
+  // A remote /status poll losing the revision race is a benign stale snapshot,
+  // not a crash; the SSE feed and the running-state watchdog converge anyway.
+  if (globalCrashEventMessages(e).some((message) => message.includes("status was superseded by newer runtime state"))) return false;
   if (isWailsRuntimeOnlyCrashEvent(e)) return false;
   return true;
 }
