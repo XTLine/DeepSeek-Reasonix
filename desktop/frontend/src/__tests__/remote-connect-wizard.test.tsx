@@ -231,7 +231,7 @@ ok(document.activeElement === hostInput, "Tab from the last action wraps to the 
 // ── Saved-host suggestion: arrow toggle → dropdown → prefill ──
 const toggleArrow = () => document.querySelector<HTMLButtonElement>(".remote-wizard__suggest-toggle");
 ok(Boolean(toggleArrow()), "host field exposes the saved-connections arrow");
-ok(toggleArrow()?.getAttribute("aria-haspopup") === "listbox", "arrow advertises its listbox popup");
+ok(toggleArrow()?.getAttribute("aria-haspopup") === "menu", "arrow advertises its saved-host menu");
 ok(toggleArrow()?.getAttribute("aria-expanded") === "false", "arrow starts collapsed");
 await act(async () => {
   hostInput?.dispatchEvent(new dom.window.Event("focusin", { bubbles: true }));
@@ -246,13 +246,33 @@ await act(async () => {
 ok(Boolean(document.querySelector(".remote-wizard__suggest-list")), "clicking the arrow lists saved SSH connections");
 ok(toggleArrow()?.getAttribute("aria-expanded") === "true", "arrow reflects the expanded state");
 ok((document.querySelector(".remote-wizard__suggest-head")?.textContent ?? "").toLowerCase().includes("ssh"), "dropdown leads with the saved-connections caption");
-const suggestion = document.querySelector<HTMLButtonElement>(".remote-wizard__suggest-list button");
+ok(document.querySelector(".remote-wizard__suggest-list")?.getAttribute("role") === "menu", "saved hosts use menu semantics");
+const menuItems = [...document.querySelectorAll<HTMLButtonElement>('.remote-wizard__suggest-list [role="menuitem"]')];
+ok(menuItems.length === savedHosts.length, "every saved host is exposed as a menu item");
+ok(document.activeElement === menuItems[0], "opening the menu moves focus to the first saved host");
+await act(async () => {
+  menuItems[0]?.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  await Promise.resolve();
+});
+ok(document.activeElement === menuItems[1], "ArrowDown moves focus to the next saved host");
+await act(async () => {
+  document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await Promise.resolve();
+});
+ok(!document.querySelector(".remote-wizard__suggest-list"), "Escape closes the keyboard-opened menu");
+ok(document.activeElement === toggleArrow(), "Escape restores focus to the saved-host arrow");
+await act(async () => {
+  toggleArrow()?.click();
+  await Promise.resolve();
+});
+const suggestion = document.querySelector<HTMLButtonElement>('.remote-wizard__suggest-list [role="menuitem"]');
 await act(async () => {
   suggestion?.click();
   await Promise.resolve();
 });
 ok(hostInput?.value === "192.168.1.10", "picking a suggestion prefills the host");
 ok(!document.querySelector(".remote-wizard__suggest-list"), "picking a suggestion closes the list");
+ok(document.activeElement === hostInput, "picking a suggestion restores focus to the host input");
 const keyInput = [...document.querySelectorAll<HTMLInputElement>("input")].find((i) => i.value.includes("id_ed25519"));
 ok(Boolean(keyInput), "saved key auth switches the form to key mode with the identity file");
 await act(async () => {
@@ -313,6 +333,7 @@ ok(keyInput?.value === "/home/dev/.ssh/id_wizard", "native picker returns the ab
   });
   ok(!document.querySelector(".remote-wizard__suggest-list"), "Escape closes the open list");
   ok(!tape.includes("close"), "Escape with the list open keeps the wizard open");
+  ok(document.activeElement === toggleArrow(), "Escape from a saved host restores focus to the arrow");
   await act(async () => {
     toggleArrow()?.click();
     await Promise.resolve();
