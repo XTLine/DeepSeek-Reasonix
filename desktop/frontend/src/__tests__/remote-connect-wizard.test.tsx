@@ -195,6 +195,12 @@ ok(railItems().every((item) => !item.className.includes("--done")), "no step is 
 ok(document.querySelectorAll(".remote-wizard__seg").length === 3, "auth, download, and credential mode use segmented sliders");
 const hostInput = document.querySelector<HTMLInputElement>(".remote-wizard__suggest input");
 ok(Boolean(hostInput), "config step shows the host input");
+ok(
+  hostInput?.closest("label") === null &&
+    hostInput?.labels?.length === 1 &&
+    hostInput.labels[0]?.textContent?.trim() === "Host",
+  "host input uses an exact explicit label",
+);
 ok(document.activeElement === hostInput, "opening the dialog focuses the first field");
 await act(async () => {
   document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }));
@@ -231,6 +237,7 @@ ok(document.activeElement === hostInput, "Tab from the last action wraps to the 
 // ── Saved-host suggestion: arrow toggle → dropdown → prefill ──
 const toggleArrow = () => document.querySelector<HTMLButtonElement>(".remote-wizard__suggest-toggle");
 ok(Boolean(toggleArrow()), "host field exposes the saved-connections arrow");
+ok(toggleArrow()?.closest("label") === null, "saved-connections arrow stays outside the host label");
 ok(toggleArrow()?.getAttribute("aria-haspopup") === "menu", "arrow advertises its saved-host menu");
 ok(toggleArrow()?.getAttribute("aria-expanded") === "false", "arrow starts collapsed");
 await act(async () => {

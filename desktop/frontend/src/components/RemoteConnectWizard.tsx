@@ -9,6 +9,7 @@ import type { RemoteDirEntry, RemoteHostInput, RemoteHostView } from "../lib/typ
 
 type WizardStep = "config" | "connecting" | "workspace";
 const STEP_ORDER: WizardStep[] = ["config", "connecting", "workspace"];
+const HOST_INPUT_ID = "remote-wizard-host-input";
 const HOST_MENU_ID = "remote-wizard-host-menu";
 
 const blankInput: RemoteHostInput = {
@@ -393,10 +394,11 @@ export function RemoteConnectWizard({
                 <div className="remote-wizard__form">
                 <div className="remote-wizard__field-row">
                   <div className="remote-wizard__suggest" ref={suggestRef}>
-                    <label className="remote-wizard__field">
-                      <span>{t("remote.host.host")}</span>
+                    <div className="remote-wizard__field">
+                      <label htmlFor={HOST_INPUT_ID}>{t("remote.host.host")}</label>
                       <div className="remote-wizard__host-box">
                         <input
+                          id={HOST_INPUT_ID}
                           ref={hostInputRef}
                           value={form.host}
                           disabled={busy}
@@ -445,7 +447,7 @@ export function RemoteConnectWizard({
                           </button>
                         ) : null}
                       </div>
-                    </label>
+                    </div>
                     {hostListOpen && hosts.length > 0 ? (
                       <div
                         className="remote-wizard__suggest-list"
