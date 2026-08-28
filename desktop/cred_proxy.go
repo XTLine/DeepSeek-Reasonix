@@ -422,7 +422,10 @@ func (a *App) refreshCredentialProxyRoutes() {
 	}
 	proxy.updateMu.Lock()
 	defer proxy.updateMu.Unlock()
-	cfg, err := config.Load()
+	// Credential saves can run inside a user-config edit transaction (for
+	// example while installing provider access). Use the non-migrating loader
+	// so route refresh never tries to reacquire that transaction's file lock.
+	cfg, err := config.LoadForRootReadOnly(".")
 	if err != nil {
 		log.Printf("[remote] credProxy: credential route refresh skipped: %v", err)
 		return
