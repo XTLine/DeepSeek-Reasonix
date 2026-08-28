@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"reasonix/internal/config"
 	"reasonix/internal/remote/bootstrap"
@@ -420,5 +421,34 @@ func TestCredentialModeConfigRoundTrip(t *testing.T) {
 	}
 	if n := normalizeCredentialMode("bogus"); n != "" {
 		t.Fatalf("bogus mode normalized to %q", n)
+	}
+}
+
+// routeRefreshStub captures RefreshCredentialProxyRoutes calls; the embedded
+// nil remoteKernel is safe because only the optional method is invoked.
+type routeRefreshStub struct {
+	remoteKernel
+	refreshed chan struct{}
+}
+
+func (s *routeRefreshStub) RefreshCredentialProxyRoutes() {
+	s.refreshed <- struct{}{}
+}
+
+// TestSaveProviderCredentialRefreshesCredentialProxyRoutes: rotating a
+// provider key on the desktop must re-register the credential proxy routes,
+// otherwise remote local-proxy tabs keep authenticating with the old key
+// until a model switch, tunnel heal, or restart.
+func TestSaveProviderCredentialRefreshesCredentialProxyRoutes(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	refreshed := make(chan struct{}, 1)
+	a := &App{remoteRuntime: &routeRefreshStub{refreshed: refreshed}}
+	if _, err := a.saveProviderCredential("TEST_PROXY_REFRESH_KEY", "sk-rotated"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-refreshed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("saving a provider key did not refresh credential proxy routes")
 	}
 }

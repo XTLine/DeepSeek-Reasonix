@@ -30,6 +30,15 @@ import (
 // the remote config; the serve launches with --model <name>.
 const credentialProxyProviderName = "reasonix-desktop-proxy"
 
+// credentialRouteRefresher is the optional capability a remote runtime kernel
+// offers so a provider key rotated on the desktop reaches connected
+// local-proxy hosts: the proxy captured the previous key in its route
+// closures, and route tokens never include key material, so re-registering
+// the same tokens is all a key change needs.
+type credentialRouteRefresher interface {
+	RefreshCredentialProxyRoutes()
+}
+
 type credProxyRoute struct {
 	proxy *httputil.ReverseProxy
 	model string
