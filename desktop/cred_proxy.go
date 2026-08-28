@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,29 +31,22 @@ import (
 // the remote config; the serve launches with --model <name>.
 const credentialProxyProviderName = "reasonix-desktop-proxy"
 
-// credentialRouteRefresher is the optional capability a remote runtime kernel
-// offers so a provider key rotated on the desktop reaches connected
-// local-proxy hosts: the proxy captured the previous key in its route
-// closures, and route tokens never include key material, so re-registering
-// the same tokens is all a key change needs.
-type credentialRouteRefresher interface {
-	RefreshCredentialProxyRoutes()
-}
-
 type credProxyRoute struct {
 	proxy *httputil.ReverseProxy
 	model string
+	ref   string
 }
 
 // credentialProxy is the desktop-side key holder: a loopback HTTP endpoint
 // that authenticates requests by virtual token and forwards them to the real
 // provider with the real key. One instance serves the whole app.
 type credentialProxy struct {
-	mu     sync.Mutex
-	ln     net.Listener
-	server *http.Server
-	port   int
-	routes map[string]*credProxyRoute
+	mu       sync.Mutex
+	updateMu sync.Mutex
+	ln       net.Listener
+	server   *http.Server
+	port     int
+	routes   map[string]*credProxyRoute
 }
 
 func (p *credentialProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +113,24 @@ func rewriteJSONModel(body []byte, model string) []byte {
 	return out
 }
 
-func (p *credentialProxy) setRoute(token string, upstream *url.URL, apiKey, model, kind string) {
+func (p *credentialProxy) setRoute(token, ref string, upstream *url.URL, apiKey, model, kind string) {
+	p.updateMu.Lock()
+	defer p.updateMu.Unlock()
+	p.setRouteLocked(token, ref, upstream, apiKey, model, kind)
+}
+
+func (p *credentialProxy) resolveAndSetRoute(token, ref string, resolve func() (proxyUpstream, error)) (proxyUpstream, error) {
+	p.updateMu.Lock()
+	defer p.updateMu.Unlock()
+	up, err := resolve()
+	if err != nil {
+		return proxyUpstream{}, err
+	}
+	p.setRouteLocked(token, ref, up.url, up.apiKey, up.model, up.kind)
+	return up, nil
+}
+
+func (p *credentialProxy) setRouteLocked(token, ref string, upstream *url.URL, apiKey, model, kind string) {
 	if kind == "" {
 		kind = "openai"
 	}
@@ -140,7 +151,25 @@ func (p *credentialProxy) setRoute(token string, upstream *url.URL, apiKey, mode
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.routes[token] = &credProxyRoute{proxy: proxy, model: model}
+	p.routes[token] = &credProxyRoute{proxy: proxy, model: model, ref: ref}
+}
+
+type credentialRouteRegistration struct {
+	token string
+	ref   string
+}
+
+func (p *credentialProxy) routeRegistrationsLocked() []credentialRouteRegistration {
+	p.mu.Lock()
+	registrations := make([]credentialRouteRegistration, 0, len(p.routes))
+	for token, route := range p.routes {
+		if route != nil && strings.TrimSpace(route.ref) != "" {
+			registrations = append(registrations, credentialRouteRegistration{token: token, ref: route.ref})
+		}
+	}
+	p.mu.Unlock()
+	sort.Slice(registrations, func(i, j int) bool { return registrations[i].token < registrations[j].token })
+	return registrations
 }
 
 func (p *credentialProxy) close() {
@@ -326,14 +355,6 @@ func (a *App) desktopModelForWorkspace(hostID, workspace string) string {
 }
 
 func (a *App) applyCredentialProxyModel(hostID, workspace, ref string) (credentialProxyRouteInfo, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return credentialProxyRouteInfo{}, err
-	}
-	up, err := resolveProxyProvider(cfg, ref)
-	if err != nil {
-		return credentialProxyRouteInfo{}, err
-	}
 	port, err := a.credentialProxyPort()
 	if err != nil {
 		return credentialProxyRouteInfo{}, err
@@ -350,8 +371,56 @@ func (a *App) applyCredentialProxyModel(hostID, workspace, ref string) (credenti
 	if err != nil {
 		return credentialProxyRouteInfo{}, err
 	}
-	proxy.setRoute(token, up.url, up.apiKey, up.model, up.kind)
+	up, err := proxy.resolveAndSetRoute(token, ref, func() (proxyUpstream, error) {
+		cfg, err := config.Load()
+		if err != nil {
+			return proxyUpstream{}, err
+		}
+		return resolveProxyProvider(cfg, ref)
+	})
+	if err != nil {
+		return credentialProxyRouteInfo{}, err
+	}
 	return credentialProxyRouteInfo{token: token, model: up.model, kind: up.kind, port: port}, nil
+}
+
+// saveProviderCredential persists a provider key and synchronously refreshes
+// every route that captured its previous value before returning to the UI.
+func (a *App) saveProviderCredential(apiKeyEnv, value string) (string, error) {
+	apiKeyEnv = strings.TrimSpace(apiKeyEnv)
+	value = strings.TrimSpace(value)
+	if err := upsertDotEnv(apiKeyEnv, value); err != nil {
+		return "", err
+	}
+	a.refreshCredentialProxyRoutes()
+	return providerCredentialSourceNotice(apiKeyEnv, value), nil
+}
+
+// refreshCredentialProxyRoutes rebuilds every registered model-token route.
+// updateMu covers credential resolution through route replacement, so an
+// older save cannot capture a stale key and publish it after a newer save.
+func (a *App) refreshCredentialProxyRoutes() {
+	a.credProxyMu.Lock()
+	proxy := a.credProxy
+	a.credProxyMu.Unlock()
+	if proxy == nil {
+		return
+	}
+	proxy.updateMu.Lock()
+	defer proxy.updateMu.Unlock()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Printf("[remote] credProxy: credential route refresh skipped: %v", err)
+		return
+	}
+	for _, registration := range proxy.routeRegistrationsLocked() {
+		up, err := resolveProxyProvider(cfg, registration.ref)
+		if err != nil {
+			log.Printf("[remote] credProxy: credential route refresh skipped: %v", err)
+			continue
+		}
+		proxy.setRouteLocked(registration.token, registration.ref, up.url, up.apiKey, up.model, up.kind)
+	}
 }
 
 // credentialModeView returns the host entry's normalized credential mode for

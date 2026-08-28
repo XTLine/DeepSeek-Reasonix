@@ -1837,31 +1837,6 @@ func (a *App) activeWorkspaceRoot() string {
 	return "."
 }
 
-func (a *App) saveProviderCredential(apiKeyEnv, value string) (string, error) {
-	apiKeyEnv = strings.TrimSpace(apiKeyEnv)
-	value = strings.TrimSpace(value)
-	if err := upsertDotEnv(apiKeyEnv, value); err != nil {
-		return "", err
-	}
-	a.refreshCredentialProxyRoutes()
-	return providerCredentialSourceNotice(apiKeyEnv, value), nil
-}
-
-// refreshCredentialProxyRoutes re-arms the desktop credential proxy with the
-// just-saved key. The proxy captured the previous key in its route closures
-// and nothing else re-registers routes until a model switch, tunnel heal, or
-// restart, so remote local-proxy tabs would otherwise keep authenticating
-// with the rotated-out key. Best-effort and asynchronous; route tokens never
-// include key material, so no host-side change is needed.
-func (a *App) refreshCredentialProxyRoutes() {
-	a.remoteMu.Lock()
-	rt := a.remoteRuntime
-	a.remoteMu.Unlock()
-	if refresher, ok := rt.(credentialRouteRefresher); ok {
-		a.goSafe("credentialProxyRouteRefresh", refresher.RefreshCredentialProxyRoutes)
-	}
-}
-
 func providerCredentialSourceNotice(apiKeyEnv, value string) string {
 	return ""
 }

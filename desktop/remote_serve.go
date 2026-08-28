@@ -489,48 +489,6 @@ func (m *desktopRemoteManager) trackedCredentialWorkspaces(hostID, workspace str
 	return workspaces
 }
 
-// RefreshCredentialProxyRoutes re-registers the credential route of every
-// ready serve on connected local-proxy hosts. Saving a provider key on the
-// desktop updates the .env, but the proxy captured the previous key in its
-// route closures; without this refresh remote tabs keep authenticating with
-// the rotated-out key until a model switch, tunnel heal, or restart. Route
-// tokens never include key material, so host-side provider entries stay valid
-// and only the desktop proxy's upstream credential changes.
-func (m *desktopRemoteManager) RefreshCredentialProxyRoutes() {
-	app, ok := m.sink.(*App)
-	if !ok || app == nil {
-		return
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		log.Printf("[remote] credProxy: key-change route refresh skipped: %v", err)
-		return
-	}
-	proxyMode := make(map[string]bool, len(cfg.Remote.Hosts))
-	for _, entry := range cfg.Remote.Hosts {
-		proxyMode[entry.Name] = entry.CredentialProxyEnabled()
-	}
-	m.mu.Lock()
-	type keyChangeTarget struct{ hostID, workspace string }
-	var targets []keyChangeTarget
-	for hostID, mh := range m.hosts {
-		if mh == nil || mh.client == nil || !proxyMode[hostID] {
-			continue
-		}
-		for workspace, serve := range mh.serves {
-			if serve != nil && serve.view.State == "ready" {
-				targets = append(targets, keyChangeTarget{hostID, workspace})
-			}
-		}
-	}
-	m.mu.Unlock()
-	for _, t := range targets {
-		if _, err := app.registerCredentialProxyRoute(t.hostID, t.workspace); err != nil {
-			log.Printf("[remote] credProxy: key-change route refresh failed host=%q workspace=%q: %v", t.hostID, t.workspace, err)
-		}
-	}
-}
-
 // ensureCredentialProxyForward opens (idempotently) the reverse tunnel: the
 // REMOTE binds an ephemeral loopback port (avoids conflicts with stale
 // listeners from half-dead sessions) and forwards back through SSH to the
