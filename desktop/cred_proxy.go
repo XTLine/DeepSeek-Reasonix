@@ -32,9 +32,11 @@ import (
 const credentialProxyProviderName = "reasonix-desktop-proxy"
 
 type credProxyRoute struct {
-	proxy *httputil.ReverseProxy
-	model string
-	ref   string
+	proxy     *httputil.ReverseProxy
+	model     string
+	ref       string
+	apiKeyEnv string
+	provider  string
 }
 
 // credentialProxy is the desktop-side key holder: a loopback HTTP endpoint
@@ -116,7 +118,7 @@ func rewriteJSONModel(body []byte, model string) []byte {
 func (p *credentialProxy) setRoute(token, ref string, upstream *url.URL, apiKey, model, kind string) {
 	p.updateMu.Lock()
 	defer p.updateMu.Unlock()
-	p.setRouteLocked(token, ref, upstream, apiKey, model, kind)
+	p.setRouteLocked(token, ref, proxyUpstream{url: upstream, apiKey: apiKey, model: model, kind: kind})
 }
 
 func (p *credentialProxy) resolveAndSetRoute(token, ref string, resolve func() (proxyUpstream, error)) (proxyUpstream, error) {
@@ -126,32 +128,35 @@ func (p *credentialProxy) resolveAndSetRoute(token, ref string, resolve func() (
 	if err != nil {
 		return proxyUpstream{}, err
 	}
-	p.setRouteLocked(token, ref, up.url, up.apiKey, up.model, up.kind)
+	p.setRouteLocked(token, ref, up)
 	return up, nil
 }
 
-func (p *credentialProxy) setRouteLocked(token, ref string, upstream *url.URL, apiKey, model, kind string) {
-	if kind == "" {
-		kind = "openai"
+func (p *credentialProxy) setRouteLocked(token, ref string, up proxyUpstream) {
+	if up.kind == "" {
+		up.kind = "openai"
 	}
 	proxy := &httputil.ReverseProxy{FlushInterval: -1}
 	proxy.Rewrite = func(req *httputil.ProxyRequest) {
-		req.SetURL(upstream)
+		req.SetURL(up.url)
 		for _, header := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-IP", "Via"} {
 			req.Out.Header.Del(header)
 		}
-		if kind == "anthropic" {
+		if up.kind == "anthropic" {
 			req.Out.Header.Del("Authorization")
-			req.Out.Header.Set("x-api-key", apiKey)
+			req.Out.Header.Set("x-api-key", up.apiKey)
 			req.Out.Header.Set("anthropic-version", "2023-06-01")
 		} else {
 			req.Out.Header.Del("x-api-key")
-			req.Out.Header.Set("Authorization", "Bearer "+apiKey)
+			req.Out.Header.Set("Authorization", "Bearer "+up.apiKey)
 		}
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.routes[token] = &credProxyRoute{proxy: proxy, model: model, ref: ref}
+	p.routes[token] = &credProxyRoute{
+		proxy: proxy, model: up.model, ref: ref,
+		apiKeyEnv: strings.TrimSpace(up.apiKeyEnv), provider: strings.TrimSpace(up.provider),
+	}
 }
 
 type credentialRouteRegistration struct {
@@ -286,10 +291,12 @@ type credentialProxyRouteInfo struct {
 
 // proxyUpstream is the resolved desktop-side provider a route forwards to.
 type proxyUpstream struct {
-	apiKey string
-	url    *url.URL
-	model  string
-	kind   string
+	apiKey    string
+	url       *url.URL
+	model     string
+	kind      string
+	apiKeyEnv string
+	provider  string
 }
 
 // resolveProxyProvider resolves a desktop model ref into the upstream the
@@ -319,7 +326,10 @@ func resolveProxyProvider(cfg *config.Config, ref string) (proxyUpstream, error)
 	if kind == "" {
 		kind = "openai"
 	}
-	return proxyUpstream{apiKey: apiKey, url: upstream, model: entry.Model, kind: kind}, nil
+	return proxyUpstream{
+		apiKey: apiKey, url: upstream, model: entry.Model, kind: kind,
+		apiKeyEnv: entry.APIKeyEnv, provider: entry.Name,
+	}, nil
 }
 
 // registerCredentialProxyRoute binds one workspace token to the current
@@ -392,7 +402,11 @@ func (a *App) saveProviderCredential(apiKeyEnv, value string) (string, error) {
 	if err := upsertDotEnv(apiKeyEnv, value); err != nil {
 		return "", err
 	}
-	a.refreshCredentialProxyRoutes()
+	if value == "" {
+		a.revokeCredentialProxyRoutesByCredential(apiKeyEnv)
+	} else {
+		a.refreshCredentialProxyRoutes()
+	}
 	return providerCredentialSourceNotice(apiKeyEnv, value), nil
 }
 
@@ -416,10 +430,11 @@ func (a *App) refreshCredentialProxyRoutes() {
 	for _, registration := range proxy.routeRegistrationsLocked() {
 		up, err := resolveProxyProvider(cfg, registration.ref)
 		if err != nil {
-			log.Printf("[remote] credProxy: credential route refresh skipped: %v", err)
+			proxy.revokeRouteLocked(registration.token)
+			log.Printf("[remote] credProxy: invalid credential route revoked: %v", err)
 			continue
 		}
-		proxy.setRouteLocked(registration.token, registration.ref, up.url, up.apiKey, up.model, up.kind)
+		proxy.setRouteLocked(registration.token, registration.ref, up)
 	}
 }
 
