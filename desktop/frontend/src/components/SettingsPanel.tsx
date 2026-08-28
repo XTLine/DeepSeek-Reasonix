@@ -73,7 +73,8 @@ import { Tooltip } from "./Tooltip";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { getGenerativePreset, setGenerativePreset, generativeMusic, type GenerativePreset } from "../lib/generative-music";
 import { SoundSelect } from "./SoundSelect";
-import { getSuccessPreference, setSuccessPreference, getAttentionPreference, setAttentionPreference, playSuccessChime, playAttentionChime, type SoundWavPref } from "../lib/sound";
+import { getSuccessPreference, setSuccessPreference, getAttentionPreference, setAttentionPreference, getNotificationVolume, setNotificationVolume as persistNotificationVolume, playSuccessChime, playAttentionChime, type SoundWavPref } from "../lib/sound";
+import { NotificationVolumeSlider } from "./NotificationVolumeSlider";
 import { ModalCloseButton } from "./ModalCloseButton";
 import { ShortcutComboDisplay } from "./ShortcutComboDisplay";
 import { SettingsNavigation, SETTINGS_NAV_TABS } from "./SettingsNavigation";
@@ -1644,10 +1645,11 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
   const [genMusicPreset, setGenMusicPreset] = useState<GenerativePreset>(getGenerativePreset());
   const [soundPref, setSoundPref] = useState<SoundWavPref>(getSuccessPreference());
   const [attentionPref, setAttentionPref] = useState<SoundWavPref>(getAttentionPreference());
+  const [notificationVolume, setNotificationVolume] = useState(getNotificationVolume);
   const [soundExpanded, setSoundExpanded] = useState(false);
   const statusBarStyle = normalizeStatusBarStyle(s.statusBarStyle);
   const statusBarItems = normalizeStatusBarItems(s.statusBarItems);
-  const soundStatus = summarizeSoundStatus(genMusicPreset, soundPref, attentionPref);
+  const soundStatus = summarizeSoundStatus(genMusicPreset, soundPref, attentionPref, notificationVolume);
   const applyStatusBarItems = (items: StatusBarItemId[]) => {
     const contentScrollTop = document.querySelector<HTMLElement>(".settings-center__content")?.scrollTop ?? 0;
     const navScrollTop = document.querySelector<HTMLElement>(".settings-center__nav")?.scrollTop ?? 0;
@@ -1842,6 +1844,13 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
                 />
               </div>
               <div className="settings-sound-row">
+                <span className="settings-sound-row__label">{t("settings.notificationVolume")}</span>
+                <NotificationVolumeSlider
+                  value={notificationVolume}
+                  onChange={(next) => setNotificationVolume(persistNotificationVolume(next))}
+                />
+              </div>
+              <div className="settings-sound-row">
                 <span className="settings-sound-row__label">{t("settings.notificationSoundSuccess")}</span>
                 <SoundSelect
                   value={soundPref}
@@ -1910,8 +1919,14 @@ function summarizeSoundStatus(
   music: GenerativePreset,
   success: SoundWavPref,
   attention: SoundWavPref,
+  notificationVolume: number,
 ): "allOff" | "enabled" | "custom" {
-  const enabledCount = [music !== "off", success !== "off", attention !== "off"].filter(Boolean).length;
+  const notificationsAudible = notificationVolume > 0;
+  const enabledCount = [
+    music !== "off",
+    notificationsAudible && success !== "off",
+    notificationsAudible && attention !== "off",
+  ].filter(Boolean).length;
   if (enabledCount === 0) return "allOff";
   if (enabledCount === 1) return "enabled";
   return "custom";

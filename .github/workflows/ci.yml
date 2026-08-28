@@ -393,6 +393,7 @@ jobs:
           pnpm --dir frontend test:motion
           pnpm --dir frontend test:motion-browser
           pnpm --dir frontend test:composer
+          pnpm --dir frontend test:todo-visibility
           pnpm --dir frontend test:transcript
           xvfb-run -a env REASONIX_TRANSCRIPT_NATIVE_THUMB=1 pnpm --dir frontend test:transcript-browser
 

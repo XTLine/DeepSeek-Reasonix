@@ -9055,6 +9055,9 @@ body > .mermaid-diagram--fullscreen {
   margin: 0 auto 10px;
   animation: shelf-in var(--dur-slow) var(--ease-out) both;
 }
+.todo-exit {
+  animation: shelf-in 240ms 900ms ease reverse both;
+}
 @keyframes shelf-in {
   from {
     opacity: 0;
@@ -16619,6 +16622,42 @@ body > .mermaid-diagram--fullscreen {
   width: clamp(140px, 34vw, 188px);
   min-width: 0;
   justify-self: end;
+}
+
+.settings-sound-row .notification-volume-control {
+  width: clamp(190px, 36vw, 260px);
+  min-width: 0;
+  justify-self: end;
+}
+
+.notification-volume-control {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 42px;
+  align-items: center;
+  gap: 10px;
+}
+
+.notification-volume-control input[type="range"] {
+  --wails-draggable: no-drag;
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.notification-volume-control input[type="range"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.notification-volume-control output {
+  min-width: 42px;
+  color: var(--fg);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 1;
+  text-align: right;
 }
 
 .sound-select {

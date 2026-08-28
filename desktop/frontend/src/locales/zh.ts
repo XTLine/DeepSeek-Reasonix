@@ -1909,6 +1909,7 @@ export const zh: Record<DictKey, string> = {
   "settings.soundCollapse": "折叠声音设置",
   "settings.notificationSound": "通知音效",
   "settings.notificationSoundHint": "为不同事件选择不同的音效",
+  "settings.notificationVolume": "通知音量",
   "settings.notificationSoundSuccess": "生成完成",
   "settings.notificationSoundAttention": "等待操作",
   "settings.notificationSound.synth": "合成音效",

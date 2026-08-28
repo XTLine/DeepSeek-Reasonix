@@ -1907,6 +1907,7 @@ export const en = {
   "settings.soundCollapse": "Collapse sound settings",
   "settings.notificationSound": "Notification sounds",
   "settings.notificationSoundHint": "Choose different sounds for each event",
+  "settings.notificationVolume": "Notification volume",
   "settings.notificationSoundSuccess": "Generation complete",
   "settings.notificationSoundAttention": "Awaiting response",
   "settings.notificationSound.synth": "Synthesized",
