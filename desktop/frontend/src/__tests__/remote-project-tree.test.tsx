@@ -246,6 +246,10 @@ ok(
     /a\.goRemoteTabSafe\("remoteTabResume"[\s\S]*?restoreRejectedRemoteTabOpenSelection/.test(remotePendingSelectionSource),
   "session switches resume in the background behind a generation guard",
 );
+ok(
+  /if \(project\.remote\) return;/.test(source),
+  "remote groups never reach ListProjectTopics with their virtual root",
+);
 
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);
