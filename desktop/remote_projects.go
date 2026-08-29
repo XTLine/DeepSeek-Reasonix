@@ -672,9 +672,17 @@ func (a *App) bootstrapRemoteTab(tabID, hostID, workspace string) {
 		// same as the live-tab reset path.
 		openTab.topicTitle = a.localizedDefaultTopicTitle()
 	}
+	meta := remoteTabMetaLocked(openTab)
 	a.remoteTabMu.Unlock()
 	if !a.publishRemoteTabAttachedReady(tabID, gen) {
 		return
+	}
+	if openTab.session.reset {
+		// A fresh session has no transcript on the serve yet, so the sidebar's
+		// listing cannot see it until the first turn lands. Publish the tab
+		// update so the sidebar re-pulls and synthesizes the blank row — the
+		// ready-only state event does not trigger that listing.
+		a.emitRemoteEvent("remote-tab:updated", meta)
 	}
 	// The confirmed /events pump makes the session usable without losing prompts.
 	// Saving the explorer default is auxiliary and cannot downgrade a healthy tab.

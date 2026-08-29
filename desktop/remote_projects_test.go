@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"reasonix/internal/config"
 )
@@ -110,5 +111,50 @@ func TestRemoteRootWorkspaceContainsAbsoluteDescendants(t *testing.T) {
 	}
 	if isRemoteSubpath("/", "/") || isRemoteSubpath("/", "relative/path") {
 		t.Fatal("root containment must stay strict and absolute")
+	}
+}
+
+// TestBootstrapNewSessionPublishesTabUpdateForSidebarBlankRow pins the
+// sidebar's only signal for a brand-new remote session: the fresh session has
+// no transcript on the serve, so the session listing synthesizes a blank row
+// from the tab's reset flag — but only after the sidebar re-pulls, which it
+// does on remote-tab:updated. A bootstrap that reaches ready without that
+// update leaves the new project group empty.
+func TestBootstrapNewSessionPublishesTabUpdateForSidebarBlankRow(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	log := &eventLog{}
+	a := &App{remoteRuntime: kernel, remoteEventHook: log.add}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+
+	a.remoteTabMu.Lock()
+	reset := a.remoteTabs[meta.ID].session.reset
+	a.remoteTabMu.Unlock()
+	if !reset {
+		t.Fatal("bootstrap did not mark the fresh session as reset")
+	}
+	// The tab update trails the ready state event on the same goroutine
+	// handoff; wait briefly instead of racing the emit.
+	updates := 0
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		updates = 0
+		for _, event := range log.recorded() {
+			if strings.HasPrefix(event, "remote-tab:updated ") && strings.Contains(event, meta.ID) {
+				updates++
+			}
+		}
+		if updates >= 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if updates < 1 {
+		t.Fatalf("bootstrap emitted no remote-tab:updated for tab %q, events: %v", meta.ID, log.recorded())
 	}
 }

@@ -363,12 +363,34 @@ func (a *App) remoteProjectSessions(ctx context.Context, client *http.Client, ba
 		}
 	}
 	if !hasCurrent {
+		// The foreground session is invisible to the serve listing whenever its
+		// transcript is not on disk yet (a just-rotated /new session until its
+		// first save). That — not the tab's transient reset flag — is the real
+		// condition for synthesizing the current blank row: the status poll
+		// clears reset as soon as Serve names the session, long before the
+		// listing can see it.
 		a.remoteTabMu.Lock()
+		listedPaths := make(map[string]bool, len(entries))
+		for _, e := range entries {
+			listedPaths[e.Path] = true
+		}
 		var blank *RemoteSessionView
 		for _, tab := range a.remoteTabs {
-			if tab.ref.HostID == hostID && tab.ref.Workspace == workspace && tab.session.reset {
-				blank = &RemoteSessionView{Name: "", Path: tab.routing.currentPath, Title: tab.topicTitle, Current: true, Running: tab.runtime.running, LastActivityAt: time.Now().UnixMilli()}
-				break
+			if tab.ref.HostID != hostID || tab.ref.Workspace != workspace {
+				continue
+			}
+			if tab.state != "ready" || blank != nil {
+				continue
+			}
+			// Known current path: blank while the serve listing cannot see it
+			// yet. Unknown path (a legacy /new without a path header): blank
+			// while the fresh-session marker is still set.
+			if path := tab.routing.currentPath; path != "" {
+				if !listedPaths[path] {
+					blank = &RemoteSessionView{Name: "", Path: path, Title: tab.topicTitle, Current: true, Running: tab.runtime.running, LastActivityAt: time.Now().UnixMilli()}
+				}
+			} else if tab.session.reset {
+				blank = &RemoteSessionView{Name: "", Title: tab.topicTitle, Current: true, Running: tab.runtime.running, LastActivityAt: time.Now().UnixMilli()}
 			}
 		}
 		a.remoteTabMu.Unlock()
