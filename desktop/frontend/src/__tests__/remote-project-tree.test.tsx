@@ -247,7 +247,7 @@ ok(
   "session switches resume in the background behind a generation guard",
 );
 ok(
-  /if \(project\.remote\) return;/.test(source),
+  /if \(\(project\.kind !== "project" && project\.kind !== "global_folder"\) \|\| project\.remote\) return;/.test(source),
   "remote groups never reach ListProjectTopics with their virtual root",
 );
 

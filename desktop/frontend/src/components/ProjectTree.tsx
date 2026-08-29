@@ -330,11 +330,7 @@ export function ProjectTree({
   const loadProjectTopicsRef = useRef<(project: ProjectNode, append?: boolean) => Promise<void>>(async () => {});
 
   const loadProjectTopics = useCallback(async (project: ProjectNode, append = false) => {
-    if (project.kind !== "project" && project.kind !== "global_folder") return;
-    // Remote groups list sessions from the serve-side catalog instead; their
-    // qualified root ("remote-project:<host>:<workspace>") is not a local
-    // topic-state scope and must never reach ListProjectTopics.
-    if (project.remote) return;
+    if ((project.kind !== "project" && project.kind !== "global_folder") || project.remote) return;
     const key = project.key;
     const pageState = topicPageStateRef.current[key];
     const cursor = append ? pageState?.nextCursor ?? "" : "";

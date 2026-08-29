@@ -727,6 +727,9 @@ func (a *App) ListProjectTree() []ProjectNode {
 		// folders. This compatibility wrapper rebuilds the complete child list,
 		// so start clean to avoid duplicating those shells with catalog rows.
 		project.Children = []ProjectNode{}
+		if project.Remote != nil {
+			continue
+		}
 		scope := "project"
 		root := project.Root
 		if project.Kind == "global_folder" {
