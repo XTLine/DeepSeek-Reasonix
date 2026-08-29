@@ -363,12 +363,9 @@ func (a *App) remoteProjectSessions(ctx context.Context, client *http.Client, ba
 		}
 	}
 	if !hasCurrent {
-		// The foreground session is invisible to the serve listing whenever its
-		// transcript is not on disk yet (a just-rotated /new session until its
-		// first save). That — not the tab's transient reset flag — is the real
-		// condition for synthesizing the current blank row: the status poll
-		// clears reset as soon as Serve names the session, long before the
-		// listing can see it.
+		// A fresh foreground session stays absent from /sessions until its first
+		// transcript save. Synthesize it from the live route rather than reset,
+		// which status clears as soon as Serve names the not-yet-listed session.
 		a.remoteTabMu.Lock()
 		listedPaths := make(map[string]bool, len(entries))
 		for _, e := range entries {
