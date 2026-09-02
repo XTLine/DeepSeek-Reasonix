@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"reasonix/internal/agent"
 )
 
 const (
@@ -32,6 +34,7 @@ type serveSessionEntry struct {
 	Turns      int    `json:"turns"`
 	Current    bool   `json:"current"`
 	Running    bool   `json:"running"`
+	TakenOver  bool   `json:"takenOver,omitempty"`
 	MtimeMilli int64  `json:"mtimeMilli"`
 }
 
@@ -450,6 +453,9 @@ listingAttempt:
 				authoritative := make(map[string]bool, len(entries))
 				for _, entry := range entries {
 					authoritative[entry.Path] = entry.Running
+					if agent.CanonicalSessionPath(entry.Path) == agent.CanonicalSessionPath(tab.routing.currentPath) {
+						tab.session.takenOver = entry.TakenOver
+					}
 				}
 				tab.routing.running = authoritative
 				if authoritativeCurrent != nil {

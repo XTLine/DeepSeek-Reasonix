@@ -164,7 +164,8 @@ func (a *App) resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPat
 		// before the request returns so the all-session pump does not discard its
 		// handoff output or prompt replay as background work.
 		route := a.beginRemoteTabProvisionalResume(tabID, tab, client, gen, target.Path)
-		if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
+		mountedPath, err := servePostSessionPath(ctx, client, serveURL(base, "/resume"), body)
+		if err != nil {
 			var statusErr *serveHTTPStatusError
 			if errors.As(err, &statusErr) {
 				if !a.rollbackRemoteTabProvisionalResume(tabID, tab, client, gen, route) {
@@ -205,17 +206,14 @@ func (a *App) resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPat
 				target.Title = current.Title
 			}
 			target.Running = target.Running || current.Running
+			target.TakenOver = current.TakenOver
+		} else {
+			target.TakenOver = strings.TrimSpace(mountedPath) != ""
 		}
 		title := strings.TrimSpace(target.Title)
 		if title == "" {
 			title = name
 		}
-		// A 204 from /resume on a session a local runtime owns is a spectator
-		// mount, not ownership. The provisional route is already committed by
-		// beginRemoteTabProvisionalResume, so flip the tab read-only BEFORE the
-		// resume publication emits ready: the frontend rehydrates with
-		// /history?session= only when takenOver is already set.
-		a.markRemoteTabSpectatorIfLocalOwned(ctx, tabID, client, base, gen)
 		if !a.commitAndPublishRemoteTabResume(tabID, tab, client, gen, route, target, title) {
 			// A newer route won the publication fence; never restore the older
 			// selection over it. The spectator pin was for the losing route —

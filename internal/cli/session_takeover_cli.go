@@ -661,10 +661,10 @@ func (m *cliTakeoverManager) requestYieldFor(binding *cliTakeoverBinding, revisi
 	}
 	go func() {
 		deadline := time.Now().Add(cliTakeoverTimeout)
-		for ctrl != nil && ctrl.Running() && time.Now().Before(deadline) {
+		for cliControllerHasActiveRuntimeWork(ctrl) && time.Now().Before(deadline) {
 			time.Sleep(50 * time.Millisecond)
 		}
-		if ctrl != nil && ctrl.Running() {
+		if cliControllerHasActiveRuntimeWork(ctrl) {
 			m.reclaiming.Store(false)
 			return
 		}
@@ -959,10 +959,10 @@ func (m *cliTakeoverManager) Close() error {
 	if m.reclaiming.Load() {
 		_, ctrl, _, _ := m.snapshot()
 		deadline := time.Now().Add(cliTakeoverTimeout)
-		for ctrl != nil && ctrl.Running() && time.Now().Before(deadline) {
+		for cliControllerHasActiveRuntimeWork(ctrl) && time.Now().Before(deadline) {
 			time.Sleep(50 * time.Millisecond)
 		}
-		if ctrl != nil && ctrl.Running() {
+		if cliControllerHasActiveRuntimeWork(ctrl) {
 			return fmt.Errorf("timed out waiting for the active turn to yield its session")
 		}
 	}

@@ -124,6 +124,7 @@ func (a *App) reconcileRemoteTabRejectedResume(tabID string, tab *remoteTab, cli
 	}
 	current.session.name = strings.TrimSpace(authoritative.Name)
 	current.session.path = authoritative.Path
+	current.session.takenOver = authoritative.TakenOver
 	current.session.newSession = false
 	current.session.reset = false
 	current.runtime.running = authoritative.Running || current.routing.running[authoritative.Path]
@@ -161,6 +162,7 @@ func (a *App) commitRemoteTabResume(tabID string, tab *remoteTab, client *http.C
 	current.session.newSession = false
 	current.session.name = strings.TrimSpace(target.Name)
 	current.session.path = target.Path
+	current.session.takenOver = target.TakenOver
 	current.routing.currentPath = target.Path
 	// Close the provisional routing epoch so a listing that began while
 	// /resume was in flight cannot publish its pre-switch snapshot afterward.

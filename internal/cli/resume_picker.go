@@ -122,11 +122,6 @@ func (m chatTUI) applyResumePick() (tea.Model, tea.Cmd) {
 		m.notice(i18n.M.ResumeBusy)
 		return m, nil
 	}
-	loaded, err := agent.LoadSession(target.Path)
-	if err != nil {
-		m.notice("resume: " + err.Error())
-		return m, nil
-	}
 	// Snapshot before moving the lease: the outgoing session must be written
 	// while this process still owns it.
 	if err := m.ctrl.Snapshot(); err != nil {
@@ -134,7 +129,7 @@ func (m chatTUI) applyResumePick() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.followSessionLease()
-	if err := m.commitLoadedSessionSwitch(target.Path, loaded); err != nil {
+	if err := m.commitSessionSwitch(target.Path); err != nil {
 		m.notice("resume: " + sessionLeaseHeldNotice(err))
 		if cliSessionTakeoverCandidate(err) {
 			m.pendingTakeoverPath = target.Path

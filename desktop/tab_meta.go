@@ -19,8 +19,8 @@ type TabMeta struct {
 	SessionDigest     string `json:"sessionDigest,omitempty"`
 	SessionGeneration uint64 `json:"sessionGeneration,omitempty"`
 	ReadOnly          bool   `json:"readOnly,omitempty"`
-	// TakenOver marks a remote tab whose session a local runtime on the serve
-	// host took over: read-only here until the user reclaims it.
+	// TakenOver marks a local or remote tab spectating a session whose writer is
+	// on the other side of a cooperative handoff.
 	TakenOver         bool               `json:"takenOver,omitempty"`
 	ProjectColor      string             `json:"projectColor,omitempty"`
 	Label             string             `json:"label"`

@@ -243,7 +243,7 @@ func (a *App) TakeoverSession(tabID, mode string) error {
 	if tab == nil {
 		return fmt.Errorf("unknown tab")
 	}
-	if !a.tabHasRetryableStartupLeaseError(tab) {
+	if a.takeoverTabState(tab) == takeoverTabUnavailable {
 		return fmt.Errorf("tab is no longer waiting for a session lease")
 	}
 	path := strings.TrimSpace(tab.currentSessionPath())
@@ -319,14 +319,12 @@ func (a *App) TakeoverSession(tabID, mode string) error {
 	// overwritten by a stale takeover.
 	a.runtimeRebuildMu.Lock()
 	defer a.runtimeRebuildMu.Unlock()
-	a.mu.RLock()
-	epochCurrent := a.tabByIDLocked(tabID) == tab && a.runtimeEpochForTabLocked(tab) == sourceEpoch
-	pathCurrent := sessionRuntimeKey(tab.currentSessionPath()) == sessionRuntimeKey(path)
-	retryable := a.tabs[tab.ID] == tab && !tab.removed && tab.Ctrl == nil && tab.StartupErrLeaseHeld
-	a.mu.RUnlock()
-	if !epochCurrent || !pathCurrent || !retryable || tab.sessionLeaseRuntimeKey() != "" {
+	switch state := a.takeoverTabStateAt(tab, sourceEpoch, path); {
+	case state == takeoverTabUnavailable || tab.sessionLeaseRuntimeKey() != "":
 		a.endFailedTakeover(record, client, grant)
 		return fmt.Errorf("tab changed while taking over the session; retry")
+	case state == takeoverTabLocalSpectator:
+		return a.promoteLocalTakeoverSpectator(tab, path, sourceEpoch, record, client, grant)
 	}
 	lease, err := agent.TryAcquireSessionLeaseWithHandoff(path, grant.SourceWriterID, grant.HandoffID)
 	if err != nil {
@@ -379,6 +377,7 @@ func (a *App) TakeoverSession(tabID, mode string) error {
 		a.mu.Unlock()
 		return err
 	}
+	a.setTabReadOnly(tabID, false)
 	a.clearDeferredRebuild(tabID)
 	return nil
 }
@@ -1141,6 +1140,7 @@ func (m *takeoverMirror) demote(interrupt bool) {
 		a.setTabReadOnly(tab.ID, false)
 		return
 	}
+	a.markLocalTakeoverSpectator(tab)
 	m.stopAndFinalize(false)
 	m.startSpectate(tab, sink)
 }

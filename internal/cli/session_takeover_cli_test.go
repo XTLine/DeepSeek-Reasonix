@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"reasonix/internal/control"
 	"reasonix/internal/event"
 	"reasonix/internal/eventwire"
+	"reasonix/internal/jobs"
 	"reasonix/internal/provider"
 )
 
@@ -213,6 +215,89 @@ func TestCLITakeoverManagerReclaimReturnsLeaseAndSignalsExit(t *testing.T) {
 	}
 	if info == nil || info.HandoffTo != "serve-writer" || info.HandoffID != "return-1" {
 		t.Fatalf("reverse reservation = %+v", info)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCLITakeoverManagerReclaimWaitsForBackgroundJobs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "background.jsonl")
+	session := agent.NewSession("system")
+	if err := session.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	manager := jobs.NewManager(event.Discard)
+	ctrl := control.New(control.Options{
+		Executor:    agent.New(nil, nil, session, agent.Options{}, event.Discard),
+		Jobs:        manager,
+		SessionDir:  dir,
+		SessionPath: path,
+	})
+	defer ctrl.Close()
+	jobStarted := make(chan struct{})
+	releaseJob := make(chan struct{})
+	manager.StartForSession(agent.BranchID(path), "task", "background", func(ctx context.Context, _ io.Writer) (string, error) {
+		close(jobStarted)
+		select {
+		case <-releaseJob:
+			return "done", nil
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	})
+	<-jobStarted
+
+	leases := control.NewSessionLeaseKeeper()
+	defer leases.Release()
+	if err := leases.Rebind(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := leases.BindControllerAuthority(ctrl); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/mirror-end":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	exited := make(chan struct{}, 1)
+	m := newCLITakeoverManager(event.Discard, leases)
+	m.AttachController(ctrl)
+	m.SetYieldCallback(func() { exited <- struct{}{} })
+	binding := &cliTakeoverBinding{
+		path: path, record: cliServeRecord{base: srv.URL}, client: srv.Client(),
+		grant: cliTakeoverGrant{MirrorID: "mirror", SourceWriterID: "serve-writer", ReturnHandoffID: "return"},
+	}
+	m.mu.Lock()
+	m.binding = binding
+	m.revision = 1
+	m.mu.Unlock()
+	m.requestYieldFor(binding, 1, false)
+	select {
+	case <-exited:
+		t.Fatal("reclaim returned the lease while a background job was active")
+	case <-time.After(150 * time.Millisecond):
+	}
+	contender, err := agent.TryAcquireSessionLease(path)
+	if contender != nil {
+		contender.Release()
+	}
+	if !errors.Is(err, agent.ErrSessionLeaseHeld) {
+		t.Fatalf("background reclaim lease error = %v, want held", err)
+	}
+
+	close(releaseJob)
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reclaim did not finish after the background job completed")
 	}
 	if err := m.Close(); err != nil {
 		t.Fatal(err)

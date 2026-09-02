@@ -256,11 +256,6 @@ func (m *chatTUI) runResumeCommand(input string) {
 		m.notice(i18n.M.ResumeAlreadyActive)
 		return
 	}
-	loaded, err := agent.LoadSession(target.session.Path)
-	if err != nil {
-		m.notice("resume: " + err.Error())
-		return
-	}
 	// Persist the conversation we're leaving so switching back later restores it.
 	// Snapshot before moving the lease: the outgoing session must be written
 	// while this process still owns it.
@@ -269,7 +264,7 @@ func (m *chatTUI) runResumeCommand(input string) {
 		return
 	}
 	m.followSessionLease()
-	if err := m.commitLoadedSessionSwitch(target.session.Path, loaded); err != nil {
+	if err := m.commitSessionSwitch(target.session.Path); err != nil {
 		m.notice("resume: " + sessionLeaseHeldNotice(err))
 		if cliSessionTakeoverCandidate(err) {
 			m.pendingTakeoverPath = target.session.Path

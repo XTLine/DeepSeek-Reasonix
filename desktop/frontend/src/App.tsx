@@ -4755,14 +4755,14 @@ export default function App() {
             </div>
           </header>
 
-          {activeTab?.takenOver && activeTab?.remote ? (
+          {activeTab?.takenOver ? (
             <RemoteReclaimBanner
               tabId={activeTab.id}
               busyTabId={reclaimBusyTab}
               onReclaim={(tabId) => {
                 if (reclaimBusyTab) return;
                 setReclaimBusyTab(tabId);
-                app.ReclaimRemoteTabSession(tabId)
+                (activeTab.remote ? app.ReclaimRemoteTabSession(tabId) : app.TakeoverSession(tabId, "wait"))
                   .catch((error) => console.warn("[takeover] reclaim failed", error))
                   .finally(() => setReclaimBusyTab(null));
               }}

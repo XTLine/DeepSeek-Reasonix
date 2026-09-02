@@ -71,10 +71,14 @@ func enterRemoteSessionTarget(ctx context.Context, client *http.Client, base str
 		if err != nil {
 			return serveSessionEntry{}, err
 		}
-		if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
+		mountedPath, err := servePostSessionPath(ctx, client, serveURL(base, "/resume"), body)
+		if err != nil {
 			return serveSessionEntry{}, err
 		}
-		return serveSessionEntry{Name: name, Path: sessionPath, Title: strings.TrimSpace(opts.SessionTitle), Current: true}, nil
+		return serveSessionEntry{
+			Name: name, Path: sessionPath, Title: strings.TrimSpace(opts.SessionTitle), Current: true,
+			TakenOver: strings.TrimSpace(mountedPath) != "",
+		}, nil
 	}
 	// Focus-only attaches retain the current session; only explicit NewSession
 	// may abandon it.
@@ -94,10 +98,12 @@ func enterRemoteSessionTarget(ctx context.Context, client *http.Client, base str
 		if err != nil {
 			return serveSessionEntry{}, err
 		}
-		if err := servePost(ctx, client, serveURL(base, "/resume"), body); err != nil {
+		mountedPath, err := servePostSessionPath(ctx, client, serveURL(base, "/resume"), body)
+		if err != nil {
 			return serveSessionEntry{}, err
 		}
 		session.Current = true
+		session.TakenOver = strings.TrimSpace(mountedPath) != ""
 		return session, nil
 	}
 	return serveSessionEntry{}, fmt.Errorf("remote session %q not found", name)

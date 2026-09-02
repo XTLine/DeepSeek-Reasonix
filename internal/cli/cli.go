@@ -653,14 +653,9 @@ func runAgent(args []string, version string) int {
 	var takeoverBinding *cliTakeoverBinding
 	if resumePath != "" {
 		var err error
-		resumeSession, err = loadResumableSession(resumePath)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
-			return 1
-		}
-		bindErr := leases.Rebind(resumePath)
-		if errors.Is(bindErr, agent.ErrSessionLeaseHeld) && *takeover {
-			takeoverBinding, err = cliTakeoverHeldSession(resumePath, bindErr, leases, takeoverManager)
+		resumeSession, err = bindAndLoadCLIResume(leases, resumePath, loadResumableSession)
+		if errors.Is(err, agent.ErrSessionLeaseHeld) && *takeover {
+			takeoverBinding, err = cliTakeoverHeldSession(resumePath, err, leases, takeoverManager)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 				return 1
@@ -671,13 +666,12 @@ func runAgent(args []string, version string) int {
 				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 				return 1
 			}
-			bindErr = nil
 		}
-		if bindErr != nil {
-			if errors.Is(bindErr, agent.ErrSessionLeaseHeld) {
-				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, sessionLeaseResumeRefusal(bindErr))
+		if err != nil {
+			if errors.Is(err, agent.ErrSessionLeaseHeld) {
+				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, sessionLeaseResumeRefusal(err))
 			} else {
-				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, bindErr)
+				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 			}
 			return 1
 		}
@@ -1133,14 +1127,9 @@ func chatREPL(args []string, version string) int {
 	var takeoverBinding *cliTakeoverBinding
 	var startupResumeSession *agent.Session
 	if resumePath != "" {
-		startupResumeSession, err = loadResumableSession(resumePath)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
-			return 1
-		}
-		bindErr := leases.Rebind(resumePath)
-		if errors.Is(bindErr, agent.ErrSessionLeaseHeld) && cliSessionTakeoverCandidate(bindErr) && promptSessionTakeover(bindErr) {
-			takeoverBinding, err = cliTakeoverHeldSession(resumePath, bindErr, leases, takeoverManager)
+		startupResumeSession, err = bindAndLoadCLIResume(leases, resumePath, loadResumableSession)
+		if errors.Is(err, agent.ErrSessionLeaseHeld) && cliSessionTakeoverCandidate(err) && promptSessionTakeover(err) {
+			takeoverBinding, err = cliTakeoverHeldSession(resumePath, err, leases, takeoverManager)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 				return 1
@@ -1151,13 +1140,12 @@ func chatREPL(args []string, version string) int {
 				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 				return 1
 			}
-			bindErr = nil
 		}
-		if bindErr != nil {
-			if errors.Is(bindErr, agent.ErrSessionLeaseHeld) {
-				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, sessionLeaseResumeRefusal(bindErr))
+		if err != nil {
+			if errors.Is(err, agent.ErrSessionLeaseHeld) {
+				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, sessionLeaseResumeRefusal(err))
 			} else {
-				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, bindErr)
+				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 			}
 			return 1
 		}

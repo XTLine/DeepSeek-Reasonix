@@ -133,9 +133,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 				current, _ := serveCurrentSession(callCtx, client, base)
 				target = current
 			}
-			a.remoteTabMu.Lock()
-			tab.session.takenOver = true
-			a.remoteTabMu.Unlock()
+			target.TakenOver = true
 		} else {
 			log.Printf("[remote] attachRemoteTabServe: enterRemoteSession FAILED tab=%s err=%v", tabID, err)
 			a.retireRemoteTabGeneration(tabID, gen)
@@ -153,22 +151,6 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 		current.session.instanceID = instanceID
 	}
 	a.remoteTabMu.Unlock()
-	// /resume on a session a local runtime owns is a spectator mount, not an
-	// ownership transfer. Confirm via /ownership and mark the tab read-only
-	// BEFORE publishing readiness: the frontend hydrates as soon as it hears
-	// ready, and its /history?session= depends on takenOver being set already.
-	// Probe for spectator state asynchronously: blocking here adds an SSH
-	// round-trip to EVERY session entry. The 99% case (normal resume)
-	// pays the latency for nothing. For spectator sessions, the probe
-	// result arrives after ready — the frontend briefly hydrates with the
-	// foreground view, then takenOver flips and re-renders with ?session=.
-	if entered {
-		go func() {
-			probeCtx, probeCancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer probeCancel()
-			a.markRemoteTabSpectatorIfLocalOwned(probeCtx, tabID, client, base, gen)
-		}()
-	}
 	// A 200 response is only the stream-open barrier. The stream can still die
 	// while /new or /resume is in flight; publish readiness only if its pump has
 	// not already moved this same generation into reconnecting/error.
@@ -178,12 +160,9 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	return entered, nil
 }
 
-// markRemoteTabSpectatorIfLocalOwned flips a remote tab into read-only
-// spectator mode when the session it just attached to / resumed is owned by a
-// local runtime on the serve host (mirrored, or plainly held by another local
-// process). Both the fresh-attach path and the reuse-tab session switch take
-// this same probe, so the tab cannot drift back to the foreground session's
-// transcript and status.
+// markRemoteTabSpectatorIfLocalOwned reconciles ownership when a mid-view
+// status/notice needs an authoritative probe, or when an older Serve omitted
+// the synchronous ownership header used by attach and resume responses.
 func (a *App) markRemoteTabSpectatorIfLocalOwned(ctx context.Context, tabID string, client *http.Client, base string, gen uint64) {
 	a.remoteTabMu.Lock()
 	tab := a.remoteTabs[tabID]
@@ -297,6 +276,7 @@ func (a *App) commitRemoteTabAttachResponse(tabID string, tab *remoteTab, gen, r
 	if !alreadyAdopted {
 		commitRemoteTabAttachRoute(current, target.Path, reset)
 	}
+	current.session.takenOver = target.TakenOver
 	if name := strings.TrimSpace(target.Name); name != "" {
 		current.session.name = name
 	}

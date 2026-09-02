@@ -177,8 +177,10 @@ console.log("\nbundle budgets");
 // orchestration on top. The merged stable build measures 461.338 KiB and the
 // test channel measures 461.323 KiB. Deferring selection ownership until a
 // real range exists (#9703/#9711) and adding the session takeover banners
-// move the combined path to 462.2 KiB; retain the exact one-decimal ceiling.
-const initialJSBudgetKiB = 462.2;
+// move the combined path to 462.2 KiB. Local spectator reclaim adds the
+// desktop-vs-remote command branch and measures 462.205 KiB; retain it with
+// the smallest one-decimal ratchet.
+const initialJSBudgetKiB = 462.3;
 assertBudget("initial JavaScript gzip", initialJSGzip, initialJSBudgetKiB * 1024);
 assertBudget("largest initial JavaScript chunk gzip", largestInitialJS, 280 * 1024);
 // Render-blocking CSS is intentionally absent: styles.css loads deferred via
@@ -320,8 +322,9 @@ const rawInitialBytes = [...initialJS, ...initialCSS, ...appShellCSS]
 // remaining bounded payload. The retained recovery receipt makes the stable
 // path 2465.105 KiB raw; the merged test channel measures 2464.979 KiB.
 // Session takeover banners and #9703/#9711's provisional-selection handoff
-// move the measured stable and test paths to 2468.2 KiB; retain their exact
-// one-decimal ceilings.
-const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_468.2 : 2_468.2;
+// move the measured stable and test paths to 2468.2 KiB. The local spectator
+// reclaim branch measures 2468.222 KiB raw; retain it with the smallest
+// one-decimal ratchet.
+const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_468.3 : 2_468.3;
 assertBudget("initial raw JavaScript and CSS", rawInitialBytes, rawInitialBudgetKiB * 1024);
 assertBudget("largest initial JavaScript chunk raw", largestInitialJSRaw, 1_000 * 1024);
