@@ -7028,8 +7028,10 @@ func (a *App) SlashArgs(input string) SlashArgsResult {
 	a.mu.RLock()
 	ctrl := a.activeCtrlLocked()
 	model := ""
+	tabID := ""
 	if tab := a.activeTabLocked(); tab != nil {
 		model = tab.model
+		tabID = tab.ID
 	}
 	a.mu.RUnlock()
 	if ctrl == nil {
@@ -7041,6 +7043,11 @@ func (a *App) SlashArgs(input string) SlashArgsResult {
 		ConfiguredMCP:   ctrl.ConfiguredMCPNames(),
 		DisconnectedMCP: ctrl.DisconnectedMCPNames(),
 		CurrentModel:    model,
+	}
+	if fields := strings.Fields(input); len(fields) > 0 && fields[0] == "/effort" {
+		if effort := a.EffortForTab(tabID); effort.Supported {
+			data.EffortLevels = append([]string(nil), effort.Levels...)
+		}
 	}
 	if names, err := pluginpkg.InstalledNames(config.ReasonixHomeDir()); err == nil {
 		data.PluginNames = names
