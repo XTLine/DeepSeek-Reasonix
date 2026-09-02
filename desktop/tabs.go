@@ -2484,8 +2484,6 @@ func (a *App) openProjectTab(workspaceRoot, topicID string) (TabMeta, error) {
 	if abs, err := filepath.Abs(workspaceRoot); err == nil {
 		workspaceRoot = abs
 	}
-	saveWorkspace(workspaceRoot)
-	a.registerProjectRoot(workspaceRoot)
 
 	sessionPath, _ := a.findTopicSessionForTarget("project", workspaceRoot, topicID)
 	return a.openTopicTabWithActivation("project", workspaceRoot, topicID, sessionPath, true)
@@ -2502,7 +2500,6 @@ func (a *App) openProjectTabInactive(workspaceRoot, topicID string) (TabMeta, er
 	if abs, err := filepath.Abs(workspaceRoot); err == nil {
 		workspaceRoot = abs
 	}
-	a.registerProjectRoot(workspaceRoot)
 
 	sessionPath, _ := a.findTopicSessionForTarget("project", workspaceRoot, topicID)
 	return a.openTopicTabWithActivation("project", workspaceRoot, topicID, sessionPath, false)
@@ -2520,6 +2517,15 @@ func (a *App) openGlobalTabInactive(topicID string) (TabMeta, error) {
 
 func (a *App) openTopicTabWithActivation(scope, workspaceRoot, topicID, sessionPath string, activate bool) (TabMeta, error) {
 	actualRoot, sessionPath := a.resolveOpenTopicSessionPath(scope, workspaceRoot, sessionPath)
+	releaseAdmission, err := a.beginProjectRuntimeAdmission(scope, actualRoot)
+	if err != nil {
+		return TabMeta{}, err
+	}
+	defer releaseAdmission()
+	if strings.TrimSpace(scope) == "project" {
+		saveWorkspace(actualRoot)
+		a.registerProjectRoot(actualRoot)
+	}
 	targetKey := sessionRuntimeKey(sessionPath)
 
 	a.mu.Lock()
@@ -2645,8 +2651,6 @@ func (a *App) openTopicSession(scope, workspaceRoot, topicID, sessionPath string
 		if workspaceRoot == "" {
 			return TabMeta{}, fmt.Errorf("workspaceRoot is required")
 		}
-		saveWorkspace(workspaceRoot)
-		a.registerProjectRoot(workspaceRoot)
 	}
 	_, validPath, err := a.sessionDirForPath(sessionPath)
 	if err != nil {
@@ -2750,8 +2754,6 @@ func (a *App) ensureBlankTab(scope, workspaceRoot string) (TabMeta, error) {
 		if abs, err := filepath.Abs(workspaceRoot); err == nil {
 			workspaceRoot = abs
 		}
-		saveWorkspace(workspaceRoot)
-		a.registerProjectRoot(workspaceRoot)
 	} else {
 		workspaceRoot = ""
 		globalRoot = globalWorkspaceRoot()
@@ -2766,6 +2768,15 @@ func (a *App) ensureBlankTab(scope, workspaceRoot string) (TabMeta, error) {
 	actualRoot := workspaceRoot
 	if scope == "global" {
 		actualRoot = globalRoot
+	}
+	releaseAdmission, err := a.beginProjectRuntimeAdmission(scope, actualRoot)
+	if err != nil {
+		return TabMeta{}, err
+	}
+	defer releaseAdmission()
+	if scope == "project" {
+		saveWorkspace(workspaceRoot)
+		a.registerProjectRoot(workspaceRoot)
 	}
 	defaultModel, defaultToolApprovalMode := desktopNewSessionDefaults(scope, actualRoot)
 
@@ -4211,7 +4222,7 @@ func (a *App) buildTabControllerWithContextCore(tab *WorkspaceTab, loadedSession
 	// Lifecycle admission protects only the compare-and-publish boundary. Slow
 	// config, history, lease, and extension work above remains cancellable and
 	// cannot prevent shutdown from acquiring the write side.
-	releasePublication, extensionsCurrent := a.lockTabControllerPublication(extensionGen)
+	releasePublication, extensionsCurrent := a.lockTabControllerPublication(extensionGen, tabScope, tabWorkspaceRoot)
 	if !extensionsCurrent {
 		registration.rollback()
 		a.abandonSupersededBuild(tab, ctrl, rootKey, acquiredLeaseKey)
@@ -4327,6 +4338,11 @@ func (a *App) applySessionBindingToTab(tab *WorkspaceTab, binding sessionBinding
 		if workspaceRoot == "" {
 			return
 		}
+		releaseAdmission, err := a.beginChangedProjectRuntimeAdmission(tab, scope, workspaceRoot)
+		if err != nil {
+			return
+		}
+		defer releaseAdmission()
 		a.registerProjectRoot(workspaceRoot)
 	} else {
 		scope = "global"
@@ -6692,6 +6708,11 @@ func (a *App) CreateTopic(scope, workspaceRoot, title string) (TopicMeta, error)
 			workspaceRoot = abs
 		}
 	}
+	releaseAdmission, err := a.beginProjectRuntimeAdmission(scope, workspaceRoot)
+	if err != nil {
+		return TopicMeta{}, err
+	}
+	defer releaseAdmission()
 	if err := createTopicState(workspaceRoot, topicID, trimmedTitle, titleSource, createdAt); err != nil {
 		return TopicMeta{}, err
 	}

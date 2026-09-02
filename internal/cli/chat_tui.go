@@ -2038,11 +2038,11 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// pasting again would duplicate the text.
 				pending := pendingClipboardTextPastes(requests, m.clipboardImageTerminalPasteSeq, m.terminalPasteSeq)
 				if pending > 0 {
-					cmds = append(cmds, pasteClipboardTextGuarded(m.terminalPasteSeq, pending))
+					cmds = append(cmds, pasteClipboardTextGuarded(m.terminalPasteSeq, pending, msg.err))
 				}
 				break
 			}
-			m.notice(fmt.Sprintf(i18n.M.ClipboardImagePasteFailedFmt, msg.err))
+			m.notice(fmt.Sprintf(i18n.M.ClipboardImagePasteFailedFmt, sanitizeExternalDisplayText(msg.err.Error())))
 			break
 		}
 		imageBefore := m.input.Value()
@@ -2052,25 +2052,7 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case clipboardTextPasteMsg:
-		if msg.remote {
-			m.notice(i18n.M.ClipboardTextPasteRemoteHint)
-			break
-		}
-		if msg.err != nil {
-			m.notice(fmt.Sprintf(i18n.M.ClipboardTextPasteFailedFmt, msg.err))
-			break
-		}
-		if msg.text == "" {
-			break
-		}
-		count := 1
-		if msg.pending > 0 {
-			count = pendingClipboardTextPastes(msg.pending, msg.terminalPasteSeq, m.terminalPasteSeq)
-			if count == 0 {
-				break
-			}
-		}
-		return m.applyComposerPasteCount(tea.PasteMsg{Content: msg.text}, false, count)
+		return m.handleClipboardTextPaste(msg)
 
 	case clipboardCopyMsg:
 		if msg.statusHint && msg.seq != m.copyNoticeSeq {
