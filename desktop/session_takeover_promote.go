@@ -86,7 +86,7 @@ func (a *App) failLocalSpectatorTakeover(
 	}
 	if err := lease.ReleaseForHandoff(grant.SourceWriterID, grant.ReturnHandoffID); err != nil {
 		lease.Release()
-		return fmt.Errorf("%w (return reclaimed lease: %v)", cause, err)
+		return fmt.Errorf("%w (return reclaimed lease: %w)", cause, err)
 	}
 	a.endFailedTakeover(record, client, grant)
 	return cause
@@ -172,7 +172,6 @@ func (a *App) promoteLocalTakeoverSpectator(
 	}
 	oldCtrl, oldSink := tab.Ctrl, tab.sink
 	tab.adoptSessionLease(lease)
-	lease = nil
 	tab.Ctrl = candidate.ctrl
 	tab.sink = candidate.sink
 	tab.SessionPath = path

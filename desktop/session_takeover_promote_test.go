@@ -211,8 +211,9 @@ func TestTakeoverSessionBuildFailureKeepsLocalSpectatorAndReturnsLease(t *testin
 		return takeoverServeRecord{base: srv.URL}, srv.Client(), SessionTakeoverView{Holder: "serve"}, nil
 	}
 	originalBuild := takeoverBuildLocalSpectatorCandidateForTest
+	buildErr := errors.New("injected rebuild failure")
 	takeoverBuildLocalSpectatorCandidateForTest = func(*App, *WorkspaceTab, tabRuntimeSnapshot, string, *agent.Session) (*sessionRebindCandidate, error) {
-		return nil, errors.New("injected rebuild failure")
+		return nil, buildErr
 	}
 	t.Cleanup(func() {
 		takeoverFindTargetForTest = originalFind
@@ -224,7 +225,7 @@ func TestTakeoverSessionBuildFailureKeepsLocalSpectatorAndReturnsLease(t *testin
 		sourceLease.Release()
 	})
 
-	if err := app.TakeoverSession(tab.ID, "wait"); err == nil || !strings.Contains(err.Error(), "injected rebuild failure") {
+	if err := app.TakeoverSession(tab.ID, "wait"); !errors.Is(err, buildErr) || !strings.Contains(err.Error(), "injected rebuild failure") {
 		t.Fatalf("TakeoverSession error = %v, want injected failure", err)
 	}
 	app.mu.RLock()
