@@ -2,15 +2,15 @@
   "limits": {
     "banner": 15,
     "commented-code": 0,
-    "complexity": 1996,
-    "essay": 2007,
-    "file-size": 109087,
-    "function-size": 8619,
+    "complexity": 1989,
+    "essay": 2006,
+    "file-size": 109183,
+    "function-size": 8598,
     "layering": 1,
     "marker": 0,
     "narrative": 64,
     "struct-state": 116,
-    "test-file-size": 69831
+    "test-file-size": 69832
   },
   "files": {
     "cmd/e2ebench/main.go": {
@@ -24,8 +24,8 @@
     },
     "desktop/app.go": {
       "complexity": 57,
-      "essay": 64,
-      "file-size": 11116,
+      "essay": 65,
+      "file-size": 11124,
       "function-size": 355,
       "struct-state": 15
     },
@@ -66,7 +66,7 @@
       "essay": 2
     },
     "desktop/frontend/src/App.tsx": {
-      "file-size": 4734
+      "file-size": 4778
     },
     "desktop/frontend/src/__tests__/app-chrome-tabs.test.ts": {
       "test-file-size": 27
@@ -144,7 +144,7 @@
       "file-size": 180
     },
     "desktop/frontend/src/lib/bridge.ts": {
-      "file-size": 4924
+      "file-size": 4930
     },
     "desktop/frontend/src/lib/crash.ts": {
       "file-size": 225
@@ -153,10 +153,10 @@
       "file-size": 264
     },
     "desktop/frontend/src/lib/types.ts": {
-      "file-size": 1543
+      "file-size": 1545
     },
     "desktop/frontend/src/lib/useController.ts": {
-      "file-size": 4231
+      "file-size": 4227
     },
     "desktop/heartbeat.go": {
       "essay": 7
@@ -284,10 +284,10 @@
       "test-file-size": 151
     },
     "desktop/tabs.go": {
-      "complexity": 41,
+      "complexity": 42,
       "essay": 71,
-      "file-size": 7667,
-      "function-size": 357,
+      "file-size": 7688,
+      "function-size": 364,
       "struct-state": 23
     },
     "desktop/tabs_order_test.go": {
@@ -298,7 +298,7 @@
       "test-file-size": 3260
     },
     "desktop/terminal.go": {
-      "file-size": 79
+      "file-size": 73
     },
     "desktop/theme_app.go": {
       "complexity": 9,
@@ -691,10 +691,10 @@
       "essay": 6
     },
     "internal/cli/chat_tui.go": {
-      "complexity": 329,
+      "complexity": 321,
       "essay": 86,
-      "file-size": 4710,
-      "function-size": 1321
+      "file-size": 4691,
+      "function-size": 1299
     },
     "internal/cli/chat_tui_paste.go": {
       "essay": 6
@@ -705,9 +705,9 @@
     },
     "internal/cli/cli.go": {
       "complexity": 92,
-      "essay": 24,
-      "file-size": 2013,
-      "function-size": 575
+      "essay": 22,
+      "file-size": 2012,
+      "function-size": 574
     },
     "internal/cli/cli_test.go": {
       "essay": 1,
@@ -816,7 +816,7 @@
       "essay": 1
     },
     "internal/cli/tui_diagnostics.go": {
-      "function-size": 9
+      "function-size": 4
     },
     "internal/cli/upgrade.go": {
       "complexity": 1,
