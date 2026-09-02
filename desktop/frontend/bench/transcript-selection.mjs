@@ -58,13 +58,19 @@ async function waitForVisibleSelectionStart(page, { preferHighest, wheelDelta, t
         range.selectNodeContents(node);
         rects.push(...range.getClientRects());
       }
-      const start = rects.find((rect) => rect.width > 8 && rect.bottom > viewport.top && rect.top < viewport.bottom) ?? candidate.rect;
+      const start = rects.find((rect) => {
+        const visibleWidth = Math.min(rect.right, viewport.right) - Math.max(rect.left, viewport.left);
+        return visibleWidth > 12 && rect.bottom > viewport.top && rect.top < viewport.bottom;
+      });
       if (!start) return null;
-      const startX = Math.min(start.right - 4, start.left + Math.max(start.width * 0.45, 60));
+      const visibleLeft = Math.max(start.left, viewport.left);
+      const visibleRight = Math.min(start.right, viewport.right);
+      const visibleWidth = visibleRight - visibleLeft;
+      const startX = visibleLeft + visibleWidth * 0.3;
       const y = (Math.max(start.top, viewport.top) + Math.min(start.bottom, viewport.bottom)) / 2;
       return {
         start: { x: startX, y },
-        activate: { x: Math.min(start.right - 2, startX + 30), y },
+        activate: { x: visibleLeft + visibleWidth * 0.7, y },
         edge: { x: startX, y: prefer ? viewport.top + 2 : viewport.bottom - 2 },
         anchorTurn: candidate.turn,
       };
@@ -295,10 +301,18 @@ try {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Performance.enable");
   const retainedHeap = async () => {
-    await cdp.send("HeapProfiler.collectGarbage");
-    await page.waitForTimeout(100);
-    const metrics = await cdp.send("Performance.getMetrics");
-    return metrics.metrics.find((metric) => metric.name === "JSHeapUsedSize")?.value ?? 0;
+    let retained = Number.POSITIVE_INFINITY;
+    // Chromium can publish one stale post-GC heap sample while sweeping is
+    // still settling. Use the lowest of three explicit collections as the
+    // retained floor so the 2 MiB gate measures live data, not GC timing.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await cdp.send("HeapProfiler.collectGarbage");
+      await page.waitForTimeout(100);
+      const metrics = await cdp.send("Performance.getMetrics");
+      const sample = metrics.metrics.find((metric) => metric.name === "JSHeapUsedSize")?.value;
+      if (typeof sample === "number") retained = Math.min(retained, sample);
+    }
+    return Number.isFinite(retained) ? retained : 0;
   };
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelectorAll(".transcript__row").length > 4, undefined, { timeout: 30_000 });
@@ -368,13 +382,14 @@ try {
     downState = await page.evaluate(({ x, y }) => ({
       mode: document.querySelector(".transcript")?.dataset.scrollMode,
       target: document.elementFromPoint(x, y)?.outerHTML.slice(0, 300),
+      selectable: Boolean(document.elementFromPoint(x, y)?.closest("[data-transcript-selectable]")),
     }), points.start);
-    if (downState.mode === "selection") break;
+    if (downState.mode === "manual" && downState.selectable) break;
     await page.mouse.up();
     await page.waitForTimeout(100);
     points = await waitForVisibleSelectionStart(page, { preferHighest: true });
   }
-  assert(downState.mode === "selection", `primary pointerdown transfers scroll ownership to selection (${downState.mode}; ${downState.target})`);
+  assert(downState.mode === "manual" && downState.selectable, `primary pointerdown keeps provisional selection in manual mode (${downState.mode}; ${downState.target})`);
   await page.evaluate(() => {
     window.__transcriptProgrammaticWrites = [];
     window.__REASONIX_TRANSCRIPT_SCROLL_WRITE__ = (write) => {
@@ -382,7 +397,9 @@ try {
     };
   });
   await page.mouse.move(points.activate.x, points.activate.y, { steps: 6 });
-  await page.waitForTimeout(50);
+  await page.waitForFunction(() => document.querySelector(".transcript")?.dataset.scrollMode === "selection", undefined, { timeout: 2_000 });
+  const activeSelectionMode = await page.locator(".transcript").getAttribute("data-scroll-mode");
+  assert(activeSelectionMode === "selection", "a non-collapsed native range transfers scroll ownership to selection");
   // Cross at least one mounted row before relying on logical edge scrolling.
   // Small wheel steps expose a neighbouring selectable without skipping the
   // 20-turn target range on fast Chromium/Windows runners.
@@ -611,12 +628,15 @@ try {
   await page.evaluate(() => {
     window.__logicalClipboardText = null;
   });
-  let forwardDownMode = null;
+  let forwardDownState = null;
   for (let attempt = 0; attempt < 5; attempt += 1) {
     await page.mouse.move(forwardPoints.start.x, forwardPoints.start.y);
     await page.mouse.down();
-    forwardDownMode = await page.locator(".transcript").getAttribute("data-scroll-mode");
-    if (forwardDownMode === "selection") break;
+    forwardDownState = await page.evaluate(({ x, y }) => ({
+      mode: document.querySelector(".transcript")?.dataset.scrollMode,
+      selectable: Boolean(document.elementFromPoint(x, y)?.closest("[data-transcript-selectable]")),
+    }), forwardPoints.start);
+    if (forwardDownState.mode === "manual" && forwardDownState.selectable) break;
     await page.mouse.up();
     await page.waitForTimeout(100);
     forwardPoints = await waitForVisibleSelectionStart(page, {
@@ -625,8 +645,8 @@ try {
       timeout: 1_200,
     });
   }
-  assert(forwardDownMode === "selection",
-    `forward pointerdown transfers scroll ownership to selection (${forwardDownMode})`);
+  assert(forwardDownState.mode === "manual" && forwardDownState.selectable,
+    `forward pointerdown keeps provisional selection in manual mode (${JSON.stringify(forwardDownState)})`);
   await page.evaluate(() => {
     window.__transcriptProgrammaticWrites = [];
     window.__REASONIX_TRANSCRIPT_SCROLL_WRITE__ = (write) => {
@@ -634,6 +654,9 @@ try {
     };
   });
   await page.mouse.move(forwardPoints.activate.x, forwardPoints.activate.y, { steps: 6 });
+  await page.waitForFunction(() => document.querySelector(".transcript")?.dataset.scrollMode === "selection", undefined, { timeout: 2_000 });
+  assert(await page.locator(".transcript").getAttribute("data-scroll-mode") === "selection",
+    "a forward non-collapsed range transfers scroll ownership to selection");
   const forwardTargetTurn = forwardPoints.anchorTurn + 21;
   let forwardFocus = null;
   for (let index = 0; index < 120 && !forwardFocus; index += 1) {

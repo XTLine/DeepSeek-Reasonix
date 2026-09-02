@@ -175,11 +175,9 @@ console.log("\nbundle budgets");
 // compact shared helpers keep the combined initial path within the same gate.
 // Merge-Back adds identity-bound inspection, navigation, and retained-recovery
 // orchestration on top. The merged stable build measures 461.338 KiB and the
-// test channel measures 461.323 KiB; retain each exact one-decimal ceiling.
-// Session takeover banners (lease-blocked local tab + read-only remote tab)
-// and their armed-button confirm add ~0.6 KiB on that merged path; the
-// takeover dialog stays lazy.
-// The combined path measures 462.1 KiB gzip; retain 0.1 KiB headroom.
+// test channel measures 461.323 KiB. Deferring selection ownership until a
+// real range exists (#9703/#9711) and adding the session takeover banners
+// move the combined path to 462.2 KiB; retain the exact one-decimal ceiling.
 const initialJSBudgetKiB = 462.2;
 assertBudget("initial JavaScript gzip", initialJSGzip, initialJSBudgetKiB * 1024);
 assertBudget("largest initial JavaScript chunk gzip", largestInitialJS, 280 * 1024);
@@ -321,9 +319,9 @@ const rawInitialBytes = [...initialJS, ...initialCSS, ...appShellCSS]
 // Merge-Back's startup ownership and failure-atomic navigation fence add the
 // remaining bounded payload. The retained recovery receipt makes the stable
 // path 2465.105 KiB raw; the merged test channel measures 2464.979 KiB.
-// Session takeover banners and their startup wiring add ~2.4 KiB raw on that
-// merged path (locale copy plus armed-button state); the dialog stays lazy.
-// The combined path measures roughly 2467.5 KiB; retain 0.1 KiB headroom.
-const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_467.6 : 2_467.6;
+// Session takeover banners and #9703/#9711's provisional-selection handoff
+// move the measured stable and test paths to 2468.2 KiB; retain their exact
+// one-decimal ceilings.
+const rawInitialBudgetKiB = process.env.REASONIX_CHANNEL === "test" ? 2_468.2 : 2_468.2;
 assertBudget("initial raw JavaScript and CSS", rawInitialBytes, rawInitialBudgetKiB * 1024);
 assertBudget("largest initial JavaScript chunk raw", largestInitialJSRaw, 1_000 * 1024);

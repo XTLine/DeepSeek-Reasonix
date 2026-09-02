@@ -247,7 +247,6 @@ type PendingTopicActivation = {
   navigationSeq: number;
   tabId?: string;
   placeholderItems?: Item[];
-  surfacePolicy: HydrateSurfacePolicy;
   /** Terminal event that arrived before the ticket resolved. */
   terminal?: TopicActivationEvent;
 };
@@ -3447,7 +3446,9 @@ export function useController() {
     }
     noteActivationSettled(event.requestId, "ready");
     ensureTranscriptSubscription(tabId);
-    void loadSessionDataForTab(tabId, true, "open-topic", { placeholderItems: pending.placeholderItems, surfacePolicy: pending.surfacePolicy })
+    // The ticket already prepared the target. Preserve any Ask that raced
+    // ready while reset=true supersedes the earlier agent-ready history read.
+    void loadSessionDataForTab(tabId, true, "open-topic", { placeholderItems: pending.placeholderItems })
       .then(() => {
         if (!isNavigationIntentCurrent(pending.navigationSeq) || activeTabIdRef.current !== tabId) return;
         const hydrated = statesRef.current.get(tabId);
@@ -4830,11 +4831,7 @@ export function useController() {
     // in the background and report through "topic:activation". Register the
     // pending ticket before the call so synchronously-emitted events match.
     topicActivationSeqRef.current += 1;
-    const pending: PendingTopicActivation = {
-      requestId: `fe-act-${Date.now()}-${topicActivationSeqRef.current}`,
-      navigationSeq,
-      surfacePolicy: "replace-surface",
-    };
+    const pending: PendingTopicActivation = { requestId: `fe-act-${Date.now()}-${topicActivationSeqRef.current}`, navigationSeq };
     pendingTopicActivationRef.current = pending;
     noteActivationRequested(pending.requestId);
     const ticket = await app.StartTopicActivation({
@@ -4865,7 +4862,7 @@ export function useController() {
     const previousSurface = activeTabIdRef.current ? statesRef.current.get(activeTabIdRef.current) : undefined;
     const sameSession = sameSessionHydrateIdentity(meta, previousSurface?.meta);
     const prevItems = sameSessionPlaceholderItems(meta, previousSurface);
-    pending.placeholderItems = prevItems; pending.surfacePolicy = sameSession ? "preserve-current" : "replace-surface";
+    pending.placeholderItems = prevItems;
     setActiveTabId(meta.id);
     activeTabIdRef.current = meta.id;
     confirmBackendActiveTab(meta.id);

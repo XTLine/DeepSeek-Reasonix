@@ -557,6 +557,8 @@ try {
     const target = document.querySelector("[data-transcript-selectable]");
     const transcript = document.querySelector(".transcript");
     if (!(target instanceof HTMLElement) || !(transcript instanceof HTMLElement)) return "missing";
+    const text = document.createTreeWalker(target, NodeFilter.SHOW_TEXT).nextNode();
+    if (!(text instanceof Text) || text.data.length === 0) return "missing-text";
     const rect = target.getBoundingClientRect();
     target.dispatchEvent(new PointerEvent("pointerdown", {
       bubbles: true,
@@ -566,9 +568,16 @@ try {
       clientX: rect.left + 4,
       clientY: rect.top + 4,
     }));
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, Math.min(1, text.data.length));
+    const selection = document.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event("selectionchange"));
     return transcript.dataset.scrollMode;
   });
-  assert(staleSelectionMode === "selection", "lost WebView2 pointerup leaves selection owning transcript scroll");
+  assert(staleSelectionMode === "selection", "lost WebView2 pointerup after a real range leaves selection owning transcript scroll");
   await page.mouse.click(
     questionTargetPoint.x,
     questionTargetPoint.y,

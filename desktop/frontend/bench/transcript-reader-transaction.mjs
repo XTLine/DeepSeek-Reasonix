@@ -76,6 +76,21 @@ async function waitStable(page, requireTail = false) {
   }), { requireTail });
 }
 
+async function loadPlainClickFixture(page) {
+  await page.click('.project-tree__topic-main:has-text("bench:selection-table")');
+  await page.waitForFunction(() => {
+    const element = document.querySelector(".transcript");
+    return document.querySelector(".project-tree__topic--active .project-tree__topic-label")?.textContent?.includes("bench:selection-table")
+      && element instanceof HTMLElement
+      && element.textContent?.includes("SELECTION REPAINT TARGET")
+      && Number.parseInt(element.dataset.transcriptRowCount ?? "0", 10) > 0
+      && element.dataset.transcriptHydrating === "false";
+  }, undefined, { timeout: 30_000 });
+  await page.waitForFunction(() => !document.querySelector(".transcript-navigation-overlay"), undefined, { timeout: 15_000 });
+  await waitStable(page);
+  return page.locator(".transcript");
+}
+
 async function loadLongFixture(page) {
   await page.click('.project-tree__topic-main:has-text("bench:tools-38t")');
   await page.waitForFunction(() => {
@@ -141,6 +156,106 @@ async function loadLongFixture(page) {
   const stableRows = await transcript.evaluate((element) => Number.parseInt(element.dataset.transcriptRowCount ?? "0", 10));
   assert(stableRows >= 400, `long reader fixture keeps its loaded window (${stableRows})`);
   return transcript;
+}
+
+async function runPlainClickHandoff(page, transcript, label) {
+  const box = await transcript.boundingBox();
+  if (!box) throw new Error(`${label}: transcript is unavailable for plain-click handoff`);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -560);
+  await page.waitForFunction(() => {
+    const element = document.querySelector(".transcript");
+    return element?.dataset.scrollMode === "manual"
+      && element.dataset.transcriptReaderLayoutLease === "true";
+  }, undefined, { timeout: 2_000 });
+  await page.waitForFunction(() => {
+    const element = document.querySelector(".transcript");
+    return element?.dataset.scrollMode === "manual"
+      && element.dataset.transcriptReaderIntent === "false"
+      && element.dataset.transcriptReaderLayoutLease === "true";
+  }, undefined, { timeout: 10_000 });
+  await waitStable(page);
+
+  const before = await page.evaluate(() => {
+    const element = document.querySelector(".transcript");
+    if (!(element instanceof HTMLElement)) return null;
+    const viewport = element.getBoundingClientRect();
+    const centerY = (viewport.top + viewport.bottom) / 2;
+    const ys = [];
+    for (let y = viewport.top + 48; y <= viewport.bottom - 48; y += 20) ys.push(y);
+    ys.sort((left, right) => Math.abs(left - centerY) - Math.abs(right - centerY));
+    const xs = [0.5, 0.35, 0.65].map((ratio) => viewport.left + viewport.width * ratio);
+    let click = null;
+    let row = null;
+    for (const y of ys) {
+      for (const x of xs) {
+        const hit = document.elementFromPoint(x, y);
+        if (!hit || hit.closest("button, a, input, textarea, select, [contenteditable='true']")) continue;
+        const selectable = hit.closest("[data-transcript-selectable]");
+        const candidateRow = selectable?.closest(".transcript__row[data-row-key]");
+        if (!selectable || !element.contains(selectable) || !(candidateRow instanceof HTMLElement)) continue;
+        click = { x, y };
+        row = candidateRow;
+        break;
+      }
+      if (row) break;
+    }
+    if (!(row instanceof HTMLElement) || !click) {
+      return {
+        diagnostic: {
+          selectableCount: element.querySelectorAll("[data-transcript-selectable]").length,
+          mountedRows: element.querySelectorAll(".transcript__row[data-row-key]").length,
+          visibleRows: [...element.querySelectorAll(".transcript__row")].filter((candidate) => {
+            const rect = candidate.getBoundingClientRect();
+            return rect.bottom > viewport.top && rect.top < viewport.bottom;
+          }).length,
+          centerHit: document.elementFromPoint((viewport.left + viewport.right) / 2, centerY)?.className,
+        },
+      };
+    }
+    const rowRect = row.getBoundingClientRect();
+    return {
+      rowKey: row.dataset.rowKey,
+      rowTop: rowRect.top - viewport.top,
+      scrollTop: element.scrollTop,
+      readerIntent: element.dataset.transcriptReaderIntent,
+      lease: element.dataset.transcriptReaderLayoutLease,
+      click,
+    };
+  });
+  if (!before?.rowKey) throw new Error(`${label}: no visible selectable row for plain-click handoff ${JSON.stringify(before?.diagnostic)}`);
+
+  await page.mouse.click(before.click.x, before.click.y);
+  await waitStable(page);
+  const after = await page.evaluate((rowKey) => {
+    const element = document.querySelector(".transcript");
+    if (!(element instanceof HTMLElement)) return null;
+    const viewport = element.getBoundingClientRect();
+    const row = [...element.querySelectorAll(".transcript__row[data-row-key]")]
+      .find((candidate) => candidate instanceof HTMLElement && candidate.dataset.rowKey === rowKey);
+    if (!(row instanceof HTMLElement)) return {
+      rowTop: null,
+      scrollTop: element.scrollTop,
+      mounted: element.querySelectorAll(".transcript__row[data-row-key]").length,
+      readerIntent: element.dataset.transcriptReaderIntent,
+      lease: element.dataset.transcriptReaderLayoutLease,
+    };
+    return {
+      rowTop: row.getBoundingClientRect().top - viewport.top,
+      scrollTop: element.scrollTop,
+      mounted: element.querySelectorAll(".transcript__row[data-row-key]").length,
+      readerIntent: element.dataset.transcriptReaderIntent,
+      lease: element.dataset.transcriptReaderLayoutLease,
+    };
+  }, before.rowKey);
+  const visualDelta = after?.rowTop == null ? Number.POSITIVE_INFINITY : Math.abs(after.rowTop - before.rowTop);
+  const scrollDelta = after == null ? Number.POSITIVE_INFINITY : Math.abs(after.scrollTop - before.scrollTop);
+  const detail = JSON.stringify({ before: { rowKey: before.rowKey, rowTop: before.rowTop, scrollTop: before.scrollTop, readerIntent: before.readerIntent, lease: before.lease }, after });
+  assert(before.readerIntent === "false" && before.lease === "true", `${label}: plain-click handoff starts after reader intent settles with its layout lease retained${before.readerIntent === "false" && before.lease === "true" ? "" : ` ${detail}`}`);
+  assert(after?.readerIntent === "false", `${label}: plain transcript click does not recreate reader intent${after?.readerIntent === "false" ? "" : ` ${detail}`}`);
+  assert(after?.lease === "true", `${label}: plain transcript click keeps the reader layout lease${after?.lease === "true" ? "" : ` ${detail}`}`);
+  assert(scrollDelta <= 2, `${label}: plain transcript click preserves scrollTop (${scrollDelta.toFixed(1)}px)${scrollDelta <= 2 ? "" : ` ${detail}`}`);
+  assert(visualDelta <= 2, `${label}: plain transcript click preserves the visible row anchor (${visualDelta.toFixed(1)}px)${visualDelta <= 2 ? "" : ` ${detail}`}`);
 }
 
 async function runIteration(page, transcript, label, iteration) {
@@ -310,6 +425,8 @@ async function runBrowser(browserType, label) {
     }));
     assert(final.distance <= 4 && final.mode === "tail-follow", `${label}: final viewport reaches the physical tail`);
     assert(final.occupied, `${label}: final viewport has no blank range`);
+    const plainClickTranscript = await loadPlainClickFixture(page);
+    await runPlainClickHandoff(page, plainClickTranscript, label);
   } finally {
     await browser.close();
   }
