@@ -269,11 +269,9 @@ func (s *Server) switchModelLocked(ctx context.Context, ref string) error {
 	newCtrl.AdoptHistory(carried, newPath)
 	tag.PrimePath(newCtrl.SessionPath())
 	newCtrl.SetOnSessionRecovered(s.sessionRecoveryHandler(newCtrl, s.leases))
-	// A rebuild must not force the user to re-approve tools already granted
-	// this session, or re-trust Plan-mode read-only commands already trusted
-	// this session. The composer posture is carried over the same way: a
-	// fresh boot defaults to ask, which would otherwise silently downgrade a
-	// yolo session on every model switch.
+	// A rebuild must not force the user to re-approve tools, re-trust Plan-mode
+	// commands, or re-pick the composer posture: a fresh boot defaults to ask
+	// and would silently downgrade a yolo session.
 	if prev, ok := cur.(*control.Controller); ok {
 		newCtrl.RestoreSessionAuthorizations(prev.SessionAuthorizations())
 		newCtrl.SetToolApprovalMode(prev.ToolApprovalMode())

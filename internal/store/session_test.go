@@ -93,6 +93,7 @@ func TestSessionSidecarFiles(t *testing.T) {
 	want := []string{
 		p + ".meta",
 		"/home/u/.reasonix/sessions/abc.goal-state.json",
+		"/home/u/.reasonix/sessions/abc.posture-state.json",
 		"/home/u/.reasonix/sessions/abc.events.jsonl",
 		"/home/u/.reasonix/sessions/abc.events.jsonl.damaged",
 		"/home/u/.reasonix/sessions/abc.events.jsonl.rotating",

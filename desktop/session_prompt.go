@@ -182,10 +182,8 @@ func normalizeRestoredControllerRuntime(ctrl control.SessionAPI, requested norma
 		actual.legacyGoal = strings.TrimSpace(ctrl.Goal())
 	}
 	actual.toolApprovalMode = normalizeToolApprovalMode(ctrl.ToolApprovalMode())
-	// The floor is a tab-level intent that the controller only executes;
-	// Resume restores a recorded floor onto the controller, so read it back
-	// when the tab has none, but never clobber an explicit tab choice with
-	// the controller's unset/standard fallback.
+	// The floor stays a tab-level intent the controller only executes; read
+	// the controller's value back only when the tab has no explicit choice.
 	actual.qualityFloor = requested.qualityFloor
 	if actual.qualityFloor == "" {
 		if floor, ok := ctrlQualityFloor(ctrl); ok {

@@ -238,8 +238,8 @@ func SessionCleanupPending(sessionPath string) string {
 }
 
 // SessionSidecarFiles returns every regular-file sidecar owned by a session
-// transcript: branch meta, goal state, event/index logs, pinned context, and
-// diagnostic logs.
+// transcript: branch meta, goal state, composer posture, event/index logs,
+// pinned context, and diagnostic logs.
 // Every surface that deletes a session (desktop trash, /clear, serve, ACP)
 // must remove all of these — the event log is the authoritative transcript, so
 // leaving it behind both leaks the "deleted" conversation and lets LoadSession
@@ -253,6 +253,7 @@ func SessionSidecarFiles(sessionPath string) []string {
 	return []string{
 		SessionMeta(sessionPath),
 		SessionGoalState(sessionPath),
+		SessionPostureState(sessionPath),
 		SessionEventLog(sessionPath),
 		SessionEventLogDamaged(sessionPath),
 		SessionEventLogRotating(sessionPath),
