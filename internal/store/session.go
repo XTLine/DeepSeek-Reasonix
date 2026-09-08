@@ -86,6 +86,16 @@ func SessionGoalState(sessionPath string) string {
 	return sessionStem(sessionPath) + ".goal-state.json"
 }
 
+// SessionPostureState is the persisted composer-posture sidecar
+// (<id>.posture-state.json). It carries a session's tool approval mode, plan
+// flag, and quality floor across session switches and controller rebuilds.
+func SessionPostureState(sessionPath string) string {
+	if sessionPath == "" {
+		return ""
+	}
+	return sessionStem(sessionPath) + ".posture-state.json"
+}
+
 // SessionEventLog is the append-only transcript event log (<id>.events.jsonl).
 func SessionEventLog(sessionPath string) string {
 	if sessionPath == "" {
