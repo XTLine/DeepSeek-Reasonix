@@ -156,19 +156,21 @@ func configureControllerRuntime(ctrl, oldCtrl control.SessionAPI, runtime normal
 	}
 }
 
+// normalizeRestoredControllerRuntime reads the composer axes back off a
+// restored controller so the caller mirrors them onto the tab. Resume already
+// applied the bound session's persisted posture (its sidecar), so the
+// controller is authoritative here; re-applying the requested tab seed would
+// silently clobber a session that recorded its own posture.
 func normalizeRestoredControllerRuntime(ctrl control.SessionAPI, requested normalizedTabRuntime) (normalizedTabRuntime, error) {
 	if ctrl == nil {
 		return normalizedTabRuntime{}, fmt.Errorf("replacement controller is nil")
 	}
-	plan := requested.collaborationMode == "plan"
-	ctrl.SetPlanMode(plan)
-	applyTabToolApprovalModeToController(ctrl, requested.toolApprovalMode)
-	if plan && ctrl.GoalStatus() == control.GoalStatusRunning {
-		// Explicit Plan wins over inconsistent legacy data. Clearing the running
-		// Goal also prevents a stale scope from being executed after approval.
+	if requested.collaborationMode == "plan" && ctrl.GoalStatus() == control.GoalStatusRunning {
+		// Explicit Plan wins over a Goal the resume restored from disk.
+		// Clearing it also prevents a stale scope from executing after
+		// approval and persists the cleared state to the Goal sidecar.
 		ctrl.ClearGoal()
 	}
-
 	actual := requested
 	actual.collaborationMode = "normal"
 	actual.legacyGoal = ""
@@ -180,11 +182,15 @@ func normalizeRestoredControllerRuntime(ctrl control.SessionAPI, requested norma
 		actual.legacyGoal = strings.TrimSpace(ctrl.Goal())
 	}
 	actual.toolApprovalMode = normalizeToolApprovalMode(ctrl.ToolApprovalMode())
-	if ctrl.PlanMode() != (actual.collaborationMode == "plan") {
-		return normalizedTabRuntime{}, fmt.Errorf("replacement collaboration mode validation failed")
-	}
-	if actual.toolApprovalMode != normalizeToolApprovalMode(requested.toolApprovalMode) {
-		return normalizedTabRuntime{}, fmt.Errorf("replacement tool approval mode = %q, want %q", actual.toolApprovalMode, requested.toolApprovalMode)
+	// The floor is a tab-level intent that the controller only executes;
+	// Resume restores a recorded floor onto the controller, so read it back
+	// when the tab has none, but never clobber an explicit tab choice with
+	// the controller's unset/standard fallback.
+	actual.qualityFloor = requested.qualityFloor
+	if actual.qualityFloor == "" {
+		if floor, ok := ctrlQualityFloor(ctrl); ok {
+			actual.qualityFloor = floor
+		}
 	}
 	return actual, nil
 }
