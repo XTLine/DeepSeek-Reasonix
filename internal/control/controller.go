@@ -776,23 +776,33 @@ func New(opts Options) *Controller {
 	// Auto Guard is built into Auto. Ask and YOLO bypass it through the mode
 	// provider, so no separate enablement state is needed.
 	c.initRecoveryGate(opts.RecoveryReviewer, opts.RecoveryHeadless)
-	// Task monitoring: record background-job lifecycle into the project-local
-	// task store so CLI, Desktop, scripts, and future clients observe the same
-	// state/event evidence. The recorder swallows its own failures — monitoring
-	// must never affect the agent pipeline. The session id is resolved lazily
-	// because the session path is only fixed once the first turn begins.
-	if c.jobs != nil && c.workspaceRoot != "" {
-		taskStore := opts.TaskStore
-		if taskStore == nil {
-			taskStore = taskmonitor.NewFileStore(filepath.Join(".reasonix", "tasks"))
-		}
-		c.jobs.SetTaskRecorder(taskmonitor.NewTaskRecorder(
-			taskStore,
-			c.workspaceRoot,
-			func() string { return c.parentSessionID() },
-		))
+	c.bindTaskRecorder(opts.TaskStore)
+	// A path supplied at construction binds the session immediately: restore
+	// its persisted posture so an explicit mode change before the first
+	// Resume persists to the right sidecar (serve's initial controller).
+	if strings.TrimSpace(opts.SessionPath) != "" {
+		c.restoreSessionPosture(opts.SessionPath, false)
 	}
 	return c
+}
+
+// bindTaskRecorder records background-job lifecycle into the project-local task
+// store so CLI, Desktop, scripts, and future clients observe the same
+// state/event evidence. The recorder swallows its own failures — monitoring
+// must never affect the agent pipeline — and the session id is resolved lazily
+// because the session path is only fixed once the first turn begins.
+func (c *Controller) bindTaskRecorder(store taskmonitor.WriteStore) {
+	if c.jobs == nil || c.workspaceRoot == "" {
+		return
+	}
+	if store == nil {
+		store = taskmonitor.NewFileStore(filepath.Join(".reasonix", "tasks"))
+	}
+	c.jobs.SetTaskRecorder(taskmonitor.NewTaskRecorder(
+		store,
+		c.workspaceRoot,
+		func() string { return c.parentSessionID() },
+	))
 }
 
 // SetDisplayRecorder installs an optional hook used by frontends that persist a
