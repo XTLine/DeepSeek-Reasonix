@@ -71,6 +71,7 @@ func (c *Controller) SetQualityFloor(floor string) error {
 	c.mu.Lock()
 	c.sessionSettings.qualityFloor = normalized
 	c.mu.Unlock()
+	c.persistSessionPosture()
 	return nil
 }
 
@@ -82,8 +83,12 @@ func (c *Controller) qualityFloorConstraint() taskcontract.PolicyFloor {
 }
 
 // sessionSettings groups the per-session posture knobs (plan mode, quality
-// floor) that share one lifetime under c.mu.
+// floor) that share one lifetime under c.mu. postureReady and postureDisk
+// track the persisted composer-posture baseline of the bound session so an
+// explicit knob change writes the sidecar exactly when it diverges from disk.
 type sessionSettings struct {
 	planMode     bool
 	qualityFloor string
+	postureReady bool
+	postureDisk  sessionPosture
 }

@@ -271,9 +271,14 @@ func (s *Server) switchModelLocked(ctx context.Context, ref string) error {
 	newCtrl.SetOnSessionRecovered(s.sessionRecoveryHandler(newCtrl, s.leases))
 	// A rebuild must not force the user to re-approve tools already granted
 	// this session, or re-trust Plan-mode read-only commands already trusted
-	// this session.
+	// this session. The composer posture is carried over the same way: a
+	// fresh boot defaults to ask, which would otherwise silently downgrade a
+	// yolo session on every model switch.
 	if prev, ok := cur.(*control.Controller); ok {
 		newCtrl.RestoreSessionAuthorizations(prev.SessionAuthorizations())
+		newCtrl.SetToolApprovalMode(prev.ToolApprovalMode())
+		newCtrl.SetPlanMode(prev.PlanMode())
+		_ = newCtrl.SetQualityFloor(prev.QualityFloor())
 	}
 	// Persist before publishing the replacement. A failed write leaves cur and
 	// the on-disk transcript coherent and lets the caller retry; publishing first

@@ -2754,11 +2754,13 @@ func (c *Controller) applyPlanMode(v bool) {
 	c.mu.Unlock()
 	if setter, ok := c.runner.(interface{ SetPlanMode(bool) }); ok {
 		setter.SetPlanMode(v)
+		c.persistSessionPosture()
 		return
 	}
 	if c.executor != nil {
 		c.executor.SetPlanMode(v)
 	}
+	c.persistSessionPosture()
 }
 
 // SetResponseLanguage updates the final-answer language preference for
@@ -3380,6 +3382,7 @@ func (c *Controller) Resume(s *agent.Session, path string) {
 		c.rotateSessionTemp()
 	}
 	c.snapshotMu.Unlock()
+	c.restoreSessionPosture(path, false)
 	c.rebindInbox()
 	c.recoverCheckpointTransactions()
 	c.recoverInterruptedTurn(path)
@@ -3833,6 +3836,7 @@ func (c *Controller) commitRecoveredSession(originalPath, reason string, info ag
 	c.setActiveJobSession(info.Path)
 	c.rebindCheckpoints(info.Path)
 	c.transplantInFlightTurnMarker(originalPath, info.Path)
+	c.restoreSessionPosture(info.Path, false)
 	commit.publish()
 	return nil
 }
@@ -4239,6 +4243,7 @@ func (c *Controller) setSessionPath(p string, fresh bool) {
 		c.loadRecoveryState(p)
 	}
 	c.snapshotMu.Unlock()
+	c.restoreSessionPosture(p, fresh)
 	c.rebindInbox()
 	if !fresh {
 		c.recoverCheckpointTransactions()
@@ -5174,6 +5179,7 @@ func (c *Controller) ApplyToolApprovalMode(mode string) []string {
 		p.reply <- approvalReply{allow: true}
 		drained = append(drained, p.id)
 	}
+	c.persistSessionPosture()
 	return drained
 }
 
