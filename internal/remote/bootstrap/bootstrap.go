@@ -55,6 +55,7 @@ type Options struct {
 	ProductVersion string                                                        // exact local release used for a cross-platform official download
 	FetchBinary    func(context.Context, string, string, string) ([]byte, error) // local verified release fetcher
 	MinVersion     string                                                        // minimum acceptable remote version
+	ForceUpgrade   bool                                                          // skip the locate fast-path so the install ladder replaces the binary; callers Stop the live serve first
 	Progress       func(step, detail string)                                     // optional progress callback
 	Clock          func() time.Time                                              // nil => time.Now
 	// CredentialProxy installs a tunnel-backed provider and a scoped virtual

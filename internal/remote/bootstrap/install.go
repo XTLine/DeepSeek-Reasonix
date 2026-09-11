@@ -11,13 +11,15 @@ import (
 )
 
 // ensureBinary resolves a usable reasonix binary on the remote host per the
-// install strategy, returning its path and version. A located binary older
-// than MinVersion counts as missing (it lacks --port-file/--token-file).
+// install strategy, returning its path and version. ForceUpgrade skips the
+// locate fast-path so the install ladder replaces the binary.
 func ensureBinary(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, home, goos, goarch string, paths StatePaths) (bin, version string, err error) {
 	uploaded := uploadedBinPath(home)
-	bin, version = locate(ctx, conn, uploaded, opts.MinVersion)
-	if bin != "" {
-		return bin, version, nil
+	if !opts.ForceUpgrade {
+		bin, version = locate(ctx, conn, uploaded, opts.MinVersion)
+		if bin != "" {
+			return bin, version, nil
+		}
 	}
 
 	strategy := opts.Install
@@ -30,40 +32,103 @@ func ensureBinary(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, h
 	case InstallNever:
 		return "", "", fmt.Errorf("bootstrap: reasonix not found on remote and serve_install = never")
 	case InstallNPM:
-		return installViaNPM(ctx, conn, opts.MinVersion)
+		bin, version, err = installViaNPM(ctx, conn, opts.MinVersion)
 	case InstallUpload:
-		return installViaUpload(ctx, conn, fs, opts, home, goos, goarch, uploaded)
+		bin, version, err = installViaUpload(ctx, conn, fs, opts, home, goos, goarch, uploaded)
 	default: // auto: try npm, packaged same-platform upload, then verified release upload
-		if b, v, nerr := installViaNPM(ctx, conn, opts.MinVersion); nerr == nil {
-			return b, v, nil
+		if opts.ForceUpgrade {
+			bin, version, err = upgradeLadder(ctx, conn, fs, opts, home, goos, goarch, uploaded)
 		} else {
-			attempts := []error{nerr}
-			if opts.LocalBinary != "" && opts.LocalGOOS == goos && opts.LocalGOARCH == goarch {
-				if b, v, uploadErr := installViaUpload(ctx, conn, fs, opts, home, goos, goarch, uploaded); uploadErr == nil {
+			bin, version, err = installLadder(ctx, conn, fs, opts, home, goos, goarch, uploaded)
+		}
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if opts.ForceUpgrade && !upgradeTargetMet(version, opts.ProductVersion) {
+		return "", "", fmt.Errorf("bootstrap: remote binary is %q after upgrade, desktop requires %q", version, opts.ProductVersion)
+	}
+	return bin, version, nil
+}
+
+// installLadder is the auto install order: npm, packaged same-platform upload,
+// then verified release download.
+func installLadder(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, home, goos, goarch, uploaded string) (bin, version string, err error) {
+	if b, v, nerr := installViaNPM(ctx, conn, opts.MinVersion); nerr == nil {
+		return b, v, nil
+	} else {
+		attempts := []error{nerr}
+		if opts.LocalBinary != "" && opts.LocalGOOS == goos && opts.LocalGOARCH == goarch {
+			if b, v, uploadErr := installViaUpload(ctx, conn, fs, opts, home, goos, goarch, uploaded); uploadErr == nil {
+				return b, v, nil
+			} else {
+				attempts = append(attempts, uploadErr)
+			}
+		} else if opts.LocalBinary == "" {
+			attempts = append(attempts, errors.New("bootstrap: no local Reasonix CLI is available for upload"))
+		} else {
+			attempts = append(attempts, fmt.Errorf("bootstrap: local binary is %s/%s but remote is %s/%s", opts.LocalGOOS, opts.LocalGOARCH, goos, goarch))
+		}
+		if opts.FetchBinary != nil {
+			binary, fetchErr := opts.FetchBinary(ctx, opts.ProductVersion, goos, goarch)
+			if fetchErr == nil {
+				if b, v, uploadErr := installBinaryBytes(ctx, conn, fs, binary, opts.MinVersion, home, uploaded); uploadErr == nil {
 					return b, v, nil
 				} else {
 					attempts = append(attempts, uploadErr)
 				}
-			} else if opts.LocalBinary == "" {
-				attempts = append(attempts, errors.New("bootstrap: no local Reasonix CLI is available for upload"))
 			} else {
-				attempts = append(attempts, fmt.Errorf("bootstrap: local binary is %s/%s but remote is %s/%s", opts.LocalGOOS, opts.LocalGOARCH, goos, goarch))
+				attempts = append(attempts, fmt.Errorf("bootstrap: fetch official %s/%s CLI: %w", goos, goarch, fetchErr))
 			}
-			if opts.FetchBinary != nil {
-				binary, fetchErr := opts.FetchBinary(ctx, opts.ProductVersion, goos, goarch)
-				if fetchErr == nil {
-					if b, v, uploadErr := installBinaryBytes(ctx, conn, fs, binary, opts.MinVersion, home, uploaded); uploadErr == nil {
-						return b, v, nil
-					} else {
-						attempts = append(attempts, uploadErr)
-					}
-				} else {
-					attempts = append(attempts, fmt.Errorf("bootstrap: fetch official %s/%s CLI: %w", goos, goarch, fetchErr))
-				}
+		}
+		return "", "", fmt.Errorf("bootstrap: automatic install failed: %w", errors.Join(attempts...))
+	}
+}
+
+// upgradeLadder is the ForceUpgrade auto order: exact-release sources first -
+// same-platform upload of the desktop's binary, then the official download at
+// ProductVersion; npm (latest, possibly lagging) is only a fallback.
+func upgradeLadder(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, home, goos, goarch, uploaded string) (bin, version string, err error) {
+	var attempts []error
+	if opts.LocalBinary != "" && opts.LocalGOOS == goos && opts.LocalGOARCH == goarch {
+		if b, v, uploadErr := installViaUpload(ctx, conn, fs, opts, home, goos, goarch, uploaded); uploadErr == nil {
+			return b, v, nil
+		} else {
+			attempts = append(attempts, uploadErr)
+		}
+	} else if opts.LocalBinary == "" {
+		attempts = append(attempts, errors.New("bootstrap: no local Reasonix CLI is available for upload"))
+	} else {
+		attempts = append(attempts, fmt.Errorf("bootstrap: local binary is %s/%s but remote is %s/%s", opts.LocalGOOS, opts.LocalGOARCH, goos, goarch))
+	}
+	if opts.FetchBinary != nil {
+		binary, fetchErr := opts.FetchBinary(ctx, opts.ProductVersion, goos, goarch)
+		if fetchErr == nil {
+			if b, v, uploadErr := installBinaryBytes(ctx, conn, fs, binary, opts.MinVersion, home, uploaded); uploadErr == nil {
+				return b, v, nil
+			} else {
+				attempts = append(attempts, uploadErr)
 			}
-			return "", "", fmt.Errorf("bootstrap: automatic install failed: %w", errors.Join(attempts...))
+		} else {
+			attempts = append(attempts, fmt.Errorf("bootstrap: fetch official %s/%s CLI: %w", goos, goarch, fetchErr))
 		}
 	}
+	if b, v, nerr := installViaNPMAt(ctx, conn, opts.ProductVersion); nerr == nil {
+		return b, v, nil
+	} else {
+		attempts = append(attempts, nerr)
+	}
+	return "", "", fmt.Errorf("bootstrap: forced upgrade install failed: %w", errors.Join(attempts...))
+}
+
+// upgradeTargetMet reports whether an upgrade landed on the desktop's release;
+// a dev or unparseable ProductVersion carries no target to check.
+func upgradeTargetMet(version, product string) bool {
+	target, err := ParseVersion(product)
+	if err != nil {
+		return true
+	}
+	return version != "" && CompareVersions(version, target) >= 0
 }
 
 // locate finds an existing reasonix and returns it only if its serve command
@@ -134,6 +199,27 @@ func installViaNPM(ctx context.Context, conn Conn, minVersion string) (bin, vers
 	}
 	// npm may install outside the login PATH; probe npm prefix explicitly.
 	loc, ver := locateNPMGlobal(ctx, conn, minVersion)
+	if loc == "" {
+		return "", "", fmt.Errorf("bootstrap: reasonix not found after npm install (check remote PATH / npm prefix)")
+	}
+	return loc, ver, nil
+}
+
+// installViaNPMAt installs an exact published version when the desktop
+// carries one; anything else falls back to latest.
+func installViaNPMAt(ctx context.Context, conn Conn, product string) (bin, version string, err error) {
+	target, perr := ParseVersion(product)
+	if perr != nil {
+		return installViaNPM(ctx, conn, "")
+	}
+	res, err := conn.Exec(ctx, fmt.Sprintf("npm i -g reasonix@%s 2>&1", target))
+	if err != nil {
+		return "", "", fmt.Errorf("bootstrap: npm install: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return "", "", fmt.Errorf("bootstrap: npm install reasonix@%s failed: %s", target, tail(res.Stdout, 400))
+	}
+	loc, ver := locateNPMGlobal(ctx, conn, "")
 	if loc == "" {
 		return "", "", fmt.Errorf("bootstrap: reasonix not found after npm install (check remote PATH / npm prefix)")
 	}
