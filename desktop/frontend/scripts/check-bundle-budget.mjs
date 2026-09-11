@@ -232,7 +232,10 @@ if (initialCSS.length > 0) {
 // 0.1 KiB headroom ratchet.
 // Workbench welcome and recovery styles measure 122869 B gzip on main-v2.
 // Turn result styles add 388 B after removing obsolete metrics (123257 B).
-assertBudget("deferred app-shell CSS gzip", appShellCSSGzip, 120.4 * 1024);
+// The dock launcher, tab container and tab picker add ~0.6 KiB (the ported
+// card, branch switcher, tab strip, add menu, empty-state picker and the
+// spacer that starts the panel below the topic bar).
+assertBudget("deferred app-shell CSS gzip", appShellCSSGzip, 121.2 * 1024);
 if (localeChunks.length !== 2) {
   throw new Error(`expected 2 on-demand Chinese locale chunks, found ${localeChunks.length}`);
 }

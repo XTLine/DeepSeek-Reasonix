@@ -14,6 +14,9 @@ import { isAllowedCommand, type LoadedContract } from "./contract.js";
 import { errorText, type Logger } from "./log.js";
 import { bool, finite, record, str } from "./params.js";
 import { RpcError } from "./rpc.js";
+import type { GraphicsSettingsStore } from "./graphics.js";
+import type { BrowserControlApi } from "./browserControlHost.js";
+import type { PerformanceHost } from "./performanceHost.js";
 
 export interface RendererWindowApi {
   isTrustedSender(sender: IpcMainEvent["sender"], frame: IpcMainEvent["senderFrame"]): boolean;
@@ -51,13 +54,23 @@ export interface RendererIpcDeps {
   window: RendererWindowApi;
   invoke(method: string, args: unknown[]): Promise<unknown>;
   serviceState(): ServiceState;
+  processDiagnostics?(): unknown;
+  performance?: PerformanceHost;
   clipboard: { writeText(text: string): Promise<void> | void; readText(): Promise<string> | string };
+  graphics?: GraphicsSettingsStore;
+  browserControl?: BrowserControlApi;
   openExternal(url: string): Promise<void>;
   browser?: BrowserRendererApi;
   log: Logger;
 }
 
 const NAVIGATE_ACTIONS = new Set(["back", "forward", "reload", "stop"]);
+
+function diagnosticRequestId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !/^[a-zA-Z0-9-]{1,96}$/.test(value)) throw new Error("invalid diagnostic request identity");
+  return value;
+}
 
 export function parseNavigateTarget(value: unknown): BrowserNavigateTarget {
   const target = record(value);
@@ -113,6 +126,13 @@ export function registerRendererIpc(deps: RendererIpcDeps): void {
     return deps.invoke(method, Array.isArray(args) ? args : []);
   });
   handle(IPC.serviceStateGet, () => deps.serviceState());
+  handle(IPC.processDiagnostics, () => deps.processDiagnostics?.() ?? null);
+  handle(IPC.captureRendererProfile, (id) => deps.performance?.captureRendererProfile(diagnosticRequestId(id)) ?? { status: "unavailable" });
+  handle(IPC.cancelRendererProfile, (id) => {
+    const requestId = diagnosticRequestId(id);
+    if (requestId) deps.performance?.cancelRendererProfile(requestId);
+  });
+  handle(IPC.exportHeapSnapshot, () => deps.performance?.exportHeapSnapshot() ?? { status: "unavailable" });
   handle(IPC.openExternal, (url) => {
     if (!isOpenableExternalURL(url)) throw new Error(`refusing to open ${typeof url === "string" ? url : typeof url}`);
     return deps.openExternal(url);
@@ -132,6 +152,30 @@ export function registerRendererIpc(deps: RendererIpcDeps): void {
   handle(IPC.appZoomGet, () => deps.window.getAppZoom());
   handle(IPC.appZoomSet, (factor) => deps.window.setAppZoom(finite(factor, Number.NaN)));
   handle(IPC.appZoomReset, () => deps.window.resetAppZoom());
+  handle(IPC.graphicsGet, () => deps.graphics?.current ?? { hardwareAcceleration: true, startupEnabled: true, override: "none", restartRequired: false, writable: false, warning: null });
+  handle(IPC.graphicsSet, (enabled) => {
+    if (typeof enabled !== "boolean") throw new Error("hardwareAcceleration must be boolean");
+    if (!deps.graphics) throw new Error("graphics settings unavailable");
+    return deps.graphics.setHardwareAcceleration(enabled);
+  });
+
+  const browserControl = deps.browserControl;
+  const browserFlag = (value: unknown, name: string): boolean => {
+    if (typeof value !== "boolean") throw new Error(`${name} must be boolean`);
+    return value;
+  };
+  const requireBrowserControl = (): BrowserControlApi => {
+    if (!browserControl) throw new Error("browser control settings unavailable");
+    return browserControl;
+  };
+  handle(IPC.browserControlGet, () => browserControl?.state() ?? null);
+  handle(IPC.browserControlSetEnabled, (enabled) => requireBrowserControl().setControlEnabled(browserFlag(enabled, "controlEnabled")));
+  handle(IPC.browserControlSetIgnoreCertificateErrors, (enabled) =>
+    requireBrowserControl().setIgnoreCertificateErrors(browserFlag(enabled, "ignoreCertificateErrors")),
+  );
+  handle(IPC.browserControlClearCache, () => requireBrowserControl().clearCache());
+  handle(IPC.browserControlClearAll, () => requireBrowserControl().clearAllData());
+  handle(IPC.browserControlImportChrome, () => requireBrowserControl().importChromeLogin());
 
   const browser = deps.browser;
   if (!browser) return;

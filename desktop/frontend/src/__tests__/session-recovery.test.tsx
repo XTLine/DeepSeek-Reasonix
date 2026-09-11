@@ -24,7 +24,7 @@ const noop = () => {};
 const common: TranscriptSurfaceProjectionInput = {
   hydrating: false, hydrateHistoryLoaded: undefined, hydratePlaceholderItems: undefined, hydratePlaceholderActive: false,
   items: [], remote: false, remoteItems: [], activeTabId: "A", geometrySessionKey: "A", transitioning: false,
-  navigationDataReady: true, preserved: null, singleSurface: true, controllerReady: true, heroLayout: true,
+  navigationDataReady: true, preserved: null, controllerReady: true,
   availability: projectSessionAvailability({ local: readyLocal }), sessionActivity: false, imDetailActive: false,
   sessionHasContent: false, commitRendered: noop, commitPaint: () => null, commitSingleSurface: noop,
   ports: { loadOlderHistory: async () => false, commitThenSend: async () => {} },

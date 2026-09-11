@@ -48,7 +48,7 @@ export function useAppChromeCommands(input: AppChromeCommandsInput) {
   const handleChromeTitlebarDoubleClick = useCommittedCommand((event: ReactMouseEvent<HTMLDivElement>) => {
     if (!chromeDoubleClickZooms) return;
     const target = event.target as HTMLElement | null;
-    const onChromeSurface = target?.closest(".app-chrome, .topicbar, .workbench-dock__tools, .management-screen__chrome");
+    const onChromeSurface = target?.closest(".topicbar, .workbench-dock__tools, .management-screen__chrome");
     const onMacOSWorkbenchSidebarTitlebar = isMacOSWorkbenchSidebarTitlebar(target, event.clientY, input.platform);
     if (!onChromeSurface && !onMacOSWorkbenchSidebarTitlebar) return;
     if (target?.closest("button, input, textarea, select, a, [role='button'], [role='tab'], .windows-window-controls")) return;

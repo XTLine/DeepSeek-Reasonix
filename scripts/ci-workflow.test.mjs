@@ -22,6 +22,24 @@ function shellStep(body, name) {
 const ci = workflow("ci");
 const release = workflow("release-desktop");
 
+test("macOS signing diagnostics require protected main and cannot publish", () => {
+  const source = workflow("macos-signing-check");
+  const verify = job(source, "verify");
+  const github = { repository: "esengine/DeepSeek-Reasonix", ref: "refs/heads/main-v2", ref_protected: true };
+  assert.equal(condition(verify, { github }), true);
+  for (const changed of [{ repository: "fork/Reasonix" }, { ref: "refs/tags/v1.0.0" }, { ref_protected: false }]) {
+    assert.equal(condition(verify, { github: { ...github, ...changed } }), false);
+  }
+  assert.match(verify, /environment: release/);
+  assert.match(verify, /ref: \$\{\{ github.sha \}\}/);
+  assert.match(source, /permissions:\n  contents: read\n/);
+  assert.doesNotMatch(source, /: write|secrets\.(R2_|SIGNPATH_|MINISIGN_|NPM_)/);
+  assert.match(verify, /HAS_APPLE_CERT: "true"/);
+  assert.match(verify, /scripts\/desktop-build.sh darwin\/universal v0.0.0-signing-check stable/);
+  assert.match(verify, /path: \$\{\{ runner.temp \}\}\/apple-notarization\/\*\.json/);
+  assert.match(verify, /if: always\(\)/);
+});
+
 test("required desktop aggregate rejects every failed, cancelled or unexpectedly skipped child", () => {
   const script = shellStep(job(ci, "desktop"), "Verify desktop validation jobs");
   const success = { CHANGES_RESULT: "success", SHOULD_RUN: "true", PREPARE_RESULT: "success", GO_RESULT: "success", FRONTEND_RESULT: "success", BROWSER_RESULT: "success" };

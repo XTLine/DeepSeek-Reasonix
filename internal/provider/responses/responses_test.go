@@ -985,7 +985,7 @@ func TestMessagesToInputEmbedsImagesAsInputImageParts(t *testing.T) {
 
 func TestOfficialDeepSeekResponsesIgnoresVisionMetadata(t *testing.T) {
 	c := New(Config{
-		Name: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash",
+		Name: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-pro",
 		Extra: map[string]any{"vision": true},
 	}).(*client)
 	if c.vision {

@@ -75,8 +75,8 @@ try {
   mkdirSync(join(staging, "icons"), { recursive: true });
   cpSync(join(desktop, "build", "appicon.png"), join(staging, "icons", "appicon.png"));
   cpSync(join(desktop, "build", "linux", "icons"), join(staging, "icons", "linux", "icons"), { recursive: true });
-  // The shell reads REASONIX_CHANNEL / REASONIX_COMMIT from the environment; this
-  // file carries the same identity inside the package for launches without one.
+  // Packaged launches always read this identity, including the full version
+  // tag. Environment overrides belong only to the unpackaged development shell.
   writeFileSync(join(staging, "build.json"), JSON.stringify(buildInfo({ version, channel, commit, electronVersion, target, buildTime }), null, 2) + "\n");
 
   const icon = { darwin: join(desktop, "build", "darwin", "icon.icns"), win32: join(desktop, "build", "windows", "icon.ico") }[target.packagerPlatform];

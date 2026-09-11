@@ -13,6 +13,7 @@ const (
 	NoticeCodePromptQueued                                      = "prompt_queued"
 	NoticeCodeLoopGuard                                         = "loop_guard"
 	NoticeCodeProgressGuard                                     = "progress_guard"
+	NoticeCodeOperationNeedsUser                                = "operation_needs_user"
 	NoticeCodeEvidenceNudge                                     = "evidence_nudge"
 	NoticeCodeReasoningGovernor                                 = "reasoning_governor"
 	NoticeCodeWorkspaceLease                                    = "workspace_lease"

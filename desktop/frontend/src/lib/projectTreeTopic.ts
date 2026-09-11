@@ -2,12 +2,12 @@ import { asArray } from "./array";
 import { getLocale, type DictKey, type Translator } from "./i18n";
 import type { ProjectNode, ProjectTopicStatus } from "./types";
 
-export type ProjectTreeVariant = "classic" | "workbench" | "creation";
+export type ProjectTreeVariant = "workbench" | "creation";
 export type WorkbenchOrganizeMode = "project" | "recent" | "time";
 export type WorkbenchSortMode = "created" | "updated";
 
 export const WORKBENCH_ORGANIZE_KEY = "projectTree:workbenchOrganize";
-// Shared by classic and workbench; key string kept for existing saved choices.
+// Shared by workbench and creation; key string kept for existing saved choices.
 export const WORKBENCH_SORT_KEY = "projectTree:workbenchSort";
 
 export function loadWorkbenchOrganizeMode(): WorkbenchOrganizeMode {
@@ -265,9 +265,9 @@ export type ProjectTreeFolderDisclosure = {
   iconStackClassName: string;
 };
 
-// allowEmptyExpand lets classic folders open without children so the expanded
-// state can host the "no sessions" placeholder row; other variants keep the
-// original contract where empty folders are inert.
+// allowEmptyExpand lets a project shell open before its first topic page has
+// arrived: without it an empty folder is inert, so expanding it could never
+// start the load that fills it.
 export function projectTreeFolderDisclosure(hasChildren: boolean, isExpanded: boolean, allowEmptyExpand = false): ProjectTreeFolderDisclosure {
   const canExpand = hasChildren || allowEmptyExpand;
   const isOpen = canExpand && isExpanded;
@@ -312,33 +312,10 @@ export function projectTreeTopicMetaLine(node: ProjectNode, t: Translator, compa
   return parts.join(" · ");
 }
 
-// Model for the classic hover preview card: the row keeps a time-only meta
-// line, so the card carries the full title, turns, exact date, and project.
-export type ProjectTreeTopicHoverCard = {
-  title: string;
-  statusLabel: string;
-  metaLine: string;
-  exactTime: string;
-  projectLabel: string;
-};
-
 // Activity labels older than a week are already the calendar date (always the
 // meta line's last part), so callers pairing the two keep a single copy.
 export function projectTreeDedupedExactTime(metaLine: string, exactTime: string): string {
   return exactTime && metaLine.endsWith(exactTime) ? "" : exactTime;
-}
-
-export function projectTreeTopicHoverCardModel(node: ProjectNode, t: Translator, projectLabel: string): ProjectTreeTopicHoverCard {
-  const activityAt = node.lastActivityAt || node.createdAt || 0;
-  const metaLine = projectTreeTopicMetaLine(node, t);
-  const exactTime = activityAt ? topicActivityDateLabel(activityAt) : "";
-  return {
-    title: (node.preview || node.label || node.topicId || "Untitled").replace(/^●\s*/, ""),
-    statusLabel: topicStatusLabel(node, t),
-    metaLine,
-    exactTime: projectTreeDedupedExactTime(metaLine, exactTime),
-    projectLabel,
-  };
 }
 
 export function topicUnknownTimeLabel(node: ProjectNode, t: Translator): string {
@@ -426,8 +403,8 @@ export function projectTreeShouldRenderTopicActions(isSessionNode: boolean, vari
   return !isSessionNode && variant !== "creation" && !unread;
 }
 
-// Pinning reorders the classic/workbench trees shared with creation mode, so
-// the creation context menu keeps its original rename/trash-only entries.
+// Pinning reorders the trees shared with creation mode, so the creation
+// context menu keeps its original rename/trash-only entries.
 export function projectTreeTopicMenuOffersPin(variant: ProjectTreeVariant): boolean {
   return variant !== "creation";
 }

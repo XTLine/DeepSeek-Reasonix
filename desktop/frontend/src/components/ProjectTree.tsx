@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import type { CSSProperties, DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { Archive, ArrowDown, Pencil, Plus, Folder, FolderPlus, Search, BriefcaseBusiness, Copy, FolderOpen, XCircle, Check, ListCollapse, ListRestart, MessageSquare, Clock, Pin, MoreHorizontal, Minimize2, Maximize2, GitBranch, Sparkles, Cloud } from "lucide-react";
 import { asArray } from "../lib/array";
@@ -7,9 +6,9 @@ import { useToast } from "../lib/toast";
 import { app } from "../lib/bridge";
 import { onProjectTreeChangedV2 } from "../lib/sessionCatalogBridge";
 import { sessionCatalogNotice } from "../lib/sessionCatalogPresentation";
-import { isRuntimeSessionNode, isTopicNode, loadWorkbenchOrganizeMode, loadWorkbenchSortMode, mergeIncompleteProjectTopicPage, mergeProjectTopicPage, projectTreeDedupedExactTime, projectTreeEventAffectsFolder, projectTreeFolderDisclosure, projectTreeReadActivityKey, projectTreeRevisionIsFresh, projectTreeShellChildren, projectTreeShellSignature, projectTreeShouldApplyShellSnapshot, projectTreeShouldRenderTopicActions, projectTreeShouldSuppressOpenForRename, projectTreeTopicArchiveBlocked, projectTreeTopicHasUnreadActivity, projectTreeTopicHoverCardModel, projectTreeTopicMenuOffersPin, projectTreeTopicMetaLine, projectTreeTopicOpenRequest, projectTreeTopicPageIsFresh, projectTreeTopicPageSignature, projectTreeWithoutTopic, projectTreeWithTopicTitle, topicActivityAt, topicActivityDateLabel, topicActivityLabel, topicIsActive, topicStatus, topicStatusLabel, topicUnknownTimeLabel, WORKBENCH_ORGANIZE_KEY, WORKBENCH_SORT_KEY, type ProjectTreePendingTopicOpen, type ProjectTreeReadActivity, type ProjectTreeTopicHoverCard, type WorkbenchOrganizeMode, type WorkbenchSortMode } from "../lib/projectTreeTopic";
+import { isRuntimeSessionNode, isTopicNode, loadWorkbenchOrganizeMode, loadWorkbenchSortMode, mergeIncompleteProjectTopicPage, mergeProjectTopicPage, projectTreeDedupedExactTime, projectTreeEventAffectsFolder, projectTreeFolderDisclosure, projectTreeReadActivityKey, projectTreeRevisionIsFresh, projectTreeShellChildren, projectTreeShellSignature, projectTreeShouldApplyShellSnapshot, projectTreeShouldRenderTopicActions, projectTreeShouldSuppressOpenForRename, projectTreeTopicArchiveBlocked, projectTreeTopicHasUnreadActivity, projectTreeTopicMenuOffersPin, projectTreeTopicMetaLine, projectTreeTopicOpenRequest, projectTreeTopicPageIsFresh, projectTreeTopicPageSignature, projectTreeWithoutTopic, projectTreeWithTopicTitle, topicActivityAt, topicActivityDateLabel, topicActivityLabel, topicIsActive, topicStatus, topicStatusLabel, topicUnknownTimeLabel, WORKBENCH_ORGANIZE_KEY, WORKBENCH_SORT_KEY, type ProjectTreePendingTopicOpen, type ProjectTreeReadActivity, type WorkbenchOrganizeMode, type WorkbenchSortMode } from "../lib/projectTreeTopic";
 export * from "../lib/projectTreeTopic";
-import { arrangeClassicProjectTree, arrangeWorkbenchTree, classicTopicWindow, CLASSIC_TOPIC_PREVIEW_LIMIT, splitPinnedProjectTree, type PinnedTreeSections } from "../lib/projectTreePresentation";
+import { arrangeWorkbenchTree, splitPinnedProjectTree, type PinnedTreeSections } from "../lib/projectTreePresentation";
 export * from "../lib/projectTreePresentation";
 import type { ProjectNode, SessionCatalogStatus } from "../lib/types";
 import { topicActivityTime } from "../lib/session";
@@ -43,6 +42,9 @@ type CollapseSnapshot = {
 
 const READ_ACTIVITY_KEY = "projectTree:readActivity";
 const READ_ACTIVITY_BASELINE_KEY = "projectTree:readActivityBaselineAt";
+// summarizeProjectTreeSessions still accepts a per-folder window override; no
+// folder is windowed any more, so it always receives the empty set.
+const EMPTY_FOLDER_WINDOW: ReadonlySet<string> = new Set<string>();
 
 function loadReadActivity(): ProjectTreeReadActivity {
   try {
@@ -201,7 +203,7 @@ export function ProjectTree({
   activeSessionPath,
   activeRemote,
   imTopicSources = {},
-  variant = "classic",
+  variant = "workbench",
   onOpenTopic,
   onAddProject,
   onCreateTopic,
@@ -272,10 +274,7 @@ export function ProjectTree({
   const topicIndexRef = useRef(0);
   const visibleTopicsCollectorRef = useRef<TopicShortcutEntry[]>([]);
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
-  const [showAllTopics, setShowAllTopics] = useState<Set<string>>(new Set());
-  const [hoverCard, setHoverCard] = useState<{ key: string; card: ProjectTreeTopicHoverCard; left: number; top: number } | null>(null);
   const [aiRenamingTopic, setAiRenamingTopic] = useState<string | null>(null);
-  const hoverCardTimerRef = useRef<number | null>(null);
   const creatingRef = useRef(false);
   const closeMenu = useCallback(() => {
     setMenuNodeKey(null);
@@ -298,27 +297,9 @@ export function ProjectTree({
   useEffect(() => {
     return () => {
       if (clickTimerRef.current !== null) clearTimeout(clickTimerRef.current.timer);
-      if (hoverCardTimerRef.current !== null) window.clearTimeout(hoverCardTimerRef.current);
     };
   }, []);
   const manuallyCollapsedRef = useRef(manuallyCollapsed);
-
-  const cancelHoverCard = useCallback(() => {
-    if (hoverCardTimerRef.current !== null) {
-      window.clearTimeout(hoverCardTimerRef.current);
-      hoverCardTimerRef.current = null;
-    }
-    setHoverCard((current) => (current === null ? current : null));
-  }, []);
-
-  const toggleShowAllTopics = useCallback((key: string) => {
-    setShowAllTopics((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
 
   const updateManuallyCollapsed = useCallback((updater: (prev: Set<string>) => Set<string>) => {
     setManuallyCollapsed((prev) => {
@@ -932,69 +913,13 @@ export function ProjectTree({
       .map(filterNode)
       .filter((node): node is ProjectNode => node !== null);
     if (compactTopics) return arrangeWorkbenchTree(filtered, workbenchOrganizeMode, workbenchSortMode);
-    if (creationTopics) return arrangeWorkbenchTree(filtered, "project", "updated");
-    return arrangeClassicProjectTree(filtered, workbenchSortMode);
-  }, [compactTopics, creationTopics, query, timeFilter, treeWithRemoteSessions, workbenchOrganizeMode, workbenchSortMode]);
+    return arrangeWorkbenchTree(filtered, "project", "updated");
+  }, [compactTopics, query, timeFilter, treeWithRemoteSessions, workbenchOrganizeMode, workbenchSortMode]);
 
   const pinnedTreeSections = useMemo<PinnedTreeSections>(() => {
     if (creationTopics) return { pinned: [], projects: visibleTree };
     return splitPinnedProjectTree(visibleTree, workbenchSortMode, compactTopics);
   }, [compactTopics, creationTopics, visibleTree, workbenchSortMode]);
-
-  const classicTopics = !compactTopics && !creationTopics;
-  const classicTruncationActive = classicTopics && query.trim() === "" && timeFilter === "all";
-
-  const projectLabelByRoot = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const nodeItem of tree) {
-      if (!nodeItem) continue;
-      if (nodeItem.kind === "project" && nodeItem.root) map.set(nodeItem.root, nodeItem.label || nodeItem.root);
-      if (nodeItem.kind === "global_folder") map.set(GLOBAL_PROJECT_ORDER_KEY, nodeItem.label || "Global");
-    }
-    return map;
-  }, [tree]);
-
-  const scheduleHoverCard = useCallback((element: HTMLElement, rowKey: string, node: ProjectNode) => {
-    if (hoverCardTimerRef.current !== null) window.clearTimeout(hoverCardTimerRef.current);
-    hoverCardTimerRef.current = window.setTimeout(() => {
-      hoverCardTimerRef.current = null;
-      if (!element.isConnected) return;
-      if (menuNodeKey || menuProject || editingTopic || editingProject || dragProjectRoot) return;
-      const rect = element.getBoundingClientRect();
-      const globalScope = node.kind === "global_topic" || node.kind === "global_session";
-      const projectLabel = globalScope
-        ? projectLabelByRoot.get(GLOBAL_PROJECT_ORDER_KEY) ?? "Global"
-        : projectLabelByRoot.get(node.root ?? "") ?? "";
-      setHoverCard({
-        key: rowKey,
-        card: projectTreeTopicHoverCardModel(node, t, projectLabel),
-        left: rect.right + 10,
-        top: Math.max(8, Math.min(rect.top, window.innerHeight - 150)),
-      });
-    }, 350);
-  }, [menuNodeKey, menuProject, editingTopic, editingProject, dragProjectRoot, projectLabelByRoot, t]);
-
-  // Opening an old session from history can land on a topic hidden behind the
-  // classic show-more window; reveal that folder so the active row stays visible.
-  useEffect(() => {
-    if (!classicTruncationActive) return;
-    const revealKeys: string[] = [];
-    for (const nodeItem of visibleTree) {
-      if (!nodeItem || (nodeItem.kind !== "project" && nodeItem.kind !== "global_folder")) continue;
-      const children = asArray(nodeItem.children);
-      const activeIndex = children.findIndex((child) =>
-        topicIsActive(child, activeScope, activeWorkspaceRoot, activeTopicId, activeSessionPath) ||
-        asArray(child.children).some((grand) => topicIsActive(grand, activeScope, activeWorkspaceRoot, activeTopicId, activeSessionPath)));
-      if (activeIndex >= CLASSIC_TOPIC_PREVIEW_LIMIT) revealKeys.push(projectNodeKey(nodeItem, 0));
-    }
-    if (revealKeys.length === 0) return;
-    setShowAllTopics((prev) => {
-      if (revealKeys.every((key) => prev.has(key))) return prev;
-      const next = new Set(prev);
-      for (const key of revealKeys) next.add(key);
-      return next;
-    });
-  }, [classicTruncationActive, visibleTree, activeScope, activeWorkspaceRoot, activeTopicId, activeSessionPath]);
 
   const projectDragEnabled = query.trim() === "";
 
@@ -1054,8 +979,10 @@ export function ProjectTree({
       tree,
       visibleTree,
       expanded,
-      showAllTopics,
-      classicTruncationActive,
+      // No variant truncates a folder's children any more, so the diagnostics
+      // see exactly the rows the tree paints.
+      showAllTopics: EMPTY_FOLDER_WINDOW,
+      classicTruncationActive: false,
       queryActive: query.trim().length > 0,
       timeFilterActive: timeFilter !== "all",
       projectNodeKey,
@@ -1083,7 +1010,7 @@ export function ProjectTree({
       treeRevision: latestRevisionRef.current,
       organizationRevision,
     };
-  }, [activeScope, activeSessionPath, activeTopicId, activeWorkspaceRoot, catalogStatus, classicTruncationActive, expanded, organizationRevision, query, readActivity, readBaselineAt, showAllTopics, timeFilter, tree, variant, visibleTree]);
+  }, [activeScope, activeSessionPath, activeTopicId, activeWorkspaceRoot, catalogStatus, expanded, organizationRevision, query, readActivity, readBaselineAt, timeFilter, tree, variant, visibleTree]);
 
   useProjectTreeFrontendDiagnostics(projectTreeDiagnosticSnapshot);
 
@@ -1107,8 +1034,8 @@ export function ProjectTree({
       const label = (node.label || node.topicId || "Untitled").replace(/^●\s*/, "");
       const activityAt = node.lastActivityAt || node.createdAt || 0;
       // Every variant is a single-line row with the activity time on the right;
-      // classic moved there too so turns and the exact date live in the hover
-      // preview card and the accessible label instead of a second meta line.
+      // turns and the exact date ride on the row's title instead of a second
+      // meta line.
       const sideTimeVisible = true;
       const timeLabel = activityAt ? topicActivityLabel(activityAt, t, true) : topicUnknownTimeLabel(node, t);
       const exactTimeLabel = activityAt ? topicActivityDateLabel(activityAt) : "";
@@ -1192,7 +1119,7 @@ export function ProjectTree({
         return (
           <div
             key={key}
-            className={`project-tree__topic project-tree__topic--editing${active ? " project-tree__topic--active" : ""}${imSource ? " project-tree__topic--im-source" : ""}${!classicTopics && metaFull ? " project-tree__topic--has-meta" : ""}`}
+            className={`project-tree__topic project-tree__topic--editing${active ? " project-tree__topic--active" : ""}${imSource ? " project-tree__topic--im-source" : ""}${metaFull ? " project-tree__topic--has-meta" : ""}`}
             style={{ paddingLeft: 14 + depth * 16 }}
           >
             <input
@@ -1228,15 +1155,11 @@ export function ProjectTree({
           style={accentStyle}
           {...topicDrag.props}
           onContextMenu={openTopicMenu}
-          onMouseEnter={classicTopics ? (event) => scheduleHoverCard(event.currentTarget, key, node) : undefined}
-          onMouseLeave={classicTopics ? cancelHoverCard : undefined}
-          onMouseDown={classicTopics ? cancelHoverCard : undefined}
         >
           <button
             type="button"
             className="project-tree__topic-main"
-            title={classicTopics ? undefined : title}
-            aria-label={classicTopics ? title : undefined}
+            title={title}
             style={{ paddingLeft: 14 + depth * 16 }}
             onClick={() => {
               const remote = node.remoteSession ?? remoteSessionActions.resolve(topicId);
@@ -1286,7 +1209,7 @@ export function ProjectTree({
                     <span>{imSourceLabel}</span>
                   </span>
                 )}
-                {!compactTopics && statusLabel && (!classicTopics || status === "paused" || status === "awaiting_delivery" || status === "error") && (
+                {!compactTopics && statusLabel && (
                   <span className={`project-tree__topic-status project-tree__topic-status--${status}`}>{statusLabel}</span>
                 )}
               </span>
@@ -1332,8 +1255,6 @@ export function ProjectTree({
             <span
               className="project-tree__topic-actions"
               aria-label={t("projectTree.topicActions")}
-              onMouseEnter={classicTopics ? cancelHoverCard : undefined}
-              onFocus={classicTopics ? cancelHoverCard : undefined}
             >
               <Tooltip label={pinLabel} side="top" className="project-tree__topic-action-slot">
                 <button
@@ -1605,11 +1526,6 @@ export function ProjectTree({
         : []),
     ];
 
-    const folderShowAll = showAllTopics.has(key);
-    const { visible: windowedChildren, hiddenCount } = classicTruncationActive
-      ? classicTopicWindow(children, folderShowAll)
-      : { visible: children, hiddenCount: 0 };
-    const windowToggleVisible = classicTruncationActive && (hiddenCount > 0 || (folderShowAll && children.length > CLASSIC_TOPIC_PREVIEW_LIMIT));
     const backendPage = topicPageState[key];
     const renderFolderChildren = () => {
       if (!hasChildren) {
@@ -1618,11 +1534,10 @@ export function ProjectTree({
         const remoteError = remoteGroupError[remoteGroupKey] || "";
         if (node.remote) return <RemoteProjectEmptyState
           busy={remoteBusy} error={remoteError} ready={remoteServers[node.remote.hostId]?.[node.remote.workspace]?.state === "ready"}
-          isExpanded={isExpanded} depth={depth} classicTopics={classicTopics} t={t} onEnsure={() => ensureRemoteGroupSessions(node.remote!.hostId, node.remote!.workspace)}
+          isExpanded={isExpanded} depth={depth} t={t} onEnsure={() => ensureRemoteGroupSessions(node.remote!.hostId, node.remote!.workspace)}
         />;
         // While the first topic page is still loading (cold start, catalog
-        // reconcile in flight), show a skeleton instead of a blank folder or
-        // a premature "no topics" placeholder.
+        // reconcile in flight), show a skeleton instead of a blank folder.
         if (backendPage?.loading) {
           return (
             <div className={`project-tree__children${isExpanded ? " project-tree__children--expanded" : ""}`}>
@@ -1637,31 +1552,12 @@ export function ProjectTree({
             </div>
           );
         }
-        if (!classicTopics) return null;
-        return (
-          <div className={`project-tree__children${isExpanded ? " project-tree__children--expanded" : ""}`}>
-            <div className="project-tree__children-inner">
-              <div className="project-tree__topic-placeholder" style={{ paddingLeft: 14 + (depth + 1) * 16 }}>
-                {t("projectTree.noTopics")}
-              </div>
-            </div>
-          </div>
-        );
+        return null;
       }
       return (
         <div className={`project-tree__children${isExpanded ? " project-tree__children--expanded" : ""}`}>
           <div className="project-tree__children-inner">
-            <ProjectTreeGroupRows folder={node} children={windowedChildren} depth={depth + 1} section={section} visible={isVisible && isExpanded} organization={organization} renderNode={renderNode} t={t} />
-            {windowToggleVisible && (
-              <button
-                type="button"
-                className="project-tree__topic-window-toggle"
-                style={{ paddingLeft: 14 + (depth + 1) * 16 }}
-                onClick={() => toggleShowAllTopics(key)}
-              >
-                {hiddenCount > 0 ? t("projectTree.showMoreTopics", { n: hiddenCount }) : t("projectTree.showFewerTopics")}
-              </button>
-            )}
+            <ProjectTreeGroupRows folder={node} children={children} depth={depth + 1} section={section} visible={isVisible && isExpanded} organization={organization} renderNode={renderNode} t={t} />
             {backendPage?.nextCursor && (
               <button
                 type="button"
@@ -1895,10 +1791,11 @@ export function ProjectTree({
   const renderTimeFilterControl = (mode: "classic" | "workbench") => {
     const workbench = mode === "workbench";
     const active = timeFilter !== "all";
-    // The classic menu also hosts the sort-criteria section, so its label
-    // covers both; creation reuses the classic control but stays filter-only.
-    const filterOnlyLabel = variant === "classic" ? t("projectTree.filterAndSort") : t("projectTree.timeFilter");
-    const controlLabel = workbench ? `${t("projectTree.timeFilter")}: ${timeFilterDisplayLabel}` : filterOnlyLabel;
+    // The non-workbench control is the filter-only menu creation reuses, so its
+    // label never mentions the sort criteria, which live in the workbench
+    // header's "more" menu.
+    const filterOnlyLabel = t("projectTree.timeFilter");
+    const controlLabel = workbench ? `${filterOnlyLabel}: ${timeFilterDisplayLabel}` : filterOnlyLabel;
     const buttonClassName = workbench
       ? `project-tree__header-icon-btn project-tree__header-icon-btn--filter${active ? " project-tree__header-icon-btn--active" : ""}`
       : `project-tree__header-action-btn${active ? " project-tree__header-action-btn--active" : ""}`;
@@ -1988,28 +1885,6 @@ export function ProjectTree({
               >
                 {t("projectTree.timeFilter1d")}
               </button>
-              {variant === "classic" && (
-                <>
-                  <div className="project-tree__time-filter-sep" role="separator" />
-                  <div className="project-tree__time-filter-title">{t("projectTree.sortCriteria")}</div>
-                  <button
-                    type="button"
-                    className={`project-tree__time-filter-opt${workbenchSortMode === "updated" ? " project-tree__time-filter-opt--on" : ""}`}
-                    onClick={() => selectWorkbenchSortMode("updated")}
-                    role="menuitem"
-                  >
-                    {t("projectTree.sortByUpdatedAt")}
-                  </button>
-                  <button
-                    type="button"
-                    className={`project-tree__time-filter-opt${workbenchSortMode === "created" ? " project-tree__time-filter-opt--on" : ""}`}
-                    onClick={() => selectWorkbenchSortMode("created")}
-                    role="menuitem"
-                  >
-                    {t("projectTree.sortByCreatedAt")}
-                  </button>
-                </>
-              )}
             </div>
           )}
         </div>
@@ -2219,7 +2094,7 @@ export function ProjectTree({
       ) : (
         <>
           {renderProjectHeader("classic")}
-          <div className="project-tree__list" onScroll={cancelHoverCard}>
+          <div className="project-tree__list">
             {!hasTreeRows ? (
               renderEmptyState()
             ) : (
@@ -2237,28 +2112,6 @@ export function ProjectTree({
             )}
           </div>
         </>
-      )}
-      {hoverCard && createPortal(
-        <div
-          className="project-tree__hover-card"
-          style={{ left: hoverCard.left, top: hoverCard.top }}
-          aria-hidden="true"
-        >
-          <div className="project-tree__hover-card-title">{hoverCard.card.title}</div>
-          {hoverCard.card.statusLabel && (
-            <div className="project-tree__hover-card-status">{hoverCard.card.statusLabel}</div>
-          )}
-          <div className="project-tree__hover-card-meta">
-            {[hoverCard.card.metaLine, hoverCard.card.exactTime].filter(Boolean).join(" · ")}
-          </div>
-          {hoverCard.card.projectLabel && (
-            <div className="project-tree__hover-card-project">
-              <Folder size={12} aria-hidden="true" />
-              <span>{hoverCard.card.projectLabel}</span>
-            </div>
-          )}
-        </div>,
-        document.body,
       )}
       {blankProjectFlow}
       {remoteConnectFlow}

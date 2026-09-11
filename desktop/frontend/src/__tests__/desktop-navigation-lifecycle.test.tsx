@@ -29,11 +29,11 @@ const ports: Parameters<typeof useDesktopNavigation>[0]["ports"] = {
   openRemoteProject: async (_host, workspace) => activate(`remote:${workspace}`),
   switchRemoteTab: async (meta, seq) => { calls.push(`remote-switch:${meta.id}:${seq}`); },
   activateTopic: async (_scope, _workspace, id) => activate(id),
-  openTopicSession: async (_scope, _workspace, id) => { calls.push("classic-session"); return activate(id); },
-  openGlobalTab: async id => { calls.push("classic-global"); return activate(id); },
-  openProjectTab: async (_workspace, id) => { calls.push("classic-project"); return activate(id); },
+  openTopicSession: async (_scope, _workspace, id) => { calls.push("tab-session"); return activate(id); },
+  openGlobalTab: async id => { calls.push("tab-global"); return activate(id); },
+  openProjectTab: async (_workspace, id) => { calls.push("tab-project"); return activate(id); },
   ensureBlankSurface: async (_scope, workspace) => activate(`blank:${workspace}`),
-  ensureBlankTab: async (_scope, workspace) => { calls.push("classic-blank"); return activate(`blank:${workspace}`); },
+  ensureBlankTab: async (_scope, workspace) => { calls.push("tab-blank"); return activate(`blank:${workspace}`); },
   createIsolatedWorktree: async workspace => ({ tab: await activate(`worktree:${workspace}`), branch: "fixture", sourceDirty: true }) as Awaited<ReturnType<DesktopNavigationPorts["createIsolatedWorktree"]>>,
   openChannelSession: async (path, id) => { calls.push(`channel:${id}:${path}`); },
   resumeSession: async (path, id) => { calls.push(`resume:${id}:${path}`); },
@@ -41,9 +41,9 @@ const ports: Parameters<typeof useDesktopNavigation>[0]["ports"] = {
   listSessions: async () => { calls.push("history-refresh"); return []; },
   topicAccepted: seq => { acceptedTopics.push(seq); },
 };
-function Probe({ visible = "A", single = true }: { visible?: string; single?: boolean }) {
+function Probe({ visible = "A" }: { visible?: string }) {
   useRemoteTabOpened(meta => { calls.push(`resource:${meta.id}`); }, () => {});
-  api = useDesktopNavigation({ visible: { tabId: visible, sessionKey: visible }, singleSurface: single, ports,
+  api = useDesktopNavigation({ visible: { tabId: visible, sessionKey: visible }, ports,
     setTabRevealSignal: () => { calls.push("reveal-tab"); }, setTranscriptRevealSignal: () => { calls.push("reveal-transcript"); },
     setProjectRevision: () => { calls.push("project"); }, setHistory: () => { calls.push("history-close"); },
     t: ((key: string) => key) as Translator, showToast: message => { calls.push(`notice:${message}`); },
@@ -52,7 +52,7 @@ function Probe({ visible = "A", single = true }: { visible?: string; single?: bo
   });
   return null;
 }
-const paint = (visible = "A", single = true) => act(async () => root.render(<Probe visible={visible} single={single} />));
+const paint = (visible = "A") => act(async () => root.render(<Probe visible={visible} />));
 const topic = (id: string) => api.enqueueNavigation({ kind: "topic", scope: "project", workspaceRoot: "fixture", topicId: id });
 async function finish(id: string, task: Promise<void>) { pending.get(id)!.resolve(tab(id)); await task; }
 try {
@@ -93,10 +93,10 @@ try {
   assert.ok(calls.includes("project"));
 
   calls.length = 0;
-  await paint("A", false);
   const history = api.enqueueNavigation({ kind: "resume-session", session: { scope: "global", topicId: "history", path: "history.jsonl" } as SessionMeta });
   await finish("history", history);
-  assert.ok(calls.includes("classic-session"));
+  assert.ok(calls.includes("open:history"), "resuming a session activates its topic surface");
+  assert.ok(!calls.includes("tab-session"), "every layout style takes the surface path, never a legacy tab");
   assert.ok(calls.includes("history-close"));
 
   calls.length = 0;
@@ -132,7 +132,7 @@ try {
   const outcome = await successfulRemote;
   assert.equal(outcome.status, "completed");
   assert.ok(calls.includes(`remote-switch:remote:success:${intent}`), "the request's exact intent reaches dedicated remote activation");
-  assert.ok(!calls.includes("classic-session"));
+  assert.ok(!calls.includes("tab-session"));
 
   calls.length = 0;
   const retainedRemote = api.openRemoteProject;
@@ -142,5 +142,5 @@ try {
   entry({ kind: "blank", scope: "global", workspaceRoot: "" });
   assert.deepEqual(calls.filter(value => /^(open|seed|tabs|notice|reveal|settle)/.test(value)), ["open:disposed"], "unmount releases pending input and fences queued and running continuations");
   assert.deepEqual(await retainedRemote({ hostId: "fixture", workspace: "disposed" }, {}), { status: "cancelled", reason: "disposed" });
-  console.log("desktop navigation: queue ownership, ABA, IM hydrate, dirty-worktree warning, Classic resume, failure and disposal passed");
+  console.log("desktop navigation: queue ownership, ABA, IM hydrate, dirty-worktree warning, tab resume, failure and disposal passed");
 } finally { dom.window.close(); }

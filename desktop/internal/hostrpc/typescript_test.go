@@ -87,3 +87,17 @@ func TestTypeScriptNamesDisambiguateCollisions(t *testing.T) {
 		}
 	}
 }
+
+func TestTypeScriptNamesDoNotShadowGeneratedHelpers(t *testing.T) {
+	names := tsTypeNames(map[string]ObjectType{
+		"transcript.Record": {}, "main.Promise": {}, "main.GeneratedDesktopCommands": {},
+	})
+	for key, want := range map[string]string{
+		"transcript.Record": "transcript_Record", "main.Promise": "main_Promise",
+		"main.GeneratedDesktopCommands": "main_GeneratedDesktopCommands",
+	} {
+		if names[key] != want {
+			t.Errorf("%s = %s, want %s", key, names[key], want)
+		}
+	}
+}

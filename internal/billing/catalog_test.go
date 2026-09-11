@@ -38,6 +38,45 @@ func TestResolveDeepSeekScheduledRateBoundaries(t *testing.T) {
 	}
 }
 
+// The 2026-09-10 cutover both renamed the Flash SKU and cut its price; the
+// retired ids are served by V4.1 Flash and billed at the same rate.
+func TestDeepSeekSeptemberScheduleResolvesFlashPriceCut(t *testing.T) {
+	// Monday 2026-09-14, inside and outside the 06:00-10:00 UTC peak window.
+	peak := time.Date(2026, 9, 14, 6, 0, 0, 0, time.UTC)
+	offPeak := time.Date(2026, 9, 14, 22, 0, 0, 0, time.UTC)
+	cnyPeak := RateCard{CacheHit: 0.04, Input: 2, Output: 8, Currency: "CNY"}
+	cnyOffPeak := RateCard{CacheHit: 0.02, Input: 1, Output: 4, Currency: "CNY"}
+	for _, tc := range []struct {
+		at   time.Time
+		band string
+		want RateCard
+	}{{peak, RateBandPeak, cnyPeak}, {offPeak, RateBandOffPeak, cnyOffPeak}} {
+		got, ok := ResolveScheduledRate("deepseek", "deepseek-flash", "CNY", BillingModePAYG, ScheduleDeepSeekV4September2026, tc.at)
+		if !ok || got.RateBand != tc.band || got.Card != tc.want {
+			t.Fatalf("at %s resolved = %+v ok=%v, want band=%s card=%+v", tc.at, got, ok, tc.band, tc.want)
+		}
+	}
+	for _, model := range []string{"deepseek-v4-flash", "deepseek-v4-flash-vision-exp"} {
+		got, ok := ResolveScheduledRate("deepseek", model, "CNY", BillingModePAYG, ScheduleDeepSeekV4September2026, peak)
+		if !ok || got.Card != cnyPeak {
+			t.Fatalf("%s resolved = %+v ok=%v, want the Flash price", model, got, ok)
+		}
+	}
+	if got, ok := ResolveScheduledRate("deepseek", "deepseek-flash", "USD", BillingModePAYG, ScheduleDeepSeekV4September2026, offPeak); !ok ||
+		got.Card != (RateCard{CacheHit: 0.003, Input: 0.15, Output: 0.6, Currency: "USD"}) {
+		t.Fatalf("USD off-peak resolved = %+v ok=%v", got, ok)
+	}
+	// V4 Pro keeps its own price until the vendor routes it to V4.1 Flash.
+	if got, ok := ResolveScheduledRate("deepseek", "deepseek-v4-pro", "CNY", BillingModePAYG, ScheduleDeepSeekV4September2026, peak); !ok ||
+		got.Card != (RateCard{CacheHit: 0.30, Input: 9, Output: 27, Currency: "CNY"}) {
+		t.Fatalf("V4 Pro resolved = %+v ok=%v", got, ok)
+	}
+	// The superseded August schedule closes at the cutover.
+	if _, ok := ResolveScheduledRate("deepseek", "deepseek-v4-flash", "CNY", BillingModePAYG, ScheduleDeepSeekV4August2026, peak); ok {
+		t.Fatal("August schedule still resolved after the September cutover")
+	}
+}
+
 func TestDeepSeekRateBandWeekendIsAlwaysOffPeak(t *testing.T) {
 	tests := []struct {
 		name string

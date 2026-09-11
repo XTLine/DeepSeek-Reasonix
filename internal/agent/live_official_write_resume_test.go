@@ -90,6 +90,7 @@ func runLiveWriteAfterEffectResume(t *testing.T, p provider.Provider, label stri
 	resume.SetSessionPath(state)
 	next, done := context.WithTimeout(context.Background(), 90*time.Second)
 	defer done()
+	confirmLiveWriteRecovery(t, next, resume)
 	if err := resume.Run(next, "Continue from the interrupted operation. Use the verified write postconditions. Do not rewrite satisfied content; just report whether the target is satisfied."); err != nil {
 		t.Fatal(err)
 	}

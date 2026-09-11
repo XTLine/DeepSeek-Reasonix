@@ -218,9 +218,13 @@ export function ContextWindowRing({ enabled = true, context, tabId, turnCost, tu
                 <span className="context-ring-popover__value">{elapsed}</span>
               </div>
             )}
-            {turnMetrics && <div className="context-ring-popover__turn-metrics" title={t("composer.runStripEstimateHint")}>
-              {[[t("context.turnTime"), turnMetrics.elapsed], [t("status.tpsLabel"), turnMetrics.tps], [t("status.turnTokensLabel"), turnMetrics.tokens]].map(([label, value]) => value && (
-                <div className="context-ring-popover__row" key={label}>
+            {turnMetrics && <div className="context-ring-popover__turn-metrics">
+              {([
+                [t("context.turnTime"), t("context.turnTimeTitle"), turnMetrics.elapsed],
+                [t("status.turnTpsLabel"), t("status.turnTpsTitle"), turnMetrics.tps],
+                [t("status.turnOutputTokensLabel"), t("status.turnOutputTokensTitle"), turnMetrics.tokens],
+              ] as const).map(([label, hint, value]) => value && (
+                <div className="context-ring-popover__row" key={label} title={hint}>
                   <span className="context-ring-popover__label">{label}</span>
                   <span className="context-ring-popover__value">{value}</span>
                 </div>

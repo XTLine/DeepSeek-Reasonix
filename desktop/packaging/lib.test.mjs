@@ -84,12 +84,12 @@ test("only the shell bundle and its package.json enter the asar", () => {
   }
 });
 
-test("the bundled package.json carries the release tag app.getVersion() reports", () => {
+test("package.json uses the numeric native version; build.json owns the full release identity", () => {
   const pkg = sanitizeShellPackageJson(
     { name: "reasonix-desktop-shell", private: true, version: "0.0.0", type: "module", main: "dist/main.cjs", description: "shell", scripts: { build: "x" }, devDependencies: { electron: "44.2.0" }, engines: { node: ">=24" } },
     { version: "v1.2.3-rc.1", productName: "Reasonix" },
   );
-  assert.deepEqual(pkg, { name: "reasonix-desktop-shell", description: "shell", main: "dist/main.cjs", type: "module", productName: "Reasonix", version: "v1.2.3-rc.1" });
+  assert.deepEqual(pkg, { name: "reasonix-desktop-shell", description: "shell", main: "dist/main.cjs", type: "module", productName: "Reasonix", version: "1.2.3" });
 });
 
 test("packager options pin the product identity and layout for every target", () => {
@@ -270,4 +270,26 @@ test("the NSIS script installs the Electron tree with both payload modes and no 
   assert.match(nsi, /!define PRODUCT_EXECUTABLE "\$\{INFO_PROJECTNAME\}\.exe"/);
   assert.match(nsi, /RMDir \/r "\$INSTDIR\\versions"/);
   assert.match(nsi, /File "\/oname=uninstall\.exe" "\$\{ARG_REASONIX_SIGNED_UNINSTALLER\}"/);
+});
+
+test("the installer stamps the shortcuts it created without launching the desktop", () => {
+  const nsi = read("build/windows/installer/project.nsi");
+  const maintenance = nsi.indexOf('--repair-shortcuts "$SMPROGRAMS\\${INFO_PRODUCTNAME}.lnk" "$DESKTOP\\${INFO_PRODUCTNAME}.lnk"');
+  assert.ok(maintenance > nsi.indexOf('CreateShortCut "$DESKTOP\\${INFO_PRODUCTNAME}.lnk"'), "maintenance follows shortcut creation");
+  assert.match(nsi.slice(maintenance, maintenance + 350), /Pop \$0/);
+  assert.match(nsi.slice(maintenance, maintenance + 350), /shortcut identity repair failed/);
+});
+
+test("installer unlock checks do not create or lock missing release entries", () => {
+  const nsi = read("build/windows/installer/project.nsi");
+  const body = nsi.slice(nsi.indexOf("Function reasonix.waitForExecutableUnlock"), nsi.indexOf("FunctionEnd", nsi.indexOf("Function reasonix.waitForExecutableUnlock")));
+  const opens = [...body.matchAll(/FileOpen \$1 "([^"]+)" a/g)];
+  assert.equal(opens.length, 6);
+  for (const open of opens) {
+    const preceding = body.slice(0, open.index);
+    const guard = `IfFileExists "${open[1]}" 0 `;
+    const at = preceding.lastIndexOf(guard);
+    assert.ok(at >= 0, `missing existence guard for ${open[1]}`);
+    assert.match(preceding.slice(at), /^IfFileExists [^\n]+\r?\n\s+ClearErrors\s+$/);
+  }
 });

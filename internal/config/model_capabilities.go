@@ -161,9 +161,26 @@ func (r *ModelCapabilityResolver) resolveAutomatic(entry *ProviderEntry, credent
 	}
 	// Resolve catalog facts separately so a vision override or legacy declaration
 	// cannot erase context/output/protocol metadata.
-	facts, hasFacts := provider.PiCatalogModelInfoForProvider(entry.Name, entry.Kind, entry.BaseURL, model)
+	catalogURL := entry.BaseURL
+	if entry.RequestURL != "" || entry.ChatURL != "" {
+		catalogURL = entry.RequestURL
+		if catalogURL == "" {
+			catalogURL = entry.ChatURL
+		}
+	}
+	if contract, ok := provider.LookupOpenCodeGoContract(entry.Kind, entry.BaseURL, entry.RequestURL, entry.ChatURL, model); ok {
+		switch contract.Route {
+		case provider.OpenCodeGoRouteChat:
+			catalogURL = "https://opencode.ai/zen/go/v1"
+		case provider.OpenCodeGoRouteAnthropic:
+			catalogURL = "https://opencode.ai/zen/go"
+		case provider.OpenCodeGoRouteResponses:
+			catalogURL = "https://opencode.ai/zen/go/v1"
+		}
+	}
+	facts, hasFacts := provider.PiCatalogModelInfoForProvider(entry.Name, entry.Kind, catalogURL, model)
 	if !hasFacts {
-		facts, hasFacts = provider.BuiltinModelInfo(entry.Kind, entry.BaseURL, model)
+		facts, hasFacts = provider.BuiltinModelInfo(entry.Kind, catalogURL, model)
 	}
 	if info, ok := presetModelInfo(entry, model); ok {
 		resolved := capabilityFromModalities(model, info.InputModalities, CapabilitySourcePreset)
@@ -204,7 +221,7 @@ func (r *ModelCapabilityResolver) resolveAutomatic(entry *ProviderEntry, credent
 // local model catalog. It only applies to an untouched preset identity; an
 // explicitly edited vision list remains a user-owned legacy override.
 func presetModelInfo(entry *ProviderEntry, model string) (provider.ModelInfo, bool) {
-	if entry == nil || strings.TrimSpace(entry.PresetID) == "" {
+	if entry == nil || entry.RequestURL != "" || entry.ChatURL != "" || strings.TrimSpace(entry.PresetID) == "" {
 		return provider.ModelInfo{}, false
 	}
 	preset, ok := CuratedProviderPreset(entry.PresetID)
@@ -219,7 +236,11 @@ func presetModelInfo(entry *ProviderEntry, model string) (provider.ModelInfo, bo
 			return provider.ModelInfo{}, false
 		}
 		modalities := []provider.ModelModality{provider.ModalityText}
-		if candidate.HasVisionModel(model) {
+		// The curated templates predate the V4.1 multimodal SKUs, so the vendor
+		// authority also decides here; otherwise a matching preset would lock a
+		// model that the builtin catalog already reports as image-capable.
+		if candidate.HasVisionModel(model) ||
+			(openai.IsDeepSeek(entry.BaseURL) && provider.IsOfficialDeepSeekImageModel(model)) {
 			modalities = append(modalities, provider.ModalityImage)
 		}
 		return provider.ModelInfo{ID: model, Name: model, InputModalities: modalities}, true

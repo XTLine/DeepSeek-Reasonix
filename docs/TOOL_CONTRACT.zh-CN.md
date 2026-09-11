@@ -1,5 +1,9 @@
 # 工具合约
 
+读取覆盖、源版本观察和操作级写入守卫各自独立。普通 `inspect`/`range` 部分读取
+不阻塞终答；显式 `intent=full` 和 host Stop 仍保留有界完成约束。恢复及兼容说明见
+[读取证据生命周期](READ_EVIDENCE_LIFECYCLE.zh-CN.md)。
+
 <a href="./TOOL_CONTRACT.md">English</a>
 
 本文记录 Reasonix 编译期内置工具的 provider-visible 合约。运行时 registry 使用同一条 canonical schema 路径；测试会校验这里列出的工具名、read-only 标记和 schema 快照不会漂移。
@@ -9,7 +13,7 @@
 | `bash` | false | 执行 shell 命令并返回 stdout/stderr。构建、测试、git、包管理器等使用它；读写查找文件优先使用专用工具。 |
 | `bash_output` | true | 读取后台 `bash` 或 `task` job 自上次读取后的新增输出和状态。 |
 | `code_index` | true | 轻量内置代码符号索引；优先使用 `lsp_*` 或代码图 MCP，缺失时用它兜底。 |
-| `complete_step` | true | 用证据记录已批准计划中一个步骤的完成情况。 |
+| `complete_step` | true | 记录已批准计划中一个步骤的完成。优先用回执 ID（`receipt_ids`）引用证据；普通任务下宿主无法确认的内容随签收一并报告而不拒绝，交付底线仍要求证据。 |
 | `compress` | true | 压缩当前模型可见对话中选定的范围，不删除可见历史。仅在用户明确要求压缩上下文时使用；锚点必须是某条真实用户消息中唯一、精确的原文片段。 |
 | `delete_range` | false | 用精确 start/end 文本锚点删除文件中的连续范围。 |
 | `delete_symbol` | false | 用 Go AST 删除 Go 源文件中的命名符号。 |
@@ -45,8 +49,9 @@ go test ./internal/tool -run TestBuiltinToolContractDocumentation
 每个会话都使用这套 Executor 工具面，并额外提供稳定代理 `use_capability`
 （list/inspect/call/decline），用于在不改变 provider 可见 Schema 的前提下发现和调用按需
 MCP（含 `auto_start=false`）。宿主根据真实工具动作建立验证义务：后续相关写入会使旧的
-验证、复查和签收重新变为未满足；Goal 项和已批准 Plan 的验收项为 Strict；`complete_step`
-必须引用最后一次相关写入之后的证据。Skill/MCP 的 require/prefer 路由受门禁约束（只读回答
+验证、复查和签收重新变为未满足；Goal 项和已批准 Plan 的验收项为 Strict；在交付底线下
+`complete_step` 必须引用最后一次相关写入之后的证据，普通任务则按真实工具结果结算，
+宿主无法确认的内容随签收一并报告而不拒绝。Skill/MCP 的 require/prefer 路由受门禁约束（只读回答
 同样不能跳过 require 能力）；触及认证、Schema 或破坏性路径后，结构化 review 的
 `reviewed_paths` 必须有宿主观测到的 read/diff 证据。
 

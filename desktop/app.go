@@ -37,7 +37,6 @@ import (
 	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/event"
-	"reasonix/internal/eventwire"
 	"reasonix/internal/evidence"
 	"reasonix/internal/extension/providerext"
 	"reasonix/internal/fileref"
@@ -58,6 +57,7 @@ import (
 	"reasonix/internal/taskcatalog"
 	"reasonix/internal/taskmonitor"
 	"reasonix/internal/tool"
+	"reasonix/internal/transcript"
 )
 
 // sessionTempFromController returns the logical-session private temporary
@@ -414,6 +414,9 @@ type App struct {
 	browserExecMu    sync.Mutex
 	browserExecutors map[string]*hostBrowserExecutor
 	browserOps       *browserops.Ledger
+	// browserControl is the shell-pushed switch that decides whether new
+	// sessions may drive the built-in browser at all.
+	browserControl browserControl
 }
 
 type desktopShellRuntimeState struct {
@@ -715,9 +718,9 @@ func (a *App) restoreOrBuildTabs() {
 		}
 		a.setDesktopLocale(i18n.DetectLanguage(lang))
 	}
-	if cfgErr != nil || singleSurfaceLayoutStyle(startupCfg.DesktopLayoutStyle()) {
-		f = singleSurfaceTabsFile(f)
-	}
+	// Every surviving layout style is single-surface, and a config that failed
+	// to load already took this path when the predicate could still be false.
+	f = singleSurfaceTabsFile(f)
 	// Restore remote tabs as disconnected shells; activation performs the
 	// first network work so desktop startup remains offline-safe.
 	a.restoreRemoteTabShells(f)
@@ -1092,12 +1095,6 @@ func (a *App) submitUserTurnToTabWithSink(tabID, input string, forwarder event.S
 		tab.sink.clearBotSink(generation)
 	}
 	return started
-}
-
-// RunShell executes a shell command directly (bypassing the model) and streams
-// output as events on eventChannel.
-func (a *App) RunShell(command string) error {
-	return a.RunShellForTab("", command)
 }
 
 func (a *App) RunShellForTab(tabID, command string) error {
@@ -1771,10 +1768,6 @@ func normalizeCollaborationMode(mode string) string {
 	default:
 		return "normal"
 	}
-}
-
-func (a *App) SetCollaborationMode(mode string) {
-	a.SetCollaborationModeForTab("", mode)
 }
 
 // SetComposerProfileForTab applies the controller-facing profile axes under one
@@ -3189,14 +3182,7 @@ func (a *App) openFallbackRuntime(target fallbackRuntimeTarget) error {
 	if topicID == "" {
 		return a.openTransientBlankRuntime(scope, root)
 	}
-	var err error
-	if a.singleSurfaceLayoutEnabled() {
-		_, err = a.ActivateTopic(scope, root, topicID, "")
-	} else if scope == "global" {
-		_, err = a.OpenGlobalTab(topicID)
-	} else {
-		_, err = a.OpenProjectTab(root, topicID)
-	}
+	_, err := a.ActivateTopic(scope, root, topicID, "")
 	return err
 }
 
@@ -3575,25 +3561,44 @@ func (a *App) OpenChannelSessionForTab(tabID, path string) ([]HistoryMessage, er
 }
 
 func (a *App) OpenChannelSessionPageForTab(tabID, path string, limit int) (HistoryPage, error) {
+	return a.openChannelSessionForTranscript(tabID, path, limit, true)
+}
+
+func (a *App) openChannelSessionForTranscript(tabID, path string, limit int, includeHistory bool) (HistoryPage, error) {
+	started := time.Now()
+	phases := HistorySwitchPhases{Outcome: "ok"}
+	defer func() { logSessionSwitchPhases(phases, started) }()
 	tab, ctrl := a.tabAndCtrlByID(tabID)
 	if tab == nil || ctrl == nil {
+		phases.Outcome = "tab_not_ready"
 		return HistoryPage{}, fmt.Errorf("tab is not ready")
 	}
+	resolveStarted := time.Now()
 	sessionPath, _, err := validateChannelSessionPath(controllerSessionDir(ctrl), path)
 	if err != nil {
+		phases.Outcome = "invalid_path"
 		return HistoryPage{}, err
 	}
+	phases.ResolveMs = elapsedMs(resolveStarted)
+
+	loadStarted := time.Now()
+	phases.DurableReads++
 	loaded, err := loadResumableSession(sessionPath)
+	if err != nil {
+		phases.Outcome = "load_failed"
+		return HistoryPage{}, err
+	}
+	phases.LoadMs = elapsedMs(loadStarted)
+	phases.LoadedCount = loaded.Len()
+	phases.LoadedBytes = sessionFileBytes(sessionPath)
+
+	page, err := a.switchToLoadedSessionPage(tab, loaded, sessionPath, true, includeHistory, limit, &phases)
 	if err != nil {
 		return HistoryPage{}, err
 	}
-	if sessionRuntimeKey(tab.currentSessionPath()) != sessionRuntimeKey(sessionPath) {
-		if err := a.rebindTabToLoadedSessionPath(tab, sessionPath, loaded); err != nil {
-			return HistoryPage{}, err
-		}
-	}
-	a.setTabReadOnly(tab.ID, true)
-	return a.HistoryPageForTab(tab.ID, 0, limit), nil
+	phases.TotalMs = elapsedMs(started)
+	page.Switch = &phases
+	return page, nil
 }
 
 func (a *App) rebindTabToSessionPath(tab *WorkspaceTab, sessionPath string) error {
@@ -4967,63 +4972,16 @@ func (a *App) SwitchWorkspace(dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var meta TabMeta
-	if a.singleSurfaceLayoutEnabled() {
-		meta, err = a.ActivateTopic("project", dir, topic.ID, "")
-	} else {
-		meta, err = a.OpenProjectTab(dir, topic.ID)
-	}
+	meta, err := a.ActivateTopic("project", dir, topic.ID, "")
 	if err != nil {
 		return "", err
 	}
 	return meta.WorkspaceRoot, nil
 }
 
-func (a *App) singleSurfaceLayoutEnabled() bool {
-	cfg, _, err := a.loadDesktopUserConfigForView()
-	if err != nil {
-		return true
-	}
-	return singleSurfaceLayoutStyle(cfg.DesktopLayoutStyle())
-}
-
 // HistoryMessage is one prior turn, for the frontend to repopulate its transcript
 // after a reload.
-type HistoryMessage struct {
-	CompletionReceipt  *eventwire.CompletionReceipt `json:"completionReceipt,omitempty"`
-	CompletionSummary  *eventwire.CompletionSummary `json:"completionSummary,omitempty"`
-	TurnID             string                       `json:"turnId,omitempty"`
-	Role               string                       `json:"role"`
-	Content            string                       `json:"content"`
-	Detail             string                       `json:"detail,omitempty"`
-	Code               string                       `json:"code,omitempty"`
-	SubmitText         string                       `json:"submitText,omitempty"`
-	CheckpointTurn     *int                         `json:"checkpointTurn,omitempty"`
-	CreatedAt          int64                        `json:"createdAt,omitempty"`
-	Reasoning          string                       `json:"reasoning,omitempty"`
-	MemoryCitations    []provider.MemoryCitation    `json:"memoryCitations,omitempty"`
-	WorkDurationMs     int64                        `json:"workDurationMs,omitempty"`
-	Level              string                       `json:"level,omitempty"`
-	ToolCalls          []HistoryToolCall            `json:"toolCalls,omitempty"`
-	ToolCallID         string                       `json:"toolCallId,omitempty"`
-	ToolName           string                       `json:"toolName,omitempty"`
-	ToolResultArchived bool                         `json:"toolResultArchived,omitempty"`
-	ToolResultError    string                       `json:"toolResultError,omitempty"`
-	// Execution is local shell metadata restored onto ToolCards after history
-	// reload. Omitted when absent so older frontends ignore it safely.
-	Execution        *provider.ToolExecution          `json:"execution,omitempty"`
-	Pending          bool                             `json:"pending,omitempty"`
-	Trigger          string                           `json:"trigger,omitempty"`
-	Messages         int                              `json:"messages,omitempty"`
-	Summary          string                           `json:"summary,omitempty"`
-	Archive          string                           `json:"archive,omitempty"`
-	DecisionReceipt  *provider.DecisionReceipt        `json:"decisionReceipt,omitempty"`
-	Readiness        *event.FinalReadiness            `json:"readiness,omitempty"`
-	ReadPause        *provider.ReadPause              `json:"readPause,omitempty"`
-	ProtocolRecovery *provider.ProtocolRecoveryAction `json:"protocolRecovery,omitempty"`
-	Diagnostic       *provider.FailureDiagnostic      `json:"diagnostic,omitempty"`
-	ServerSearch     []provider.ServerSearchCall      `json:"serverSearch,omitempty"`
-}
+type HistoryMessage = transcript.Message
 
 func interruptedTurnHistoryNotice(recovery *provider.InterruptedTurnRecovery) HistoryMessage {
 	if recovery != nil && recovery.TerminalStatus == "failed" {
@@ -5049,20 +5007,7 @@ func interruptedTurnHistoryNotice(recovery *provider.InterruptedTurnRecovery) Hi
 	}
 }
 
-type HistoryToolCall struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	Arguments         string `json:"arguments"`
-	ResolvedName      string `json:"resolvedName,omitempty"`
-	CapabilityID      string `json:"capabilityId,omitempty"`
-	ResolvedReadOnly  *bool  `json:"resolvedReadOnly,omitempty"`
-	Subject           string `json:"subject,omitempty"`
-	Summary           string `json:"summary,omitempty"`
-	Diff              string `json:"diff,omitempty"`
-	Added             int    `json:"added,omitempty"`
-	Removed           int    `json:"removed,omitempty"`
-	ArgumentsArchived bool   `json:"argumentsArchived,omitempty"`
-}
+type HistoryToolCall = transcript.ToolCall
 
 const (
 	defaultHistoryPageTurns = 60
@@ -5070,13 +5015,33 @@ const (
 )
 
 type HistoryPage struct {
-	Messages   []HistoryMessage `json:"messages"`
-	StartTurn  int              `json:"startTurn"`
-	EndTurn    int              `json:"endTurn"`
-	TotalTurns int              `json:"totalTurns"`
-	HasOlder   bool             `json:"hasOlder"`
-	Revision   int64            `json:"revision,omitempty"`
-	Digest     string           `json:"digest,omitempty"`
+	Messages   []HistoryMessage     `json:"messages"`
+	StartTurn  int                  `json:"startTurn"`
+	EndTurn    int                  `json:"endTurn"`
+	TotalTurns int                  `json:"totalTurns"`
+	HasOlder   bool                 `json:"hasOlder"`
+	Revision   int64                `json:"revision,omitempty"`
+	Digest     string               `json:"digest,omitempty"`
+	Switch     *HistorySwitchPhases `json:"switch,omitempty"`
+}
+
+// HistorySwitchPhases records a session adoption and optional legacy page.
+// It carries durations, counts and sizes, never paths or message content.
+// Snapshot adoption leaves HistoryMs and HistoryCount zero; the frontend
+// measures its authoritative snapshot separately. A changed controller may
+// require another durable read instead of reusing an obsolete preload.
+type HistorySwitchPhases struct {
+	ResolveMs    int64 `json:"resolveMs"`
+	LoadMs       int64 `json:"loadMs"`
+	RebindMs     int64 `json:"rebindMs"`
+	HistoryMs    int64 `json:"historyMs"`
+	TotalMs      int64 `json:"totalMs"`
+	LoadedCount  int   `json:"loadedMessages"`
+	LoadedBytes  int64 `json:"loadedBytes"`
+	HistoryCount int   `json:"historyEntries"`
+	// DurableReads counts target log reads, including refreshes after preload invalidation.
+	DurableReads int    `json:"durableReads"`
+	Outcome      string `json:"outcome"`
 }
 
 // historyProviderMessagesWithPersistedTimes overlays legacy event-record
@@ -5149,18 +5114,60 @@ func (a *App) HistoryPageForTab(tabID string, beforeTurn, limit int) HistoryPage
 		}
 		return page
 	}
-	dir := controllerSessionDir(ctrl)
-	path := ctrl.SessionPath()
+	page, _ := historyPageForController(tab, ctrl, nil, "", beforeTurn, limit)
+	return page
+}
+
+// historyPageForController converts the controller's log into one visible page.
+// preloaded is a read of this controller's own session that the caller already
+// paid for (a session switch loads the target to build the replacement
+// controller); nil makes this read the durable log itself.
+func historyPageForController(tab *WorkspaceTab, ctrl control.SessionAPI, preloaded *agent.Session, preloadedPath string, beforeTurn, limit int) (HistoryPage, bool) {
 	msgs := ctrl.History()
+	durable, readLog := durableHistorySnapshot(ctrl, preloaded, preloadedPath, msgs)
+	if durable != nil {
+		msgs = durable
+	}
+	return historyPageFromMessagesForTab(tab, ctrl, msgs, beforeTurn, limit), readLog
+}
+
+// durableHistorySnapshot returns the durable transcript while the controller is
+// idle and fully persisted, so a stale in-memory log cannot hide an
+// assistant/tool suffix written after restart or cross-runtime recovery. It
+// returns nil when the controller's own log is already the source of truth.
+// Reuse preloaded only when it still describes the controller's captured
+// history. A reused runtime can have committed more work since that read.
+func durableHistorySnapshot(ctrl control.SessionAPI, preloaded *agent.Session, preloadedPath string, current []provider.Message) ([]provider.Message, bool) {
 	status := ctrl.RuntimeStatus()
-	if !status.Running && !status.PendingPrompt && !ctrl.SessionHasUnsavedChanges() && strings.TrimSpace(path) != "" {
-		// Once the foreground turn is idle, the durable event log is the source
-		// of truth. Re-reading it prevents a stale controller snapshot from
-		// hiding an assistant/tool suffix after restart or cross-runtime recovery.
-		if loaded, err := agent.LoadSession(path); err == nil && loaded != nil {
-			msgs = loaded.Snapshot()
+	path := strings.TrimSpace(ctrl.SessionPath())
+	if status.Running || status.PendingPrompt || ctrl.SessionHasUnsavedChanges() || path == "" {
+		return nil, false
+	}
+	if preloaded != nil && sessionRuntimeKey(preloadedPath) == sessionRuntimeKey(path) {
+		// A same-session or detached controller can finish and persist after the
+		// preload. Path equality alone does not prove it still owns this cut.
+		loadedDigest, loadedErr := preloaded.ContentDigest()
+		currentDigest, currentErr := agent.ContentDigestForMessages(current)
+		if loadedErr == nil && currentErr == nil && loadedDigest == currentDigest {
+			return preloaded.Snapshot(), false
 		}
 	}
+	loaded, err := agent.LoadSession(path)
+	if err != nil || loaded == nil {
+		return nil, false
+	}
+	return loaded.Snapshot(), true
+}
+
+// historyPageFromMessagesForTab renders a page from messages already in hand.
+// Session switching reuses the snapshot it loaded to build the replacement
+// controller instead of re-reading and re-converting the same idle transcript.
+func historyPageFromMessagesForTab(tab *WorkspaceTab, ctrl control.SessionAPI, msgs []provider.Message, beforeTurn, limit int) HistoryPage {
+	if tab == nil || ctrl == nil {
+		return HistoryPage{Messages: []HistoryMessage{}}
+	}
+	dir := controllerSessionDir(ctrl)
+	path := ctrl.SessionPath()
 	page := historyPageFromProviderMessages(
 		msgs,
 		sessionDisplayResolver(dir, path),
@@ -5376,10 +5383,6 @@ func historyCheckpointTurns(msgs []provider.Message, resolveUserContent func(str
 	return out
 }
 
-func historyMessages(msgs []provider.Message, resolveUserContent func(string) string) []HistoryMessage {
-	return historyMessagesWithPlannerDisplays(msgs, resolveUserContent, nil, nil)
-}
-
 func historyMessagesWithPlannerDisplays(msgs []provider.Message, resolveUserContent func(string) string, plannerTurns []plannerDisplayTurn, checkpointTurns map[int]int) []HistoryMessage {
 	replayedTodoArgs := historyTodoArgsWithCompleteSteps(msgs)
 	toolResults := historyToolResultsByID(msgs)
@@ -5475,7 +5478,7 @@ func (state *historyMessageConvertState) convertHistoryMessage(
 	if m.LocalOnly {
 		displayRole = "assistant"
 	}
-	hm := HistoryMessage{Role: displayRole, Content: content, CheckpointTurn: checkpointTurn, CreatedAt: m.CreatedAt, Reasoning: reasoning, WorkDurationMs: m.WorkDurationMs}
+	hm := HistoryMessage{MessageID: m.ID, Role: displayRole, Content: content, CheckpointTurn: checkpointTurn, CreatedAt: m.CreatedAt, Reasoning: reasoning, WorkDurationMs: m.WorkDurationMs}
 	if m.Role == provider.RoleAssistant && len(m.MemoryCitations) > 0 {
 		hm.MemoryCitations = append([]provider.MemoryCitation(nil), m.MemoryCitations...)
 	}
@@ -6224,11 +6227,6 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// ContextUsage returns the latest context-window gauge numbers.
-func (a *App) ContextUsage() ContextInfo {
-	return a.ContextUsageForTab("")
-}
-
 func (a *App) ContextUsageForTab(tabID string) ContextInfo {
 	a.mu.RLock()
 	tab := a.tabByIDLocked(tabID)
@@ -6683,10 +6681,6 @@ func syncTabGoalToController(ctrl control.SessionAPI, goal string) {
 		return
 	}
 	ctrl.SetGoal(goal)
-}
-
-func (a *App) ClearGoal() error {
-	return a.SetGoal("")
 }
 
 func (a *App) ClearGoalForTab(tabID string) error {
@@ -7873,13 +7867,6 @@ func (a *App) invalidateSkillRootsCache() {
 	a.skillRootsMu.Unlock()
 }
 
-func skillRootsView() []SkillRootView {
-	cwd, _ := os.Getwd()
-	cfg, _ := config.Load()
-	userCfg := config.LoadForEdit(config.UserConfigPath())
-	return skillRootsViewFrom(cwd, cfg, userCfg)
-}
-
 func skillRootsViewFrom(workspaceRoot string, cfg, userCfg *config.Config) []SkillRootView {
 	workspaceRoot = normalizeWorkspaceRoot(workspaceRoot)
 	var custom []string
@@ -9002,18 +8989,6 @@ func mcpConnected(ctrl control.SessionAPI, name string) bool {
 	return false
 }
 
-func mcpFailed(ctrl control.SessionAPI, name string) bool {
-	if ctrl == nil || ctrl.Host() == nil {
-		return false
-	}
-	for _, f := range ctrl.Host().Failures() {
-		if f.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
 func recordMCPFailure(ctrl control.SessionAPI, e config.PluginEntry, err error) {
 	if ctrl == nil || ctrl.Host() == nil || err == nil {
 		return
@@ -9994,6 +9969,9 @@ type WorkspaceChangesView struct {
 	GitAvailable bool                  `json:"gitAvailable"`
 	GitErr       string                `json:"gitErr,omitempty"`
 	GitBranch    string                `json:"gitBranch,omitempty"`
+	Added        int                   `json:"added,omitempty"`
+	Removed      int                   `json:"removed,omitempty"`
+	Incomplete   bool                  `json:"incomplete,omitempty"`
 }
 
 type WorkspaceChangeDetailView struct {
@@ -10326,12 +10304,6 @@ func (a *App) ReadFileForTab(tabID, rel string) FilePreview {
 	return out
 }
 
-// OpenWorkspacePath opens a workspace or authorized external-ref file/folder in
-// the OS default app.
-func (a *App) OpenWorkspacePath(rel string) error {
-	return a.OpenWorkspacePathForTab("", rel)
-}
-
 // OpenWorkspacePathForTab opens a path resolved against the requested tab.
 func (a *App) OpenWorkspacePathForTab(tabID, rel string) error {
 	path, ok, err := a.workspaceOrExternalPathForTab(tabID, rel)
@@ -10339,12 +10311,6 @@ func (a *App) OpenWorkspacePathForTab(tabID, rel string) error {
 		return os.ErrInvalid
 	}
 	return openWorkspacePath(path)
-}
-
-// RevealWorkspacePath shows a workspace or authorized external-ref file in the
-// native file manager.
-func (a *App) RevealWorkspacePath(rel string) error {
-	return a.RevealWorkspacePathForTab("", rel)
 }
 
 // RevealWorkspacePathForTab reveals a path resolved against the requested tab.
@@ -10625,12 +10591,6 @@ func numberedExportPath(path string, partIndex, partCount int) string {
 	ext := filepath.Ext(path)
 	stem := strings.TrimSuffix(path, ext)
 	return fmt.Sprintf("%s-%d-of-%d%s", stem, partIndex+1, partCount, ext)
-}
-
-func saveExclusiveExportFiles(targets []string, payloads [][]byte) error {
-	return saveExclusiveExportPayloads(targets, len(payloads), func(index int) ([]byte, error) {
-		return payloads[index], nil
-	})
 }
 
 func saveExclusiveExportPayloads(targets []string, payloadCount int, payloadAt func(int) ([]byte, error)) error {
@@ -11486,10 +11446,6 @@ func (a *App) GetTask(taskID string) (*taskmonitor.TaskSnapshot, error) {
 	return a.taskStore().GetTask(a.ctx, a.projectDir(), taskID)
 }
 
-func (a *App) ListTaskEvents(taskID string, afterSequence int) ([]taskmonitor.TaskEvent, error) {
-	return a.taskStore().ListEvents(a.ctx, a.projectDir(), taskID, afterSequence)
-}
-
 func (a *App) ListTaskEventsForTab(tabID, taskID string, afterSequence int) ([]taskmonitor.TaskEvent, error) {
 	target, err := a.taskMonitorTargetForTab(tabID)
 	if err != nil {
@@ -11536,20 +11492,12 @@ func (a *App) CancelTaskForTab(tabID, taskID string, expectedVersion uint64, rea
 	)
 }
 
-func (a *App) RequeueTask(taskID string, expectedVersion uint64, idemKey string) (taskmonitor.ControlResult, error) {
-	return a.taskControl().RequeueTask(a.ctx, a.projectDir(), taskID, expectedVersion, idemKey)
-}
-
 func (a *App) RequeueTaskForTab(tabID, taskID string, expectedVersion uint64, idemKey string) (taskmonitor.ControlResult, error) {
 	target, err := a.taskMonitorTargetForTab(tabID)
 	if err != nil {
 		return taskmonitor.ControlResult{}, err
 	}
 	return a.taskControl().RequeueTask(a.ctx, target.projectDir, taskID, expectedVersion, idemKey)
-}
-
-func (a *App) OpenTaskSession(taskID string) (taskmonitor.ControlResult, error) {
-	return a.taskControl().OpenTaskSession(a.ctx, a.projectDir(), taskID)
 }
 
 func (a *App) OpenTaskSessionForTab(tabID, taskID string) (taskmonitor.ControlResult, error) {

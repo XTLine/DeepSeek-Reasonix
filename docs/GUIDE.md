@@ -350,7 +350,7 @@ environment-variable name, context window, model capability metadata, proxy bypa
 for China-only endpoints, MiniMax `reasoning_split`, GLM/MiniMax thinking
 heuristics, Anthropic-compatible Bearer auth where needed, Ollama Cloud
 max-effort support, and OpenCode Go per-model reasoning overrides. Official DeepSeek Anthropic, Responses, and Chat Completions catalogs also
-include `deepseek-v4-flash-vision-exp`. Settings derives image support from
+include the multimodal SKUs `deepseek-flash` and `deepseek-v4-flash-vision-exp`. Settings derives image support from
 model capability metadata. Each model also has an Image input Auto / On / Off
 selector. For an ID-only relay list, unknown means unrecognized, not confirmed
 text-only: select On after confirming support with the relay, then save. See the
@@ -548,7 +548,7 @@ Composer shortcuts:
 | `Cmd+Z` on macOS, `Ctrl+Z` on Windows/Linux | Undoes the latest composer edit | Native typing stays in the WebView history; Reasonix-managed paste, cut, folded blocks, and structured tokens are restored as complete transactions. |
 | `Cmd+Shift+Z` on macOS, `Ctrl+Shift+Z` on Windows/Linux | Redoes the latest composer edit | On Windows/Linux, `Ctrl+Y` is also accepted after the YOLO shortcut has been rebound. |
 | `Cmd+Y` / `Ctrl+Y` (default) | Toggles YOLO on/off | Turning YOLO off restores the previous Ask/Auto base when known. The current binding is shown in **Settings → Shortcuts**. |
-| `Cmd+V` on macOS, `Ctrl+V` on Windows/Linux | Pastes clipboard content | Clipboard images are attached; images can also be dropped into the composer. Official DeepSeek Flash/Pro stay text-only; switch to `deepseek-v4-flash-vision-exp` to send those images. |
+| `Cmd+V` on macOS, `Ctrl+V` on Windows/Linux | Pastes clipboard content | Clipboard images are attached; images can also be dropped into the composer. On official DeepSeek, `deepseek-flash` and `deepseek-v4-flash` accept images natively; V4 Pro stays text-only. |
 | Plain `Up` / `Down` at the prompt boundary | Recalls older or newer submitted prompts | Modified arrows and native text navigation stay with the textarea. |
 | `Esc` while a turn is running | Cancels the running turn | If the turn has not produced a response yet, the draft is restored. |
 

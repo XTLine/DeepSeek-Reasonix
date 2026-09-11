@@ -55,6 +55,7 @@ type Config struct {
 	Agent            AgentConfig         `toml:"agent"`
 	Providers        []ProviderEntry     `toml:"providers"`
 	Tools            ToolsConfig         `toml:"tools"`
+	Checkpoints      CheckpointsConfig   `toml:"checkpoints"`
 	Permissions      PermissionsConfig   `toml:"permissions"`
 	Sandbox          SandboxConfig       `toml:"sandbox"`
 	Network          NetworkConfig       `toml:"network"`
@@ -86,7 +87,8 @@ type Config struct {
 	// loadWarnings are non-fatal issues observed while loading config (corrupt
 	// user/project files recovered via last-known-good or defaults). They never
 	// rewrite the original file; the UI may surface them for doctor repair.
-	loadWarnings []string
+	loadWarnings      []string
+	openCodeGoJournal *openCodeGoJournal
 }
 
 // KeepProjectSkillKey marks a skill field as an intentional project override.
@@ -343,12 +345,11 @@ func normalizeThemeStyle(style string) string {
 	}
 }
 
+// The retired "classic" style normalizes to workbench, like any other value
+// this build does not know, so a config written before the style was removed
+// keeps working and the Go side and the UI agree on what it means.
 func normalizeDesktopLayoutStyle(style string) string {
 	switch strings.ToLower(strings.TrimSpace(style)) {
-	case "classic":
-		return "classic"
-	case "workbench", "workspace":
-		return "workbench"
 	case "creation":
 		return "creation"
 	default:
@@ -431,7 +432,9 @@ func (c *Config) DesktopTerminalTheme() string {
 	}
 }
 
-// DesktopLayoutStyle defaults to workbench; retired classic stays readable until startup migration persists its replacement.
+// DesktopLayoutStyle defaults to workbench. The retired "classic" value is
+// normalized on read rather than migrated to disk: nothing behaves differently
+// for it, so there is no rewritten value worth persisting.
 func (c *Config) DesktopLayoutStyle() string {
 	if strings.EqualFold(strings.TrimSpace(c.Desktop.ThemeStyle), "workbench") && strings.TrimSpace(c.Desktop.LayoutStyle) == "" {
 		return "workbench"
@@ -704,6 +707,16 @@ type LSPServer struct {
 // status data row. A JSON payload (model, context tokens, cwd) is fed on stdin.
 type StatuslineConfig struct {
 	Command string `toml:"command"`
+}
+
+// CheckpointsConfig tunes rewind snapshot retention. Zero values leave the
+// built-in defaults in place (100 turns, 1 GiB soft budget).
+type CheckpointsConfig struct {
+	// RetainTurns caps how many turns of file payloads are kept.
+	RetainTurns int `toml:"retain_turns"`
+	// BlobQuotaBytes is the soft byte budget for retained file payloads. A
+	// protected or current turn may temporarily exceed it.
+	BlobQuotaBytes int64 `toml:"blob_quota_bytes"`
 }
 
 // BotConfig 控制多渠道 IM bot 消息网关。
@@ -1806,7 +1819,7 @@ const LanguagePolicy = `Reply in the same language the user is using in their mo
 // Default returns the built-in default configuration.
 func Default() *Config {
 	return &Config{
-		ConfigVersion:    9,
+		ConfigVersion:    10,
 		DefaultModel:     "deepseek-flash",
 		CredentialsStore: CredentialsStoreAuto,
 		UI:               UIConfig{Theme: "auto", ShowTurnUsage: true},
@@ -1916,6 +1929,17 @@ func (c *Config) Provider(name string) (*ProviderEntry, bool) {
 // without duplicating base_url/api_key_env. Single-`model` entries still resolve
 // by provider name, keeping older configs working unchanged.
 func (c *Config) ResolveModel(ref string) (*ProviderEntry, bool) {
+	if entry, ok := c.resolveCurrentModel(ref); ok {
+		return entry, true
+	}
+	target, err := c.resolveOpenCodeGoAlias(ref, false)
+	if err != nil || target == ref {
+		return nil, false
+	}
+	return c.resolveCurrentModel(target)
+}
+
+func (c *Config) resolveCurrentModel(ref string) (*ProviderEntry, bool) {
 	if ref == "" {
 		return nil, false
 	}
@@ -1962,6 +1986,9 @@ func (c *Config) ResolveModel(ref string) (*ProviderEntry, bool) {
 // configured provider — so preference isn't overwritten by iteration order.
 func (c *Config) ResolveModelWithFallback(ref string) (resolvedRef string, fallback bool, ok bool) {
 	ref = strings.TrimSpace(ref)
+	if c.ModelReferenceError(ref) != nil {
+		return "", false, false
+	}
 	if ref != "" {
 		if e, found := c.ResolveModel(ref); found {
 			return e.Name + "/" + e.Model, false, true

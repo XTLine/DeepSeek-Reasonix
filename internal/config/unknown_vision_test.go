@@ -3,7 +3,7 @@ package config
 import "testing"
 
 func TestUnknownDeepSeekVisionOverride(t *testing.T) {
-	model := "deepseek-v4.1-flash-expires-on-0910"
+	model := "deepseek-v5-flash"
 	enabled := true
 	e := ProviderEntry{Kind: "openai", BaseURL: "https://api.deepseek.com", Model: model}
 	r := NewModelCapabilityResolver()
@@ -16,7 +16,7 @@ func TestUnknownDeepSeekVisionOverride(t *testing.T) {
 	}
 	e.Name = "deepseek-test"
 	e.Model = ""
-	e.Models = []string{"DeepSeek-V4.1-Flash-Expires-On-0910", model}
+	e.Models = []string{"DeepSeek-V5-Flash", model}
 	cfg := Config{Providers: []ProviderEntry{e}}
 	resolved, ok := cfg.ResolveModel(e.Name + "/" + model)
 	if !ok || resolved.Model != model || !EffectiveVision(resolved) {

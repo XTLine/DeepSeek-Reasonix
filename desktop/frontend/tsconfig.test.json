@@ -3,6 +3,6 @@
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": ["src/__tests__/**/*.ts", "vite-env.d.ts"],
+  "include": ["src/__tests__/**/*.ts", "bench/transcript-layout.tsx", "vite-env.d.ts"],
   "exclude": []
 }

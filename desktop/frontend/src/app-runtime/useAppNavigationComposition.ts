@@ -62,12 +62,12 @@ export function useAppNavigationComposition(input: AppNavigationCompositionInput
   } = input.local;
   const {
     noteNavigationIntent, registeredNavigationIntent,
-    isNavigationIntentCurrent, syncActiveTab, ensureBlankTab, ensureBlankSurface,
+    isNavigationIntentCurrent, syncActiveTab, ensureBlankSurface,
   } = runtime.navigation;
   const { listSessions, deleteSession, renameSession } = runtime.sessionActions;
   const { refreshMeta, pickWorkspace, switchWorkspace } = runtime.workspace;
   const {
-    managementActive, desktopPlatform, windowsFramelessChrome, singleSurfaceLayout, sidebarCollapsed,
+    managementActive, desktopPlatform, windowsFramelessChrome, sidebarCollapsed,
     openPage, returnToWorkspace, enterConversation,
     setSettingsTarget, setSettingsFocus, setSidebarSearchOpen, setSidebarSearchFocusSignal, setProviderSetupNeeded,
   } = shell;
@@ -99,9 +99,6 @@ export function useAppNavigationComposition(input: AppNavigationCompositionInput
 
   const navigationCommands = useSessionNavigationCommands({
     activeTab,
-    running: state.running,
-    singleSurface: singleSurfaceLayout,
-    t,
     showToast,
     closeTransientOverlays,
     clearImDetail: () => setSidebarImDetailConnectionId(""),
@@ -201,8 +198,8 @@ export function useAppNavigationComposition(input: AppNavigationCompositionInput
   });
   const onboardingCommands = useOnboardingCommands(() => setProviderSetupNeeded(false));
   const worktreeMergeCommands = useWorktreeMergeCommands({
-    singleSurfaceLayout, noteNavigationIntent,
-    registeredNavigationIntent, isNavigationIntentCurrent, ensureBlankSurface, ensureBlankTab,
+    noteNavigationIntent,
+    registeredNavigationIntent, isNavigationIntentCurrent, ensureBlankSurface,
     seedSource: seedActiveTabMeta, listTabs: desktopBridge.listTabs,
     closeWorktree: desktopBridge.closeMergedWorktreeTab, finalize: desktopBridge.finalizeWorktreeMerge,
     showToast, t, showCleanup: (cleanup, translate) => showWorktreeCleanupNotice(cleanup, translate, showToast),

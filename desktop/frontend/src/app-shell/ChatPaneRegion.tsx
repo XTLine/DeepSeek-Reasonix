@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Transcript, type TranscriptProps } from "../components/Transcript";
 import { SessionRecoveryBanner, SessionRecoveryPlaceholder } from "../components/SessionRecoveryBanner";
 import { NoticePreviewPanel, noticePreviewMockEnabled } from "./NoticePreviewPanel";
@@ -49,6 +49,8 @@ export type ChatPaneRegionProps = {
     onOpenSession: (connection: SidebarImConnection) => void;
   } | null;
   remote: { tab: TabMeta; session: RemoteSessionApi } | undefined;
+  /** Floating dock launcher card, mounted over the transcript's right edge. */
+  launcher?: ReactNode;
   transcript: ChatPaneTranscriptInput;
   onRetryHistory: () => Promise<unknown>;
   commands: {
@@ -102,6 +104,7 @@ export function ChatPaneRegion(props: ChatPaneRegionProps) {
       ) : (
         <>
           <div className="transcript-navigation-surface" aria-busy={transitioning}>
+            {props.launcher}
             <div
               className="transcript-navigation-content"
               aria-hidden={transitioning || undefined}
@@ -138,6 +141,7 @@ export function ChatPaneRegion(props: ChatPaneRegionProps) {
                 revealSignal={transcript.revealSignal}
                 hydrating={transcript.transcriptHydrating || (transitioning && !transcript.navigationDataReady)}
                 hasOlderHistory={!transitioning && state.historyHasOlder && !rewind.stateActive}
+                stableHistoryPaging={state.transcriptProtocol === 1}
                 historyStartTurn={state.historyStartTurn}
                 historyTotalTurns={state.historyTotalTurns}
                 loadingOlderHistory={state.historyOlderLoading}

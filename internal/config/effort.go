@@ -48,6 +48,7 @@ func ReasoningCapabilityForEntry(e *ProviderEntry) provider.ReasoningCapability 
 	}
 	cfg := provider.Config{Name: e.Name, BaseURL: e.BaseURL, Model: e.Model, Extra: map[string]any{
 		"thinking": e.Thinking, "reasoning_protocol": ReasoningProtocolForEntry(e),
+		"request_url": e.RequestURL, "chat_url": e.ChatURL,
 		"supported_efforts": normalizedSupportedEfforts(e), "default_effort": normalizeEffortLevel(e.DefaultEffort),
 	}}
 	return provider.ReasoningForConfig(e.Kind, cfg)
@@ -156,6 +157,11 @@ func normalizeStoredEffort(raw string) string {
 func ReasoningProtocolForEntry(e *ProviderEntry) string {
 	if explicit := explicitReasoningProtocol(e); explicit != "" {
 		return explicit
+	}
+	if e != nil {
+		if contract, ok := provider.LookupOpenCodeGoContract(e.Kind, e.BaseURL, e.RequestURL, e.ChatURL, e.Model); ok {
+			return contract.ReasoningProtocol
+		}
 	}
 	if cap, ok := resolvedModelReasoningCapability(e); ok {
 		return cap.Protocol
@@ -339,7 +345,10 @@ func normalizedModelOverrides(overrides map[string]ProviderModelOverride) map[st
 			ov.ContextWindow = 0
 		}
 
-		if ov.ReasoningProtocol == "" && len(ov.SupportedEfforts) == 0 && ov.DefaultEffort == "" && ov.Vision == nil && ov.ContextWindow == 0 {
+		// One definition of "empty", shared with the renderer. The inline copy
+		// that used to live here omitted MaxOutputTokens, so the loader dropped
+		// an override the renderer would have written back out.
+		if modelOverrideEmpty(ov) {
 			continue
 		}
 		out[model] = ov

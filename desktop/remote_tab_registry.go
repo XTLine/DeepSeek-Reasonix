@@ -125,12 +125,9 @@ func (a *App) remoteTabsFileEntries(localIDs []string) ([]desktopRemoteTabEntry,
 // registry entry goes away. The remote serve and the SSH connection stay
 // untouched — other tabs on the same host keep running.
 func (a *App) CloseRemoteTab(tabID string) error {
-	protectLastSurface := a.singleSurfaceLayoutEnabled()
-	if protectLastSurface {
-		a.singleSurfaceMu.Lock()
-		defer a.singleSurfaceMu.Unlock()
-	}
-	return a.closeRemoteTabRegistration(tabID, !protectLastSurface)
+	a.singleSurfaceMu.Lock()
+	defer a.singleSurfaceMu.Unlock()
+	return a.closeRemoteTabRegistration(tabID, false)
 }
 
 // removeRemoteTabsForHost drops surfaces whose connection identity was
@@ -138,11 +135,8 @@ func (a *App) CloseRemoteTab(tabID string) error {
 // the same single-surface transaction so workbench/creation layouts never
 // retain an uncloseable orphan or become surface-less.
 func (a *App) removeRemoteTabsForHost(hostID string) error {
-	protectLastSurface := a.singleSurfaceLayoutEnabled()
-	if protectLastSurface {
-		a.singleSurfaceMu.Lock()
-		defer a.singleSurfaceMu.Unlock()
-	}
+	a.singleSurfaceMu.Lock()
+	defer a.singleSurfaceMu.Unlock()
 
 	a.remoteTabMu.Lock()
 	ids := make([]string, 0, len(a.remoteTabs))

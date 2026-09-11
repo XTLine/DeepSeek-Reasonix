@@ -16,6 +16,7 @@ import (
 // mutationBarrierCause is an immutable, argument-free description of the
 // first durable-state write that failed or was blocked in a tool batch.
 type mutationBarrierCause struct {
+	evidenceOnly          bool
 	callID                string
 	toolName              string
 	stateMutation         bool
@@ -76,6 +77,8 @@ type toolOutcome struct {
 	recoveryStopReason string
 	readTaskID         string
 	readEnvelope       *tool.ReadResultEnvelope
+	diagnostic         *tool.OperationDiagnostic
+	evidenceSource     tool.EvidenceTargetInfo
 	finalReadEnvelope  *tool.ReadResultEnvelope
 	readReference      *readDelivery
 	readActiveMillis   int64
@@ -100,6 +103,8 @@ type batchExecution struct {
 // ordering stays provider-ordered. Each completed serial call (or read-only
 // group) is checkpointed before the next group starts.
 func (a *Agent) executeBatch(ctx context.Context, turn *turnRuntime, calls []provider.ToolCall) batchExecution {
+	turn.evidenceBlocked.clearChecks()
+	defer turn.evidenceBlocked.clearChecks()
 	// The assistant message already stored this slice in Session. Keep execution
 	// state separate so refreshing a dependent preview never mutates shared
 	// session memory outside Session's lock.
@@ -182,9 +187,10 @@ func (a *Agent) executeBatch(ctx context.Context, turn *turnRuntime, calls []pro
 		a.finalizeIncompleteReadOutcome(ctx, outcomes[i].incompleteRead, &outcomes[i])
 		a.finalizeReadDelivery(ctx, calls[i], &outcomes[i])
 		results[i] = outcomes[i].output
-		a.commitBatchCallResolution(calls[i])
+		a.commitBatchCallResolution(ctx, calls[i])
+		a.finishToolRecovery(calls[i], outcomes[i])
 		a.storeBatchToolResult(ctx, calls[i], outcomes[i])
-		if err := a.emitBatchToolResult(calls[i], outcomes[i], durations[i], startedAt[i], ranParallel[i], batchStart); err != nil {
+		if err := a.emitBatchToolResult(ctx, calls[i], outcomes[i], durations[i], startedAt[i], ranParallel[i], batchStart); err != nil {
 			batchErrOnce.Do(func() { batchErr = fmt.Errorf("persist tool result %s: %w", calls[i].ID, err) })
 		}
 		if surfaceWriters[i] || (outcomes[i].resolved && !outcomes[i].resolvedReadOnly) {
@@ -373,19 +379,19 @@ func (a *Agent) executeBatch(ctx context.Context, turn *turnRuntime, calls []pro
 	}
 }
 
-func (a *Agent) commitBatchCallResolution(call provider.ToolCall) {
+func (a *Agent) commitBatchCallResolution(ctx context.Context, call provider.ToolCall) {
 	if call.ResolvedReadOnly == nil {
 		return
 	}
 	a.sess.conversation.UpdateToolCallResolution(call)
-	a.emitResolvedToolDispatch(call)
+	a.emitResolvedToolDispatch(ctx, call)
 }
 
 // batchCallMutationFailureCause returns a sanitized effect description when a
 // durable-state mutation failed or was blocked. Verification failures alone do
 // not open the dependency barrier.
 func batchCallMutationFailureCause(a *Agent, call provider.ToolCall, o toolOutcome) *mutationBarrierCause {
-	if o.errMsg == "" && !o.blocked {
+	if o.errMsg == "" && !o.blocked && outcomeRunState(o) != provider.ToolRunUnknown {
 		return nil
 	}
 	readOnly := false
@@ -419,6 +425,7 @@ func batchCallMutationFailureCause(a *Agent, call provider.ToolCall, o toolOutco
 		phase = "blocked"
 	}
 	return &mutationBarrierCause{
+		evidenceOnly:        o.blocked && !o.executed && o.diagnostic != nil && o.diagnostic.Code == tool.WriteEvidenceMissing,
 		callID:              call.ID,
 		toolName:            toolName,
 		stateMutation:       effects.StateMutation,

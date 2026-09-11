@@ -39,7 +39,11 @@ func fetchGitStatus() tea.Cmd {
 }
 
 func loadGitStatus(ctx context.Context, cwd string) (gitStatus, error) {
-	root, err := runGit(ctx, cwd, "rev-parse", "--show-toplevel")
+	return loadGitStatusWithRunner(ctx, cwd, runGit)
+}
+
+func loadGitStatusWithRunner(ctx context.Context, cwd string, run func(context.Context, string, ...string) (string, error)) (gitStatus, error) {
+	root, err := run(ctx, cwd, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return gitStatus{}, err
 	}
@@ -49,12 +53,12 @@ func loadGitStatus(ctx context.Context, cwd string) (gitStatus, error) {
 	}
 
 	status := gitStatus{Repo: filepath.Base(root)}
-	if branch, err := runGit(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil && strings.TrimSpace(branch) != "" {
+	if branch, err := run(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil && strings.TrimSpace(branch) != "" {
 		status.Branch = strings.TrimSpace(branch)
-	} else if sha, err := runGit(ctx, root, "rev-parse", "--short", "HEAD"); err == nil && strings.TrimSpace(sha) != "" {
+	} else if sha, err := run(ctx, root, "rev-parse", "--short", "HEAD"); err == nil && strings.TrimSpace(sha) != "" {
 		status.Branch = strings.TrimSpace(sha)
 		status.Detached = true
-	} else if ref, err := runGit(ctx, root, "symbolic-ref", "--short", "HEAD"); err == nil && strings.TrimSpace(ref) != "" {
+	} else if ref, err := run(ctx, root, "symbolic-ref", "--short", "HEAD"); err == nil && strings.TrimSpace(ref) != "" {
 		status.Branch = strings.TrimSpace(ref)
 	}
 	if status.Branch == "" {
@@ -62,11 +66,14 @@ func loadGitStatus(ctx context.Context, cwd string) (gitStatus, error) {
 		status.Detached = true
 	}
 
-	if out, err := runGit(ctx, root, "diff", "--numstat", "HEAD", "--"); err == nil {
+	if out, err := run(ctx, root, "diff", "--numstat", "HEAD", "--"); err == nil {
 		status.Added, status.Removed = parseGitNumstat(out)
 	}
-	if out, err := runGit(ctx, root, "status", "--porcelain=v1", "--untracked-files=normal"); err == nil {
+	if out, err := run(ctx, root, "status", "--porcelain=v1", "--untracked-files=normal"); err == nil {
 		status.Untracked = countUntracked(out)
+	}
+	if err := ctx.Err(); err != nil {
+		return gitStatus{}, err
 	}
 	return status, nil
 }

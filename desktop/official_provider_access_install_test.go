@@ -33,7 +33,7 @@ language = "zh"
 	}
 	flash := p.Prices["deepseek-v4-flash"]
 	pro := p.Prices["deepseek-v4-pro"]
-	if flash == nil || flash.Output != 1.32 || flash.Currency != "$" {
+	if flash == nil || flash.Output != 1.2 || flash.Currency != "$" {
 		t.Fatalf("flash price = %+v, want frozen USD official table", flash)
 	}
 	if pro == nil || pro.Output != 3.96 || pro.Currency != "$" {

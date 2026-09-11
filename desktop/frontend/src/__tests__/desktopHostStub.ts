@@ -4,10 +4,13 @@
 // host.invoke through it, and mutating the table between calls is observed
 // immediately (mirroring how the retired window.go seam behaved).
 import type { AppBindings } from "../lib/bridge";
+import type { NativePerformanceActions, ProcessDiagnosticsSnapshot } from "../lib/processDiagnostics";
 import type { DesktopBrowserHost } from "../lib/browserHost";
-import type { ReasonixDesktopHost } from "../lib/desktopHost";
+import type { BrowserControlApi, BrowserControlState, ChromeImportOutcome, ReasonixDesktopHost } from "../lib/desktopHost";
 
 export interface DesktopHostStubOptions {
+  performance?: NativePerformanceActions;
+  processDiagnostics?: () => Promise<ProcessDiagnosticsSnapshot | null>;
   /** Maps a dropped File to its native path, mirroring the preload. */
   getPathForFile?: (file: File) => string;
   /** Records native clipboard writes; clipboardWriteResult gates success. */
@@ -17,6 +20,47 @@ export interface DesktopHostStubOptions {
   clipboardReadText?: string;
   /** Records native openExternal calls. */
   externalOpens?: string[];
+  /** State the browser-control page starts from. */
+  browserControl?: BrowserControlState;
+  /** Records browser-control calls in order, e.g. "setEnabled:false". */
+  browserControlCalls?: string[];
+  /** Outcome of the Chrome sign-in-state import. */
+  chromeImportOutcome?: ChromeImportOutcome;
+}
+
+function browserControlStub(options: DesktopHostStubOptions): BrowserControlApi {
+  let state: BrowserControlState = options.browserControl ?? {
+    controlEnabled: true,
+    ignoreCertificateErrors: false,
+    writable: true,
+    warning: null,
+  };
+  const record = (call: string) => options.browserControlCalls?.push(call);
+  return {
+    get: () => Promise.resolve(state),
+    setEnabled: (enabled) => {
+      record(`setEnabled:${enabled}`);
+      state = { ...state, controlEnabled: enabled };
+      return Promise.resolve(state);
+    },
+    setIgnoreCertificateErrors: (enabled) => {
+      record(`setIgnoreCertificateErrors:${enabled}`);
+      state = { ...state, ignoreCertificateErrors: enabled };
+      return Promise.resolve(state);
+    },
+    clearCache: () => {
+      record("clearCache");
+      return Promise.resolve();
+    },
+    clearAllData: () => {
+      record("clearAllData");
+      return Promise.resolve();
+    },
+    importChromeLogin: () => {
+      record("importChromeLogin");
+      return Promise.resolve(options.chromeImportOutcome ?? { ok: true, profile: "Default", cookies: 12, skipped: 0 });
+    },
+  };
 }
 
 export interface DesktopHostStub {
@@ -40,7 +84,7 @@ export function installDesktopHostStub(commands: object, options: DesktopHostStu
       digest: "sha256:test",
       // Live view: tests mutating the command table between calls must be seen.
       get commands() {
-        return Object.keys(ref.current);
+        return Object.keys(ref.current).filter((name) => typeof ref.current[name] === "function");
       },
     },
     platform: { os: "darwin", arch: "arm64", versions: {} },
@@ -59,6 +103,8 @@ export function installDesktopHostStub(commands: object, options: DesktopHostStu
       return () => set.delete(cb);
     },
     native: {
+      ...options.performance,
+      ...(options.processDiagnostics ? { processDiagnostics: options.processDiagnostics } : {}),
       openExternal: (url) => {
         options.externalOpens?.push(url);
         return Promise.resolve();
@@ -79,11 +125,26 @@ export function installDesktopHostStub(commands: object, options: DesktopHostStu
         minimise: () => {},
         toggleMaximise: () => {},
       close: () => {},
-      getAppZoom: async () => 1,
-      setAppZoom: async () => 1,
+      // The Electron shell owns zoom natively; tests drive it through the
+      // same command table the bridge path uses, so tables without zoom
+      // commands keep the neutral default.
+      getAppZoom: async () => {
+        const fn = ref.current.GetDesktopZoomFactor as (() => Promise<number>) | undefined;
+        return typeof fn === "function" ? await fn() : 1;
+      },
+      setAppZoom: async (factor: number) => {
+        const fn = ref.current.SetDesktopZoomFactor as ((factor: number) => Promise<number>) | undefined;
+        if (typeof fn === "function") await fn(factor);
+        return factor;
+      },
       resetAppZoom: async () => 1,
       },
+      graphics: {
+        get: () => Promise.resolve({ hardwareAcceleration: true, startupEnabled: true, override: "none" as const, restartRequired: false, writable: true, warning: null }),
+        setHardwareAcceleration: async (enabled: boolean) => ({ hardwareAcceleration: enabled, startupEnabled: true, override: "none" as const, restartRequired: enabled !== true, writable: true, warning: null }),
+      },
       getPathForFile: options.getPathForFile ?? (() => ""),
+      browserControl: browserControlStub(options),
       onServiceState: () => () => {},
     },
     browser: undefined as unknown as DesktopBrowserHost,

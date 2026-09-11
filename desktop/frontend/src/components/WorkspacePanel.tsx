@@ -53,7 +53,7 @@ import {
   rememberWorkspaceTreeState,
   touchWorkspaceTreeVisit,
   workspaceTreeVisitId,
-} from "../lib/workspaceTreeMemory";
+} from "../lib/workspaceViewMemory";
 import { loadLayoutSize, loadOptionalLayoutSize } from "../lib/layoutPreferences";
 import {
   RIGHT_DOCK_PREVIEW_DEFAULT_WIDTH,
@@ -224,7 +224,7 @@ export function WorkspacePanel({
   const [selectedChangePath, setSelectedChangePath] = useState<string | null>(
     () => initialWorkspaceMemory?.selectedChangePath ?? null,
   );
-  const [openTabs, setOpenTabs] = useState<string[]>([]);
+  const [openTabs, setOpenTabs] = useState<string[]>(() => initialWorkspaceMemory?.openTabs ?? []);
   // Independent "recently opened" history: survives closing all preview tabs
   // (openTabs is the live preview state) and app restarts, so the recent-files
   // menu keeps the user's file history even after the previews are dismissed.
@@ -246,7 +246,7 @@ export function WorkspacePanel({
   const [selectionMenu, setSelectionMenu] = useState<{ x: number; y: number; text: string; path: string } | null>(null);
   const [treeMenu, setTreeMenu] = useState<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
   const [treeBlankMenuPoint, setTreeBlankMenuPoint] = useState<ContextMenuPoint | null>(null);
-  const [filter, setFilter] = useState("");
+  const [filter, setFilter] = useState(() => initialWorkspaceMemory?.filter ?? "");
   const [searchResults, setSearchResults] = useState<DirEntry[] | null>(null);
   const [scopedFilePaths, setScopedFilePaths] = useState<string[] | null>(null);
   const [scopedChangeRows, setScopedChangeRows] = useState<WorkspaceChangeListEntry[] | null>(null);
@@ -362,8 +362,8 @@ export function WorkspacePanel({
 
   useEffect(() => {
     if (memoryRestorePendingRef.current) return;
-    rememberWorkspaceTreeState(workspaceMemoryKey, { selectedFilePath, selectedChangePath });
-  }, [selectedChangePath, selectedFilePath, workspaceMemoryKey]);
+    rememberWorkspaceTreeState(workspaceMemoryKey, { selectedFilePath, selectedChangePath, openTabs, filter });
+  }, [selectedChangePath, selectedFilePath, openTabs, filter, workspaceMemoryKey]);
 
   useEffect(() => {
     if (memoryRestorePendingRef.current) return;
@@ -533,7 +533,7 @@ export function WorkspacePanel({
     dirLoadRequestIdsRef.current = {};
     compactProbeInFlightRef.current.clear();
     setEntriesByDir({});
-    setOpenTabs([]);
+    setOpenTabs(readWorkspaceTreeMemory(workspaceMemoryKey)?.openTabs ?? []);
     setPreviewResource(emptyKeyedResource());
     setGitHistoryResource(emptyKeyedResource());
     changeDetailRequestIdRef.current += 1;
@@ -542,12 +542,12 @@ export function WorkspacePanel({
     setCommitDetail(null);
     setSelectionMenu(null);
     setTreeMenu(null);
-    setFilter("");
+    setFilter(readWorkspaceTreeMemory(workspaceMemoryKey)?.filter ?? "");
     setScopedFilePaths(null);
     setScopedChangeRows(null);
     setTreeVisible(true);
     void loadDir("");
-  }, [cwd, loadDir, open]);
+  }, [cwd, loadDir, open, workspaceMemoryKey]);
 
   useEffect(() => {
     if (!open) return;

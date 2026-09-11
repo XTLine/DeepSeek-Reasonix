@@ -11,7 +11,7 @@ const unavailable = async (): Promise<never> => { throw new Error("unexpected lo
 export function RemoteNavigationHarness({ children }: { children: ReactNode }) {
   const sequence = useRef(0);
   const fence = useNavigationIntentFence();
-  const { openRemoteProject } = useDesktopNavigation({ visible: { tabId: "fixture", sessionKey: "fixture" }, singleSurface: true,
+  const { openRemoteProject } = useDesktopNavigation({ visible: { tabId: "fixture", sessionKey: "fixture" },
     noteIntent: () => { const seq = ++sequence.current; fence.registerNavigationIntent(seq); return seq; },
     beginSurface: noop, settleSurface: noop, showChat: noop,
     setTabRevealSignal: noop, setTranscriptRevealSignal: noop, setProjectRevision: noop, setHistory: noop, t: useT(), showToast: noop,

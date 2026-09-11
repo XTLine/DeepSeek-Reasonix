@@ -78,7 +78,8 @@ type StreamAttempt struct {
 
 // ToWire converts a typed runtime event into the shared frontend JSON contract.
 func ToWire(e event.Event) Event {
-	w := Event{Kind: kindNames[e.Kind], PromptKind: e.PromptKind, TurnID: e.TurnID, Sequence: e.Sequence, Status: string(e.Status), Text: e.Text, Detail: e.Detail, Reasoning: e.Reasoning, ItemID: e.ItemID, SessionPath: e.SessionPath, SessionReset: e.SessionReset}
+	w := Event{Kind: kindNames[e.Kind], MessageID: e.MessageID, AttemptID: e.AttemptID, Source: e.Source, PromptKind: e.PromptKind, TurnID: e.TurnID, Sequence: e.Sequence, Status: string(e.Status), Text: e.Text, Detail: e.Detail, Reasoning: e.Reasoning, ItemID: e.ItemID, SessionPath: e.SessionPath, SessionReset: e.SessionReset}
+	w.SessionID, w.RuntimeEpoch, w.SubmissionID = e.SessionID, e.RuntimeEpoch, e.SubmissionID
 	if e.ItemID != "" {
 		promptEvent := false
 		switch e.Kind {
@@ -110,7 +111,7 @@ func ToWire(e event.Event) Event {
 		w.applyNotice(e)
 	case event.ReadStatus:
 		w.ReadStatus = toWireReadStatus(e.ReadStatus)
-	case event.ToolDispatch, event.ToolResult, event.ToolProgress, event.ToolResultPreview:
+	case event.ToolDispatch, event.ToolStarted, event.ToolResult, event.ToolProgress, event.ToolResultPreview:
 		w.Tool = toWireTool(e.Tool)
 	case event.WorkspaceChanged:
 		ws := e.Workspace
@@ -154,8 +155,10 @@ func ToWire(e event.Event) Event {
 	case event.ExtensionSurface, event.ExtensionStatus:
 		w.Extension = ToWireExtensionSurface(e.Extension)
 	case event.TurnDone:
+		w.Recovery = e.Recovery
 		w.Outcome = e.Outcome
 		w.ReadPause = e.ReadPause
+		w.ReadCompletion = e.ReadCompletion
 		w.CheckpointTurn = e.CheckpointTurn
 		w.Receipt = completionReceiptWire(e.Receipt)
 		w.ProtocolRecovery = e.ProtocolRecovery
@@ -549,11 +552,13 @@ func KindName(kind event.Kind) (string, bool) {
 }
 
 var kindNames = map[event.Kind]string{
+	event.UserMessage:             "user_message",
 	event.TurnStarted:             "turn_started",
 	event.Reasoning:               "reasoning",
 	event.Text:                    "text",
 	event.Message:                 "message",
 	event.ToolDispatch:            "tool_dispatch",
+	event.ToolStarted:             "tool_started",
 	event.ToolResult:              "tool_result",
 	event.Usage:                   "usage",
 	event.Notice:                  "notice",

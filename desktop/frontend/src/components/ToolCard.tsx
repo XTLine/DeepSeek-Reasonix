@@ -46,9 +46,17 @@ import { ReadOnlyBatch } from "./ReadOnlyBatch";
 import { useWorkProcessPresentation } from "../lib/sessionExperience";
 import { useTranscriptUserResizeIntent } from "./TranscriptLayoutIntentContext";
 import { resolveToolCardDefaultOpen } from "../lib/transcriptRowGeometry";
+import { useArchivedToolData } from "../lib/useArchivedToolData";
 import type { SearchSourcePresentation } from "../lib/searchSourcesPresentation";
 
 type ToolItem = Extract<Item, { kind: "tool" }>;
+
+function commandLanguage(shell: string | undefined, name: string): string | undefined {
+  const knownShell = shell?.toLowerCase() || (name === "bash" ? "bash" : "");
+  if (knownShell === "powershell" || knownShell === "pwsh") return "powershell";
+  if (knownShell === "bash" || knownShell === "sh" || knownShell === "zsh") return "bash";
+  return undefined;
+}
 
 const SUBAGENT_TOOLS = new Set(["task", "run_skill", "explore", "research", "review", "security_review"]);
 
@@ -297,7 +305,7 @@ export const ToolCard = memo(function ToolCard({ item, subcalls, tabId, displayN
   }, [liveFollow, presentation, subagentActive, subagentReasoningRunning]);
   // Lazy-load full tool data from the backend when the card is expanded and
   // the in-memory copy was archived for memory efficiency.
-  const [fullData, setFullData] = useState<{ args: string; output?: string; execution?: ToolItem["execution"]; mcpApp?: MCPAppPresentation } | null>(null);
+  const { data: fullData, loading: fullDataLoading, failed: fullDataFailed, retry: retryFullData } = useArchivedToolData(item, tabId, open);
   const [appInstance, setAppInstance] = useState<MCPAppInstanceView | null>(null);
   const disposeAppInstance = useCallback((instanceToken: string) => {
     setAppInstance((current) => current?.instanceToken === instanceToken ? null : current);
@@ -325,6 +333,7 @@ export const ToolCard = memo(function ToolCard({ item, subcalls, tabId, displayN
     ? t("sources.noValid")
     : t("tool.searchResults", { n: searchVisibleCount });
   const isShellCard = Boolean(item.isShell || item.name === "bash" || execution);
+  const shellCommand = isShellCard ? subjectOf("bash", effectiveArgs) : "";
   const displayOutput = isWebSearch || toolOutputDuplicatesError(effectiveOutput, item.error) ? undefined : effectiveOutput;
   const previewDiff = item.fileDiff?.diff ? item.fileDiff : undefined;
   const diffs = previewDiff || archivedWithoutFullData ? [] : diffsFor(item.name, effectiveArgs);
@@ -334,10 +343,10 @@ export const ToolCard = memo(function ToolCard({ item, subcalls, tabId, displayN
   const verificationLabel = shellVerificationLabel(t, execution?.verification);
   const riskLabel = shellRiskLabel(t, execution);
   const tailSummary = firstTailLine(execution?.outputTail);
-  // Reset cached fullData when the item identity changes (e.g. after rewind).
+  // An MCP app instance must not outlive the payload identity that created it.
   useEffect(() => {
-    return () => setFullData(null);
-  }, [item]);
+    return () => setAppInstance(null);
+  }, [item, tabId]);
 
   // edit diffs are the point of the card, so they're shown inline; everything
   // else folds its args/output away by default.  Open while running so the
@@ -356,15 +365,6 @@ export const ToolCard = memo(function ToolCard({ item, subcalls, tabId, displayN
   const errorText = item.error ? normalizeErrorText(item.error) : "";
   const errorSummary = errorText ? summarizeToolError(errorText, t("tool.errorReceiptMismatch")) : "";
   const hasErrorDetails = errorText ? errorNeedsDetails(errorText, errorSummary) : false;
-  useEffect(() => {
-    if (!open || !item.dataArchived || fullData || !tabId) return;
-    let cancelled = false;
-    void app.ToolResultForTab(tabId, item.id).then((d) => {
-      if (!cancelled && d) setFullData(d);
-    }).catch(() => {});
-    return () => { cancelled = true; setAppInstance(null); };
-  }, [open, item.id, item.dataArchived, fullData, tabId]);
-
   useEffect(() => {
     if (!open) setAppInstance(null);
   }, [open, item.id]);
@@ -456,6 +456,13 @@ export const ToolCard = memo(function ToolCard({ item, subcalls, tabId, displayN
 
       <div ref={toolBodyRef} className="tool__body">
 
+        {open && (fullDataLoading || fullDataFailed) && (
+          <div className="tool__data-status" role={fullDataFailed ? "alert" : "status"}>
+            <span>{t(fullDataFailed ? "tool.loadFailed" : "common.loading")}</span>
+            {fullDataFailed && tabId && <button type="button" className="btn btn--small" onClick={() => { beginUserResize(); retryFullData(); }}>{t("common.retry")}</button>}
+          </div>
+        )}
+
         {previewDiff ? (
           <DiffView diff={previewDiff.diff} language={languageForToolArgs(fullData?.args ?? item.args)} maxHeight={260} />
         ) : (
@@ -529,6 +536,13 @@ export const ToolCard = memo(function ToolCard({ item, subcalls, tabId, displayN
           </div>
         )}
 
+        {open && shellCommand && (
+          <div className="tool__command">
+            <div className="tool__command-label">{t("tool.command")}</div>
+            <CodeViewer value={shellCommand} language={commandLanguage(execution?.shell, item.name)} maxHeight={240} />
+          </div>
+        )}
+
         {shellPreview && (
           <>
             <CodeViewer value={showAll ? shellOutput! : shellPreview.preview} maxHeight={showAll ? 480 : 260} />
@@ -559,10 +573,10 @@ export const ToolCard = memo(function ToolCard({ item, subcalls, tabId, displayN
           </div>
         )}
 
-        {!isWebSearch && !shellPreview && hasArgsOrOutput && (
+        {!isWebSearch && hasArgsOrOutput && (
           <>
-            {effectiveArgs && <CodeViewer value={pretty(effectiveArgs)} language="json" maxHeight={180} />}
-            {displayOutput && (
+            {effectiveArgs && !shellCommand && <CodeViewer value={pretty(effectiveArgs)} language="json" maxHeight={180} />}
+            {!shellPreview && displayOutput && (
               <>
                 <CodeViewer value={displayOutput} maxHeight={280} />
                 {item.truncated && <div className="tool__note">{t("tool.truncated")}</div>}

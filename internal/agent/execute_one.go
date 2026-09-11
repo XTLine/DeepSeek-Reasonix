@@ -28,6 +28,7 @@ func (a *Agent) executeOne(ctx context.Context, turn *turnRuntime, call provider
 	ctx = withTurnState(a.withAgentContext(ctx), turn)
 	plan := &toolCallPlan{call: call}
 	defer func() {
+		out.evidenceSource = cloneEvidenceTarget(plan.expectedWriteSource)
 		out.readTaskID = plan.readTaskID
 		out.readEnvelope = plan.readEnvelope
 		out.readActiveMillis = plan.readActiveMillis
@@ -61,6 +62,9 @@ func (a *Agent) executeOne(ctx context.Context, turn *turnRuntime, call provider
 		return blocked
 	}
 	if blocked, early := a.prepareToolExecution(ctx, plan); early {
+		return blocked
+	}
+	if blocked, early := a.checkToolRecoveryStart(ctx, plan); early {
 		return blocked
 	}
 	return a.finishToolExecution(ctx, plan)
@@ -102,6 +106,9 @@ func (a *Agent) resolveToolPolicy(ctx context.Context, turn *turnRuntime, plan *
 		return blocked, true
 	}
 	if blocked, early := a.applyExecutionPreflight(turn, plan); early {
+		return blocked, true
+	}
+	if blocked, early := a.applyOperationGate(plan); early {
 		return blocked, true
 	}
 	if blocked, early := a.applyEvidenceGates(ctx, plan); early {
@@ -166,6 +173,9 @@ func (a *Agent) applyMutationDependencyBarrier(plan *toolCallPlan) (toolOutcome,
 	}
 	cause := a.mutationDependencyBarrier.Load()
 	if cause == nil {
+		return toolOutcome{}, false
+	}
+	if cause.evidenceOnly && a.independentEvidenceWriter(plan.call) {
 		return toolOutcome{}, false
 	}
 	verification := plan.evidenceName == "bash" && evidence.IsVerificationCommand(bashCommandFromArgs(plan.evidenceArgs))
@@ -646,7 +656,7 @@ func (a *Agent) finishToolExecution(ctx context.Context, plan *toolCallPlan) too
 	}
 	// Always re-read after post hooks —
 	// partialwritesandhooksideeffectscanchangethepreviewedpathevenwhentheconcrete tool returned an error.
-	a.finalizeObservedToolReceipts(plan, result, execution, err)
+	receipt := a.finalizeObservedToolReceipts(plan, result, execution, err)
 	result = a.withRecoveryObservation(ctx, evidenceName, evidenceArgs, readOnly, mutates, result, err, recoveryGen)
 	if err != nil {
 		detail := result
@@ -660,9 +670,15 @@ func (a *Agent) finishToolExecution(ctx context.Context, plan *toolCallPlan) too
 		rawErr := fmt.Sprintf("error: %v\n%s", err, detail)
 		body, truncMsg, original := a.boundProviderVisibleResult(rawErr, call.Name, call.ID)
 		out := toolOutcome{
-			runState: outcomeRunState(toolOutcome{executed: true, output: rawErr}),
+			runState: recoveryFailureState(err),
 			output:   body, errMsg: firstLine(err.Error()), truncated: truncMsg != "" || original != "", truncMsg: truncMsg,
 			execution: execution, mcpApp: toProviderMCPApp(plan.mcpApp), recoveryGeneration: recoveryGen, subagentOutcome: subagentOutcomeFromError(err),
+		}
+		var operationErr *tool.OperationError
+		if errors.As(err, &operationErr) {
+			d := operationErr.Diagnostic
+			d.OperationID = call.ID
+			out.diagnostic = &d
 		}
 		if original != "" {
 			out.rawOutput = original
@@ -686,6 +702,7 @@ func (a *Agent) finishToolExecution(ctx context.Context, plan *toolCallPlan) too
 		result, visionSummary = processed.text, processed.summary
 	}
 	body, truncMsg, original, readObserver := a.boundIncompleteReadAwareResult(plan, result)
+	body = appendReceiptCitation(body, receipt)
 	out := toolOutcome{
 		runState: runState, output: body, images: images, visionSummary: visionSummary, truncated: truncMsg != "" || original != "", truncMsg: truncMsg,
 		execution: execution, mcpApp: toProviderMCPApp(plan.mcpApp), recoveryGeneration: recoveryGen,

@@ -237,8 +237,35 @@ func TestOfficialDeepSeekVisionSKUEmbedsUserImages(t *testing.T) {
 	}
 }
 
+// V4.1 Flash is natively multimodal, so the official endpoint must serialize
+// images for it — and for the ids the vendor still aliases to it — without the
+// caller first resolving capability metadata.
+func TestOfficialDeepSeekMultimodalSKUsEmbedUserImages(t *testing.T) {
+	for _, model := range []string{"deepseek-flash", "deepseek-v4-flash", "deepseek-v4.1-flash-expires-on-0910"} {
+		p, err := New(provider.Config{Name: "deepseek", BaseURL: "https://api.deepseek.com", Model: model})
+		if err != nil {
+			t.Fatalf("New(%s): %v", model, err)
+		}
+		c := p.(*client)
+		if !c.vision {
+			t.Fatalf("%s must serialize user images without resolved metadata", model)
+		}
+		req := c.buildRequest(provider.Request{Messages: []provider.Message{{
+			Role: provider.RoleUser, Content: "describe",
+			Images: []string{"data:image/png;base64,AAAA"},
+		}}})
+		parts, ok := req.Messages[0].Content.([]chatContentPart)
+		if !ok || len(parts) != 2 || parts[0].Type != "text" || parts[1].Type != "image_url" {
+			t.Fatalf("%s user content = %#v, want [text, image_url]", model, req.Messages[0].Content)
+		}
+		if parts[1].ImageURL == nil || parts[1].ImageURL.URL != "data:image/png;base64,AAAA" {
+			t.Fatalf("%s image_url = %+v", model, parts[1].ImageURL)
+		}
+	}
+}
+
 func TestOfficialRequestURLImageHardLimit(t *testing.T) {
-	p, err := New(provider.Config{BaseURL: "https://relay.test", Model: "deepseek-v4-flash", Extra: map[string]any{"request_url": "https://api.deepseek.com/v1/chat/completions", "vision": true}, ModelInfo: &provider.ModelInfo{InputModalities: []provider.ModelModality{provider.ModalityText, provider.ModalityImage}}})
+	p, err := New(provider.Config{BaseURL: "https://relay.test", Model: "deepseek-v4-pro", Extra: map[string]any{"request_url": "https://api.deepseek.com/v1/chat/completions", "vision": true}, ModelInfo: &provider.ModelInfo{InputModalities: []provider.ModelModality{provider.ModalityText, provider.ModalityImage}}})
 	if err != nil {
 		t.Fatal(err)
 	}

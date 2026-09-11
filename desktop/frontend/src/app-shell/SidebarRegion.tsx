@@ -35,7 +35,7 @@ export type SidebarRegionProps = {
   onToggle: () => void;
 };
 
-/** Sidebar presentation shared by classic, workbench and creation layouts. */
+/** Sidebar presentation shared by the workbench and creation layouts. */
 export function SidebarRegion(props: SidebarRegionProps) {
   const { t } = props;
   return (

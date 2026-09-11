@@ -67,12 +67,7 @@ func (a *App) CreateIsolatedWorktree(workspaceRoot string) (IsolatedWorktreeOpen
 		return IsolatedWorktreeOpenResult{}, err
 	}
 
-	var tab TabMeta
-	if a.singleSurfaceLayoutEnabled() {
-		tab, err = a.ensureBlankSurface("project", created.WorkspaceRoot)
-	} else {
-		tab, err = a.ensureBlankTab("project", created.WorkspaceRoot)
-	}
+	tab, err := a.ensureBlankSurface("project", created.WorkspaceRoot)
 	if err != nil {
 		return IsolatedWorktreeOpenResult{}, fmt.Errorf("isolated worktree was created at %s but Reasonix could not open it: %w", created.WorktreeRoot, err)
 	}
@@ -584,19 +579,6 @@ func (a *App) worktreeRuntimeReferenced(worktreeRoot string) bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.runtimeReferencesCanonicalLocked(key)
-}
-
-func pathWithinWorktree(path, worktreeRoot string) bool {
-	pathKey := canonicalRuntimeRoot(path)
-	rootKey := canonicalRuntimeRoot(worktreeRoot)
-	if pathKey == "" || rootKey == "" {
-		return false
-	}
-	if pathKey == rootKey {
-		return true
-	}
-	rel, err := filepath.Rel(rootKey, pathKey)
-	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func canonicalRuntimeRoot(root string) string {

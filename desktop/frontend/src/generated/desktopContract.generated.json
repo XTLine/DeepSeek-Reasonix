@@ -1899,22 +1899,6 @@
     {
       "cancellation": "before-dispatch",
       "domain": "desktop/app.go",
-      "name": "ClearGoal",
-      "owner": "App.ClearGoal",
-      "params": [],
-      "returnsError": true,
-      "scope": {
-        "inputs": [],
-        "kind": "owner-state",
-        "resolver": "App.ClearGoal"
-      },
-      "sources": [
-        "desktop/app.go"
-      ]
-    },
-    {
-      "cancellation": "before-dispatch",
-      "domain": "desktop/app.go",
       "name": "ClearGoalForTab",
       "owner": "App.ClearGoalForTab",
       "params": [
@@ -2496,25 +2480,6 @@
       },
       "sources": [
         "desktop/tabs.go"
-      ]
-    },
-    {
-      "cancellation": "before-dispatch",
-      "domain": "desktop/app.go",
-      "name": "ContextUsage",
-      "owner": "App.ContextUsage",
-      "params": [],
-      "result": {
-        "kind": "object",
-        "ref": "main.ContextInfo"
-      },
-      "scope": {
-        "inputs": [],
-        "kind": "owner-state",
-        "resolver": "App.ContextUsage"
-      },
-      "sources": [
-        "desktop/app.go"
       ]
     },
     {
@@ -4391,6 +4356,32 @@
     },
     {
       "cancellation": "before-dispatch",
+      "domain": "desktop/tool_recovery.go",
+      "name": "GetToolRecoveryForTab",
+      "owner": "App.GetToolRecoveryForTab",
+      "params": [
+        {
+          "kind": "string"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "control.ToolRecoverySnapshot"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.GetToolRecoveryForTab"
+      },
+      "sources": [
+        "desktop/tool_recovery.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
       "domain": "desktop/session_catalog_runtime.go",
       "name": "GetTopicSummary",
       "owner": "App.GetTopicSummary",
@@ -4466,6 +4457,38 @@
     },
     {
       "cancellation": "before-dispatch",
+      "domain": "desktop/workspace_git_branches.go",
+      "name": "GitBranchesForTab",
+      "owner": "App.GitBranchesForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        }
+      ],
+      "result": {
+        "elem": {
+          "kind": "string"
+        },
+        "kind": "array"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "workspaceRoot"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.GitBranchesForTab"
+      },
+      "sources": [
+        "desktop/workspace_git_branches.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
       "domain": "desktop/workspace_changes.go",
       "name": "GitCheckout",
       "owner": "App.GitCheckout",
@@ -4484,6 +4507,88 @@
       },
       "sources": [
         "desktop/workspace_changes.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/workspace_git_branches.go",
+      "name": "GitCheckoutForTab",
+      "owner": "App.GitCheckoutForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        }
+      ],
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "workspaceRoot",
+          "branch"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.GitCheckoutForTab"
+      },
+      "sources": [
+        "desktop/workspace_git_branches.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/workspace_changes.go",
+      "name": "GitCreateBranch",
+      "owner": "App.GitCreateBranch",
+      "params": [
+        {
+          "kind": "string"
+        }
+      ],
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "name"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.GitCreateBranch"
+      },
+      "sources": [
+        "desktop/workspace_changes.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/workspace_git_branches.go",
+      "name": "GitCreateBranchForTab",
+      "owner": "App.GitCreateBranchForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        }
+      ],
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "workspaceRoot",
+          "name"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.GitCreateBranchForTab"
+      },
+      "sources": [
+        "desktop/workspace_git_branches.go"
       ]
     },
     {
@@ -4650,7 +4755,7 @@
       "result": {
         "elem": {
           "kind": "object",
-          "ref": "main.HistoryMessage"
+          "ref": "transcript.Message"
         },
         "kind": "array"
       },
@@ -4737,7 +4842,7 @@
       "result": {
         "elem": {
           "kind": "object",
-          "ref": "main.HistoryMessage"
+          "ref": "transcript.Message"
         },
         "kind": "array"
       },
@@ -5579,39 +5684,6 @@
     {
       "cancellation": "before-dispatch",
       "domain": "desktop/app.go",
-      "name": "ListTaskEvents",
-      "owner": "App.ListTaskEvents",
-      "params": [
-        {
-          "kind": "string"
-        },
-        {
-          "kind": "integer"
-        }
-      ],
-      "result": {
-        "elem": {
-          "kind": "object",
-          "ref": "taskmonitor.TaskEvent"
-        },
-        "kind": "array"
-      },
-      "returnsError": true,
-      "scope": {
-        "inputs": [
-          "taskID",
-          "afterSequence"
-        ],
-        "kind": "owner-inputs",
-        "resolver": "App.ListTaskEvents"
-      },
-      "sources": [
-        "desktop/app.go"
-      ]
-    },
-    {
-      "cancellation": "before-dispatch",
-      "domain": "desktop/app.go",
       "name": "ListTaskEventsForTab",
       "owner": "App.ListTaskEventsForTab",
       "params": [
@@ -5854,39 +5926,6 @@
     {
       "cancellation": "before-dispatch",
       "domain": "desktop/mcp_apps_app.go",
-      "name": "MCPAppCallTool",
-      "owner": "App.MCPAppCallTool",
-      "params": [
-        {
-          "kind": "string"
-        },
-        {
-          "kind": "string"
-        },
-        {
-          "kind": "any"
-        }
-      ],
-      "result": {
-        "kind": "string"
-      },
-      "returnsError": true,
-      "scope": {
-        "inputs": [
-          "instanceToken",
-          "toolName",
-          "args"
-        ],
-        "kind": "owner-inputs",
-        "resolver": "App.MCPAppCallTool"
-      },
-      "sources": [
-        "desktop/mcp_apps_app.go"
-      ]
-    },
-    {
-      "cancellation": "before-dispatch",
-      "domain": "desktop/mcp_apps_app.go",
       "name": "MCPAppCallToolForTab",
       "owner": "App.MCPAppCallToolForTab",
       "params": [
@@ -5997,27 +6036,6 @@
     {
       "cancellation": "before-dispatch",
       "domain": "desktop/mcp_apps_app.go",
-      "name": "MCPCloseAppInstance",
-      "owner": "App.MCPCloseAppInstance",
-      "params": [
-        {
-          "kind": "string"
-        }
-      ],
-      "scope": {
-        "inputs": [
-          "instanceToken"
-        ],
-        "kind": "owner-inputs",
-        "resolver": "App.MCPCloseAppInstance"
-      },
-      "sources": [
-        "desktop/mcp_apps_app.go"
-      ]
-    },
-    {
-      "cancellation": "before-dispatch",
-      "domain": "desktop/mcp_apps_app.go",
       "name": "MCPCloseAppInstanceForTab",
       "owner": "App.MCPCloseAppInstanceForTab",
       "params": [
@@ -6096,51 +6114,6 @@
     {
       "cancellation": "before-dispatch",
       "domain": "desktop/mcp_apps_app.go",
-      "name": "MCPOpenAppInstance",
-      "owner": "App.MCPOpenAppInstance",
-      "params": [
-        {
-          "kind": "string"
-        },
-        {
-          "kind": "string"
-        },
-        {
-          "kind": "integer"
-        },
-        {
-          "kind": "string"
-        },
-        {
-          "kind": "string"
-        }
-      ],
-      "result": {
-        "elem": {
-          "kind": "object",
-          "ref": "main.MCPAppInstanceView"
-        },
-        "kind": "nullable"
-      },
-      "returnsError": true,
-      "scope": {
-        "inputs": [
-          "server",
-          "tool",
-          "generation",
-          "callID",
-          "resourceURI"
-        ],
-        "kind": "owner-inputs",
-        "resolver": "App.MCPOpenAppInstance"
-      },
-      "sources": [
-        "desktop/mcp_apps_app.go"
-      ]
-    },
-    {
-      "cancellation": "before-dispatch",
-      "domain": "desktop/mcp_apps_app.go",
       "name": "MCPOpenAppInstanceForTab",
       "owner": "App.MCPOpenAppInstanceForTab",
       "params": [
@@ -6182,28 +6155,6 @@
         ],
         "kind": "owner-inputs",
         "resolver": "App.MCPOpenAppInstanceForTab"
-      },
-      "sources": [
-        "desktop/mcp_apps_app.go"
-      ]
-    },
-    {
-      "cancellation": "before-dispatch",
-      "domain": "desktop/mcp_apps_app.go",
-      "name": "MCPOpenAppLink",
-      "owner": "App.MCPOpenAppLink",
-      "params": [
-        {
-          "kind": "string"
-        }
-      ],
-      "returnsError": true,
-      "scope": {
-        "inputs": [
-          "rawURL"
-        ],
-        "kind": "owner-inputs",
-        "resolver": "App.MCPOpenAppLink"
       },
       "sources": [
         "desktop/mcp_apps_app.go"
@@ -6703,7 +6654,7 @@
       "result": {
         "elem": {
           "kind": "object",
-          "ref": "main.HistoryMessage"
+          "ref": "transcript.Message"
         },
         "kind": "array"
       },
@@ -6752,6 +6703,36 @@
       },
       "sources": [
         "desktop/app.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/transcript_api.go",
+      "name": "OpenChannelTranscriptSessionForTab",
+      "owner": "App.OpenChannelTranscriptSessionForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "main.HistorySwitchPhases"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "path"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.OpenChannelTranscriptSessionForTab"
+      },
+      "sources": [
+        "desktop/transcript_api.go"
       ]
     },
     {
@@ -6936,32 +6917,6 @@
     },
     {
       "cancellation": "before-dispatch",
-      "domain": "desktop/app.go",
-      "name": "OpenTaskSession",
-      "owner": "App.OpenTaskSession",
-      "params": [
-        {
-          "kind": "string"
-        }
-      ],
-      "result": {
-        "kind": "object",
-        "ref": "taskmonitor.ControlResult"
-      },
-      "returnsError": true,
-      "scope": {
-        "inputs": [
-          "taskID"
-        ],
-        "kind": "owner-inputs",
-        "resolver": "App.OpenTaskSession"
-      },
-      "sources": [
-        "desktop/app.go"
-      ]
-    },
-    {
-      "cancellation": "before-dispatch",
       "domain": "desktop/task_catalog.go",
       "name": "OpenTaskSessionByKey",
       "owner": "App.OpenTaskSessionByKey",
@@ -7074,28 +7029,6 @@
     {
       "cancellation": "before-dispatch",
       "domain": "desktop/external_opener.go",
-      "name": "OpenWorkspaceInExternalOpener",
-      "owner": "App.OpenWorkspaceInExternalOpener",
-      "params": [
-        {
-          "kind": "string"
-        }
-      ],
-      "returnsError": true,
-      "scope": {
-        "inputs": [
-          "id"
-        ],
-        "kind": "owner-inputs",
-        "resolver": "App.OpenWorkspaceInExternalOpener"
-      },
-      "sources": [
-        "desktop/external_opener.go"
-      ]
-    },
-    {
-      "cancellation": "before-dispatch",
-      "domain": "desktop/external_opener.go",
       "name": "OpenWorkspaceInExternalOpenerForTab",
       "owner": "App.OpenWorkspaceInExternalOpenerForTab",
       "params": [
@@ -7117,28 +7050,6 @@
       },
       "sources": [
         "desktop/external_opener.go"
-      ]
-    },
-    {
-      "cancellation": "before-dispatch",
-      "domain": "desktop/app.go",
-      "name": "OpenWorkspacePath",
-      "owner": "App.OpenWorkspacePath",
-      "params": [
-        {
-          "kind": "string"
-        }
-      ],
-      "returnsError": true,
-      "scope": {
-        "inputs": [
-          "rel"
-        ],
-        "kind": "owner-inputs",
-        "resolver": "App.OpenWorkspacePath"
-      },
-      "sources": [
-        "desktop/app.go"
       ]
     },
     {
@@ -7608,7 +7519,7 @@
       "result": {
         "elem": {
           "kind": "object",
-          "ref": "main.HistoryMessage"
+          "ref": "transcript.Message"
         },
         "kind": "array"
       },
@@ -8445,6 +8356,32 @@
     },
     {
       "cancellation": "before-dispatch",
+      "domain": "desktop/remote_tab_snapshot.go",
+      "name": "RemoteTabMetadata",
+      "owner": "App.RemoteTabMetadata",
+      "params": [
+        {
+          "kind": "string"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "main.RemoteTabSnapshot"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.RemoteTabMetadata"
+      },
+      "sources": [
+        "desktop/remote_tab_snapshot.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
       "domain": "desktop/remote_tab_commands.go",
       "name": "RemoteTabSkills",
       "owner": "App.RemoteTabSkills",
@@ -8517,6 +8454,130 @@
       },
       "sources": [
         "desktop/remote_tab_snapshot.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/remote_transcript_api.go",
+      "name": "RemoteTranscriptContentForTab",
+      "owner": "App.RemoteTranscriptContentForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "object",
+          "ref": "transcript.ContentRequest"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "transcript.ContentChunk"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "req"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.RemoteTranscriptContentForTab"
+      },
+      "sources": [
+        "desktop/remote_transcript_api.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/remote_transcript_api.go",
+      "name": "RemoteTranscriptPageForTab",
+      "owner": "App.RemoteTranscriptPageForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "object",
+          "ref": "transcript.PageRequest"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "transcript.Snapshot"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "req"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.RemoteTranscriptPageForTab"
+      },
+      "sources": [
+        "desktop/remote_transcript_api.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/remote_transcript_api.go",
+      "name": "RemoteTranscriptReplayForTab",
+      "owner": "App.RemoteTranscriptReplayForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "object",
+          "ref": "control.TranscriptReplayRequest"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "control.TranscriptReplay"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "req"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.RemoteTranscriptReplayForTab"
+      },
+      "sources": [
+        "desktop/remote_transcript_api.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/remote_transcript_api.go",
+      "name": "RemoteTranscriptSnapshotForTab",
+      "owner": "App.RemoteTranscriptSnapshotForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "object",
+          "ref": "transcript.PageRequest"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "main.RemoteTranscriptSnapshot"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "req"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.RemoteTranscriptSnapshotForTab"
+      },
+      "sources": [
+        "desktop/remote_transcript_api.go"
       ]
     },
     {
@@ -9201,40 +9262,6 @@
     },
     {
       "cancellation": "before-dispatch",
-      "domain": "desktop/app.go",
-      "name": "RequeueTask",
-      "owner": "App.RequeueTask",
-      "params": [
-        {
-          "kind": "string"
-        },
-        {
-          "kind": "integer"
-        },
-        {
-          "kind": "string"
-        }
-      ],
-      "result": {
-        "kind": "object",
-        "ref": "taskmonitor.ControlResult"
-      },
-      "returnsError": true,
-      "scope": {
-        "inputs": [
-          "taskID",
-          "expectedVersion",
-          "idemKey"
-        ],
-        "kind": "owner-inputs",
-        "resolver": "App.RequeueTask"
-      },
-      "sources": [
-        "desktop/app.go"
-      ]
-    },
-    {
-      "cancellation": "before-dispatch",
       "domain": "desktop/task_catalog.go",
       "name": "RequeueTaskByKey",
       "owner": "App.RequeueTaskByKey",
@@ -9678,6 +9705,37 @@
     },
     {
       "cancellation": "before-dispatch",
+      "domain": "desktop/tool_recovery.go",
+      "name": "ResolveToolRecoveryForTab",
+      "owner": "App.ResolveToolRecoveryForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "object",
+          "ref": "control.ToolRecoveryRequest"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "control.ToolRecoverySnapshot"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "req"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.ResolveToolRecoveryForTab"
+      },
+      "sources": [
+        "desktop/tool_recovery.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
       "domain": "desktop/workspace_path.go",
       "name": "ResolveWorkspacePathForTab",
       "owner": "App.ResolveWorkspacePathForTab",
@@ -9938,7 +9996,7 @@
       "result": {
         "elem": {
           "kind": "object",
-          "ref": "main.HistoryMessage"
+          "ref": "transcript.Message"
         },
         "kind": "array"
       },
@@ -9970,7 +10028,7 @@
       "result": {
         "elem": {
           "kind": "object",
-          "ref": "main.HistoryMessage"
+          "ref": "transcript.Message"
         },
         "kind": "array"
       },
@@ -10049,6 +10107,36 @@
       },
       "sources": [
         "desktop/app.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/transcript_api.go",
+      "name": "ResumeTranscriptSessionForTab",
+      "owner": "App.ResumeTranscriptSessionForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "main.HistorySwitchPhases"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "path"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.ResumeTranscriptSessionForTab"
+      },
+      "sources": [
+        "desktop/transcript_api.go"
       ]
     },
     {
@@ -10168,28 +10256,6 @@
         ],
         "kind": "owner-inputs",
         "resolver": "App.RevealPath"
-      },
-      "sources": [
-        "desktop/app.go"
-      ]
-    },
-    {
-      "cancellation": "before-dispatch",
-      "domain": "desktop/app.go",
-      "name": "RevealWorkspacePath",
-      "owner": "App.RevealWorkspacePath",
-      "params": [
-        {
-          "kind": "string"
-        }
-      ],
-      "returnsError": true,
-      "scope": {
-        "inputs": [
-          "rel"
-        ],
-        "kind": "owner-inputs",
-        "resolver": "App.RevealWorkspacePath"
       },
       "sources": [
         "desktop/app.go"
@@ -10331,28 +10397,6 @@
       },
       "sources": [
         "desktop/remote_tab.go"
-      ]
-    },
-    {
-      "cancellation": "before-dispatch",
-      "domain": "desktop/app.go",
-      "name": "RunShell",
-      "owner": "App.RunShell",
-      "params": [
-        {
-          "kind": "string"
-        }
-      ],
-      "returnsError": true,
-      "scope": {
-        "inputs": [
-          "command"
-        ],
-        "kind": "owner-inputs",
-        "resolver": "App.RunShell"
-      },
-      "sources": [
-        "desktop/app.go"
       ]
     },
     {
@@ -11385,27 +11429,6 @@
       },
       "sources": [
         "desktop/settings_preferences.go"
-      ]
-    },
-    {
-      "cancellation": "before-dispatch",
-      "domain": "desktop/app.go",
-      "name": "SetCollaborationMode",
-      "owner": "App.SetCollaborationMode",
-      "params": [
-        {
-          "kind": "string"
-        }
-      ],
-      "scope": {
-        "inputs": [
-          "mode"
-        ],
-        "kind": "owner-inputs",
-        "resolver": "App.SetCollaborationMode"
-      },
-      "sources": [
-        "desktop/app.go"
       ]
     },
     {
@@ -14354,6 +14377,36 @@
     },
     {
       "cancellation": "before-dispatch",
+      "domain": "desktop/remote_tab.go",
+      "name": "SubmitRemoteTabWithSubmission",
+      "owner": "App.SubmitRemoteTabWithSubmission",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        }
+      ],
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "text",
+          "submissionID"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.SubmitRemoteTabWithSubmission"
+      },
+      "sources": [
+        "desktop/remote_tab.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
       "domain": "desktop/app.go",
       "name": "SubmitToTab",
       "owner": "App.SubmitToTab",
@@ -14786,6 +14839,130 @@
       },
       "sources": [
         "desktop/app.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/transcript_api.go",
+      "name": "TranscriptContentForTab",
+      "owner": "App.TranscriptContentForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "object",
+          "ref": "transcript.ContentRequest"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "transcript.ContentChunk"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "req"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.TranscriptContentForTab"
+      },
+      "sources": [
+        "desktop/transcript_api.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/transcript_api.go",
+      "name": "TranscriptPageForTab",
+      "owner": "App.TranscriptPageForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "object",
+          "ref": "transcript.PageRequest"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "transcript.Snapshot"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "req"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.TranscriptPageForTab"
+      },
+      "sources": [
+        "desktop/transcript_api.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/transcript_api.go",
+      "name": "TranscriptReplayForTab",
+      "owner": "App.TranscriptReplayForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "object",
+          "ref": "control.TranscriptReplayRequest"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "control.TranscriptReplay"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "req"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.TranscriptReplayForTab"
+      },
+      "sources": [
+        "desktop/transcript_api.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/transcript_api.go",
+      "name": "TranscriptSnapshotForTab",
+      "owner": "App.TranscriptSnapshotForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "object",
+          "ref": "transcript.PageRequest"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "transcript.Snapshot"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "req"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.TranscriptSnapshotForTab"
+      },
+      "sources": [
+        "desktop/transcript_api.go"
       ]
     },
     {
@@ -15370,6 +15547,36 @@
     },
     {
       "cancellation": "before-dispatch",
+      "domain": "desktop/workspace_git_branches.go",
+      "name": "WorkspaceGitStatsForTab",
+      "owner": "App.WorkspaceGitStatsForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "main.WorkspaceChangesView"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "workspaceRoot"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.WorkspaceGitStatsForTab"
+      },
+      "sources": [
+        "desktop/workspace_git_branches.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
       "domain": "desktop/workspace_watch.go",
       "name": "WorkspaceRevisionForTab",
       "owner": "App.WorkspaceRevisionForTab",
@@ -15574,6 +15781,40 @@
   ],
   "protocolVersion": 1,
   "types": {
+    "agent.ToolRecoveryStatistics": {
+      "fields": [
+        {
+          "name": "unknown",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "confirmed",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "retried",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "rejected",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "blocked",
+          "type": {
+            "kind": "integer"
+          }
+        }
+      ]
+    },
     "billing.CostQuote": {
       "fields": [
         {
@@ -16840,6 +17081,97 @@
         }
       ]
     },
+    "control.ToolRecoveryRequest": {
+      "fields": [
+        {
+          "name": "sessionPath",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "runtimeEpoch",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "revision",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "attemptId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "inspectionId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "action",
+          "type": {
+            "kind": "string"
+          }
+        }
+      ]
+    },
+    "control.ToolRecoverySnapshot": {
+      "fields": [
+        {
+          "name": "silent",
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "statistics",
+          "type": {
+            "kind": "object",
+            "ref": "agent.ToolRecoveryStatistics"
+          }
+        },
+        {
+          "name": "sessionPath",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "runtimeEpoch",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "revision",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "calls",
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "provider.ToolCallRecord"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "retryEnabled",
+          "type": {
+            "kind": "boolean"
+          }
+        }
+      ]
+    },
     "control.ToolResultData": {
       "fields": [
         {
@@ -16878,6 +17210,133 @@
         }
       ]
     },
+    "control.TranscriptReplay": {
+      "fields": [
+        {
+          "name": "protocolVersion",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "snapshotId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "identity",
+          "type": {
+            "kind": "object",
+            "ref": "transcript.Identity"
+          }
+        },
+        {
+          "name": "projectionRevision",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "coveredThroughSeq",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "events",
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "turnevent.Envelope"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "floorSeq",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "latestSeq",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "nextAfterSeq",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "hasMore",
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "resetRequired",
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "transcriptRevision",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "transcriptDigest",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "headId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "leafMessageId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "runtimeEpoch",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        }
+      ]
+    },
+    "control.TranscriptReplayRequest": {
+      "fields": [
+        {
+          "name": "identity",
+          "type": {
+            "kind": "object",
+            "ref": "transcript.Identity"
+          }
+        },
+        {
+          "name": "after",
+          "type": {
+            "kind": "integer"
+          }
+        }
+      ]
+    },
     "event.FinalReadiness": {
       "fields": [
         {
@@ -16901,6 +17360,41 @@
     },
     "event.RecoveryStatus": {
       "fields": [
+        {
+          "name": "state",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "call_id",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "attempt_id",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "requires_user_decision",
+          "optional": true,
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "read_only",
+          "optional": true,
+          "type": {
+            "kind": "boolean"
+          }
+        },
         {
           "name": "phase",
           "optional": true,
@@ -17612,6 +18106,48 @@
           }
         },
         {
+          "name": "messageId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "attemptId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "source",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "sessionId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "runtimeEpoch",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "submissionId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "promptId",
           "optional": true,
           "type": {
@@ -17728,6 +18264,17 @@
             "elem": {
               "kind": "object",
               "ref": "provider.ReadPause"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "readCompletion",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "provider.ReadCompletion"
             },
             "kind": "nullable"
           }
@@ -18514,6 +19061,13 @@
     "eventwire.ReadStatus": {
       "fields": [
         {
+          "name": "verdict",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "readId",
           "type": {
             "kind": "string"
@@ -19007,6 +19561,20 @@
     },
     "eventwire.Tool": {
       "fields": [
+        {
+          "name": "runState",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "diagnostic",
+          "optional": true,
+          "type": {
+            "kind": "any"
+          }
+        },
         {
           "name": "verifying",
           "optional": true,
@@ -22819,7 +23387,7 @@
           "name": "message",
           "type": {
             "kind": "object",
-            "ref": "main.HistoryMessage"
+            "ref": "transcript.Message"
           }
         },
         {
@@ -22834,272 +23402,6 @@
         }
       ]
     },
-    "main.HistoryMessage": {
-      "fields": [
-        {
-          "name": "completionReceipt",
-          "optional": true,
-          "type": {
-            "elem": {
-              "kind": "object",
-              "ref": "eventwire.CompletionReceipt"
-            },
-            "kind": "nullable"
-          }
-        },
-        {
-          "name": "completionSummary",
-          "optional": true,
-          "type": {
-            "elem": {
-              "kind": "object",
-              "ref": "eventwire.CompletionSummary"
-            },
-            "kind": "nullable"
-          }
-        },
-        {
-          "name": "turnId",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "role",
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "content",
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "detail",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "code",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "submitText",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "checkpointTurn",
-          "optional": true,
-          "type": {
-            "elem": {
-              "kind": "integer"
-            },
-            "kind": "nullable"
-          }
-        },
-        {
-          "name": "createdAt",
-          "optional": true,
-          "type": {
-            "kind": "integer"
-          }
-        },
-        {
-          "name": "reasoning",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "memoryCitations",
-          "optional": true,
-          "type": {
-            "elem": {
-              "kind": "object",
-              "ref": "provider.MemoryCitation"
-            },
-            "kind": "array"
-          }
-        },
-        {
-          "name": "workDurationMs",
-          "optional": true,
-          "type": {
-            "kind": "integer"
-          }
-        },
-        {
-          "name": "level",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "toolCalls",
-          "optional": true,
-          "type": {
-            "elem": {
-              "kind": "object",
-              "ref": "main.HistoryToolCall"
-            },
-            "kind": "array"
-          }
-        },
-        {
-          "name": "toolCallId",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "toolName",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "toolResultArchived",
-          "optional": true,
-          "type": {
-            "kind": "boolean"
-          }
-        },
-        {
-          "name": "toolResultError",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "execution",
-          "optional": true,
-          "type": {
-            "elem": {
-              "kind": "object",
-              "ref": "provider.ToolExecution"
-            },
-            "kind": "nullable"
-          }
-        },
-        {
-          "name": "pending",
-          "optional": true,
-          "type": {
-            "kind": "boolean"
-          }
-        },
-        {
-          "name": "trigger",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "messages",
-          "optional": true,
-          "type": {
-            "kind": "integer"
-          }
-        },
-        {
-          "name": "summary",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "archive",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "decisionReceipt",
-          "optional": true,
-          "type": {
-            "elem": {
-              "kind": "object",
-              "ref": "provider.DecisionReceipt"
-            },
-            "kind": "nullable"
-          }
-        },
-        {
-          "name": "readiness",
-          "optional": true,
-          "type": {
-            "elem": {
-              "kind": "object",
-              "ref": "event.FinalReadiness"
-            },
-            "kind": "nullable"
-          }
-        },
-        {
-          "name": "readPause",
-          "optional": true,
-          "type": {
-            "elem": {
-              "kind": "object",
-              "ref": "provider.ReadPause"
-            },
-            "kind": "nullable"
-          }
-        },
-        {
-          "name": "protocolRecovery",
-          "optional": true,
-          "type": {
-            "elem": {
-              "kind": "object",
-              "ref": "provider.ProtocolRecoveryAction"
-            },
-            "kind": "nullable"
-          }
-        },
-        {
-          "name": "diagnostic",
-          "optional": true,
-          "type": {
-            "elem": {
-              "kind": "object",
-              "ref": "provider.FailureDiagnostic"
-            },
-            "kind": "nullable"
-          }
-        },
-        {
-          "name": "serverSearch",
-          "optional": true,
-          "type": {
-            "elem": {
-              "kind": "object",
-              "ref": "provider.ServerSearchCall"
-            },
-            "kind": "array"
-          }
-        }
-      ]
-    },
     "main.HistoryPage": {
       "fields": [
         {
@@ -23107,7 +23409,7 @@
           "type": {
             "elem": {
               "kind": "object",
-              "ref": "main.HistoryMessage"
+              "ref": "transcript.Message"
             },
             "kind": "array"
           }
@@ -23148,6 +23450,17 @@
           "optional": true,
           "type": {
             "kind": "string"
+          }
+        },
+        {
+          "name": "switch",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "main.HistorySwitchPhases"
+            },
+            "kind": "nullable"
           }
         }
       ]
@@ -23610,90 +23923,66 @@
         }
       ]
     },
-    "main.HistoryToolCall": {
+    "main.HistorySwitchPhases": {
       "fields": [
         {
-          "name": "id",
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "name",
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "arguments",
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "resolvedName",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "capabilityId",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "resolvedReadOnly",
-          "optional": true,
-          "type": {
-            "elem": {
-              "kind": "boolean"
-            },
-            "kind": "nullable"
-          }
-        },
-        {
-          "name": "subject",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "summary",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "diff",
-          "optional": true,
-          "type": {
-            "kind": "string"
-          }
-        },
-        {
-          "name": "added",
-          "optional": true,
+          "name": "resolveMs",
           "type": {
             "kind": "integer"
           }
         },
         {
-          "name": "removed",
-          "optional": true,
+          "name": "loadMs",
           "type": {
             "kind": "integer"
           }
         },
         {
-          "name": "argumentsArchived",
-          "optional": true,
+          "name": "rebindMs",
           "type": {
-            "kind": "boolean"
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "historyMs",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "totalMs",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "loadedMessages",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "loadedBytes",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "historyEntries",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "durableReads",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "outcome",
+          "type": {
+            "kind": "string"
           }
         }
       ]
@@ -28786,6 +29075,27 @@
         }
       ]
     },
+    "main.RemoteTranscriptSnapshot": {
+      "fields": [
+        {
+          "name": "supported",
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "snapshot",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "transcript.Snapshot"
+            },
+            "kind": "nullable"
+          }
+        }
+      ]
+    },
     "main.RemoteWriteResult": {
       "fields": [
         {
@@ -32918,6 +33228,27 @@
           "type": {
             "kind": "string"
           }
+        },
+        {
+          "name": "added",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "removed",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "incomplete",
+          "optional": true,
+          "type": {
+            "kind": "boolean"
+          }
         }
       ]
     },
@@ -33231,6 +33562,116 @@
         }
       ]
     },
+    "provider.ActionIdentity": {
+      "fields": [
+        {
+          "name": "session_id",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "turn_id",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "attempt_id",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "call_id",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "canonical_tool",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "argument_digest",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "resource_scope",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        }
+      ]
+    },
+    "provider.CompletedRead": {
+      "fields": [
+        {
+          "name": "read_id",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "path",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "snapshot",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "intent",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "verdict",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "covered",
+          "type": {
+            "elem": {
+              "elem": {
+                "kind": "integer"
+              },
+              "kind": "array"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "source_end",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "integer"
+            },
+            "kind": "nullable"
+          }
+        }
+      ]
+    },
     "provider.DecisionReceipt": {
       "fields": [
         {
@@ -33426,6 +33867,13 @@
     "provider.PausedRead": {
       "fields": [
         {
+          "name": "snapshot",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "readId",
           "type": {
             "kind": "string"
@@ -33488,8 +33936,42 @@
         }
       ]
     },
+    "provider.ReadCompletion": {
+      "fields": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "reads",
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "provider.CompletedRead"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "omitted",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        }
+      ]
+    },
     "provider.ReadPause": {
       "fields": [
+        {
+          "name": "code",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
         {
           "name": "id",
           "type": {
@@ -33591,6 +34073,113 @@
         },
         {
           "name": "url",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        }
+      ]
+    },
+    "provider.ToolCallRecord": {
+      "fields": [
+        {
+          "name": "identity",
+          "type": {
+            "kind": "object",
+            "ref": "provider.ActionIdentity"
+          }
+        },
+        {
+          "name": "arguments",
+          "optional": true,
+          "type": {
+            "kind": "any"
+          }
+        },
+        {
+          "name": "state",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "read_only",
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "idempotency_key",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "started_at",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "finished_at",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "result_digest",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "effect_summary",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "resolution",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "resolved_at",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "resolution_source",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "inspection_id",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "inspection_state",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "superseded_by",
           "optional": true,
           "type": {
             "kind": "string"
@@ -34146,6 +34735,811 @@
         }
       ]
     },
+    "transcript.ActiveAttempt": {
+      "fields": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "messageId",
+          "type": {
+            "kind": "string"
+          }
+        }
+      ]
+    },
+    "transcript.ContentChunk": {
+      "fields": [
+        {
+          "name": "data",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "nextOffset",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "done",
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "stale",
+          "type": {
+            "kind": "boolean"
+          }
+        }
+      ]
+    },
+    "transcript.ContentRef": {
+      "fields": [
+        {
+          "name": "snapshotId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "recordId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "path",
+          "type": {
+            "elem": {
+              "kind": "string"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "bytes",
+          "type": {
+            "kind": "integer"
+          }
+        }
+      ]
+    },
+    "transcript.ContentRequest": {
+      "fields": [
+        {
+          "name": "snapshotId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "recordId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "path",
+          "type": {
+            "elem": {
+              "kind": "string"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "bytes",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "offset",
+          "type": {
+            "kind": "integer"
+          }
+        }
+      ]
+    },
+    "transcript.Identity": {
+      "fields": [
+        {
+          "name": "sessionId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "headId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "rewriteEpoch",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "runtimeEpoch",
+          "type": {
+            "kind": "string"
+          }
+        }
+      ]
+    },
+    "transcript.Message": {
+      "fields": [
+        {
+          "name": "recordId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "attemptId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "submissionId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "source",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "messageId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "completionReceipt",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "eventwire.CompletionReceipt"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "completionSummary",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "eventwire.CompletionSummary"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "turnId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "role",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "content",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "detail",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "code",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "submitText",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "checkpointTurn",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "integer"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "historyTurn",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "createdAt",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "reasoning",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "memoryCitations",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "provider.MemoryCitation"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "workDurationMs",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "level",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "toolCalls",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "transcript.ToolCall"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "toolCallId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "toolName",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "toolResultArchived",
+          "optional": true,
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "toolResultError",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "execution",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "provider.ToolExecution"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "pending",
+          "optional": true,
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "trigger",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "messages",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "summary",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "archive",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "decisionReceipt",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "provider.DecisionReceipt"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "readiness",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "event.FinalReadiness"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "readPause",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "provider.ReadPause"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "readCompletion",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "provider.ReadCompletion"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "protocolRecovery",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "provider.ProtocolRecoveryAction"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "diagnostic",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "provider.FailureDiagnostic"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "serverSearch",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "provider.ServerSearchCall"
+            },
+            "kind": "array"
+          }
+        }
+      ]
+    },
+    "transcript.PageRequest": {
+      "fields": [
+        {
+          "name": "snapshotId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "before",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "records",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "bytes",
+          "type": {
+            "kind": "integer"
+          }
+        }
+      ]
+    },
+    "transcript.Record": {
+      "fields": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "order",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "message",
+          "type": {
+            "kind": "object",
+            "ref": "transcript.Message"
+          }
+        },
+        {
+          "name": "refs",
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "transcript.ContentRef"
+            },
+            "kind": "array"
+          }
+        }
+      ]
+    },
+    "transcript.Runtime": {
+      "fields": [
+        {
+          "name": "turnId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "submissionId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "status",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "phase",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "startedAt",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "pendingEvents",
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "eventwire.Event"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "completionSummary",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "eventwire.CompletionSummary"
+            },
+            "kind": "nullable"
+          }
+        }
+      ]
+    },
+    "transcript.Snapshot": {
+      "fields": [
+        {
+          "name": "protocolVersion",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "snapshotId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "identity",
+          "type": {
+            "kind": "object",
+            "ref": "transcript.Identity"
+          }
+        },
+        {
+          "name": "projectionRevision",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "coveredThroughSeq",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "records",
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "transcript.Record"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "runtime",
+          "type": {
+            "kind": "object",
+            "ref": "transcript.Runtime"
+          }
+        },
+        {
+          "name": "activeAttempts",
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "transcript.ActiveAttempt"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "activeRecords",
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "transcript.Record"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "before",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "hasOlder",
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "totalRecords",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "totalTurns",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "stale",
+          "type": {
+            "kind": "boolean"
+          }
+        }
+      ]
+    },
+    "transcript.ToolCall": {
+      "fields": [
+        {
+          "name": "partial",
+          "optional": true,
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "argChars",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "pending",
+          "optional": true,
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "parentId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "startedAt",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "id",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "name",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "arguments",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "resolvedName",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "capabilityId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "resolvedReadOnly",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "boolean"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "subject",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "summary",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "diff",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "added",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "removed",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "argumentsArchived",
+          "optional": true,
+          "type": {
+            "kind": "boolean"
+          }
+        }
+      ]
+    },
     "turnevent.Envelope": {
       "fields": [
         {
@@ -34238,6 +35632,13 @@
           "optional": true,
           "type": {
             "kind": "string"
+          }
+        },
+        {
+          "name": "rewriteEpoch",
+          "optional": true,
+          "type": {
+            "kind": "integer"
           }
         },
         {

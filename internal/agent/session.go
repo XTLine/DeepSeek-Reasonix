@@ -17,11 +17,12 @@ import (
 // the run-loop goroutine stay lock-free (serial with its own writes); cross-
 // goroutine access goes through Snapshot.
 type Session struct {
-	cacheSessionID string // ephemeral transport identity; never model-visible or persisted
-	mu             sync.RWMutex
-	Messages       []provider.Message
-	version        uint64
-	rewriteVersion int // bumped each time the log is rewritten (compact/fold)
+	cacheSessionID          string // ephemeral transport identity; never model-visible or persisted
+	mu                      sync.RWMutex
+	Messages                []provider.Message
+	version                 uint64
+	recoveryMetadataVersion uint64 // local receipt edits require persistence, not a model-history rewrite
+	rewriteVersion          int    // bumped each time the log is rewritten (compact/fold)
 	// persistedRewriteVersion is the highest rewriteVersion whose transcript
 	// has fully reached disk. It lives on the Session — not on the controller
 	// — so swapping session objects can never orphan or misattribute the
@@ -300,6 +301,7 @@ func (s *Session) UpdateToolCallResolution(call provider.ToolCall) bool {
 func (s *Session) Replace(msgs []provider.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	msgs = retainUnresolvedToolRecords(s.Messages, msgs)
 	mintMessageIDs(msgs)
 	s.Messages = msgs
 	s.version++
@@ -310,8 +312,8 @@ func (s *Session) Replace(msgs []provider.Message) {
 // pruning, or local metadata edits: a later autosave must use owned-rewrite
 // conflict checks instead of mistaking the modified prefix for another writer.
 //
-// reason names the provider-visible change (e.g. "compact_auto", "snip",
-// "rewind_truncate") and is queued for the next DrainContentRewriteReasons
+// reason names the provider-visible change (e.g. "rewind_truncate",
+// "guardian_merge") and is queued for the next DrainContentRewriteReasons
 // call, which feeds cache-diagnostics attribution. Callers whose msgs only
 // change local-only display metadata (never serialized to the provider) must
 // use ReplaceLocalMetadata instead, so they don't misreport a cache-prefix
@@ -319,6 +321,7 @@ func (s *Session) Replace(msgs []provider.Message) {
 func (s *Session) Rewrite(msgs []provider.Message, reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	msgs = retainUnresolvedToolRecords(s.Messages, msgs)
 	mintMessageIDs(msgs)
 	s.Messages = msgs
 	s.rewriteVersion++
@@ -337,6 +340,7 @@ func (s *Session) Rewrite(msgs []provider.Message, reason string) {
 func (s *Session) ReplaceLocalMetadata(msgs []provider.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	msgs = retainUnresolvedToolRecords(s.Messages, msgs)
 	mintMessageIDs(msgs)
 	s.Messages = msgs
 	s.rewriteVersion++
@@ -374,6 +378,15 @@ func (s *Session) NoteContentRewrite(reason string) {
 func (s *Session) Snapshot() []provider.Message {
 	msgs, _, _ := s.snapshotWithVersion()
 	return msgs
+}
+
+// DisplayBaseline captures messages and their rewrite/head identity together.
+// The controller calls this at an idle/admission boundary, before any new
+// streaming event can commit to its display projection.
+func (s *Session) DisplayBaseline() (messages []provider.Message, headID string, rewriteEpoch uint64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]provider.Message(nil), s.Messages...), s.head.ref.HeadID, uint64(s.rewriteVersion)
 }
 
 // Len returns the number of messages, safe to call from any goroutine.
@@ -423,6 +436,7 @@ func (s *Session) CloneWithMessages(msgs []provider.Message) *Session {
 	return &Session{
 		Messages:                append([]provider.Message(nil), msgs...),
 		version:                 version,
+		recoveryMetadataVersion: s.recoveryMetadataVersion,
 		rewriteVersion:          s.rewriteVersion,
 		persistedRewriteVersion: s.persistedRewriteVersion,
 		persisted:               s.persisted,
@@ -453,6 +467,7 @@ func (s *Session) CloneWithMessagesIfCompatible(msgs []provider.Message) (*Sessi
 	return &Session{
 		Messages:                append([]provider.Message(nil), msgs...),
 		version:                 version,
+		recoveryMetadataVersion: s.recoveryMetadataVersion,
 		rewriteVersion:          s.rewriteVersion,
 		persistedRewriteVersion: s.persistedRewriteVersion,
 		persisted:               s.persisted,
@@ -512,14 +527,14 @@ func (s *Session) RewriteVersion() int {
 	return s.rewriteVersion
 }
 
-// NeedsRewriteSave reports whether the history has been rewritten in memory
-// (compaction, prune) since the last successful full save of this session.
-// Snapshot paths use it to decide that the next write must be an owned
-// rewrite instead of an append.
+// NeedsRewriteSave reports whether the message log was rewritten in place —
+// rather than appended to — since the last successful full save of this
+// session. Snapshot paths use it to decide that the next write must be an
+// owned rewrite instead of an append.
 func (s *Session) NeedsRewriteSave() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.rewriteVersion > s.persistedRewriteVersion
+	return s.rewriteVersion > s.persistedRewriteVersion || s.recoveryMetadataVersion > s.persisted.version
 }
 
 // HasUnsavedChanges reports whether the in-memory transcript contains storage

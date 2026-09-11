@@ -39,7 +39,7 @@ func IsDeepSeek(baseURL string) bool {
 
 // OfficialDeepSeekVisionModel has built-in image support. Unknown models need
 // capability metadata or an explicit declaration, not a name-based guess.
-const OfficialDeepSeekVisionModel = "deepseek-v4-flash-vision-exp"
+const OfficialDeepSeekVisionModel = provider.OfficialDeepSeekVisionModel
 
 // IsOfficialDeepSeekVisionModel reports whether model is the pinned official
 // DeepSeek vision SKU. Matching is case-insensitive and trims surrounding space.
@@ -47,13 +47,14 @@ func IsOfficialDeepSeekVisionModel(model string) bool {
 	return strings.EqualFold(strings.TrimSpace(model), OfficialDeepSeekVisionModel)
 }
 
-// IsOfficialDeepSeekTextModel identifies known text-only models, not future SKUs.
+// The official DeepSeek model lists live in the provider package so the local
+// model catalog can consult them without an openai import cycle.
+func IsOfficialDeepSeekImageModel(model string) bool {
+	return provider.IsOfficialDeepSeekImageModel(model)
+}
+
 func IsOfficialDeepSeekTextModel(model string) bool {
-	switch strings.ToLower(strings.TrimSpace(model)) {
-	case "deepseek-v4-flash", "deepseek-v4-pro":
-		return true
-	}
-	return false
+	return provider.IsOfficialDeepSeekTextModel(model)
 }
 
 // DeepSeekImageInputAllowed applies the official endpoint hard limit after a
@@ -65,13 +66,13 @@ func DeepSeekImageInputAllowed(officialBase bool, requestURL, model string, meta
 	if IsOfficialDeepSeekTextModel(model) {
 		return false
 	}
-	return enabled || (!metadataProvided && IsOfficialDeepSeekVisionModel(model))
+	return enabled || (!metadataProvided && IsOfficialDeepSeekImageModel(model))
 }
 
 // OfficialDeepSeekAllowsVision reports whether this official DeepSeek endpoint
 // may serialize image parts for the selected model. Custom gateways never match.
 func OfficialDeepSeekAllowsVision(baseURL, model string) bool {
-	return IsDeepSeek(baseURL) && IsOfficialDeepSeekVisionModel(model)
+	return IsDeepSeek(baseURL) && IsOfficialDeepSeekImageModel(model)
 }
 
 // IsOpenAI reports whether baseURL points at OpenAI's official API host. Keep

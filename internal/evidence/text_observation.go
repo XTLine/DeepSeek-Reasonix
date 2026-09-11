@@ -1,5 +1,10 @@
 package evidence
 
+import (
+	"slices"
+	"strings"
+)
+
 // TextObservation is a turn-scoped, content-free record of a line window the
 // model was shown. Only canonical path, line position, and SHA-256 line
 // digests are retained; source text is never stored in the ledger.
@@ -13,6 +18,50 @@ type TextObservation struct {
 	Version    string
 	Snapshot   string
 	LineHashes []string
+	// Token is the read receipt ID this window came from: the host-issued
+	// source handle a writer may cite to name the version it is editing.
+	Token string
+	// Absent is a confirmed reader result, never an inference from an error
+	// message or directory listing. It retires obsolete operations only.
+	Absent bool
+}
+
+// SourceToken returns the windows a host-issued source handle covers. An
+// unknown handle returns nothing: a token is a fact the host issued, never a
+// string the model may compose.
+func (l *Ledger) SourceToken(token string) []TextObservation {
+	token = strings.TrimSpace(token)
+	if l == nil || token == "" {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []TextObservation
+	for _, o := range l.observations {
+		if o.Token != token || o.Absent {
+			continue
+		}
+		o.LineHashes = append([]string(nil), o.LineHashes...)
+		out = append(out, o)
+	}
+	return out
+}
+
+// ReceiptIDForCall resolves the host receipt issued for one provider tool call,
+// so a read's window can be filed under the same handle the model was shown.
+func (l *Ledger) ReceiptIDForCall(callID string) string {
+	callID = strings.TrimSpace(callID)
+	if l == nil || callID == "" {
+		return ""
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, r := range slices.Backward(l.receipts) {
+		if r.ToolCallID == callID && r.Read {
+			return r.ID
+		}
+	}
+	return ""
 }
 
 // ObservationBoundary freezes the ledger sequence at the start of a provider
@@ -28,7 +77,7 @@ func (l *Ledger) ObservationBoundary() uint64 {
 }
 
 func (l *Ledger) RecordTextObservation(o TextObservation) {
-	if l == nil || o.Path == "" || o.StartLine < 1 || len(o.LineHashes) == 0 {
+	if l == nil || o.Path == "" || (!o.Absent && (o.StartLine < 1 || len(o.LineHashes) == 0)) {
 		return
 	}
 	o.LineHashes = append([]string(nil), o.LineHashes...)

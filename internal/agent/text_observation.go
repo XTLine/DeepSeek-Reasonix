@@ -37,6 +37,12 @@ func observationBoundary(ctx context.Context, fallback uint64) uint64 {
 // recordModelTextObservationValue records only a fully model-visible window.
 // Incomplete read_file results reach this helper only after exact recovery.
 func (a *Agent) recordModelTextObservationValue(observed tool.ModelTextObservation) {
+	a.recordModelTextObservation(observed, "")
+}
+
+// recordModelTextObservation files a model-visible window under the read call
+// that produced it, so the read's receipt ID is a usable source token.
+func (a *Agent) recordModelTextObservation(observed tool.ModelTextObservation, callID string) {
 	if a == nil || a.task.ledger == nil || observed.Path == "" || len(observed.LineHashes) == 0 {
 		return
 	}
@@ -46,6 +52,7 @@ func (a *Agent) recordModelTextObservationValue(observed tool.ModelTextObservati
 		Version:    observed.Version,
 		Snapshot:   observed.Snapshot,
 		LineHashes: observed.LineHashes,
+		Token:      a.task.ledger.ReceiptIDForCall(callID),
 	})
 }
 

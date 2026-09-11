@@ -1057,7 +1057,7 @@ kind           = "anthropic"
 base_url       = "https://api.deepseek.com/anthropic"
 # request_url  = "https://proxy.example.com/anthropic/v1/messages" # optional exact provider request URL
 # models_url   = "https://proxy.example.com/v1/models"             # optional model discovery URL
-models         = ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"]
+models         = ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"]
 default        = "deepseek-v4-flash"   # optional; defaults to models[0]
 # vision_models = ["deepseek-v4-flash-vision-exp"]  # legacy compatibility; Settings derives image support from model metadata
 # Official DeepSeek vision accepts inline base64, http(s) image URLs, and Files API file_id.

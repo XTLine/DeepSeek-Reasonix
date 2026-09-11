@@ -91,8 +91,10 @@ type Checkpoint struct {
   an expired turn as one directory. Raw v3 preimages also have a soft 1 GiB
   budget; the current or transaction-protected turn may temporarily exceed it,
   and older whole turns are removed once they are unprotected. Legacy blobs use
-  the same budget value in their separate compatibility store. Session cleanup
-  removes the whole sidecar.
+  the same budget value in their separate compatibility store. Both limits are
+  configurable via `[checkpoints]` (`retain_turns`, `blob_quota_bytes`); an
+  omitted or non-positive value keeps the default, so `retain_turns = 0` does
+  not disable retention. Session cleanup removes the whole sidecar.
 
 ## Controller API (the one seam both frontends drive)
 
@@ -144,7 +146,7 @@ re-render uniformly.
 
 - Each user message in the transcript gets a hover **rewind** control → menu:
   **rewind code / rewind conversation / both / fork-from-here**.
-- It calls the same prepare/commit rewind API over the Wails binding; the controller's
+- It calls the same prepare/commit rewind API over the desktop host protocol; the controller's
   event stream pushes the restored state and React re-renders. No rewind logic in
   the frontend.
 - Conversation rewind and fork-from-here keep the current tab and switch it to
@@ -175,5 +177,3 @@ re-render uniformly.
 ## Open questions
 
 - Snapshot on `/compact` and on `NewSession` boundaries?
-- Whether to expose the 100-turn retention and 1 GiB soft byte limits in
-  `[checkpoints]` config.

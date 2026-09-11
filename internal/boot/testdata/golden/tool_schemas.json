@@ -129,12 +129,12 @@
   },
   {
     "Name": "complete_step",
-    "Description": "Record the evidence-backed completion of ONE step of an approved plan. Call it as you finish each step instead of silently moving on: it signs the step off with PROOF it is done — the verification you ran (command + result), a completed built-in review that is fresh for any later changes, the diff/files you changed, or a manual check. A completion with no evidence is REJECTED, so don't claim a step is done until you can show why. The host advances the task list for you when you sign off — it marks this step completed and moves the next to in_progress, so you don't need a separate todo_write to mark completions. Fields: `step` (which step — its title or number, matching the task list), `result` (what is now true/changed), `evidence` (≥1 item, each with `kind` = verification|review|diff|files|manual and a `summary`, plus optional `command`/`paths`, and `criterion_id` naming the acceptance criterion the proof satisfies), and optional `notes`.",
+    "Description": "Record the completion of ONE step of an approved plan. Call it as you finish each step so the task list advances and the user sees what changed. Cite proof by RECEIPT ID: every tool result ends with the host's own id (`[receipt r_1a2b3c4d]`), and listing those ids in `receipt_ids` is exact — retyping a command instead makes the host match your text, which fails over a `cd` prefix, quoting, or argument order. For ordinary work the host has already recorded what your tools did, so anything it cannot confirm is reported alongside the sign-off rather than rejected; under a delivery floor the proof is still required. Fields: `step_id` or `step` (which task-list item), `result` (what is now true/changed), `receipt_ids` (preferred proof), `evidence` (optional items, each with `kind` = verification|review|diff|files|manual and a `summary`, plus optional `command`/`paths`, and `criterion_id` naming the acceptance criterion the proof satisfies), and optional `notes`.",
     "ReadOnly": true,
     "Schema": {
       "properties": {
         "evidence": {
-          "description": "Proof the step is done. At least one item is required.",
+          "description": "Proof the step is done. Optional for ordinary work — the host already recorded what your tools did; required when the run is under a delivery floor.",
           "items": {
             "properties": {
               "command": {
@@ -174,12 +174,22 @@
             ],
             "type": "object"
           },
-          "minItems": 1,
           "type": "array"
         },
         "notes": {
           "description": "Optional caveats, follow-ups, or anything deferred.",
           "type": "string"
+        },
+        "operation_id": {
+          "description": "The host operation whose receipts are being cited. Required when citing runtime-issued receipts so evidence from another change cannot satisfy this step.",
+          "type": "string"
+        },
+        "receipt_ids": {
+          "description": "PREFERRED proof: the host receipt ids printed after the tool calls that did the work (e.g. \"r_1a2b3c4d\"). Citing an id is exact — the host issued it — so shell prefixes, quoting, argument order, and working directory never matter. Use these instead of retyping a command.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "result": {
           "description": "What is now true or changed as a result of finishing this step.",
@@ -200,7 +210,6 @@
         }
       },
       "required": [
-        "evidence",
         "result"
       ],
       "type": "object"
@@ -256,6 +265,10 @@
         },
         "path": {
           "description": "File path",
+          "type": "string"
+        },
+        "source_token": {
+          "description": "Optional: the source_token printed by the read_file that showed you this file. Citing it names the exact version you are editing, so a change made outside this session is caught instead of silently overwritten.",
           "type": "string"
         }
       },
@@ -535,6 +548,10 @@
         },
         "path": {
           "description": "File path",
+          "type": "string"
+        },
+        "source_token": {
+          "description": "Optional: the source_token printed by the read_file that showed you this file. Citing it names the exact version you are editing, so a change made outside this session is caught instead of silently overwritten.",
           "type": "string"
         }
       },

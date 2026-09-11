@@ -9,23 +9,29 @@ import (
 )
 
 func deepSeekV4FlashPriceCNY() *provider.Pricing {
-	return &provider.Pricing{CacheHit: 0.10, Input: 3, Output: 9, Currency: "¥"}
+	return &provider.Pricing{CacheHit: 0.04, Input: 2, Output: 8, Currency: "¥"}
 }
 
 func deepSeekV4ProPriceCNY() *provider.Pricing {
 	return &provider.Pricing{CacheHit: 0.30, Input: 9, Output: 27, Currency: "¥"}
 }
 
+// deepSeekV4FlashModelIDs are the ids the vendor serves at the Flash price: the
+// V4.1 name, and the retired V4 ids it still routes there.
+func deepSeekV4FlashModelIDs() []string {
+	return []string{"deepseek-flash", "deepseek-v4-flash", openai.OfficialDeepSeekVisionModel}
+}
+
 func deepSeekV4PricesCNY() map[string]*provider.Pricing {
-	return map[string]*provider.Pricing{
-		"deepseek-v4-flash":                deepSeekV4FlashPriceCNY(),
-		openai.OfficialDeepSeekVisionModel: deepSeekV4FlashPriceCNY(),
-		"deepseek-v4-pro":                  deepSeekV4ProPriceCNY(),
+	prices := map[string]*provider.Pricing{"deepseek-v4-pro": deepSeekV4ProPriceCNY()}
+	for _, model := range deepSeekV4FlashModelIDs() {
+		prices[model] = deepSeekV4FlashPriceCNY()
 	}
+	return prices
 }
 
 func deepSeekV4FlashPriceUSD() *provider.Pricing {
-	return &provider.Pricing{CacheHit: 0.014, Input: 0.44, Output: 1.32, Currency: "$"}
+	return &provider.Pricing{CacheHit: 0.006, Input: 0.3, Output: 1.2, Currency: "$"}
 }
 
 func deepSeekV4ProPriceUSD() *provider.Pricing {
@@ -33,11 +39,11 @@ func deepSeekV4ProPriceUSD() *provider.Pricing {
 }
 
 func deepSeekV4PricesUSD() map[string]*provider.Pricing {
-	return map[string]*provider.Pricing{
-		"deepseek-v4-flash":                deepSeekV4FlashPriceUSD(),
-		openai.OfficialDeepSeekVisionModel: deepSeekV4FlashPriceUSD(),
-		"deepseek-v4-pro":                  deepSeekV4ProPriceUSD(),
+	prices := map[string]*provider.Pricing{"deepseek-v4-pro": deepSeekV4ProPriceUSD()}
+	for _, model := range deepSeekV4FlashModelIDs() {
+		prices[model] = deepSeekV4FlashPriceUSD()
 	}
+	return prices
 }
 
 // DeepSeekV4PricesForCurrency returns the official regional price table.
@@ -281,14 +287,23 @@ func ApplyUserConfigUpgradesOnStartup(path string) (bool, error) {
 	if header.ConfigVersion > defaultVersion {
 		return false, nil
 	}
+	if header.ConfigVersion >= openCodeGoUpgradeVersion {
+		resolved, _, err := statConfigPath(path)
+		if err != nil {
+			return false, err
+		}
+		if err := finalizeOpenCodeGoJournal(resolved); err != nil {
+			return false, err
+		}
+	}
 	classicDesktopLayout := strings.EqualFold(strings.TrimSpace(header.Desktop.LayoutStyle), "classic")
 	if header.ConfigVersion == defaultVersion && !classicDesktopLayout {
 		return false, nil
 	}
-	// Versions 7 and 8 already completed the older migrations. Preserve their
-	// TOML byte-for-byte except for the protocol scalars and version marker.
-	if header.ConfigVersion >= deepSeekScheduledPricingConfigVersion && header.ConfigVersion < deepSeekOfficialChatUpgradeConfigVersion && !classicDesktopLayout {
-		return upgradeDeepSeekChatDefaultFileLocked(path)
+	// Versions 7-9 commit the protocol upgrades and final version together,
+	// preserving the original bytes in one backup before any replacement.
+	if header.ConfigVersion >= deepSeekScheduledPricingConfigVersion && header.ConfigVersion < openCodeGoUpgradeVersion {
+		return upgradeOpenCodeGoFileLocked(path)
 	}
 	cfg := LoadForEdit(path)
 	changed := false
@@ -336,10 +351,15 @@ func ApplyUserConfigUpgradesOnStartup(path string) (bool, error) {
 		return false, nil
 	}
 	if header.ConfigVersion < defaultVersion {
-		cfg.ConfigVersion = defaultVersion
+		cfg.ConfigVersion = deepSeekOfficialChatUpgradeConfigVersion
 	}
 	if err := cfg.SaveTo(path); err != nil {
 		return false, err
+	}
+	if header.ConfigVersion < openCodeGoUpgradeVersion {
+		if _, err := upgradeOpenCodeGoFileLocked(path); err != nil {
+			return false, err
+		}
 	}
 	return true, nil
 }
@@ -412,6 +432,25 @@ func legacyDeepSeekV4PricesUSD() map[string]*provider.Pricing {
 	}
 }
 
+// augustDeepSeekV4Prices* are the 2026-08-17 table. They are recognized so a
+// config that never left that generation is still refreshed to the current
+// prices, and so it is not mistaken for a hand-edited custom rate.
+func augustDeepSeekV4PricesCNY() map[string]*provider.Pricing {
+	return map[string]*provider.Pricing{
+		"deepseek-v4-flash":                {CacheHit: 0.10, Input: 3, Output: 9, Currency: "¥"},
+		openai.OfficialDeepSeekVisionModel: {CacheHit: 0.10, Input: 3, Output: 9, Currency: "¥"},
+		"deepseek-v4-pro":                  {CacheHit: 0.30, Input: 9, Output: 27, Currency: "¥"},
+	}
+}
+
+func augustDeepSeekV4PricesUSD() map[string]*provider.Pricing {
+	return map[string]*provider.Pricing{
+		"deepseek-v4-flash":                {CacheHit: 0.014, Input: 0.44, Output: 1.32, Currency: "$"},
+		openai.OfficialDeepSeekVisionModel: {CacheHit: 0.014, Input: 0.44, Output: 1.32, Currency: "$"},
+		"deepseek-v4-pro":                  {CacheHit: 0.044, Input: 1.32, Output: 3.96, Currency: "$"},
+	}
+}
+
 // migrateDeepSeekScheduledPricingDefaults replaces only the exact pre-August
 // official defaults. Custom endpoints and any edited numeric rate remain intact.
 func migrateDeepSeekScheduledPricingDefaults(c *Config) {
@@ -470,7 +509,9 @@ func isKnownDeepSeekOfficialPricing(model string, price *provider.Pricing) bool 
 		return false
 	}
 	for _, prices := range []map[string]*provider.Pricing{
-		deepSeekV4PricesCNY(), deepSeekV4PricesUSD(), legacyDeepSeekV4PricesCNY(), legacyDeepSeekV4PricesUSD(),
+		deepSeekV4PricesCNY(), deepSeekV4PricesUSD(),
+		augustDeepSeekV4PricesCNY(), augustDeepSeekV4PricesUSD(),
+		legacyDeepSeekV4PricesCNY(), legacyDeepSeekV4PricesUSD(),
 	} {
 		if samePricingNormalizedCurrency(price, prices[model]) {
 			return true

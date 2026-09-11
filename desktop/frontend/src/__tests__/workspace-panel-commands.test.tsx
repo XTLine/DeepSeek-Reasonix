@@ -23,7 +23,7 @@ let navigationRequest: unknown;
 const setTreeWidth = (width: number) => { restoredWidth = width; };
 function Probe({ workspace, creation, visible }: { workspace: string; creation: boolean; visible: boolean }) {
   commands = useWorkspacePanelCommands({ workspaceRoot: workspace, creation, visible, closeOverlays, clearLiveWidth,
-    availableWidth: 800, clampTreeWidth: (width) => width, setTreeWidth });
+    availableWidth: 800, clampTreeWidth: (width) => width, setTreeWidth, gridOpen: visible, t: (key: string) => key } as never);
   navigation = useSessionNavigationCommands({
     activeTab: { id: "fixture", scope: workspace === globalRoot ? "global" : "project", workspaceRoot: workspace },
     closeTransientOverlays: closeOverlays, clearImDetail: () => {}, prepareBlankWorkspace: commands.prepareBlankWorkspace,

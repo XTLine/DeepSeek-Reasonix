@@ -23,6 +23,7 @@ var ChineseTraditional = Messages{
 	TaskBudget:                       "本任務已達花費預算上限，已要求給出最終回答。",
 	LoopGuard:                        "助手沒有取得有效進展，已要求它重新評估目前步驟。",
 	ProgressGuard:                    "助手在沒有新證據的情況下反覆做重複工作，已要求它更換方法。",
+	OperationNeedsUser:               "同一處變更連續兩次以相同原因失敗，已暫停並交給你處理，不再自動重試。",
 	SoftBudgetConverge:               "正在收斂這場耗時較長的唯讀調查。",
 	EvidenceNudge:                    "有多處改動尚未驗證，已要求執行成本最低的判別性檢查。",
 	ReasoningGovernor:                "目前處於高思考開銷的探索階段，在開始實證工作前將保持較低的推理深度。",

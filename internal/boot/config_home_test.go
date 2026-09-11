@@ -33,8 +33,14 @@ func isolateConfigHome(t *testing.T) string {
 
 func closeBootTestHistoryCatalog(t *testing.T) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	// Fixture teardown must await resource release before changing HOME. Its
+	// bound is the suite deadline; shutdown latency is tested by the owner.
+	ctx := context.Background()
+	if deadline, ok := t.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
 	if err := history.CloseSharedCatalog(ctx); err != nil {
 		t.Fatalf("close shared history catalog: %v", err)
 	}

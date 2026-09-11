@@ -1386,8 +1386,8 @@ price = { cache_hit = 0.2, input = 3.75, output = 6.75, currency = "T" }
 		flash.Price == nil || flash.Price.Output != 2.25 {
 		t.Fatalf("Flash model fields were not preserved: %+v", flash)
 	}
-	if config.EffectiveVision(flash) {
-		t.Fatal("preserved stale Flash vision metadata must not enable images on the official DeepSeek endpoint")
+	if !config.EffectiveVision(flash) {
+		t.Fatal("V4 Flash is natively multimodal on the official DeepSeek endpoint")
 	}
 	flashOverride := canonical.ModelOverrides["deepseek-v4-flash"]
 	if flashOverride.Vision == nil || !*flashOverride.Vision {
@@ -1831,13 +1831,13 @@ func TestOfficialDeepSeekTemplateUsesRegionalPricing(t *testing.T) {
 		if got.Kind != "openai" || got.BaseURL != "https://api.deepseek.com" || !config.EffectiveIndependentWebSearch(&got) || got.Thinking != "enabled" {
 			t.Fatalf("%s DeepSeek template = kind:%q base_url:%q web_search:%t thinking:%q, want Chat Completions with independent web search", language, got.Kind, got.BaseURL, config.EffectiveIndependentWebSearch(&got), got.Thinking)
 		}
-		if price := got.Prices["deepseek-v4-flash"]; price == nil || price.Currency != "$" || price.Output != 1.32 {
+		if price := got.Prices["deepseek-v4-flash"]; price == nil || price.Currency != "$" || price.Output != 1.2 {
 			t.Fatalf("%s deepseek-v4-flash price = %+v, want frozen USD table", language, price)
 		}
 		if price := got.Prices["deepseek-v4-pro"]; price == nil || price.Currency != "$" || price.Output != 3.96 {
 			t.Fatalf("%s deepseek-v4-pro price = %+v, want frozen USD table", language, price)
 		}
-		if price := got.Prices[openai.OfficialDeepSeekVisionModel]; price == nil || price.Currency != "$" || price.Output != 1.32 {
+		if price := got.Prices[openai.OfficialDeepSeekVisionModel]; price == nil || price.Currency != "$" || price.Output != 1.2 {
 			t.Fatalf("%s vision SKU price = %+v, want Flash USD table", language, price)
 		}
 	}
@@ -2011,7 +2011,7 @@ func TestSetDesktopCurrencyPersistsDisplayWithoutRewritingOfficialPricing(t *tes
 	}
 	flash, ok := cfg.Provider("deepseek-flash")
 	// Display currency must not rewrite frozen list prices (default USD table).
-	if !ok || flash.Price == nil || flash.Price.Output != 1.32 || flash.Price.Currency != "$" {
+	if !ok || flash.Price == nil || flash.Price.Output != 1.2 || flash.Price.Currency != "$" {
 		t.Fatalf("saved DeepSeek flash price = %+v, want frozen USD official price", flash)
 	}
 }

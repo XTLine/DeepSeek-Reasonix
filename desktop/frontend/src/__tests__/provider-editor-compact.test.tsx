@@ -15,6 +15,7 @@ await act(async () => root.render(<LocaleProvider><ProviderEditor initial={provi
 const save = document.querySelector('.provider-editor-footer .btn--primary') as HTMLButtonElement;
 const edit = () => (document.querySelector('.provider-model-draft__option button') as HTMLButtonElement).click();
 async function change(input: HTMLInputElement,value:string) { await act(async()=>{Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value')!.set!.call(input,value);input.dispatchEvent(new window.Event('input',{bubbles:true}));}); }
+async function changeSelect(select: HTMLSelectElement,value:string) { await act(async()=>{Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype,'value')!.set!.call(select,value);select.dispatchEvent(new window.Event('change',{bubbles:true}));}); }
 const dialog = () => document.querySelector('dialog')!;
 const submit = async () => act(async()=>{dialog().querySelector('form')!.dispatchEvent(new window.Event('submit',{bubbles:true,cancelable:true}));});
 assert.equal(save.disabled,true);
@@ -34,6 +35,7 @@ await change(numbers[0],'128000');await change(numbers[1],'4096');
 const image=dialog().querySelector<HTMLInputElement>('aside input:not(:disabled)')!;
 await act(async()=>image.click());
 assert.equal(dialog().querySelectorAll('aside input:disabled').length,4,'text is locked; video and PDF unavailable');
+await changeSelect(dialog().querySelector('select')!, '');
 await submit();
 assert.equal(save.disabled,false);
 assert.equal(document.querySelector('.provider-context-badge')!.textContent,'128K');
@@ -45,6 +47,15 @@ assert.equal(saved.modelOverrides[0].contextWindow,128000);
 assert.equal(saved.modelOverrides[0].maxOutputTokens,4096);
 assert.equal(saved.modelOverrides[0].vision,true);
 assert.equal(saved.modelOverrides[0].reasoningProtocol,'deepseek','preserves unrelated reasoning configuration');
+assert.deepEqual(saved.modelOverrides[0].supportedEfforts,['high'],'automatic default preserves configured effort options');
+assert.equal(saved.modelOverrides[0].defaultEffort,'','automatic default is stored without a model default');
+await act(async()=>edit());
+const highLevel = Array.from(dialog().querySelectorAll<HTMLInputElement>('.provider-model-dialog__effort-card input[type="checkbox"]')).find(input => input.getAttribute('aria-label') === 'high' || input.parentElement?.textContent?.trim() === 'high');
+assert.ok(highLevel, 'configured effort checkbox is rendered');
+await act(async()=>highLevel!.click());
+await submit();await act(async()=>save.click());
+assert.deepEqual(saved.modelOverrides[0].supportedEfforts,[],'removing the default effort clears the invalid option');
+assert.equal(saved.modelOverrides[0].defaultEffort,'','removing the default effort falls back to automatic');
 await act(async()=>edit());
 await act(async()=>{
   dialog().querySelectorAll<HTMLButtonElement>('section label button').forEach(button=>button.click());

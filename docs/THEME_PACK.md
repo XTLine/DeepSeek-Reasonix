@@ -12,7 +12,7 @@ both scenes.
 
 - Built-in styles, user themes, backgrounds, live preview, import/export, local library
 - Full background on the home (empty) scene; reduced opacity + directional overlay on task scenes
-- Works with Classic / Workbench / Creation and `auto` / `light` / `dark`
+- Works with Workbench / Creation and `auto` / `light` / `dark`
 - **No** online marketplace, cloud sync, or script plugins
 
 ## Theme experience (settings IA)

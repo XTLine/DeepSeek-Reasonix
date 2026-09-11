@@ -1206,7 +1206,7 @@ func TestResolvedCapabilityDispatchRefreshesWriterClassification(t *testing.T) {
 	}))
 
 	results := a.executeBatch(context.Background(), &a.turn, []provider.ToolCall{call}).results
-	if calls != 1 || len(results) != 1 || results[0] != "target executed" {
+	if calls != 1 || len(results) != 1 || stripReceiptCitation(results[0]) != "target executed" {
 		t.Fatalf("execution calls=%d results=%v", calls, results)
 	}
 

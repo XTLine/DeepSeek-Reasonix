@@ -1,11 +1,14 @@
 import type { ReactNode } from "react";
 import { PanelLeft } from "lucide-react";
+import logoSymbol from "../assets/logo-symbol.svg";
 import { Tooltip } from "../components/Tooltip";
 import { WorktreeBadge } from "../components/WorktreeBadge";
 
 export type TopicbarView = {
   automationReturn: boolean; automationReturnLabel: string;
   chromeHidden: boolean;
+  /** Windows leads the bar with the app mark; macOS leads with the traffic lights. */
+  brand: boolean;
   sidebar: { title: string; blocked: boolean; pressed: boolean; collapsed: boolean };
   title: {
     text: string; hover: string; renameLabel: string; editing: boolean;
@@ -32,6 +35,9 @@ export function TopicbarRegion({ view, commands, children }: {
 }) {
   const { sidebar, title, subtitle } = view;
   return <header className="topicbar">
+    {view.brand && <div className="topicbar__brand">
+      <img src={logoSymbol} alt="Reasonix" className="topicbar__brand-logo" draggable={false} />
+    </div>}
     {view.automationReturn && <button className="btn btn--small" type="button" onClick={event => {
       event.currentTarget.focus({ preventScroll: true });
       commands.openAutomation();

@@ -35,12 +35,10 @@ let staleAfterEnsure = false;
 let states!: ReturnType<typeof useWorktreeMergeCommands>;
 function Probe() {
   states = useWorktreeMergeCommands({
-    singleSurfaceLayout: false,
     noteNavigationIntent: () => 42,
     registeredNavigationIntent: async () => navigationToken,
     isNavigationIntentCurrent: () => navigationCurrent,
-    ensureBlankSurface: async () => sourceTab,
-    ensureBlankTab: async () => {
+    ensureBlankSurface: async () => {
       lifecycleCalls.push("ensure");
       if (staleAfterEnsure) navigationCurrent = false;
       return sourceTab;

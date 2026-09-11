@@ -169,12 +169,12 @@ export function useAppSessionComposition(input: AppSessionCompositionInput) {
   const {
     switchTab, switchRemoteTab, closeTab, reorderTabs, createIsolatedWorktree,
     noteNavigationIntent, registeredNavigationIntent, isNavigationIntentCurrent, reassertVisibleTabAfterStaleNavigation,
-    commitSingleSurfaceNavigation, openTopicSession, openGlobalTab, openProjectTab, activateTopic,
-    ensureBlankSurface, ensureBlankTab,
+    commitSingleSurfaceNavigation, activateTopic,
+    ensureBlankSurface,
   } = runtime.navigation;
   const {
     setTransientOverlayDismissSignal, managementActive, desktopLayoutStyle,
-    singleSurfaceLayout, windowsFramelessChrome, rightDockMode,
+    windowsFramelessChrome, rightDockMode,
     workspacePanelOpen, workspacePanelMaximized, liveTerminalHeight, setLiveWorkspacePanelRenderWidth,
     setRightDockTreeWidth, terminalPanelOpen, setSettingsTarget, enterConversation,
   } = shell;
@@ -592,6 +592,8 @@ export function useAppSessionComposition(input: AppSessionCompositionInput) {
     creation: desktopLayoutStyle === "creation", visible: surfaceWorkspacePanelRenderable,
     closeOverlays: closeTransientOverlays, clearLiveWidth: setLiveWorkspacePanelRenderWidth,
     availableWidth: workspacePanelAvailableWidth, clampTreeWidth: rightDockTreeWidthClamp, setTreeWidth: setRightDockTreeWidth,
+    gridOpen: surfaceWorkspacePanelGridOpen,
+    t,
   });
   const { openRightDockMode } = workspacePanelCommands;
 
@@ -643,9 +645,7 @@ export function useAppSessionComposition(input: AppSessionCompositionInput) {
     transitioning: runtimeTransitioning,
     navigationDataReady: navigationTargetDataReady,
     preserved: preservedTranscriptSurface,
-    singleSurface: singleSurfaceLayout,
     controllerReady,
-    heroLayout: desktopLayoutStyle === "creation" || desktopLayoutStyle === "workbench",
     availability,
     sessionActivity: Boolean(conversationView.runtime.running || conversationView.runtime.pendingPrompt
       || conversationView.runtime.approval || conversationView.runtime.ask || conversationView.runtime.extensionForm
@@ -657,7 +657,7 @@ export function useAppSessionComposition(input: AppSessionCompositionInput) {
     commitSingleSurface: commitSingleSurfaceNavigation,
     ports: {
       loadOlderHistory: (tabId, targetTurn, trigger) => loadOlderHistory(tabId, targetTurn, trigger),
-      commitThenSend: (tabId, text) => commitThenSend(tabId, text),
+      commitThenSend: (tabId, text, submitText) => commitThenSend(tabId, text, submitText),
     },
   });
 
@@ -674,9 +674,9 @@ export function useAppSessionComposition(input: AppSessionCompositionInput) {
 
   const { openAutomationTopic, topicAccepted } = useAutomationNavigation({ noteIntent: noteNavigationIntent,
     enqueue: useCommittedCommand((intent, seq) => enqueueNavigationWithIntent(intent, seq)) });  const { enqueueNavigation, enqueueNavigationWithIntent, openRemoteProject } = useDesktopNavigation({
-    visible: { tabId: activeTabId ?? "", sessionKey: activeSessionIdentity }, singleSurface: singleSurfaceLayout,
-    ports: { isNavigationIntentCurrent, activateTopic, openTopicSession, openGlobalTab, openProjectTab,
-      ensureBlankSurface, ensureBlankTab, createIsolatedWorktree, openChannelSession, resumeSession,
+    visible: { tabId: activeTabId ?? "", sessionKey: activeSessionIdentity },
+    ports: { isNavigationIntentCurrent, activateTopic,
+      ensureBlankSurface, createIsolatedWorktree, openChannelSession, resumeSession,
       registeredNavigationIntent, switchRemoteTab, openRemoteProject: desktopBridge.openRemoteProjectTab,
       listTabs: desktopBridge.listTabs, applyTabs: setTabMetas, seedTab: seedActiveTabMeta, listSessions, topicAccepted },
     setTabRevealSignal, setTranscriptRevealSignal, setProjectRevision, setHistory: setHistView, t, showToast,

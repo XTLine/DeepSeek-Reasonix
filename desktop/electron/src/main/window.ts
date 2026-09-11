@@ -1,4 +1,4 @@
-import { BrowserWindow, nativeTheme, type WebContents, type WebFrameMain } from "electron";
+import { BrowserWindow, nativeTheme, screen, type WebContents, type WebFrameMain } from "electron";
 import type { EventFrame, WindowBounds, WindowTheme } from "../shared/ipc.js";
 import { IPC } from "../shared/ipc.js";
 import { shellActionFromURL, type ShellAction } from "./failurePage.js";
@@ -6,6 +6,7 @@ import type { HelloWindow } from "./handshake.js";
 import { errorText, type Logger } from "./log.js";
 import { APP_ORIGIN } from "./protocol.js";
 import { AppZoomStore } from "./zoomStore.js";
+import { persistedWindowRect, restoreWindowRect, type WindowRect } from "./windowBounds.js";
 
 export const DEFAULT_GEOMETRY: HelloWindow = { width: 1280, height: 820, minWidth: 760, minHeight: 480, frameless: false, zoomFactor: 1 };
 
@@ -17,6 +18,7 @@ export interface MainWindowDeps {
   log: Logger;
   onAppDomReady(rendererGeneration: number): void;
   onRendererLost?(reason: string): void;
+  isQuitting?(): boolean;
   onCloseRequested(): Promise<boolean>;
   onCloseAllowed(): void;
   onShellAction(action: ShellAction): void;
@@ -35,6 +37,8 @@ export class MainWindow {
   private rendererGeneration = 0;
   private closing = false;
   private closeAllowed = false;
+  private lastMaximised = false;
+  private lastNormalBounds: WindowRect | undefined;
   private readonly appOrigin: string;
 
   constructor(private readonly deps: MainWindowDeps) {
@@ -51,14 +55,25 @@ export class MainWindow {
     return this.win && !this.win.isDestroyed() ? this.win : null;
   }
 
+  prepareApp(geometry: HelloWindow): void {
+    if (this.content === "app" && this.browserWindow) return;
+    const previous = this.browserWindow;
+    this.win = null;
+    this.create(geometry);
+    previous?.destroy();
+  }
+
   create(geometry: HelloWindow): void {
     if (this.browserWindow) return;
     const { deps } = this;
+    const display = geometry.position
+      ? screen.getDisplayMatching({ ...geometry.position, width: geometry.width, height: geometry.height })
+      : screen.getPrimaryDisplay();
+    const rect = restoreWindowRect(geometry, geometry.position, display.workArea);
     const win = new BrowserWindow({
-      width: Math.round(geometry.width),
-      height: Math.round(geometry.height),
-      minWidth: Math.round(geometry.minWidth),
-      minHeight: Math.round(geometry.minHeight),
+      ...rect,
+      minWidth: Math.min(Math.round(geometry.minWidth), display.workArea.width),
+      minHeight: Math.min(Math.round(geometry.minHeight), display.workArea.height),
       show: false,
       title: "Reasonix",
       backgroundColor: "#1a1a2e",
@@ -76,6 +91,15 @@ export class MainWindow {
       },
     });
     this.win = win;
+    this.lastMaximised = false;
+    this.lastNormalBounds = win.getNormalBounds();
+    // Some platforms report isMaximized=false while iconic. Keep the last
+    // non-minimized state so minimising a maximized window does not erase it.
+    const captureBounds = () => { this.bounds(); };
+    win.on("resize", captureBounds);
+    win.on("move", captureBounds);
+    win.on("maximize", captureBounds);
+    win.on("unmaximize", captureBounds);
     this.content = "none";
     if (deps.platform !== "darwin") win.setMenuBarVisibility(false);
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -99,7 +123,7 @@ export class MainWindow {
     win.webContents.on("render-process-gone", (_event, details) => {
       deps.log.error(`renderer process gone: ${details.reason} (exit code ${details.exitCode})`);
       deps.onRendererLost?.(`app renderer ${details.reason}`);
-      if (this.content === "app" && this.browserWindow) win.webContents.reload();
+      if (!this.deps.isQuitting?.() && this.content === "app" && this.browserWindow) win.webContents.reload();
     });
     win.on("close", (event) => {
       if (this.closeAllowed) return;
@@ -107,7 +131,7 @@ export class MainWindow {
       void this.requestClose();
     });
     win.on("closed", () => {
-      this.win = null;
+      if (this.win === win) this.win = null;
     });
   }
 
@@ -149,9 +173,11 @@ export class MainWindow {
     try {
       await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
     } catch (error) {
-      this.deps.log.error(`failed to load the failure page: ${errorText(error)}`);
+      // Successful startup replaces the provisional window while its data URL
+      // may still be loading. That cancellation is not a startup failure.
+      if (!win.isDestroyed() && this.browserWindow === win) this.deps.log.error(`failed to load the recovery page: ${errorText(error).slice(0, 300)}`);
     }
-    win.show();
+    if (!win.isDestroyed() && !this.deps.isQuitting?.() && this.content === "failure") win.show();
   }
 
   allowClose(): void {
@@ -252,9 +278,15 @@ export class MainWindow {
   bounds(): WindowBounds {
     const win = this.browserWindow;
     if (!win) return { x: 0, y: 0, width: 0, height: 0, maximised: false };
-    const [x, y] = win.getPosition();
-    const [width, height] = win.getSize();
-    return { x, y, width, height, maximised: win.isMaximized() };
+    // getNormalBounds can return the maximized frame after minimising on macOS.
+    // Freeze both geometry and intent while iconic; capture native moves even
+    // when they occur between the renderer's periodic persistence requests.
+    if (!win.isMinimized()) {
+      this.lastNormalBounds = persistedWindowRect(win);
+      this.lastMaximised = win.isMaximized();
+    }
+    const rect = this.lastNormalBounds ?? persistedWindowRect(win);
+    return { ...rect, maximised: this.lastMaximised };
   }
 
   setTheme(theme: WindowTheme): void {

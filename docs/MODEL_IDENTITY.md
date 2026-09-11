@@ -4,7 +4,7 @@ Model IDs are case-sensitive identifiers. Reasonix preserves their spelling when
 
 Use the exact ID accepted by the configured API endpoint. Display names and aliases are not implicit alternate spellings: if a service exposes an alias, configure that exact API identifier. Reasonix does not infer aliases by folding case. Adding a model validates its ID and numeric settings locally; a connection test determines whether the endpoint accepts it. An unlisted model can still be callable.
 
-Unknown DeepSeek models allow manual image capability declarations. This does not prove that the endpoint supports images. Known text-only V4 Flash and V4 Pro remain blocked; video and PDF transport are not enabled by this setting.
+Unknown DeepSeek models allow manual image capability declarations. This does not prove that the endpoint supports images. The official DeepSeek models with native image input are `deepseek-flash`, `deepseek-v4-flash`, `deepseek-v4.1-flash-expires-on-0910`, and `deepseek-v4-flash-vision-exp`; V4 Pro remains text-only and blocked. A non-empty vision list curated before those models existed does not veto them, but an explicitly emptied list still disables image input for the provider. Video and PDF transport are not enabled by this setting.
 
 ## Existing configuration
 

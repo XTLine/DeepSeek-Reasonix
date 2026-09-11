@@ -25,7 +25,7 @@ export interface SettingsView {
   bot: BotSettingsView;
   desktopLanguage: string; // "" | "en" | "zh"; empty = auto
   desktopCurrency?: string; // "" | "CNY" | "USD"; absent/empty = follow language
-  desktopLayoutStyle: string; // "classic" | "workbench" | "creation"
+  desktopLayoutStyle: string; // "workbench" | "creation"
   desktopTheme: string; // "auto" | "dark" | "light"
   desktopThemeStyle: string;
   desktopTerminalTheme: string; // "auto" follows app | "dark" | "light"

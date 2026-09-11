@@ -3,6 +3,7 @@
 // enforces that boundary.
 import type { AppBindings } from "./bridge";
 import type { DesktopBrowserHost } from "./browserHost";
+import type { NativePerformanceActions, ProcessDiagnosticsSnapshot } from "./processDiagnostics";
 
 export type DesktopHostKind = "electron" | "none";
 export type WindowTheme = "system" | "light" | "dark";
@@ -20,6 +21,39 @@ export interface ServiceState {
   generation: string;
   error?: string;
 }
+export interface GraphicsSettingsState {
+  hardwareAcceleration: boolean; startupEnabled: boolean;
+  override: "none" | "environment" | "command-line"; restartRequired: boolean;
+  writable: boolean; warning: "invalid-config" | "unreadable-config" | "unsupported-version" | null;
+}
+
+export interface BrowserControlState {
+  controlEnabled: boolean;
+  ignoreCertificateErrors: boolean;
+  writable: boolean;
+  warning: "invalid-config" | "unreadable-config" | "unsupported-version" | null;
+}
+
+export type ChromeImportFailure =
+  | "chrome-missing"
+  | "profile-not-found"
+  | "cookies-unreadable"
+  | "safe-storage-denied"
+  | "safe-storage-unavailable"
+  | "unsupported-platform";
+
+export type ChromeImportOutcome =
+  | { ok: true; profile: string; cookies: number; skipped: number }
+  | { ok: false; reason: ChromeImportFailure };
+
+export interface BrowserControlApi {
+  get(): Promise<BrowserControlState | null>;
+  setEnabled(enabled: boolean): Promise<BrowserControlState>;
+  setIgnoreCertificateErrors(enabled: boolean): Promise<BrowserControlState>;
+  clearCache(): Promise<void>;
+  clearAllData(): Promise<void>;
+  importChromeLogin(): Promise<ChromeImportOutcome>;
+}
 
 // Mirrors docs/DESKTOP_HOST_PROTOCOL.md "Renderer preload API".
 export interface ReasonixDesktopHost {
@@ -28,7 +62,8 @@ export interface ReasonixDesktopHost {
   readonly platform: { os: "darwin" | "windows" | "linux"; arch: string; versions: Record<string, string> };
   invoke(method: string, args: unknown[]): Promise<unknown>;
   on(name: string, cb: (...args: unknown[]) => void): () => void;
-  native: {
+  native: NativePerformanceActions & {
+    processDiagnostics?(): Promise<ProcessDiagnosticsSnapshot | null>;
     openExternal(url: string): Promise<void>;
     clipboard: { writeText(text: string): Promise<boolean>; readText(): Promise<string> };
     window: {
@@ -43,6 +78,8 @@ export interface ReasonixDesktopHost {
       setAppZoom(factor: number): Promise<number>;
       resetAppZoom(): Promise<number>;
     };
+    graphics: { get(): Promise<GraphicsSettingsState>; setHardwareAcceleration(enabled: boolean): Promise<GraphicsSettingsState> };
+    browserControl: BrowserControlApi;
     getPathForFile(file: File): string;
     onServiceState(cb: (state: ServiceState) => void): () => void;
   };
@@ -59,7 +96,8 @@ export interface DesktopHost {
   kind: DesktopHostKind;
   app: AppBindings | undefined;
   events: { on(name: string, cb: (...args: unknown[]) => void): () => void };
-  native: {
+  native: NativePerformanceActions & {
+    processDiagnostics?(): Promise<ProcessDiagnosticsSnapshot | null>;
     openExternal(url: string): void;
     clipboardWriteText(text: string): Promise<boolean>;
     clipboardReadText(): Promise<string>;
@@ -69,6 +107,8 @@ export interface DesktopHost {
     getAppZoom(): Promise<number>;
     setAppZoom(factor: number): Promise<number>;
     resetAppZoom(): Promise<number>;
+    graphics: { get(): Promise<GraphicsSettingsState>; setHardwareAcceleration(enabled: boolean): Promise<GraphicsSettingsState> };
+    browserControl: BrowserControlApi;
     onFilesDropped(cb: (paths: string[]) => void): () => void;
     getPathForFile?(file: File): string;
     onServiceState(cb: (state: ServiceState) => void): () => void;
@@ -85,6 +125,17 @@ function dataTransferLooksLikeFileDrag(dt: DataTransfer | null): boolean {
 
 const noop = () => {};
 const win = () => (typeof window === "undefined" ? undefined : window);
+
+// The bare browser has no shell, so the browser-control page degrades to its
+// "desktop only" notice instead of pretending the actions exist.
+const unavailableBrowserControl: BrowserControlApi = {
+  get: async () => null,
+  setEnabled: async () => { throw new Error("browser control settings unavailable"); },
+  setIgnoreCertificateErrors: async () => { throw new Error("browser control settings unavailable"); },
+  clearCache: async () => { throw new Error("browser control settings unavailable"); },
+  clearAllData: async () => { throw new Error("browser control settings unavailable"); },
+  importChromeLogin: async () => ({ ok: false, reason: "unsupported-platform" }),
+};
 
 // The bare browser (Serve product, dev server, tests) has no shell: every
 // native call degrades to a no-op and there are no bound commands.
@@ -106,6 +157,8 @@ const serverHost: DesktopHost = {
     getAppZoom: async () => 1,
     setAppZoom: async () => 1,
     resetAppZoom: async () => 1,
+    graphics: { get: async () => ({ hardwareAcceleration: true, startupEnabled: true, override: "none", restartRequired: false, writable: false, warning: null }), setHardwareAcceleration: async () => { throw new Error("graphics settings unavailable"); } },
+    browserControl: unavailableBrowserControl,
   },
 };
 
@@ -161,7 +214,13 @@ const electronHostFrom = (host: ReasonixDesktopHost): DesktopHost => {
       getWindowBounds: () => host.native.window.getBounds(),
       getAppZoom: () => host.native.window.getAppZoom(),
       setAppZoom: (factor) => host.native.window.setAppZoom(factor),
-      resetAppZoom: () => host.native.window.resetAppZoom(),
+    resetAppZoom: () => host.native.window.resetAppZoom(),
+      graphics: host.native.graphics,
+      ...(host.native.processDiagnostics ? { processDiagnostics: () => host.native.processDiagnostics!() } : {}),
+      ...(host.native.captureRendererProfile ? { captureRendererProfile: (id?: string) => host.native.captureRendererProfile!(id) } : {}),
+      ...(host.native.cancelRendererProfile ? { cancelRendererProfile: (id?: string) => host.native.cancelRendererProfile!(id) } : {}),
+      ...(host.native.exportHeapSnapshot ? { exportHeapSnapshot: () => host.native.exportHeapSnapshot!() } : {}),
+      browserControl: host.native.browserControl,
       onFilesDropped: (cb) => {
         installElectronDropHandlers();
         dropListeners.add(cb);

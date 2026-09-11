@@ -116,9 +116,18 @@ func TestDesktopPackagesPreserveNativePlatformLaunchers(t *testing.T) {
 		t.Fatal("Windows package must not collide reasonix.exe with the Reasonix.exe launcher")
 	}
 	darwinIconCheck := strings.Index(build, `[ -s "$app/Contents/Resources/$bundle_icon" ]`)
-	developerIDSign := strings.Index(build, `codesign --force --deep --timestamp --options runtime`)
+	developerIDSign := strings.Index(build, `node "$ROOT/desktop/packaging/sign-macos.mjs" "$app" "$identity"`)
 	if darwinIconCheck < 0 || developerIDSign < 0 || darwinIconCheck > developerIDSign {
 		t.Fatalf("macOS bundle icon must be verified before signing (icon=%d sign=%d)", darwinIconCheck, developerIDSign)
+	}
+	for _, copyCommand := range []string{
+		`cp "$service_out" "$app/Contents/MacOS/$BINNAME"`,
+		`cp "$service_out" "$app/Contents/Resources/service/$BINNAME"`,
+		`cp "$cli_out" "$app/Contents/Resources/service/$CLINAME"`,
+	} {
+		if index := strings.Index(build, copyCommand); index < 0 || index > developerIDSign {
+			t.Errorf("macOS sidecar must be installed before signing: %s", copyCommand)
+		}
 	}
 
 	for _, want := range []string{

@@ -18,7 +18,7 @@ const commands = {
   openWorktree: (id: string) => { calls.push(`worktree:${id}`); },
 };
 const view: TopicbarView = {
-  automationReturn: true, automationReturnLabel: "Back to automation", chromeHidden: true,
+  automationReturn: true, automationReturnLabel: "Back to automation", chromeHidden: true, brand: false,
   sidebar: { title: "Sidebar", blocked: false, pressed: false, collapsed: true },
   title: { text: "A", hover: "Full A", renameLabel: "Rename", editing: false, draft: "Draft A", editSize: 12, canRename: true, workspaceLabel: "Project" },
   subtitle: { visible: true, title: "Workspace", worktreeTabId: "A", mergeLabel: "Merge", mergeTooltip: "Merge back", sourcePlatform: "feishu", sourceLabel: "Channel" },
@@ -31,6 +31,12 @@ try {
   await paint();
   assert.deepEqual([...document.querySelector("header")!.children].map(node => node.className),
     ["btn btn--small", "tooltip-trigger", "topicbar__identity", "topicbar__spacer", "topicbar__actions"], "region extraction adds no DOM wrapper");
+  await paint({ ...view, brand: true });
+  assert.deepEqual([...document.querySelector("header")!.children].map(node => node.className),
+    ["topicbar__brand", "btn btn--small", "tooltip-trigger", "topicbar__identity", "topicbar__spacer", "topicbar__actions"],
+    "the Windows bar leads with the app mark");
+  assert.equal(document.querySelector(".topicbar__brand-logo")!.tagName, "IMG", "the leading mark is the app logo asset");
+  await paint();
   const action = document.querySelector(".topicbar__actions button");
   assert.equal(document.querySelectorAll(".topicbar__subtitle .worktree-badge").length, 1);
   assert.ok(document.querySelector(".worktree-badge")!.getAttribute("aria-label"), "isolated worktree identity is accessible");

@@ -1,4 +1,4 @@
-import { lazy, useMemo, type CSSProperties } from "react";
+import { lazy, Suspense, useMemo, type CSSProperties } from "react";
 import { ShellExpandProvider } from "../lib/shellExpand";
 import { RemoteNavigationContext } from "../lib/remoteNavigationCommands";
 import { UpdaterProvider } from "../lib/useUpdater";
@@ -18,11 +18,12 @@ import { WindowChromeLifecycle } from "../app-runtime/WindowChromeLifecycle";
 import { StartupGateLifecycle } from "../app-runtime/StartupGateLifecycle";
 import { AppRuntimeEffects } from "../app-runtime/AppRuntimeEffects";
 import { ThemeBackground } from "../components/ThemeBackground";
-import { AppChrome } from "../components/AppChrome";
+import { useTopicbarHeightVar } from "../lib/useTopicbarHeightVar";
 import { SidebarRegion } from "./SidebarRegion";
 import { TopicbarRegion } from "./TopicbarRegion";
 import { buildTopicbarView, TopicbarActionsStack } from "./TopicbarActionsStack";
 import { DockToggleButton } from "./DockToggleButton";
+import { LauncherToggleButton } from "./LauncherToggleButton";
 import { SessionStatusBanners } from "./SessionStatusBanners";
 import { ChatPaneRegion } from "./ChatPaneRegion";
 import { DecisionFooterRegion } from "./DecisionFooterRegion";
@@ -35,6 +36,7 @@ import { buildOverlayHostProps } from "./overlayBuilders";
 import { buildComposerSurface, buildDecisionFooterSurface, buildFooterTodo, buildFooterUndo } from "./decisionFooterBuilders";
 
 const WindowsWindowControls = lazy(() => import("./WindowsWindowControls").then((module) => ({ default: module.WindowsWindowControls })));
+const DockLauncher = lazy(() => import("../components/DockLauncher").then((module) => ({ default: module.DockLauncher })));
 
 const WORKSPACE_RESIZER_WIDTH = 8;
 const SHOW_CONTEXT_DOCK = true;
@@ -90,9 +92,10 @@ export type AppRuntimeViewProps = {
  * beyond value memoization live here; ownership stays in the compositions.
  */
 export function AppRuntimeView(props: AppRuntimeViewProps) {
+  useTopicbarHeightVar();
   const { core, shell, session, navigation, runtime, local } = props;
   const { state, activeTab, activeTabId, t, locale } = core;
-  const { sidebarWorkbench, sidebarCreation, windowsFramelessChrome, managementActive, mainWindowMaximised } = shell;
+  const { sidebarWorkbench, sidebarCreation, windowsFramelessChrome, mainWindowMaximised } = shell;
   const {
     conversationView, visibleRuntimeState, sidebarImDetailConnection,
     surfaceWorkspacePanelRenderable, surfaceWorkspacePanelGridOpen, surfaceWorkspacePanelOverlay, terminalSurfaceOpen,
@@ -103,9 +106,6 @@ export function AppRuntimeView(props: AppRuntimeViewProps) {
   const runtimeTransitioning = core.surface.transitioning;
   const browserPreviewChrome = navigation.browserPreviewChrome;
 
-  // Creation keeps the classic sidebar/chat structure while gating chrome tweaks
-  // behind its own style flag so classic/workbench remain unchanged.
-  const appChromeHidden = sidebarWorkbench || sidebarCreation;
   const workbenchChromeHidden = sidebarWorkbench;
   const sidebarClassName = [
     "sidebar",
@@ -204,38 +204,11 @@ export function AppRuntimeView(props: AppRuntimeViewProps) {
         className={shellClassNames.app}
     >
       <ThemeBackground />
-      {sidebarWorkbench && <div className="app__dock-toggle" inert={managementActive}><DockToggleButton renderable={surfaceWorkspacePanelRenderable} t={t} onToggle={session.workspacePanelCommands.toggleWorkspacePanel} /></div>}
       <div
         ref={layoutRef}
         className={shellClassNames.layout}
         style={layoutStyle}
       >
-        {!appChromeHidden && (
-          <AppChrome
-            platform={shell.desktopPlatform}
-            browserPreviewChrome={browserPreviewChrome}
-            workbenchChrome={sidebarWorkbench}
-            tabs={session.visibleTabs}
-            activeTabId={session.visibleTabId}
-            revealActiveSignal={local.tabRevealSignal}
-            commandCompact={true}
-            sidebarTogglePressed={shell.sidebarTogglePressed}
-            sidebarExpandBlocked={navigation.sidebarExpandBlocked}
-            sidebarCollapsed={shell.sidebarCollapsed}
-            sidebarToggleTitle={navigation.sidebarToggleTitle}
-            workspacePanelMaximized={shell.workspacePanelMaximized}
-            workspacePanelRenderable={surfaceWorkspacePanelRenderable}
-            workspacePanelLabel={surfaceWorkspacePanelRenderable ? t("rightDock.collapse") : t("rightDock.expand")}
-            onToggleSidebar={shellGeometry.toggleSidebar}
-            onToggleWorkspacePanel={session.workspacePanelCommands.toggleWorkspacePanel}
-            onTabChange={(id) => void session.tabBarCommands.handleTabChange(id)}
-            onTabClose={(id) => void session.tabBarCommands.handleTabClose(id)}
-            onTabsClose={(ids, nextActiveTabId) => void session.tabBarCommands.handleTabsClose(ids, nextActiveTabId)}
-            onTabsReorder={(ids) => void session.tabBarCommands.handleTabsReorder(ids)}
-            onNewTab={() => void navigationCommands.handleNewTab()}
-            onOpenPalette={() => void navigation.paletteCommands.openPalette()}
-          />
-        )}
         <a className="skip-to-composer" href="#composer-input">
           {t("shortcuts.skipToComposer")}
         </a>
@@ -266,10 +239,10 @@ export function AppRuntimeView(props: AppRuntimeViewProps) {
           },
         })} />
 
-        <section className={`chat-pane${session.transcript.emptyHero ? " chat-pane--creation-empty" : ""}`}>
-          <TopicbarRegion view={buildTopicbarView({
+        <TopicbarRegion view={buildTopicbarView({
             t, locale, activeTab, cwd: state.meta?.cwd, imDetail: sidebarImDetailConnection, imTopicSources: shell.preferences.imTopicSources,
-            creation: sidebarCreation, chromeHidden: workbenchChromeHidden, automationReturn: shell.automationReturn,
+            creation: sidebarCreation, chromeHidden: workbenchChromeHidden, windowsBrand: windowsFramelessChrome,
+            automationReturn: shell.automationReturn,
             sidebar: { title: navigation.sidebarToggleTitle, blocked: navigation.sidebarExpandBlocked, pressed: shell.sidebarTogglePressed, collapsed: shell.sidebarCollapsed },
             rename: { editing: navigation.projectTopicCommands.topicbarEditing, draft: navigation.projectTopicCommands.topicTitleDraft },
           })} commands={{
@@ -294,9 +267,15 @@ export function AppRuntimeView(props: AppRuntimeViewProps) {
               onOpenTaskSession={navigationCommands.openTaskMonitorSession}
               creation={sidebarCreation}
               dockToggle={<DockToggleButton renderable={surfaceWorkspacePanelRenderable} t={t} onToggle={session.workspacePanelCommands.toggleWorkspacePanel} />}
+              launcherToggle={<LauncherToggleButton
+                visible={session.workspacePanelCommands.launcherCard.visible}
+                t={t}
+                onToggle={session.workspacePanelCommands.toggleLauncherCard}
+              />}
             />
           </TopicbarRegion>
 
+        <section className={`chat-pane${session.transcript.emptyHero ? " chat-pane--creation-empty" : ""}`}>
           <SessionStatusBanners {...buildSessionStatusBannerProps({
             t,
             activeTab,
@@ -321,6 +300,20 @@ export function AppRuntimeView(props: AppRuntimeViewProps) {
               onOpenSession: (connection) => void navigationCommands.openSidebarImConnectionSession(connection),
             } : null}
             remote={activeTab?.remote ? { tab: activeTab, session: core.remoteSession } : undefined}
+            launcher={session.workspacePanelCommands.launcherCardMounted && !core.remoteSurfaceActive ? (
+              <Suspense fallback={null}>
+                <DockLauncher
+                  tabId={activeTabId ?? ""}
+                  scopeKey={session.workspaceScopeKey}
+                  workspaceRoot={activeTab?.workspaceRoot ?? state.meta?.cwd ?? ""}
+                  visible={!shell.managementActive && !sidebarImDetailConnection}
+                  onSelect={session.workspacePanelCommands.openDockEntry}
+                  gitBranch={state.meta?.gitBranch}
+                  onSpaceModeChange={session.workspacePanelCommands.setLauncherSpaceMode}
+                  overlay={session.workspacePanelCommands.launcherCardOverlay}
+                />
+              </Suspense>
+            ) : null}
             transcript={{
               state,
               items: session.transcript.visibleTranscriptItems,
@@ -411,10 +404,9 @@ export function AppRuntimeView(props: AppRuntimeViewProps) {
           />
         </section>
 
-        <WorkspaceDockRegion {...buildWorkspaceDockProps({
+        <WorkspaceDockRegion workspaceRoot={activeTab?.workspaceRoot ?? state.meta?.cwd ?? ""} {...buildWorkspaceDockProps({
           surface: { renderable: surfaceWorkspacePanelRenderable, overlay: surfaceWorkspacePanelOverlay, gridOpen: surfaceWorkspacePanelGridOpen },
           creation: sidebarCreation,
-          remoteAvailable: shell.remoteHosts.length > 0,
           showContext: SHOW_CONTEXT_DOCK,
           remote: core.remoteSurfaceActive,
           t,

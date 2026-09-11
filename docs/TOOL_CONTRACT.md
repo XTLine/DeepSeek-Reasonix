@@ -1,5 +1,10 @@
 # Tool Contract
 
+Read coverage, source observation and per-operation write guards are separate.
+Ordinary partial `inspect`/`range` reads do not block finalization; explicit
+`intent=full` and host Stops remain bounded completion requirements. See
+[Read evidence lifecycle](READ_EVIDENCE_LIFECYCLE.md) for recovery and compatibility.
+
 <a href="./TOOL_CONTRACT.zh-CN.md">简体中文</a>
 
 This document records the provider-visible contract for Reasonix compile-time built-in tools. It is generated from the same canonical schema path used by the runtime registry.
@@ -9,7 +14,7 @@ This document records the provider-visible contract for Reasonix compile-time bu
 | `bash` | false | Execute a command in the shell and return combined stdout/stderr. Use for builds, tests, git, package managers, etc. To search/read/list/edit/move files, prefer the dedicated tools (grep, read_file, ls, glob, edit_file, move_file) over shell grep/cat/ls/find/sed/mv/Move-Item - they behave identically on every OS. For symbol search or architecture questions, prefer LSP/read tools and targeted grep before shell commands. |
 | `bash_output` | true | Read new output from a background job started with bash(run_in_background=true) or task(run_in_background=true). Returns the output produced since the last bash_output call for that job, plus its status (running/done/failed/killed). Does not block. |
 | `code_index` | true | Lightweight built-in code symbol index. Prefer lsp_* for language semantics and installed code graph MCP tools for call graph, impact, and architecture relationships; use this as the local fallback for file outlines and symbol definition candidates, then verify with read_file or grep. |
-| `complete_step` | true | Record the evidence-backed completion of ONE step of an approved plan. Call it as you finish each step instead of silently moving on: it signs the step off with PROOF it is done - the verification you ran (command + result), the diff/files you changed, or a manual check. A completion with no evidence is REJECTED, so don't claim a step is done until you can show why. The host advances the task list for you when you sign off - it marks this step completed and moves the next to in_progress, so you don't need a separate todo_write to mark completions. Fields: `step` (which step - its title or number, matching the task list), `result` (what is now true/changed), `evidence` (>=1 item, each with `kind` = verification\|diff\|files\|manual and a `summary`, plus optional `command`/`paths`), and optional `notes`. |
+| `complete_step` | true | Record the completion of ONE step of an approved plan. Call it as you finish each step so the task list advances and the user sees what changed. Cite proof by RECEIPT ID: every tool result ends with the host's own id (`[receipt r_1a2b3c4d]`), and listing those ids in `receipt_ids` is exact - retyping a command instead makes the host match your text, which fails over a `cd` prefix, quoting, or argument order. For ordinary work the host has already recorded what your tools did, so anything it cannot confirm is reported alongside the sign-off rather than rejected; under a delivery floor the proof is still required. Fields: `step_id` or `step` (which task-list item), `result` (what is now true/changed), `receipt_ids` (preferred proof), `evidence` (optional items, each with `kind` = verification\|review\|diff\|files\|manual and a `summary`, plus optional `command`/`paths`, and `criterion_id` naming the acceptance criterion the proof satisfies), and optional `notes`. |
 | `compress` | true | Compress a selected part of the current model-visible conversation without deleting visible history. Use only when the user explicitly asks for context compression. Choose `before` to summarize everything before the uniquely matched user turn while keeping that turn and later context, or `after` to summarize from that turn through the last completed turn while keeping the active turn. The anchor must be an exact, unique excerpt from a real user message; use a longer excerpt if the tool reports multiple matches. |
 | `delete_range` | false | Delete a contiguous text range from a file using exact start/end text anchors. Each anchor must match exactly one line. Returns unified diff on success. Use for large deletions - smaller changes should use edit_file. |
 | `delete_symbol` | false | Delete a named symbol (function, method, type, interface, const, var) from a Go source file using AST parsing. For non-Go files, use delete_range with manual anchors. |
@@ -50,9 +55,11 @@ can be inspected and called without changing provider-visible schemas
 mid-session. The host also
 enforces a risk-adaptive execution contract: state-changing and
 verification commands need acceptance criteria when the turn is closed-loop;
-changed work cannot finalize
+under a delivery floor changed work cannot finalize
 without post-change review, verification, and an evidence-backed
-`complete_step` sign-off; Skill/MCP `require`/`prefer` routes are gated with
+`complete_step` sign-off, while ordinary work settles on the real tool results
+the host recorded and reports what it could not confirm instead of rejecting
+the sign-off; Skill/MCP `require`/`prefer` routes are gated with
 host-proven evidence (including read-only answers — ordinary reads never skip
 a required capability); and medium/high-risk mutations force structured
 `review` / `security_review` results via the review-only `review_report` tool,

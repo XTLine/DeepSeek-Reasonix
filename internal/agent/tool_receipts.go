@@ -13,10 +13,10 @@ import (
 // recordToolReceipts files the turn-scoped evidence for one executed call:
 // always the model-visible call for audit, plus the real target's attributes
 // for mutation/read classification when a proxy resolved elsewhere.
-func (a *Agent) finalizeObservedToolReceipts(plan *toolCallPlan, result string, execution *tool.ShellExecution, err error) {
+func (a *Agent) finalizeObservedToolReceipts(plan *toolCallPlan, result string, execution *tool.ShellExecution, err error) evidence.Receipt {
 	a.observeAfterMutation(plan)
 	plan.mutationAfterDone = true
-	a.recordToolReceipts(plan, result, execution, err)
+	return a.recordToolReceipts(plan, result, execution, err)
 }
 
 // emitTodoResultPreview flips the todo_write card to done the moment the call
@@ -33,9 +33,9 @@ func (a *Agent) emitTodoResultPreview(call provider.ToolCall, output string) {
 	})
 }
 
-func (a *Agent) recordToolReceipts(plan *toolCallPlan, result string, execution *tool.ShellExecution, err error) {
+func (a *Agent) recordToolReceipts(plan *toolCallPlan, result string, execution *tool.ShellExecution, err error) evidence.Receipt {
 	if a.task.ledger == nil {
-		return
+		return evidence.Receipt{}
 	}
 	call := plan.call
 	args := json.RawMessage(call.Arguments)
@@ -46,16 +46,22 @@ func (a *Agent) recordToolReceipts(plan *toolCallPlan, result string, execution 
 	if floorStamp == taskcontract.PolicyFloorNone.String() {
 		floorStamp = ""
 	}
+	// Every receipt carries the operation it belongs to, so a later citation
+	// resolves an ID the host issued instead of a command string the model
+	// retyped, and a repeated failure is attributable to one intended change.
+	operationID := plan.operationID()
 	switch {
 	case call.Name == "complete_step":
 		rec := evidence.ReceiptFromToolCall(call.Name, args, err == nil, plan.readOnly)
 		a.stampReceiptDeliveryScope(&rec)
 		rec.PolicyFloor = floorStamp
-		a.task.ledger.Record(rec)
+		rec.OperationID = operationID
+		rec = a.task.ledger.Record(rec)
 		a.commitToolReceipt(rec)
 		if err == nil {
 			a.advanceCanonicalTodo(rec.Step)
 		}
+		return rec
 	case plan.evidenceName != call.Name:
 		proxy := evidence.ReceiptFromToolCall(call.Name, args, err == nil, true)
 		proxy.ToolCallID = call.ID
@@ -66,8 +72,11 @@ func (a *Agent) recordToolReceipts(plan *toolCallPlan, result string, execution 
 		a.stampReceiptDeliveryScope(&rec)
 		rec.PolicyFloor = floorStamp
 		decorateExecutionReceipt(&rec, result, execution)
-		a.task.ledger.Record(rec)
+		rec.OperationID = operationID
+		rec = a.task.ledger.Record(rec)
 		a.commitToolReceipt(rec)
+		a.recordOperationOutcome(plan, rec, err)
+		return rec
 	default:
 		rec := evidence.ReceiptFromToolCall(call.Name, args, err == nil, plan.tool.ReadOnly())
 		rec.ToolCallID = call.ID
@@ -75,8 +84,10 @@ func (a *Agent) recordToolReceipts(plan *toolCallPlan, result string, execution 
 		a.stampReceiptDeliveryScope(&rec)
 		rec.PolicyFloor = floorStamp
 		decorateExecutionReceipt(&rec, result, execution)
-		a.task.ledger.Record(rec)
+		rec.OperationID = operationID
+		rec = a.task.ledger.Record(rec)
 		a.commitToolReceipt(rec)
+		a.recordOperationOutcome(plan, rec, err)
 		if err == nil && call.Name == "todo_write" {
 			a.setTodoState(rec.Todos)
 			if len(rec.Todos) > 0 {
@@ -84,5 +95,6 @@ func (a *Agent) recordToolReceipts(plan *toolCallPlan, result string, execution 
 			}
 			a.emitTodoResultPreview(call, result)
 		}
+		return rec
 	}
 }

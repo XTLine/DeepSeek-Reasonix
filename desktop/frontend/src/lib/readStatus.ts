@@ -9,6 +9,7 @@ export interface WireReadStatus {
   path: string;
   intent?: string;
   state: string;
+  verdict?: "partial_read_sufficient" | "full_read_pending" | "read_hard_stop";
   covered?: [number, number][];
   missing?: [number, number][];
   sourceEnd?: number;
@@ -16,6 +17,25 @@ export interface WireReadStatus {
   reason?: string;
   recovery?: string;
   active?: boolean;
+}
+
+/** Host recovery metadata, never an executable permission or read receipt. */
+export interface OperationDiagnostic {
+  code: string;
+  path?: string;
+  operation_id?: string;
+  expected_snapshot?: string;
+  actual_snapshot?: string;
+  required_ranges?: { start: number; end: number }[];
+  recovery: string;
+  /** Host-issued receipt ids the model may cite instead of retyping a command. */
+  available_receipts?: string[];
+  /** Closed set of actions the host accepts, e.g. "use_receipt:r_123". */
+  allowed_recovery?: string[];
+  retryable?: boolean;
+  retry_budget?: number;
+  /** Operation lifecycle state; "needs_user" means the host stopped retrying. */
+  state?: string;
 }
 
 export type ReadStatusHost = { readStatuses?: Record<string, WireReadStatus>; readStatusClosed?: boolean };

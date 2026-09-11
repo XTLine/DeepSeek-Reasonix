@@ -43,7 +43,7 @@ func (writeFile) Description() string {
 }
 
 func (writeFile) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Full content to write"}},"required":["path","content"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Full content to write"},"source_token":{"type":"string","description":"Optional: the source_token printed by the read_file that showed you this file. Citing it names the exact version you are editing, so a change made outside this session is caught instead of silently overwritten."}},"required":["path","content"]}`)
 }
 
 func (writeFile) ReadOnly() bool { return false }
@@ -70,7 +70,7 @@ func (w writeFile) DeclareEvidenceTarget(ctx context.Context, args json.RawMessa
 	}
 	src, err := readEditSource(ctx, w.overlay, path)
 	if os.IsNotExist(err) {
-		return tool.EvidenceTargetInfo{Path: path}, nil
+		return tool.EvidenceTargetInfo{Path: path, Absent: true}, nil
 	}
 	if err != nil {
 		return tool.EvidenceTargetInfo{}, err

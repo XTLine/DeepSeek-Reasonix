@@ -305,7 +305,7 @@ Gateway、HuggingFace Router、ModelScope、NVIDIA NIM、KiloCode 和 Ollama Clo
 中国区端点直连、MiniMax `reasoning_split`、GLM/MiniMax thinking heuristic、
 Anthropic-compatible 网关需要的 Bearer 认证、Ollama Cloud max-effort 支持，
 以及 OpenCode Go 的每模型 reasoning 覆盖。官方 DeepSeek 的 Anthropic、Responses 与
-Chat Completions 目录还会带上 `deepseek-v4-flash-vision-exp`。设置页会按模型能力元数据
+Chat Completions 目录还会带上多模态 SKU `deepseek-flash` 与 `deepseek-v4-flash-vision-exp`。设置页会按模型能力元数据
 展示支持图片的模型，也提供逐模型“图片输入：自动 / 开启 / 关闭”。中转站只返回
 模型 ID 时会显示“图片能力未识别”；向服务商确认支持后，选择开启并保存即可。
 详见[图片输入指南](MODEL_CAPABILITIES.zh-CN.md#中转站模型使用指南)。
@@ -439,7 +439,7 @@ CLI/TUI 文本输入可通过 `[ui].cursor_shape` 设置光标形状，支持 `u
 | macOS `Cmd+Z`，Windows/Linux `Ctrl+Z` | 撤销输入框中的最近一次编辑 | 普通键入继续由 WebView 原生历史管理；Reasonix 接管的粘贴、剪切、折叠块和结构化 token 会作为完整事务恢复。 |
 | macOS `Cmd+Shift+Z`，Windows/Linux `Ctrl+Shift+Z` | 重做输入框中的最近一次编辑 | Windows/Linux 改绑 YOLO 后也可使用 `Ctrl+Y`。 |
 | `Cmd+Y` / `Ctrl+Y`（默认） | 切换 YOLO 开/关 | 关闭 YOLO 时会尽量恢复之前的 Ask/Auto 基底；当前绑定可在 **设置 → 快捷键** 查看。 |
-| macOS `Cmd+V`，Windows/Linux `Ctrl+V` | 粘贴剪贴板内容 | 剪贴板图片会作为附件加入；图片也可以拖进输入框。官方 DeepSeek 的 Flash/Pro 仍是纯文本；要直接发图请切换到 `deepseek-v4-flash-vision-exp`。 |
+| macOS `Cmd+V`，Windows/Linux `Ctrl+V` | 粘贴剪贴板内容 | 剪贴板图片会作为附件加入；图片也可以拖进输入框。官方 DeepSeek 的 `deepseek-flash` 与 `deepseek-v4-flash` 原生支持图片；V4 Pro 仍是纯文本。 |
 | 输入边界处的普通 `Up` / `Down` | 回放更旧或更新的已提交提示词 | 带修饰键的方向键和原生文本导航仍交给 textarea。 |
 | 运行中按 `Esc` | 取消当前 turn | 如果后端尚未开始回复，会恢复草稿。 |
 

@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { isDirectory, PRODUCT } from "./lib.mjs";
 import { closeAndVerify, processAlive, sleep, waitForProcessesToExit } from "./smoke-lifecycle.mjs";
+import { packagedSmokeEnv } from "./smoke-env.mjs";
 
 // Playwright belongs to the Electron workspace, not the shipped application.
 const require = createRequire(new URL("../electron/package.json", import.meta.url));
@@ -46,13 +47,7 @@ const executable = executableOf(targetArg);
 if (!existsSync(executable)) throw new Error(`shell executable is missing: ${executable}`);
 const home = mkdtempSync(join(tmpdir(), "reasonix-smoke-"));
 const logs = join(home, "desktop-shell", "logs");
-const env = {
-  ...process.env,
-  REASONIX_HOME: home,
-  REASONIX_STATE_HOME: home,
-  REASONIX_CACHE_HOME: join(home, "cache"),
-  REASONIX_DEV: "1",
-};
+const env = packagedSmokeEnv(process.env, home);
 if (service !== "") env.REASONIX_DESKTOP_SERVICE = resolve(service);
 const stdio = join(home, "smoke-stdio.log");
 const started = Date.now();
@@ -95,6 +90,8 @@ try {
   // On Windows Playwright may own a cmd.exe wrapper. Read the Electron main
   // PID itself so a wrapper exit cannot pass the shell-liveness assertion.
   shellPid = await application.evaluate(() => process.pid);
+  const identity = await application.evaluate(({ app }) => ({ packaged: app.isPackaged, dev: process.env.REASONIX_DEV ?? "", resourcesPath: process.resourcesPath }));
+  if (!identity.packaged || identity.dev !== "") throw new Error("startup smoke must exercise a packaged app without development mode");
   while (!ready) {
     if (exit || !processAlive(shellPid)) throw new Error("shell exited before the handshake");
     if (Date.now() - started > timeout) throw new Error(`no handshake within ${timeout / 1000}s`);
@@ -106,6 +103,12 @@ try {
     else await sleep(250);
   }
   console.log(`PASS  handshake ready after ${((Date.now() - started) / 1000).toFixed(1)}s: ${ready.line}`);
+  const page = await application.firstWindow({ timeout });
+  await page.waitForFunction(() => Boolean(window.reasonixDesktop), null, { timeout });
+  const version = await page.evaluate(() => window.reasonixDesktop.invoke("Version", []));
+  const expected = JSON.parse(readFileSync(join(identity.resourcesPath, "build.json"), "utf8")).version;
+  if (version === "dev" || version !== expected) throw new Error(`packaged service version ${version} differs from manifest ${expected}`);
+  console.log(`PASS  renderer invokes the production service: Version=${version}`);
   await sleep(hold);
   if (exit || !processAlive(shellPid)) throw new Error(`shell exited during the ${hold / 1000}s hold`);
   if (!processAlive(ready.pid)) throw new Error(`Go service pid ${ready.pid} exited during the hold`);

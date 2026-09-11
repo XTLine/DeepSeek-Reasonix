@@ -107,8 +107,12 @@ func tsTypeNames(types map[string]ObjectType) map[string]string {
 	}
 	out := make(map[string]string, len(types))
 	for name, ks := range bare {
+		// These names belong to the emitted module or its generic helpers.
+		// A DTO named Record must not shadow Record<string, T> elsewhere.
+		reserved := name == "Record" || name == "Promise" || name == "GeneratedDesktopCommands" ||
+			name == "DesktopCommandName" || name == "DesktopEventName"
 		for _, key := range ks {
-			if len(ks) == 1 {
+			if len(ks) == 1 && !reserved {
 				out[key] = tsIdentifier(name)
 				continue
 			}

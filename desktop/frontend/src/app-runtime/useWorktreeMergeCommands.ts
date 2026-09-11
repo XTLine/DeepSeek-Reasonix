@@ -11,12 +11,10 @@ import type { Translator } from "../lib/i18n";
  * returned state and commands into the topicbar and overlay regions.
  */
 export function useWorktreeMergeCommands(input: {
-  singleSurfaceLayout: boolean;
   noteNavigationIntent: () => number;
   registeredNavigationIntent: (seq: number) => Promise<string | null>;
   isNavigationIntentCurrent: (seq: number) => boolean;
   ensureBlankSurface: (scope: string, workspace: string, seq: number) => Promise<any>;
-  ensureBlankTab: (scope: string, workspace: string, seq: number) => Promise<any>;
   seedSource: (tab: any) => void;
   listTabs: () => Promise<any[]>;
   closeWorktree: (request: any) => Promise<any>;
@@ -43,9 +41,7 @@ export function useWorktreeMergeCommands(input: {
         return;
       }
       const lifecycle = await runWorktreeMergeLifecycle(result, tabToClose, token, {
-        ensureSource: (root) => input.singleSurfaceLayout
-          ? input.ensureBlankSurface("project", root, seq)
-          : input.ensureBlankTab("project", root, seq),
+        ensureSource: (root) => input.ensureBlankSurface("project", root, seq),
         isNavigationCurrent: () => input.isNavigationIntentCurrent(seq),
         seedSource: input.seedSource,
         listTabs: input.listTabs,

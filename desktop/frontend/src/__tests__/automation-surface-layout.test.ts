@@ -10,7 +10,6 @@ const css = read("../components/ManagementPageShell.css");
 const heartbeat = read("../custom/features/heartbeat/HeartbeatPanel.tsx");
 const warmth = read("../lib/useWarmTerminalPanel.ts");
 const sessionComposition = read("../app-runtime/useAppSessionComposition.ts");
-const appView = read("../app-shell/AppRuntimeView.tsx");
 const chromeCommands = read("../app-runtime/useAppChromeCommands.ts");
 const palette = read("../app-runtime/usePaletteCommands.tsx");
 
@@ -20,7 +19,8 @@ assert.match(sessionComposition, /useManagementWorkspace\(layoutRef, managementA
 assert.match(isolation, /workspace\.inert = true/);
 assert.match(isolation, /workspace\.inert = false/);
 assert.doesNotMatch(app, /mainView === "automation"/);
-assert.match(appView, /inert=\{managementActive\}/);
+// Actual focus and hit-testing of background controls are covered by
+// bench/dock-view-state.mjs; the ancestor owns isolation regardless of JSX position.
 assert.match(css, /\.management-screen \{[^}]*position: fixed;[^}]*inset: 0;/);
 assert.match(shell, /hidden=\{!active\} inert=\{!active\}/);
 assert.match(palette, /if \(managementActive\) ports\.returnToWorkspace\(\)/);

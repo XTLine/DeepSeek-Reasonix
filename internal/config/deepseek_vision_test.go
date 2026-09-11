@@ -38,15 +38,32 @@ func TestEffectiveVisionHonorsOfficialDeepSeekVisionModels(t *testing.T) {
 		t.Fatal("unchecking image input must disable image input on the official vision SKU")
 	}
 
+	pro := &ProviderEntry{
+		Name:         "deepseek",
+		Kind:         "openai",
+		BaseURL:      "https://api.deepseek.com",
+		Model:        "deepseek-v4-pro",
+		VisionModels: []string{"deepseek-v4-pro", openai.OfficialDeepSeekVisionModel},
+	}
+	if EffectiveVision(pro) || ExplicitModelVision(pro) {
+		t.Fatal("checking image input on a text-only model must not enable official DeepSeek image payloads")
+	}
+
+	// V4.1 Flash is natively multimodal, so a curated list that predates it must
+	// not veto it — while an explicitly emptied list still turns images off.
 	flash := &ProviderEntry{
 		Name:         "deepseek",
 		Kind:         "openai",
 		BaseURL:      "https://api.deepseek.com",
-		Model:        "deepseek-v4-flash",
-		VisionModels: []string{"deepseek-v4-flash", openai.OfficialDeepSeekVisionModel},
+		Model:        "deepseek-flash",
+		VisionModels: []string{openai.OfficialDeepSeekVisionModel},
 	}
-	if EffectiveVision(flash) || ExplicitModelVision(flash) {
-		t.Fatal("checking image input on Flash must not enable official DeepSeek image payloads")
+	if !EffectiveVision(flash) {
+		t.Fatal("a stale curated vision list vetoed a natively multimodal model")
+	}
+	flash.VisionModels = []string{}
+	if EffectiveVision(flash) {
+		t.Fatal("an explicitly emptied vision list must disable image input")
 	}
 }
 
@@ -153,7 +170,7 @@ func TestDeepSeekV4PricesIncludeVisionSKU(t *testing.T) {
 	}
 }
 
-func TestDeepSeekOfficialPresetsRouteVisionToPinnedSKU(t *testing.T) {
+func TestDeepSeekOfficialPresetsRouteVisionToMultimodalSKUs(t *testing.T) {
 	for _, id := range []string{"deepseek-anthropic", "deepseek-responses"} {
 		preset, ok := CuratedProviderPreset(id)
 		if !ok || len(preset.Entries) != 1 {
@@ -173,7 +190,7 @@ func TestDeepSeekOfficialPresetsRouteVisionToPinnedSKU(t *testing.T) {
 		if flash == nil || pro == nil || !ok {
 			t.Fatalf("%s models did not resolve", id)
 		}
-		if EffectiveVision(flash) || EffectiveVision(pro) || !EffectiveVision(vision) {
+		if !EffectiveVision(flash) || EffectiveVision(pro) || !EffectiveVision(vision) {
 			t.Fatalf("%s vision routing = flash:%t pro:%t vision:%t", id, EffectiveVision(flash), EffectiveVision(pro), EffectiveVision(vision))
 		}
 	}

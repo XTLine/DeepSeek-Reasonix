@@ -9,6 +9,7 @@ import (
 	"reasonix/internal/event"
 	"reasonix/internal/provider"
 	"reasonix/internal/tool"
+	"strings"
 	"testing"
 	"time"
 )
@@ -61,7 +62,7 @@ func TestToolCheckpointSurvivesReloadWhileNextWriterRuns(t *testing.T) {
 			continue
 		}
 		if m.ToolCallID == "c1" {
-			completed = m.Content == "write completed" && provider.ToolResultRunState(m) == provider.ToolRunCompleted
+			completed = strings.HasPrefix(m.Content, "write completed") && provider.ToolResultRunState(m) == provider.ToolRunCompleted
 		}
 		if m.ToolCallID == "c2" {
 			unknown = provider.ToolResultRunState(m) == provider.ToolRunUnknown

@@ -707,7 +707,7 @@ func TestRemoteStopAndCloseCancelsBeforeRemovingTab(t *testing.T) {
 		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
 		ensureView: RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
 	}
-	seedClassicBridgeTestHost(t, "box")
+	seedBridgeTestHost(t, "box")
 	a := &App{remoteRuntime: kernel}
 	cleanupRemoteTabPumps(t, a)
 	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
@@ -715,8 +715,12 @@ func TestRemoteStopAndCloseCancelsBeforeRemovingTab(t *testing.T) {
 	if !work.Running || !work.Cancellable {
 		t.Fatalf("remote active work = %+v", work)
 	}
-	if err := a.CloseTabWithPolicy(meta.ID, "stop_and_close"); err != nil {
-		t.Fatal(err)
+	// The one-surface policy refuses to remove the sole visible surface. What
+	// "stop and close" promises regardless is the stop, so that is what this
+	// pins: both cancels land, and the tab stays because the close was refused.
+	err := a.CloseTabWithPolicy(meta.ID, "stop_and_close")
+	if err == nil || !strings.Contains(err.Error(), "cannot close the last tab") {
+		t.Fatalf("stop-and-close on the sole surface = %v, want the last-surface refusal", err)
 	}
 	if !slices.ContainsFunc(fs.recorded(), func(call string) bool { return strings.HasPrefix(call, "POST /cancel") }) {
 		t.Fatalf("stop-and-close did not cancel remote work: %v", fs.recorded())
@@ -727,8 +731,8 @@ func TestRemoteStopAndCloseCancelsBeforeRemovingTab(t *testing.T) {
 	a.remoteTabMu.Lock()
 	_, present := a.remoteTabs[meta.ID]
 	a.remoteTabMu.Unlock()
-	if present {
-		t.Fatal("remote tab remained after work became idle")
+	if !present {
+		t.Fatal("a refused stop-and-close must leave the tab registered")
 	}
 }
 

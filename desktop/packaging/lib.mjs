@@ -52,8 +52,8 @@ export function versionTag(tag) {
 }
 
 // Windows version resources, CFBundleVersion and the NSIS VIProductVersion only
-// accept X.Y.Z; the full tag still identifies the build through package.json,
-// build.json and the Go -X main.version ldflag.
+// accept X.Y.Z; the full tag identifies the build through build.json and the
+// Go -X main.version ldflag. Packager also writes appVersion to package.json.
 export function numericVersion(tag) {
   return versionTag(tag).slice(1).split("-")[0];
 }
@@ -80,7 +80,7 @@ export function sanitizeShellPackageJson(pkg, { version, productName }) {
   const out = {};
   for (const key of keep) if (key in pkg) out[key] = pkg[key];
   out.productName = productName;
-  out.version = version;
+  out.version = numericVersion(version);
   return out;
 }
 

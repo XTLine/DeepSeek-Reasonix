@@ -642,7 +642,7 @@ func TestE2EApprovalRoundTrip(t *testing.T) {
 		}
 		json.Unmarshal(n.Params, &p)
 		if p.Update.Status == "completed" && len(p.Update.Content) > 0 &&
-			p.Update.Content[0].Content.Text == "written ok" {
+			strings.HasPrefix(p.Update.Content[0].Content.Text, "written ok") {
 			ran = true
 		}
 	}

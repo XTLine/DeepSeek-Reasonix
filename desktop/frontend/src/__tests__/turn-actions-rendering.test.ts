@@ -108,7 +108,7 @@ ok(
     /linear-gradient\(var\(--chat-bg,\s*var\(--bg\)\)/.test(windowsTranscriptRule) &&
     /linear-gradient\(var\(--bg\),\s*var\(--bg\)\)\s*!important;/.test(windowsTranscriptRule) &&
     /clip-path:\s*inset\(0\);/.test(windowsTranscriptRule),
-  "Windows Classic and Workbench primary transcripts paint a clipped opaque repaint backing (#7011)",
+  "Windows Workbench primary transcripts paint a clipped opaque repaint backing (#7011)",
 );
 
 ok(

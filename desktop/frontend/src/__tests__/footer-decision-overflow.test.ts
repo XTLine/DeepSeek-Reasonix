@@ -66,7 +66,7 @@ eq(finalDeclaration(".footer", "flex"), "0 0 auto", "base .footer keeps its flex
 // AC2 — decision state: capped + scrollable so tall approval cards stay
 // reachable and never slip behind the status bar (#7030 stays fixed).
 eq(finalDeclaration(".footer--decision", "overflow-y"), "auto", "decision footer scrolls tall approval cards");
-eq(finalDeclaration(".footer--decision", "max-height"), "calc(100% - var(--topicbar-height))", "decision footer is capped above the status bar");
+eq(finalDeclaration(".footer--decision", "max-height"), "100%", "decision footer is capped above the status bar");
 
 // AC3 — the menu stays anchored above the composer, but its preferred 360px cap
 // is now bounded by the real viewport space measured by Composer.

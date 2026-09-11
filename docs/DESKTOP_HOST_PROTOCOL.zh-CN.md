@@ -20,7 +20,7 @@ React 渲染进程 ──preload 类型化 IPC──▶ Electron 主进程 ─�
   壳在 `desktop/shutdown` 之后关闭 stdin 以请求退出。
 - 限制：双向单帧 64 MiB，服务端最多 512 个并发入站处理器，30 秒写入停滞看门狗。
   大体积二进制数据从不进入帧，而是走下文的资源源。
-- 壳发出的每个请求都在独立 goroutine 上执行，与 Wails 绑定调用一致。只有
+- 壳发出的每个请求都在独立 goroutine 上执行，与已退役的进程内壳的绑定调用一致。只有
   `desktop/event` 帧保证顺序，它们由服务端的单一队列写出。
 
 ## 握手
@@ -47,8 +47,17 @@ React 渲染进程 ──preload 类型化 IPC──▶ Electron 主进程 ─�
 }}
 ```
 
-`window` 是 Go 根据保存状态和平台规则得到的主窗口初始几何；壳按它隐藏创建窗口，
-Go 随后在 `domReady` 中通过 `host/window.*` 定位、最大化并显示。
+`window` 是 Go 根据保存状态和平台规则得到的主窗口初始几何。可选
+`position: {x, y}` 传递保存的原点（零坐标和负坐标均有效），缺省表示居中。
+壳选择匹配的显示器，按其 DIP 可用区域校正矩形后隐藏创建窗口。Go 随后在
+`domReady` 中最大化并显示，不再覆盖壳校正后的位置。持久化始终采集普通状态
+矩形，最大化标记单独保存；旧的超大矩形会按可用区域修正，不会将所有最大化
+记录都重置为默认尺寸。
+最小化期间，壳保留最后一次非最小化快照，避免原生普通矩形查询返回最大化外框。
+
+持久化 JSON 结构不变。旧壳忽略握手中可选的位置字段，新壳接受字段缺失。
+壳与服务应配套发布：开发模式混用不同版本不能提供完整的恢复修复。降级可能
+重新引入旧几何问题，旧版读取器也可能拒绝低于其原有校验下限的负坐标。
 
 失败码都是终止性的：壳显示真实错误，提供“打开日志”和“退出”，绝不回退到浏览器 mock。
 
@@ -73,6 +82,7 @@ Go 随后在 `domReady` 中通过 `host/window.*` 定位、最大化并显示。
 | `desktop/beforeClose` | `{"reason":"window"\|"quit"\|"tray"\|"updater"}` | `{"prevent":bool}` | `App.beforeClose` |
 | `desktop/shutdown` | `{}` | `{}` | `App.shutdown` |
 | `desktop/hostEvent` | `{"name":string,"payload":any}` | `{}` | 第二实例、托盘打开/退出、菜单动作 |
+| `desktop/browserControl` | `{"enabled":bool}` | `{}` | 内置浏览器开关，构建会话时读取 |
 
 顺序：`hello` → `start` → 窗口加载 → `domReady` →（每次渲染进程挂载后 `rendererAttached`）
 → … → `beforeClose` →（`shutdown` → 关闭 stdin → 退出）。无论是否调用过 `shutdown`，
@@ -86,7 +96,7 @@ stdin 关闭后服务都会自行退出，因此壳突然死亡不会留下无�
 {"error":{"code":-32000,"message":"<错误文本>","data":{"method":"OpenProjectTab"}}}
 ```
 
-`method` 必须是契约注册表接受的 Go `App` 导出方法。签名遵循 Wails 规则：任意可
+`method` 必须是契约注册表接受的 Go `App` 导出方法。签名沿用已退役壳的规则：任意可
 JSON 序列化的参数，结果为 `()`、`(T)`、`(error)` 或 `(T, error)`。注册表在构建期拒绝
 其他形态，因此接口面不可能出现壳无法调用的方法。壳在转发前按内嵌命令表校验
 `method`；未知名称以 `-32601` 失败。
@@ -135,7 +145,7 @@ JSON 序列化的参数，结果为 `()`、`(T)`、`(error)` 或 `(T, error)`。
 ## 原生宿主调用（服务 → 壳）
 
 这些调用替代 Go 中对壳工具包的直接调用。每一项对应 Go `nativeHost` 接口的一个方法；
-Wails 实现在最后阶段删除。
+Wails 实现已随 Electron 壳落地删除。
 
 | 方法 | 参数 | 结果 |
 | --- | --- | --- |
@@ -215,6 +225,14 @@ interface ReasonixDesktopHost {
     };
     getPathForFile(file: File): string;          // 原生拖放路径
     onServiceState(cb: (state: ServiceState) => void): () => void;
+    browserControl: {                            // 内置浏览器的设置页
+      get(): Promise<BrowserControlState | null>;
+      setEnabled(enabled: boolean): Promise<BrowserControlState>;
+      setIgnoreCertificateErrors(enabled: boolean): Promise<BrowserControlState>;
+      clearCache(): Promise<void>;               // 保留 Cookie 与站点数据
+      clearAllData(): Promise<void>;             // Cookie、站点数据与缓存
+      importChromeLogin(): Promise<ChromeImportOutcome>;
+    };
   };
   browser: {                                       // 用户驱动的浏览器面板；Agent 调用经 Go
     list(): Promise<BrowserTabView[]>;
@@ -241,6 +259,13 @@ temporary, mode: "agent" | "human", epoch, zoom, error }`，`BrowserDownloadView
 `ServiceState` 为 `{ phase: "starting" | "ready" | "restarting" | "failed" | "exited"; generation: string; error?: string }`。
 业务组件只导入类型化 SDK，从不直接使用该对象；只有桥接适配层读取它。
 
+`BrowserControlState` 为 `{ controlEnabled, ignoreCertificateErrors, writable,
+warning: "invalid-config" | "unreadable-config" | "unsupported-version" | null }`，
+`ChromeImportOutcome` 为 `{ ok: true, profile, cookies, skipped }` 或
+`{ ok: false, reason }`，`reason` 取值 `chrome-missing`、`profile-not-found`、
+`cookies-unreadable`、`safe-storage-denied`、`safe-storage-unavailable`、
+`unsupported-platform`。
+
 ## 安全边界
 
 - 应用窗口：sandbox 开启，context isolation 开启，Node integration 关闭，只加载
@@ -249,3 +274,48 @@ temporary, mode: "agent" | "human", epoch, zoom, error }`，`BrowserDownloadView
   `reasonix://`，不能触达 `host/*`。
 - IPC 处理器只接受来自应用窗口 `webContents` 的请求，其他发送者被拒绝并记录。
 - 内嵌契约之外的 `desktop/invoke` 名称在到达 Go 之前失败。
+
+## 性能诊断补充
+
+以下可选 native 接口仅允许可信应用主框架调用。旧 shell 可缺少这些接口；
+不涉及持久化用户数据格式变更或迁移。
+
+- `processDiagnostics()` 返回 `{scope: "electron", samples, growth}`。
+  样本包含年龄、可空 CPU 区间、PID/类型/创建时间、可空 CPU 百分比、
+  工作集及私有内存（MiB）、截断标记。前台最多每 30 秒采集一次，后台每 60 秒一次；
+  最多保留五分钟内的 12 条记录，每条最多 128 个进程。不采集标题、URL 或进程名称。
+  范围仅含 Electron 管理的进程，不含 Go 服务。
+- `captureRendererProfile(requestId?)` 通过 CDP 录制当前 renderer 五秒，
+  请求的采样间隔为 10ms，返回状态、时长和最多八个应用脚本的自身耗时摘要。
+  普通页面不启用 JS Self-Profiling。最多一个进行中的采样，要求窗口在前台，
+  冷却十分钟，每次启动 shell 最多尝试三次。不接管已有 debugger/DevTools。
+  失焦、隐藏、导航、renderer 退出或取消会停止采样。
+- `cancelRendererProfile(requestId)` 仅取消身份匹配的采样；忽略 renderer 不带身份的取消请求，
+  防止长时间挂起后迟到的旧请求干扰新采样。每条 CDP 命令最多等待 1.5 秒，
+  所有终态均释放自己的 debugger。分析在临时 Worker 中运行，老生代限制 32 MiB，
+  超时 1.5 秒，输入最多 20,000 个节点及 100,000 个样本。
+  原始 profile 不进入 UI 报告。
+- `exportHeapSnapshot()` 先显示原生风险提示并要求用户确认，再选择保存路径，
+  仅保存本地、不上传，也不接受 renderer 提供的路径。快照可能包含代码、聊天、
+  密钥，会暂停界面并可能占用较多磁盘。Electron 无法中断已开始的快照，
+  因而忙碌状态保持到操作实际结束，不用超时伪装取消成功。
+
+内存增长信号要求 PID 与创建时间连续一致，至少五次读数跨越两分钟，
+最近三次读数均超过前两次的较高基线至少 256 MiB 且至少 50%。
+全程可用时采用私有内存，否则使用工作集。这表示观察到持续增长，
+不代表确认泄漏，也不代表独占的物理内存。
+
+报告立即显示已有证据。进程补充最多等待 750ms；短时 CPU 采样结束后更新同一报告。
+前端 12 秒后放弃采样补充并请求取消。这些是异步等待期限，不是同步工作可被抢占的保证。
+迟到结果不会重建已经关闭的报告，采样结果明确标注为触发后的数据。
+用户主动生成堆快照期间及结束后五秒内，暂停压力报警，避免诊断触发自身报警。
+
+在 `desktop/electron` 运行 `node scripts/performance-smoke.mjs`，
+可用隔离原生测试验证采样 owner、Worker、报告更新及本地堆快照。
+`node scripts/performance-benchmark.mjs` 分别以关闭监测、基础监测、短时采样运行
+三次独立进程对照，记录可用的 CPU 时间、帧时序、工作集及指标采集耗时，
+各模式使用同一 renderer bundle，通过运行时开关选择；固定活动信号并关闭后台节流，
+用于无人值守比较成本。宿主事件测试独立覆盖生产焦点和导航取消策略，
+原生 smoke 验证实际 CDP 与 ASAR 路径。
+输出至 `artifacts/performance/overhead.json`。该合成测试不等同于 Windows 用户场景复现；
+仍需对比刚启动、长时间使用、切回窗口和关闭标签等阶段。

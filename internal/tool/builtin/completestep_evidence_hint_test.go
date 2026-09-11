@@ -11,6 +11,7 @@ import (
 
 func TestCompleteStepVerificationWithoutCommandSuggestsOtherKinds(t *testing.T) {
 	ctx := evidence.WithLedger(context.Background(), evidence.NewLedger())
+	ctx = evidence.WithClosedLoopExecution(ctx)
 	_, err := completeStep{}.Execute(ctx, json.RawMessage(`{
 		"step":"Remove debug files",
 		"result":"debug files removed from git",

@@ -57,20 +57,6 @@ export function arrangeWorkbenchTree(
   });
 }
 
-export function arrangeClassicProjectTree(nodes: ProjectNode[], sortMode: WorkbenchSortMode): ProjectNode[] {
-  return arrangeWorkbenchTree(nodes, "project", sortMode);
-}
-
-export const CLASSIC_TOPIC_PREVIEW_LIMIT = 5;
-
-export function classicTopicWindow(children: ProjectNode[], showAll: boolean): { visible: ProjectNode[]; hiddenCount: number } {
-  if (showAll || children.length <= CLASSIC_TOPIC_PREVIEW_LIMIT) return { visible: children, hiddenCount: 0 };
-  return {
-    visible: children.slice(0, CLASSIC_TOPIC_PREVIEW_LIMIT),
-    hiddenCount: children.length - CLASSIC_TOPIC_PREVIEW_LIMIT,
-  };
-}
-
 function projectTreeTopicIdentity(node: ProjectNode): string | null {
   if ((!isTopicNode(node) && !isRuntimeSessionNode(node)) || !node.topicId) return null;
   const global = node.kind === "global_topic" || node.kind === "global_session";

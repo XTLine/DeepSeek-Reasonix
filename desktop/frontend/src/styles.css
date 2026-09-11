@@ -2083,18 +2083,21 @@ a[href] {
   --workspace-width: 420px;
   --workspace-resizer-width: 8px;
   --terminal-height: 280px;
-  --app-chrome-height: 38px;
+  /* The bar sizes to its own content, so this is only the fallback for the two
+     absolutely-positioned consumers below until useTopicbarHeightVar publishes
+     the measured value as --app-bar-height. */
   --topicbar-height: 56px;
   --statusbar-height: var(--statusbar-dock-height);
-  --chrome-toggle-size: 42px;
   --chrome-left-safe-offset: 0px;
-  --chrome-left-toggle-offset: max(var(--sidebar-width), var(--chrome-left-safe-offset));
-  --chrome-right-toggle-offset: 0px;
   position: relative;
   display: grid;
   justify-content: start;
-  grid-template-rows: var(--app-chrome-height) minmax(0, 1fr) var(--statusbar-height);
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) var(--statusbar-height);
+  /* The dock's track is always present, collapsed to zero when it is closed.
+     grid-template-columns only interpolates between track lists of the same
+     length, so dropping the third track on close would make the dock snap
+     instead of animating the way the sidebar column does. */
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) minmax(0px, 0px);
   height: 100%;
   min-height: 0;
   width: 100%;
@@ -2111,8 +2114,6 @@ a[href] {
    rows; workspace and terminal preferences remain in their stores. */
 
 .app--darwin .layout {
-  --app-chrome-height: 44px;
-  --chrome-toggle-size: 36px;
   --chrome-left-safe-offset: 112px;
   transition:
     grid-template-columns 0.28s cubic-bezier(0.2, 0.72, 0.2, 1),
@@ -2128,13 +2129,12 @@ a[href] {
 }
 .layout--sidebar-collapsed {
   --sidebar-width: 0px;
-  grid-template-columns: 0px minmax(0, 1fr);
+  grid-template-columns: 0px minmax(0, 1fr) minmax(0px, 0px);
 }
 .layout:not(.layout--sidebar-collapsed):not(.layout--workspace-open):not(.layout--workspace-maximized) {
-  grid-template-columns: var(--sidebar-expanded-width) minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-expanded-width) minmax(0, 1fr) minmax(0px, 0px);
 }
 .layout--workspace-open {
-  --chrome-right-toggle-offset: var(--workspace-width);
   min-width: min(780px, 100vw);
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr) minmax(0, var(--workspace-width));
 }
@@ -2165,7 +2165,7 @@ a[href] {
    Sidebar and workspace panel stay full-height in columns 1 and 3;
    the terminal occupies column 2 row 3, statusbar at row 4. */
 .layout--terminal-drawer-open {
-  grid-template-rows: var(--app-chrome-height) minmax(0, 1fr) var(--terminal-height, 280px) var(--statusbar-height);
+  grid-template-rows: auto minmax(0, 1fr) var(--terminal-height, 280px) var(--statusbar-height);
   transition:
     grid-template-columns 0.16s ease,
     min-width 0.16s ease,
@@ -2238,45 +2238,9 @@ a[href] {
 .layout--terminal-drawer-open .workspace-panel-resizer {
   grid-row: 2 / 4;
 }
-/* Chrome-hidden variants: rows shift up by one (3 rows total: content, terminal, statusbar). */
-.layout.layout--workbench-chrome-hidden.layout--terminal-drawer-open .sidebar {
-  grid-row: 1 / 3 !important;
-}
-.layout.layout--workbench-chrome-hidden.layout--terminal-drawer-open .workspace-panel-resizer {
-  grid-row: 1 / 3 !important;
-}
-.layout.layout--workbench-chrome-hidden.layout--terminal-drawer-open .workbench-dock {
-  grid-row: 1 / 3 !important;
-}
-.app--creation .layout.layout--creation-chrome-hidden.layout--terminal-drawer-open .sidebar {
-  grid-row: 1 / 3 !important;
-}
-.app--creation .layout.layout--creation-chrome-hidden.layout--terminal-drawer-open .workspace-panel-resizer {
-  grid-row: 1 / 3 !important;
-}
-.app--creation .layout.layout--creation-chrome-hidden.layout--terminal-drawer-open .workbench-dock {
-  grid-row: 1 / 3 !important;
-}
-.layout.layout--workbench-chrome-hidden.layout--terminal-drawer-open {
-  grid-template-rows: minmax(0, 1fr) var(--terminal-height, 280px) var(--statusbar-height) !important;
-  transition:
-    grid-template-columns 0.16s ease,
-    min-width 0.16s ease,
-    grid-template-rows 0.22s cubic-bezier(0.2, 0.72, 0.2, 1) !important;
-}
-.app--creation .layout.layout--creation-chrome-hidden.layout--terminal-drawer-open {
-  grid-template-rows: minmax(0, 1fr) var(--terminal-height, 280px) !important;
-  transition:
-    grid-template-columns 0.16s ease,
-    min-width 0.16s ease,
-    grid-template-rows 0.22s cubic-bezier(0.2, 0.72, 0.2, 1) !important;
-}
 /* StatusBar shifts to row 4 when the terminal drawer adds an extra row. */
 .layout--terminal-drawer-open .statusbar {
   grid-row: 4;
-}
-.layout--workbench-chrome-hidden.layout--terminal-drawer-open .statusbar {
-  grid-row: 3;
 }
 
 /* Keep the old layout--terminal-open rules for backward compat — they are
@@ -2284,7 +2248,7 @@ a[href] {
    no longer added by App.tsx but may remain in cached localStorage styles. */
 .layout--terminal-open {
   grid-template-columns: var(--sidebar-expanded-width) minmax(0, 1fr);
-  grid-template-rows: var(--app-chrome-height) minmax(0, 1fr) minmax(220px, min(42vh, 440px)) var(--statusbar-height);
+  grid-template-rows: auto minmax(0, 1fr) minmax(220px, min(42vh, 440px)) var(--statusbar-height);
 }
 .layout--terminal-open.layout--sidebar-collapsed {
   grid-template-columns: 0px minmax(0, 1fr);
@@ -2307,65 +2271,11 @@ a[href] {
 .layout--terminal-open .statusbar {
   grid-row: 4;
 }
-.layout--workbench-chrome-hidden.layout--terminal-open {
-  grid-template-rows: minmax(0, 1fr) minmax(220px, min(42vh, 440px)) var(--statusbar-height);
-}
-.layout--workbench-chrome-hidden.layout--terminal-open .workbench-dock {
-  grid-row: 2;
-}
-
-.layout--workbench-chrome-hidden.layout--terminal-open .statusbar {
-  grid-row: 3;
-}
-.app--creation .layout--creation-chrome-hidden.layout--terminal-open {
-  grid-template-rows: minmax(0, 1fr) minmax(220px, min(42vh, 440px));
-}
-.app--creation .layout--creation-chrome-hidden.layout--terminal-open .workbench-dock {
-  grid-row: 2;
-}
 .layout--workspace-maximized .chat-pane {
   display: none;
 }
 .layout--workspace-maximized .workspace-panel-resizer {
   display: none;
-}
-
-.layout--workbench-chrome-hidden {
-  --app-chrome-height: 0px;
-  grid-template-rows: minmax(0, 1fr) var(--statusbar-height);
-  background: var(--bg);
-}
-
-.layout--workbench-chrome-hidden .sidebar,
-.layout--workbench-chrome-hidden .chat-pane,
-.layout--workbench-chrome-hidden .workspace-panel-resizer,
-.layout--workbench-chrome-hidden .context-inspector,
-.layout--workbench-chrome-hidden .workbench-dock {
-  grid-row: 1;
-}
-.layout--workbench-chrome-hidden .terminal-drawer-resizer {
-  grid-row: 1;
-}
-.layout--workbench-chrome-hidden .terminal-drawer {
-  grid-row: 2;
-}
-.app--creation .layout--creation-chrome-hidden .terminal-drawer-resizer {
-  grid-row: 1;
-}
-.app--creation .layout--creation-chrome-hidden .terminal-drawer {
-  grid-row: 2;
-}
-
-.layout--workbench-chrome-hidden .statusbar {
-  grid-row: 2;
-}
-
-.app--darwin .layout--workbench-chrome-hidden.layout--sidebar-collapsed .topicbar {
-  padding-left: 96px;
-}
-
-.app--darwin .layout--workbench-chrome-hidden.layout--workspace-maximized .workbench-dock__tools {
-  padding-left: 96px;
 }
 
 .sidebar {
@@ -2792,7 +2702,7 @@ a[href] {
 .sidebar-resizer {
   --reasonix-draggable: no-drag;
   position: absolute;
-  top: var(--app-chrome-height);
+  top: var(--app-bar-height, var(--topicbar-height));
   bottom: var(--statusbar-height);
   /* The sidebar is position:static, so anchor via left from the layout
      container. 1px width means the hairline sits exactly on the sidebar's
@@ -3471,11 +3381,17 @@ a[href] {
   min-height: 0;
   height: 100%;
   display: flex;
-  flex-direction: column;
+  /* Row layout so the dock launcher (rendered before the content) occupies
+     the right edge and PUSHES the transcript history left into the remaining
+     space — the two never overlap. */
+  flex-direction: row;
 }
 .transcript-navigation-content {
   position: relative;
   flex: 1 1 auto;
+  /* Content may contain unbroken code lines. Its intrinsic width must not
+     become the minimum width of this horizontal flex item. */
+  min-width: 0;
   min-height: 0;
   height: 100%;
 }
@@ -5020,6 +4936,35 @@ button.reasoning-summary:focus-visible {
   font-size: var(--text-sm);
   line-height: 1.4;
 }
+
+.tool__command {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+.tool__command-label,
+.tool__data-status {
+  color: var(--fg-faint);
+  font-size: var(--text-sm);
+}
+.tool__data-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* Commands opt into wrapping; output and ordinary code preserve their lines.
+   This also covers CodeViewer's plain loading fallback. */
+.tool__command .code,
+.tool__command .code code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.tool__command .code {
+  max-height: 240px;
+}
 .tool__search-query {
   color: var(--fg);
   overflow-wrap: anywhere;
@@ -5286,6 +5231,7 @@ button.reasoning-summary:focus-visible {
 }
 .reasoning__body,
 .turn-collapse__inline-reasoning {
+  overflow-wrap: anywhere;
   max-height: min(40vh, 480px);
   overflow-x: hidden;
   overflow-y: auto;
@@ -5332,6 +5278,16 @@ button.reasoning-summary:focus-visible {
 .md {
   font-family: var(--font-content-family);
   font-weight: var(--font-weight-regular);
+  overflow-wrap: anywhere;
+}
+/* Prose wraps long tokens; preformatted code, tables and mathematical layout
+   keep their own line/scroll contracts instead of inheriting prose wrapping. */
+.md pre,
+.md pre code,
+.md table,
+.md .katex {
+  overflow-wrap: normal;
+  word-break: normal;
 }
 /* KaTeX \boxed draws its frame as an empty .fbox span that relies on
    width:100% resolving against an inline-table + table-layout:fixed row.
@@ -6720,7 +6676,9 @@ body > .mermaid-diagram--fullscreen {
    containing block .composer-wrap lives inside the footer. The composer is
    hidden while a decision owns the footer, so the two states never overlap. */
 .footer--decision {
-  max-height: calc(100% - var(--topicbar-height));
+  /* 100% is .chat-pane, which no longer contains the shell bar, so it is
+     already the space left for the footer. */
+  max-height: 100%;
   overflow-y: auto;
 }
 
@@ -6855,6 +6813,9 @@ body > .mermaid-diagram--fullscreen {
   color: var(--accent);
   font-family: var(--sans);
   font-size: 12px;
+  /* Lets the readings drop the rate by width instead of grinding it down to a
+     half-cut number. */
+  container-type: inline-size;
 }
 .composer-card--waiting .composer-run-strip {
   /* inherited from the card border tint; no extra rule needed */
@@ -6868,11 +6829,50 @@ body > .mermaid-diagram--fullscreen {
   animation: pulse 1.2s ease-in-out infinite;
 }
 .composer-run-strip__text {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+}
+/* Punctuation is not what groups these. The state word carries the accent and
+   the readings are pinned right, so a long state word ellipsises instead of
+   truncating a reading; a single ellipsised line would cut inside a number and
+   leave it reading as a whole one. */
+.composer-run-strip__state {
+  flex: 0 9 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-variant-numeric: tabular-nums;
+}
+/* The readings never shrink, so every pixel the strip gives up comes out of the
+   state word. That is what keeps a reading from being cut mid-number. */
+.composer-run-strip__metrics {
+  display: flex;
+  align-items: baseline;
+  flex: 0 0 auto;
+  column-gap: 14px;
+  color: var(--fg-dim);
+}
+/* `pre` keeps the space that separates the readings in the text layer too:
+   flex strips a leading space from the block's first character. */
+.composer-run-strip__metric {
+  flex: 0 0 auto;
+  white-space: pre;
+}
+/* Throughput is the only reading that may be shed, and it is shed whole: it
+   never shrinks, so it cannot be ground down to a half-cut number, and the
+   container query removes it before it would have to overflow. */
+.composer-run-strip__metric--optional {
+  flex: 0 0 auto;
+}
+@container (max-width: 350px) {
+  .composer-run-strip__metric--optional {
+    display: none;
+  }
 }
 .composer-run-strip--waiting {
   color: color-mix(in srgb, var(--warn) 74%, var(--fg));
@@ -21936,20 +21936,8 @@ body > .mermaid-diagram--fullscreen {
   .sidebar-resizer {
     display: none;
   }
-  .layout {
-    --chrome-left-toggle-offset: var(--chrome-left-safe-offset);
-  }
-  .app--darwin .layout {
-    --chrome-left-toggle-offset: 94px;
-  }
   .chat-pane {
     grid-column: 1;
-  }
-  .app--darwin .layout--workbench-chrome-hidden .topicbar {
-    padding-left: 96px;
-  }
-  .app--darwin .layout--workbench-chrome-hidden.layout--workspace-maximized .workbench-dock__tools {
-    padding-left: 96px;
   }
   .topbar {
     padding: 0 12px 0 82px; /* clear macOS inset traffic lights when the sidebar is hidden */
@@ -22203,163 +22191,6 @@ body > .mermaid-diagram--fullscreen {
   min-height: 160px;
 }
 
-.app-chrome {
-  grid-row: 1;
-  grid-column: 1 / -1;
-  position: relative;
-  z-index: var(--z-app-chrome);
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  height: var(--app-chrome-height);
-  padding: 0;
-  background: var(--bg-soft);
-  border-bottom: 1px solid var(--border-soft);
-  --reasonix-draggable: drag;
-  user-select: none;
-}
-
-.app-chrome button {
-  --reasonix-draggable: no-drag;
-}
-
-.app-chrome__panel-toggle {
-  position: absolute;
-  top: 0;
-  flex: 0 0 var(--chrome-toggle-size);
-  width: var(--chrome-toggle-size);
-  height: var(--app-chrome-height);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--fg-faint);
-  opacity: 0.86;
-  transition: color 0.12s, background 0.12s, opacity 0.12s;
-}
-
-.app-chrome__panel-toggle--left {
-  left: var(--chrome-left-toggle-offset);
-  border-left: 1px solid var(--border-soft);
-  border-right: 1px solid var(--border-soft);
-}
-
-.app-chrome__panel-toggle--right {
-  right: var(--chrome-right-toggle-offset);
-  border-left: 1px solid var(--border-soft);
-  border-right: 1px solid var(--border-soft);
-}
-
-.layout--resizing .app-chrome__panel-toggle {
-  pointer-events: none;
-  opacity: 0.65;
-}
-
-.app-chrome__panel-toggle:hover {
-  color: var(--fg);
-  background: color-mix(in srgb, var(--fg-faint) 10%, transparent);
-  opacity: 1;
-}
-
-.app-chrome__panel-toggle--active {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
-  opacity: 1;
-}
-
-.app-chrome__panel-toggle--active:hover {
-  color: var(--accent-strong);
-  background: color-mix(in srgb, var(--fg-faint) 10%, transparent);
-}
-
-.app-chrome__panel-toggle--blocked,
-.app-chrome__panel-toggle--blocked:hover {
-  color: var(--fg-faint);
-  background: transparent;
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.app-chrome__spacer {
-  flex: 1 1 auto;
-  min-width: 16px;
-}
-
-.app-chrome__tab-strip {
-  flex: 1 1 auto;
-  min-width: 0;
-  max-width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: stretch;
-  overflow: hidden;
-}
-
-.app-chrome__identity {
-  flex: 0 0 auto;
-  min-width: 128px;
-  max-width: 220px;
-  height: 100%;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--fg-dim);
-  overflow: hidden;
-  --reasonix-draggable: drag;
-}
-
-.app-chrome__logo {
-  flex: 0 0 auto;
-  width: 78px;
-  max-height: 20px;
-  object-fit: contain;
-}
-
-.app-chrome__separator {
-  flex: 0 0 auto;
-  color: var(--fg-faint);
-  opacity: 0.72;
-}
-
-.app-chrome__scope {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12.5px;
-  font-weight: 560;
-}
-
-.app-chrome__tools {
-  flex: 0 0 auto;
-  height: 100%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  min-width: 0;
-  margin-left: 8px;
-  --reasonix-draggable: no-drag;
-  transition:
-    margin 0.28s cubic-bezier(0.2, 0.72, 0.2, 1),
-    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.app-chrome__command {
-  margin-left: 0;
-}
-
-.app-chrome__tools--fixed {
-  position: absolute;
-  top: 0;
-  right: calc(var(--chrome-toggle-size) + 8px);
-  z-index: var(--z-local-raised);
-  margin-left: 0;
-}
-
 .windows-window-controls {
   position: fixed;
   top: 0;
@@ -22445,184 +22276,6 @@ body > .mermaid-diagram--fullscreen {
   background: #c42b1c;
 }
 
-.app--darwin .app-chrome--tabs {
-  align-items: stretch;
-  padding: 0 calc(var(--chrome-toggle-size) + var(--chrome-toggle-size) + 16px) 0 calc(var(--chrome-left-toggle-offset) + var(--chrome-toggle-size) + 8px);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-soft) 94%, var(--bg-elev)), var(--bg-soft));
-  transition: padding 0.28s cubic-bezier(0.2, 0.72, 0.2, 1);
-}
-
-.app--darwin .app-chrome--tabs .tabbar {
-  --reasonix-draggable: drag;
-}
-
-.app--darwin .app-chrome--tabs .tabbar * {
-  --reasonix-draggable: no-drag;
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__drag-rail,
-.app--windows-frameless:not(.app--workbench):not(.app--creation) .app-chrome--native-tabs .app-chrome__drag-rail {
-  display: block;
-  position: absolute;
-  top: 0;
-  z-index: var(--z-local-handle);
-  height: 10px;
-  --reasonix-draggable: drag;
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__drag-rail {
-  left: calc(var(--chrome-left-toggle-offset) + var(--chrome-toggle-size) + 12px);
-  right: calc(var(--chrome-toggle-size) + var(--chrome-toggle-size) + 20px);
-}
-
-.app--windows-frameless:not(.app--workbench):not(.app--creation) .app-chrome--native-tabs .app-chrome__drag-rail {
-  left: calc(var(--chrome-toggle-size) + 16px);
-  right: calc(var(--windows-window-controls-safe) + var(--chrome-toggle-size) + 18px);
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__drag-rail::before,
-.app--windows-frameless:not(.app--workbench):not(.app--creation) .app-chrome--native-tabs .app-chrome__drag-rail::before {
-  content: "";
-  position: absolute;
-  top: 3px;
-  left: 50%;
-  width: calc(100% - 24px);
-  height: 3px;
-  transform: translateX(-50%);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--fg-faint) 40%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 76%, transparent);
-  opacity: 0;
-  transition:
-    background 0.12s ease,
-    box-shadow 0.12s ease,
-    opacity 0.12s ease;
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__drag-rail:hover::before,
-.app--windows-frameless:not(.app--workbench):not(.app--creation) .app-chrome--native-tabs .app-chrome__drag-rail:hover::before {
-  opacity: 0.72;
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__drag-rail:active::before,
-.app--windows-frameless:not(.app--workbench):not(.app--creation) .app-chrome--native-tabs .app-chrome__drag-rail:active::before {
-  background: var(--accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 68%, transparent);
-  opacity: 0.95;
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle {
-  top: 7px;
-  height: 30px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  transition:
-    color 0.14s ease,
-    border-color 0.14s ease,
-    background 0.14s ease,
-    right 0.28s cubic-bezier(0.2, 0.72, 0.2, 1),
-    transform 0.16s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left {
-  left: var(--chrome-left-safe-offset);
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right {
-  right: 8px;
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle:hover {
-  border-color: var(--border-soft);
-  background: color-mix(in srgb, var(--fg-faint) 9%, transparent);
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--active {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right {
-  isolation: isolate;
-  overflow: hidden;
-  color: var(--fg-dim);
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left::before,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: color-mix(in srgb, var(--fg-faint) 14%, transparent);
-  opacity: 0;
-  transform: scale(0.82);
-  transition:
-    opacity 0.14s ease,
-    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
-    background 0.14s ease;
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left svg,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right svg {
-  position: relative;
-  stroke-width: 1.85;
-  transition:
-    color 0.14s ease,
-    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left.app-chrome__panel-toggle--active,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right.app-chrome__panel-toggle--active {
-  color: var(--fg-dim);
-  border-color: transparent;
-  background: transparent;
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left:hover,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right:hover {
-  color: var(--fg);
-  border-color: transparent;
-  background: transparent;
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left:hover::before,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right:hover::before {
-  opacity: 1;
-  transform: scale(1);
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left:active,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right:active {
-  transform: scale(0.94);
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left:active::before,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right:active::before {
-  background: color-mix(in srgb, var(--fg-faint) 22%, transparent);
-  opacity: 1;
-  transform: scale(0.92);
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left:active svg,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right:active svg {
-  transform: scale(0.92);
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left.app-chrome__panel-toggle--pressed::before,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right.app-chrome__panel-toggle--pressed::before {
-  animation: mac-sidebar-button-press 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left.app-chrome__panel-toggle--pressed svg,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right.app-chrome__panel-toggle--pressed svg {
-  animation: mac-sidebar-icon-press 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
 @keyframes mac-sidebar-button-press {
   0% {
     opacity: 1;
@@ -22654,354 +22307,31 @@ body > .mermaid-diagram--fullscreen {
 @media (prefers-reduced-motion: reduce) {
   .app--darwin .sidebar,
   .app--darwin .layout,
-  .app--darwin .app-chrome--tabs,
-  .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left,
-  .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right,
-  .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left::before,
-  .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right::before,
-  .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left svg,
-  .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right svg,
-  .app-chrome--native-tabs .app-chrome__panel-toggle,
-  .app-chrome--native-tabs .app-chrome__panel-toggle::before,
-  .app-chrome--native-tabs .app-chrome__panel-toggle svg,
-  .app-chrome--native-tabs .tabbar__tab,
-  .app-chrome--native-tabs .tabbar__new,
-  .app-chrome--native-tabs .tabbar__command {
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  {
     transition: none;
     animation: none;
   }
 }
 
-.app--darwin .app-chrome--tabs .tabbar {
-  height: 100%;
-  align-items: flex-end;
-  padding: 5px 0 0;
-  gap: 5px;
-}
-
-.app--darwin .app-chrome--tabs .tabbar__tabs {
-  align-self: flex-end;
-  height: 39px;
-  max-width: calc(100% - 40px);
-  gap: 4px;
-}
-
-.app--darwin .app-chrome--tabs .tabbar__tab {
-  flex-basis: var(--tabbar-tab-width);
-  height: 34px;
-  width: var(--tabbar-tab-width);
-  min-width: var(--tabbar-tab-width);
-  max-width: var(--tabbar-tab-width);
-  align-self: flex-end;
-  padding: 0 28px 0 11px;
-  border: 1px solid transparent;
-  border-bottom: 0;
-  border-radius: 10px 10px 0 0;
-  background: transparent;
-  color: var(--fg-dim);
-}
-
-.app--darwin .app-chrome--tabs .tabbar__tab:not(.tabbar__tab--active):hover {
-  background: color-mix(in srgb, var(--bg-elev-2) 50%, transparent);
-  border-color: color-mix(in srgb, var(--border-soft) 70%, transparent);
-}
-
-.app--darwin .app-chrome--tabs .tabbar__tab--active {
-  color: var(--fg);
-  background: var(--chat-bg);
-  border-color: var(--border-soft);
-  box-shadow: 0 -1px 0 color-mix(in srgb, var(--fg) 5%, transparent);
-}
-
-.app--darwin .app-chrome--tabs .tabbar__tab-label {
-  font-size: 12.5px;
-  font-weight: 590;
-}
-
-.app--darwin .app-chrome--tabs .tabbar__new {
-  width: 32px;
-  height: 30px;
-  margin: 4px 0 4px 0;
-  border-radius: 8px;
-}
-
-.app--windows .app-chrome--native-tabs,
-.app--linux .app-chrome--native-tabs {
-  align-items: center;
-  gap: 12px;
-  padding: 0 calc(var(--chrome-right-toggle-offset) + var(--chrome-toggle-size) + 10px) 0 calc(var(--chrome-toggle-size) + 10px);
-  background: var(--bg-soft);
-}
-
-.app--windows .app-chrome--native-tabs {
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-soft) 88%, var(--bg-elev)), var(--bg-soft));
-}
-
-.app--linux .app-chrome--native-tabs {
-  background: color-mix(in srgb, var(--bg-soft) 92%, var(--bg-elev));
-}
-
-.app--windows .app-chrome--native-tabs .tabbar,
-.app--linux .app-chrome--native-tabs .tabbar,
-.app--windows .app-chrome--native-tabs .tabbar *,
-.app--linux .app-chrome--native-tabs .tabbar * {
-  --reasonix-draggable: no-drag;
-}
-
-.app--windows-frameless:not(.app--workbench):not(.app--creation) .app-chrome--native-tabs .tabbar {
-  --reasonix-draggable: drag;
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__identity {
-  max-width: 238px;
-}
-
-.app--linux .app-chrome--native-tabs .app-chrome__identity {
-  max-width: 214px;
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__panel-toggle,
-.app--linux .app-chrome--native-tabs .app-chrome__panel-toggle {
-  top: 4px;
-  width: 30px;
-  height: 30px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--fg-dim);
-  isolation: isolate;
-  overflow: hidden;
-  transition:
-    color 0.14s ease,
-    border-color 0.14s ease,
-    background 0.14s ease,
-    transform 0.16s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__panel-toggle--left,
-.app--linux .app-chrome--native-tabs .app-chrome__panel-toggle--left {
-  left: 8px;
-  border-left: 1px solid transparent;
-  border-right: 1px solid transparent;
-  z-index: var(--z-local-raised);
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__panel-toggle--right,
-.app--linux .app-chrome--native-tabs .app-chrome__panel-toggle--right {
-  right: 8px;
-  border-left: 1px solid transparent;
-  border-right: 1px solid transparent;
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__panel-toggle::before,
-.app--linux .app-chrome--native-tabs .app-chrome__panel-toggle::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: color-mix(in srgb, var(--fg-faint) 13%, transparent);
-  opacity: 0;
-  transform: scale(0.82);
-  transition:
-    opacity 0.14s ease,
-    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
-    background 0.14s ease;
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__panel-toggle svg,
-.app--linux .app-chrome--native-tabs .app-chrome__panel-toggle svg {
-  position: relative;
-  stroke-width: 1.85;
-  transition:
-    color 0.14s ease,
-    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__panel-toggle:hover,
-.app--linux .app-chrome--native-tabs .app-chrome__panel-toggle:hover {
-  color: var(--fg);
-  border-color: transparent;
-  background: transparent;
-  opacity: 1;
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__panel-toggle:hover::before,
-.app--linux .app-chrome--native-tabs .app-chrome__panel-toggle:hover::before {
-  opacity: 1;
-  transform: scale(1);
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__panel-toggle--active,
-.app--linux .app-chrome--native-tabs .app-chrome__panel-toggle--active {
-  color: var(--fg-dim);
-  border-color: transparent;
-  background: transparent;
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__panel-toggle--active::before,
-.app--linux .app-chrome--native-tabs .app-chrome__panel-toggle--active::before {
-  opacity: 1;
-  transform: scale(1);
-  background: color-mix(in srgb, var(--accent) 11%, transparent);
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__panel-toggle:active,
-.app--linux .app-chrome--native-tabs .app-chrome__panel-toggle:active {
-  transform: scale(0.94);
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__panel-toggle:active::before,
-.app--linux .app-chrome--native-tabs .app-chrome__panel-toggle:active::before {
-  opacity: 1;
-  transform: scale(0.92);
-  background: color-mix(in srgb, var(--fg-faint) 22%, transparent);
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__panel-toggle:active svg,
-.app--linux .app-chrome--native-tabs .app-chrome__panel-toggle:active svg {
-  transform: scale(0.92);
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__panel-toggle--pressed::before,
-.app--linux .app-chrome--native-tabs .app-chrome__panel-toggle--pressed::before {
-  animation: mac-sidebar-button-press 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.app--windows .app-chrome--native-tabs .app-chrome__panel-toggle--pressed svg,
-.app--linux .app-chrome--native-tabs .app-chrome__panel-toggle--pressed svg {
-  animation: mac-sidebar-icon-press 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.app--windows .app-chrome--native-tabs .tabbar,
-.app--linux .app-chrome--native-tabs .tabbar {
-  height: 100%;
-  padding: 0;
-  gap: 8px;
-}
-
-.app--windows .app-chrome--native-tabs .tabbar__tabs,
-.app--linux .app-chrome--native-tabs .tabbar__tabs {
-  flex: 1 1 auto;
-  max-width: none;
-  min-width: 0;
-  align-items: center;
-  gap: 5px;
-}
-
-.app--windows .app-chrome--native-tabs .tabbar__tab,
-.app--linux .app-chrome--native-tabs .tabbar__tab {
-  height: 30px;
-  width: var(--tabbar-tab-width);
-  min-width: var(--tabbar-tab-width);
-  max-width: var(--tabbar-tab-width);
-  align-self: center;
-  padding: 0 30px 0 10px;
-  border: 1px solid transparent;
-  border-right: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--fg-dim);
-  box-shadow: none;
-  transition:
-    background 0.14s ease,
-    border-color 0.14s ease,
-    box-shadow 0.14s ease,
-    color 0.14s ease,
-    transform 0.16s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.app--windows .app-chrome--native-tabs .tabbar__tab:not(.tabbar__tab--active):hover {
-  border-color: color-mix(in srgb, var(--border) 72%, transparent);
-  background: color-mix(in srgb, var(--bg-elev-2) 50%, transparent);
-  color: var(--fg);
-}
-
-.app--linux .app-chrome--native-tabs .tabbar__tab:not(.tabbar__tab--active):hover {
-  border-color: color-mix(in srgb, var(--border-soft) 72%, transparent);
-  background: color-mix(in srgb, var(--bg-elev-2) 38%, transparent);
-  color: var(--fg);
-}
-
-.app--windows .app-chrome--native-tabs .tabbar__tab--active {
-  color: var(--fg);
-  border-color: var(--border);
-  background: var(--bg-elev);
-  box-shadow:
-    0 1px 0 color-mix(in srgb, #fff 45%, transparent),
-    inset 0 -2px 0 var(--project-accent, var(--accent));
-}
-
-.app--linux .app-chrome--native-tabs .tabbar__tab--active {
-  color: var(--fg);
-  border-color: color-mix(in srgb, var(--border-soft) 70%, transparent);
-  background: color-mix(in srgb, var(--bg-elev) 78%, transparent);
-  box-shadow: inset 0 -2px 0 var(--project-accent, var(--accent));
-}
-
-.app--windows .app-chrome--native-tabs .tabbar__tab:active,
-.app--linux .app-chrome--native-tabs .tabbar__tab:active {
-  transform: translateY(1px) scale(0.985);
-}
-
-.app--windows .app-chrome--native-tabs .tabbar__new,
-.app--linux .app-chrome--native-tabs .tabbar__new,
-.app--windows .app-chrome--native-tabs .tabbar__command,
-.app--linux .app-chrome--native-tabs .tabbar__command {
-  transition:
-    background 0.14s ease,
-    border-color 0.14s ease,
-    color 0.14s ease,
-    transform 0.16s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.app--windows .app-chrome--native-tabs .tabbar__new:active,
-.app--linux .app-chrome--native-tabs .tabbar__new:active,
-.app--windows .app-chrome--native-tabs .tabbar__command:active,
-.app--linux .app-chrome--native-tabs .tabbar__command:active {
-  transform: scale(0.94);
-}
-
-.app--windows .app-chrome--native-tabs .tabbar__spacer,
-.app--linux .app-chrome--native-tabs .tabbar__spacer {
-  flex: 0 0 8px;
-  min-width: 8px;
-}
-
-.app--windows .app-chrome--native-tabs .tabbar__command,
-.app--linux .app-chrome--native-tabs .tabbar__command {
-  flex: 0 1 clamp(148px, 19vw, 280px);
-  width: clamp(148px, 19vw, 280px);
-  max-width: 280px;
-}
-
-.app--windows .app-chrome--native-tabs .tabbar__command--compact,
-.app--linux .app-chrome--native-tabs .tabbar__command--compact {
-  flex: 0 0 112px;
-  width: 112px;
-  min-width: 112px;
-}
-
-.workspace-tabs-bar {
-  position: relative;
-  flex: 0 0 auto;
-  display: flex;
-  align-items: stretch;
-  height: 38px;
-  background: var(--bg-soft);
-  border-bottom: 1px solid var(--border-soft);
-  --reasonix-draggable: drag;
-}
-
-.workspace-tabs-bar .tabbar,
-.workspace-tabs-bar .tabbar * {
-  --reasonix-draggable: no-drag;
-}
-
+/* The bar is the layout's first row and spans every column, so the dock's tabs
+   start directly beneath it instead of under an imitated strip. */
 .topicbar {
   position: relative;
   z-index: var(--z-inline-sticky);
-  flex: 0 0 auto;
+  grid-row: 1;
+  grid-column: 1 / -1;
+  min-width: 0;
   container-type: inline-size;
   display: flex;
   align-items: center;
@@ -23016,6 +22346,40 @@ body > .mermaid-diagram--fullscreen {
 
 .topicbar button {
   --reasonix-draggable: no-drag;
+}
+
+/* The bar covers the sidebar's column too, so the macOS traffic lights always
+   overlap its left end rather than only doing so when the sidebar is hidden.
+   The themed pair is required: :root[data-theme-style] .topicbar resets the
+   padding shorthand at a higher specificity than the bare scope. */
+.app--darwin .topicbar,
+:root[data-theme-style] .app--darwin .topicbar {
+  padding-left: var(--chrome-left-safe-offset);
+}
+
+/* Windows leads the bar with the app mark — the caption buttons already own the
+   window's right end — so the sidebar stops repeating the brand there. macOS
+   leads with the traffic lights and keeps its sidebar wordmark. */
+.topicbar__brand {
+  display: none;
+}
+.app--windows-frameless .topicbar__brand,
+:root[data-theme-style] .app--windows-frameless .topicbar__brand {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+.topicbar__brand-logo {
+  display: block;
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+.app--windows-frameless .sidebar__head,
+.app--windows-frameless .sidebar__brand,
+:root[data-theme-style] .app--windows-frameless .sidebar__head,
+:root[data-theme-style] .app--windows-frameless .sidebar__brand {
+  display: none;
 }
 
 .topicbar__chrome-btn {
@@ -23125,15 +22489,6 @@ body > .mermaid-diagram--fullscreen {
   gap: 6px;
   position: relative;
   --reasonix-draggable: no-drag;
-}
-/* When the dock is closed in workbench mode, the fixed top-right dock-toggle
-/* When the dock is closed in workbench mode, the fixed top-right dock-toggle
-   overlaps the topic bar's right edge; leave room so the actions don't
-   collide with it. When the dock is open it occupies the right column, so no
-   extra margin is needed. Classic/creation keep the toggle inside the actions
-   row, so the extra margin does not apply there. */
-.layout--workbench:not(.layout--workspace-open) .topicbar__actions {
-  margin-right: 36px;
 }
 
 .topicbar__actions > .tooltip-trigger {
@@ -23573,139 +22928,11 @@ body > .mermaid-diagram--fullscreen {
   color: var(--fg-dim);
   justify-self: end;
 }
-
-.tabbar {
-  --tabbar-tab-width: 176px;
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 38px;
-  display: flex;
-  align-items: center;
-  padding: 0 10px 0 0;
-  gap: 3px;
-  background: transparent;
-  border-bottom: none;
-  overflow: hidden;
-}
-
-.tabbar__tabs {
-  display: flex;
-  align-self: stretch;
-  flex: 0 1 auto;
-  max-width: calc(100% - 36px);
-  gap: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.tabbar__tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.tabbar__tab {
-  flex: 0 0 var(--tabbar-tab-width);
-  position: relative;
-  width: var(--tabbar-tab-width);
-  height: 38px;
-  min-width: var(--tabbar-tab-width);
-  max-width: var(--tabbar-tab-width);
-  display: flex;
-  align-items: center;
-  padding: 0 28px 0 10px;
-  gap: 6px;
-  border: none;
-  border-right: 1px solid var(--border-soft);
-  border-radius: 0;
-  color: var(--fg-dim);
-  background: transparent;
-  font-size: 12.5px;
-  white-space: nowrap;
-  transition: background var(--dur-fast) var(--ease-out);
-  animation: tab-in var(--dur-base) var(--ease-out) both;
-}
 @keyframes tab-in {
   from {
     opacity: 0;
     transform: translateY(-4px);
   }
-}
-
-.tabbar__tab:not(.tabbar__tab--active):hover {
-  background: color-mix(in srgb, var(--bg-elev-2) 42%, transparent);
-}
-
-.tabbar__tab--active {
-  color: var(--fg);
-  background: var(--chat-bg);
-  box-shadow:
-    inset 0 -1px 0 var(--chat-bg),
-    inset 0 -2px 0 var(--project-accent, var(--accent));
-}
-
-@media (max-width: 980px) {
-  .tabbar {
-    --tabbar-tab-width: 148px;
-  }
-}
-
-.tabbar__tab--yolo {
-  color: var(--fg);
-}
-
-.tabbar__tab--dragging {
-  opacity: 0.58;
-}
-
-.tabbar__tab--drop-before::before,
-.tabbar__tab--drop-after::after {
-  content: "";
-  position: absolute;
-  top: 7px;
-  bottom: 7px;
-  width: 2px;
-  border-radius: 999px;
-  background: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
-}
-
-.tabbar__tab--drop-before::before {
-  left: 0;
-}
-
-.tabbar__tab--drop-after::after {
-  right: 0;
-}
-
-.tabbar__status {
-  flex: 0 0 7px;
-  width: 7px;
-  min-width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--project-accent, var(--accent));
-  opacity: 1;
-  box-shadow: 0 0 0 0 color-mix(in srgb, var(--project-accent, var(--accent)) 0%, transparent);
-  transform-origin: center;
-  transition: box-shadow 0.18s ease, opacity 0.18s ease;
-}
-
-.tabbar__tab--active .tabbar__status {
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--project-accent, var(--accent)) 18%, transparent);
-  animation: tab-status-breathe 2.6s ease-in-out infinite;
-}
-
-.tabbar__status--running {
-  box-shadow: 0 0 0 5px color-mix(in srgb, var(--project-accent, var(--accent)) 24%, transparent);
-  animation: tab-status-breathe-running 1.8s ease-in-out infinite;
-}
-
-.tabbar__file-icon {
-  flex: 0 0 auto;
-  color: var(--fg-faint);
-}
-
-.tabbar__tab--active .tabbar__file-icon {
-  color: var(--fg-dim);
 }
 
 @keyframes tab-status-breathe {
@@ -23724,230 +22951,6 @@ body > .mermaid-diagram--fullscreen {
   50% {
     box-shadow: 0 0 0 7px color-mix(in srgb, var(--project-accent, var(--accent)) 12%, transparent);
   }
-}
-
-.tabbar__tab-label {
-  flex: 1 1 auto;
-  max-width: 100%;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 560;
-}
-
-.tabbar__mode-badge {
-  flex: 0 0 auto;
-  height: 16px;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 5px;
-  border-radius: 5px;
-  font-size: 9.5px;
-  line-height: 1;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.tabbar__mode-badge--yolo {
-  color: var(--mode-yolo-fg);
-  background: var(--mode-yolo-bg);
-}
-
-.tabbar__mode-badge--plan {
-  color: var(--mode-plan-fg);
-  background: var(--mode-plan-bg);
-}
-
-.tabbar__spacer {
-  flex: 1 1 auto;
-  min-width: 12px;
-}
-
-.app-chrome__drag-rail {
-  display: none;
-}
-
-.tabbar__tab-close {
-  position: absolute;
-  right: 8px;
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 3px;
-  opacity: 0;
-  color: var(--fg-faint);
-  pointer-events: none;
-  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
-}
-
-.tabbar__tab:hover .tabbar__tab-close,
-.tabbar__tab--active .tabbar__tab-close {
-  opacity: 0.78;
-  pointer-events: auto;
-}
-
-.tabbar__tab-close:hover {
-  opacity: 1;
-  background: var(--button-bg);
-  color: var(--fg);
-}
-
-.tabbar__new {
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: 1px;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--fg-dim);
-}
-
-.tabbar__new:hover {
-  background: var(--button-bg);
-  color: var(--fg);
-}
-
-/* L1: command-search bar — opens the ⌘K palette. Sits after the new-tab
-/* L1: command-search bar — opens the ⌘K palette. Sits after the new-tab
-   button and fills the remaining strip width like the prototype. */
-.tabbar__command {
-  flex: 1 1 auto;
-  min-width: 90px;
-  max-width: 360px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-left: 4px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-elev) 60%, transparent);
-  color: var(--fg-faint);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  transition:
-    width 0.28s cubic-bezier(0.2, 0.72, 0.2, 1),
-    min-width 0.28s cubic-bezier(0.2, 0.72, 0.2, 1),
-    max-width 0.28s cubic-bezier(0.2, 0.72, 0.2, 1),
-    flex-basis 0.28s cubic-bezier(0.2, 0.72, 0.2, 1),
-    padding 0.28s cubic-bezier(0.2, 0.72, 0.2, 1),
-    gap 0.28s cubic-bezier(0.2, 0.72, 0.2, 1),
-    border-color 0.12s,
-    background 0.12s,
-    color 0.12s;
-}
-.tabbar__command:hover {
-  border-color: var(--border-2, var(--border));
-  background: var(--bg-elev);
-  color: var(--fg-dim);
-}
-
-.tabbar__command--compact {
-  flex: 0 0 var(--chrome-panel-control-size, 30px);
-  width: var(--chrome-panel-control-size, 30px);
-  min-width: var(--chrome-panel-control-size, 30px);
-  max-width: var(--chrome-panel-control-size, 30px);
-  height: var(--chrome-panel-control-size, 30px);
-  justify-content: center;
-  gap: 0;
-  padding: 0;
-  border-color: transparent;
-  background: transparent;
-  color: var(--fg-dim);
-}
-
-.tabbar__command-text--compact {
-  display: inline-flex;
-  flex: 0 0 auto;
-  max-width: 0;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(4px);
-}
-
-.tabbar__command--compact .tabbar__command-text--full {
-  max-width: 0;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(-4px);
-}
-
-.tabbar__command--compact .tabbar__command-text--compact {
-  display: none;
-  max-width: 0;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.tabbar__command--compact .tabbar__command-kbd {
-  display: none;
-}
-
-.tabbar__command-icon {
-  flex: none;
-  opacity: 0.8;
-}
-.tabbar__command-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: left;
-  opacity: 1;
-  transform: translateX(0);
-  transition:
-    max-width 0.28s cubic-bezier(0.2, 0.72, 0.2, 1),
-    opacity 0.18s ease,
-    transform 0.22s cubic-bezier(0.2, 0.72, 0.2, 1);
-}
-
-.tabbar__command .tabbar__command-text--compact {
-  flex: 0 0 auto;
-  max-width: 0;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(4px);
-}
-
-.tabbar__command.tabbar__command--compact .tabbar__command-text--compact {
-  display: none;
-  max-width: 0;
-  opacity: 0;
-  pointer-events: none;
-}
-.tabbar__command-kbd {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 30px;
-  height: 18px;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  line-height: 1;
-  color: var(--fg-faint);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 0 6px;
-  background: color-mix(in srgb, var(--bg-elev) 72%, transparent);
-  transition:
-    margin 0.28s cubic-bezier(0.2, 0.72, 0.2, 1),
-    padding 0.28s cubic-bezier(0.2, 0.72, 0.2, 1),
-    background 0.12s,
-    border-color 0.12s,
-    color 0.12s;
 }
 
 .project-tree {
@@ -24175,64 +23178,6 @@ body > .mermaid-diagram--fullscreen {
   background: var(--border-soft);
 }
 
-.project-tree__time-filter-title {
-  padding: 4px 8px 2px;
-  color: var(--fg-faint);
-  font-size: 10px;
-  white-space: nowrap;
-  user-select: none;
-}
-
-/* Classic hover preview card: rendered through a body portal so the sidebar's
-/* Classic hover preview card: rendered through a body portal so the sidebar's
-   overflow clipping cannot cut it off; pointer-events stay off so it never
-   steals the hover from the row underneath. */
-.project-tree__hover-card {
-  position: fixed;
-  z-index: var(--z-menu);
-  min-width: 180px;
-  max-width: 260px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: var(--bg-elev);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
-  pointer-events: none;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.project-tree__hover-card-title {
-  color: var(--fg);
-  font-size: 12px;
-  font-weight: 550;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
-.project-tree__hover-card-status {
-  color: var(--accent);
-  font-size: 11px;
-}
-
-.project-tree__hover-card-meta {
-  color: var(--fg-faint);
-  font-size: 11px;
-}
-
-.project-tree__hover-card-project {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--fg-faint);
-  font-size: 11px;
-}
-
-.project-tree__hover-card-project svg {
-  color: var(--fg-faint);
-  flex: 0 0 auto;
-}
-
 /* Classic per-folder show-more toggle and empty-folder placeholder rows. */
 .project-tree__topic-window-toggle {
   --reasonix-draggable: no-drag;
@@ -24258,16 +23203,6 @@ body > .mermaid-diagram--fullscreen {
 .project-tree__topic-window-toggle:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
-}
-
-.project-tree__topic-placeholder {
-  display: flex;
-  align-items: center;
-  height: 26px;
-  padding: 0 8px;
-  color: var(--fg-faint);
-  font-size: 12px;
-  user-select: none;
 }
 
 .project-tree__skeleton {
@@ -24312,27 +23247,6 @@ body > .mermaid-diagram--fullscreen {
 
 .project-tree__list::-webkit-scrollbar {
   display: none;
-}
-
-.app--classic .project-tree__section {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.app--classic .project-tree__section--pinned {
-  margin-bottom: 12px;
-}
-
-.app--classic .project-tree__section-title {
-  min-height: 26px;
-  padding: 6px 8px 2px;
-  color: var(--fg-faint);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.35;
-  letter-spacing: 0;
 }
 
 .project-tree__folder {
@@ -24735,74 +23649,6 @@ body > .mermaid-diagram--fullscreen {
   outline-offset: -2px;
 }
 
-/* Classic single-line rows: the activity time sits right-aligned on the title
-/* Classic single-line rows: the activity time sits right-aligned on the title
-   line (turns and the exact date live in the hover preview card). Mirrors the
-   workbench side recipe, including the swap with the shortcut badge. */
-.app--classic .project-tree__topic-side {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 5px;
-  margin-left: 6px;
-  color: var(--fg-faint);
-  font-size: 11px;
-  line-height: 1;
-  white-space: nowrap;
-  transition: opacity var(--dur-fast);
-}
-
-.app--classic .project-tree__topic-side--empty {
-  visibility: hidden;
-}
-
-.app--classic .project-tree__topic-time {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.app--classic .project-tree__topic-state {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: currentColor;
-  opacity: 0.78;
-}
-
-.app--classic .project-tree__topic-state--thinking,
-.app--classic .project-tree__topic-state--streaming {
-  border: 2px solid color-mix(in srgb, currentColor 26%, transparent);
-  border-top-color: currentColor;
-  background: transparent;
-  animation: project-tree-spin 0.9s linear infinite;
-}
-
-.app--classic .project-tree__topic-state--waiting_confirmation {
-  background: var(--warn);
-  animation: none;
-}
-
-.app--classic .project-tree__topic-state--paused {
-  background: var(--fg-faint);
-}
-
-.app--classic .project-tree__topic-state--error {
-  background: var(--err);
-}
-
-.app--classic .project-tree__topic--show-shortcut .project-tree__topic-side {
-  opacity: 0;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .app--classic .project-tree__topic-state--thinking,
-  .app--classic .project-tree__topic-state--streaming {
-    animation: none;
-  }
-}
-
 .project-tree__topic--editing {
   padding-right: 8px;
 }
@@ -24947,14 +23793,12 @@ body > .mermaid-diagram--fullscreen {
 }
 
 /* Topic action icons (pin, archive): clean, no background, no border */
-:root[data-theme-style] .sidebar--workbench .project-tree__topic-action,
-:root[data-theme-style] .app--classic .project-tree__topic-action {
+:root[data-theme-style] .sidebar--workbench .project-tree__topic-action {
   background: transparent;
   border-color: transparent;
   box-shadow: none;
 }
-:root[data-theme-style] .sidebar--workbench .project-tree__topic-action:hover,
-:root[data-theme-style] .app--classic .project-tree__topic-action:hover {
+:root[data-theme-style] .sidebar--workbench .project-tree__topic-action:hover {
   background: transparent;
   border-color: transparent;
   box-shadow: none;
@@ -24975,24 +23819,21 @@ body > .mermaid-diagram--fullscreen {
 }
 
 /* Remove right-side slide animations on topic hover */
-:root[data-theme-style] .sidebar--workbench .project-tree__topic-actions,
-:root[data-theme-style] .app--classic .project-tree__topic-actions {
+:root[data-theme-style] .sidebar--workbench .project-tree__topic-actions {
   transform: translateY(-50%) translateX(0);
 }
 :root[data-theme-style] .sidebar--workbench .project-tree__topic:hover .project-tree__topic-actions,
 :root[data-theme-style] .sidebar--workbench .project-tree__topic:focus-within .project-tree__topic-actions,
 :root[data-theme-style] .sidebar--workbench .project-tree__topic--menu-open .project-tree__topic-actions,
-:root[data-theme-style] .app--classic .project-tree__topic:hover .project-tree__topic-actions,
-:root[data-theme-style] .app--classic .project-tree__topic:focus-within .project-tree__topic-actions,
-:root[data-theme-style] .app--classic .project-tree__topic--menu-open .project-tree__topic-actions {
+
+{
   transform: translateY(-50%) translateX(0);
 }
 :root[data-theme-style] .sidebar--workbench .project-tree__topic:hover .project-tree__topic-side,
 :root[data-theme-style] .sidebar--workbench .project-tree__topic:focus-within .project-tree__topic-side,
 :root[data-theme-style] .sidebar--workbench .project-tree__topic--menu-open .project-tree__topic-side,
-:root[data-theme-style] .app--classic .project-tree__topic:hover .project-tree__topic-side,
-:root[data-theme-style] .app--classic .project-tree__topic:focus-within .project-tree__topic-side,
-:root[data-theme-style] .app--classic .project-tree__topic--menu-open .project-tree__topic-side {
+
+{
   transform: translateX(0);
 }
 
@@ -25323,106 +24164,11 @@ body > .mermaid-diagram--fullscreen {
   gap: 8px;
   padding: 7px 10px 3px;
   border-bottom: 1px solid transparent;
-  --reasonix-draggable: drag;
-}
-
-/* Dock collapse/expand toggle pinned to the top-right corner of the window.
-/* Dock collapse/expand toggle pinned to the top-right corner of the window.
-   Fixed position keeps it at the same spot whether the dock is open (it
-   overlaps the dock's tools row) or closed (it sits on the topic bar's
-   right edge) — the icon never shifts. */
-.app__dock-toggle {
-  position: fixed;
-  top: 0;
-  right: 12px;
-  height: 45px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-app-chrome);
+  /* This row is a control strip under the shell bar, which owns the window's
+     drag region now. Leaving it draggable swallowed clicks on any control that
+     did not opt out individually — the tab strip and add button declared
+     no-drag, the leading overview chevron did not, so it never responded. */
   --reasonix-draggable: no-drag;
-  pointer-events: auto;
-}
-.app__dock-toggle .topicbar__chrome-btn {
-  border: none !important;
-  background: transparent !important;
-  box-shadow: none !important;
-}
-.app__dock-toggle .topicbar__chrome-btn:hover:not(:disabled),
-.app__dock-toggle .topicbar__chrome-btn:focus-visible:not(:disabled) {
-  background: var(--button-bg) !important;
-  color: var(--fg) !important;
-}
-.app__dock-toggle .topicbar__chrome-btn--workspace:not(:hover):not(:focus-visible) {
-  color: var(--fg-faint);
-}
-
-.workbench-dock__tabs {
-  --reasonix-draggable: no-drag;
-  flex: 0 1 auto;
-  width: max-content;
-  max-width: 100%;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  padding: 3px;
-  border-radius: 8px;
-  background: var(--bg);
-  border: 1px solid var(--border-soft);
-}
-
-.workbench-dock__tab {
-  --reasonix-draggable: no-drag;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  flex: 0 1 auto;
-  min-width: 30px;
-  max-width: 118px;
-  height: 24px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg-faint);
-  font: inherit;
-  font-size: 11.5px;
-  font-weight: 560;
-}
-
-.workbench-dock__tab svg {
-  flex: 0 0 auto;
-}
-
-.workbench-dock__tab-label {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.workbench-dock__tab:hover {
-  color: var(--fg-dim);
-}
-
-.workbench-dock__tab--active {
-  background: var(--bg-elev);
-  color: var(--fg);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
-}
-
-@container (max-width: 520px) {
-  .workbench-dock__tabs {
-    width: 100%;
-  }
-
-  .workbench-dock__tab {
-    flex: 1 1 0;
-    max-width: none;
-  }
 }
 
 @container (max-width: 340px) {
@@ -26872,104 +25618,6 @@ body > .mermaid-diagram--fullscreen {
     linear-gradient(180deg, color-mix(in srgb, var(--bg) 94%, var(--accent) 6%), var(--bg) 360px);
 }
 
-.app-chrome {
-  background: color-mix(in srgb, var(--bg-soft) 90%, var(--bg-elev));
-  border-bottom-color: var(--border-soft);
-}
-
-.app--darwin .app-chrome--tabs {
-  padding-right: calc(var(--chrome-toggle-size) + var(--chrome-toggle-size) + 16px);
-  background: color-mix(in srgb, var(--bg-soft) 90%, var(--bg-elev));
-}
-
-.app--darwin .app-chrome--tabs .tabbar {
-  align-items: center;
-  padding: 7px 0;
-}
-
-.app--darwin .app-chrome--tabs .tabbar__tabs {
-  align-self: center;
-  height: 30px;
-  gap: 5px;
-}
-
-.app--darwin .app-chrome--tabs .tabbar__tab,
-.workspace-tabs-bar .tabbar__tab {
-  height: 30px;
-  width: var(--tabbar-tab-width);
-  min-width: var(--tabbar-tab-width);
-  max-width: var(--tabbar-tab-width);
-  align-self: center;
-  padding: 0 28px 0 10px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--fg-dim);
-}
-
-.app--darwin .app-chrome--tabs .tabbar__tab:not(.tabbar__tab--active):hover,
-.workspace-tabs-bar .tabbar__tab:not(.tabbar__tab--active):hover {
-  border-color: color-mix(in srgb, var(--border) 70%, transparent);
-  background: color-mix(in srgb, var(--bg-elev-2) 48%, transparent);
-}
-
-.app--darwin .app-chrome--tabs .tabbar__tab--active,
-.workspace-tabs-bar .tabbar__tab--active {
-  color: var(--fg);
-  border-color: var(--border);
-  background: var(--bg-elev);
-  box-shadow: inset 0 -2px 0 var(--project-accent, var(--accent));
-}
-
-.app--darwin .app-chrome--tabs .tabbar__new,
-.workspace-tabs-bar .tabbar__new {
-  height: 30px;
-  margin: 0;
-  border-radius: 7px;
-}
-
-.app-chrome__panel-toggle,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle {
-  top: 7px;
-  height: 30px;
-  width: 30px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-}
-
-.app-chrome__panel-toggle:hover,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle:hover {
-  border-color: var(--border);
-  background: var(--bg-elev);
-  color: var(--fg);
-}
-
-.app-chrome__panel-toggle--active,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--active {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left.app-chrome__panel-toggle--active,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right.app-chrome__panel-toggle--active {
-  color: var(--fg-dim);
-  border-color: transparent;
-  background: transparent;
-}
-
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left.app-chrome__panel-toggle--active:hover,
-.app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right.app-chrome__panel-toggle--active:hover {
-  color: var(--fg);
-}
-
-.workspace-tabs-bar {
-  height: 44px;
-  align-items: center;
-  padding: 0 10px 0 48px;
-  background: color-mix(in srgb, var(--bg-soft) 90%, var(--bg-elev));
-}
-
 .sidebar {
   padding: 12px 10px 12px;
   background: var(--sidebar-bg);
@@ -27336,23 +25984,6 @@ body > .mermaid-diagram--fullscreen {
   border-bottom-color: var(--border-soft);
 }
 
-.workbench-dock__tabs {
-  width: 100%;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg) 72%, transparent);
-}
-
-.workbench-dock__tab {
-  flex: 1 1 0;
-  max-width: none;
-  height: 28px;
-  border-radius: 7px;
-}
-
-.workbench-dock__tab--active {
-  background: var(--bg-elev-2);
-}
-
 .workspace-panel,
 .workspace-files,
 .workspace-preview,
@@ -27444,522 +26075,8 @@ body > .mermaid-diagram--fullscreen {
 }
 
 :root[data-theme-style] .layout {
-  --app-chrome-height: 46px;
   --topicbar-height: 58px;
   background: var(--bg);
-}
-
-:root[data-theme-style] .layout--workbench-chrome-hidden {
-  --app-chrome-height: 0px;
-  grid-template-rows: minmax(0, 1fr) var(--statusbar-height);
-  background: var(--bg);
-}
-
-:root[data-theme-style] .app--darwin .layout {
-  --app-chrome-height: 46px;
-}
-
-:root[data-theme-style] .app--darwin .layout--workbench-chrome-hidden {
-  --app-chrome-height: 0px;
-}
-
-:root[data-theme-style] .app-chrome,
-:root[data-theme-style] .workspace-tabs-bar {
-  background: var(--bg-elev);
-  border-bottom: 1px solid var(--border-soft);
-  box-shadow: none;
-}
-
-:root[data-theme-style] .app--darwin .app-chrome--tabs {
-  padding-left: calc(var(--chrome-left-safe-offset) + var(--chrome-toggle-size) + 8px);
-  padding-right: calc(var(--chrome-toggle-size) + var(--chrome-toggle-size) + 16px);
-  background: var(--bg-elev);
-  transition: background var(--dur-fast), border-color var(--dur-fast);
-}
-
-:root[data-theme-style] .app--windows .app-chrome--native-tabs,
-:root[data-theme-style] .app--linux .app-chrome--native-tabs {
-  gap: 12px;
-  padding-left: 48px;
-  padding-right: calc(var(--chrome-right-toggle-offset) + 48px);
-  background: var(--bg-elev);
-  transition: background var(--dur-fast), border-color var(--dur-fast);
-}
-
-:root[data-theme-style] .app--windows .app-chrome--native-tabs {
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-elev) 94%, #fff), var(--bg-elev));
-}
-
-:root[data-theme-style] .app--linux .app-chrome--native-tabs {
-  background: var(--bg-elev);
-}
-
-:root[data-theme-style] .app-chrome__identity {
-  min-width: 128px;
-  color: var(--fg-dim);
-}
-
-:root[data-theme-style] .app-chrome__logo {
-  width: 76px;
-  max-height: 19px;
-}
-
-:root[data-theme-style] .app-chrome__separator {
-  color: var(--fg-faint);
-}
-
-:root[data-theme-style] .app-chrome__scope {
-  font-size: 12.5px;
-  font-weight: 560;
-}
-
-:root[data-theme-style] .app--browser-preview.app--darwin .app-chrome--tabs::before {
-  content: none;
-}
-
-:root[data-theme-style] .app-chrome__traffic {
-  position: absolute;
-  left: 18px;
-  top: 16px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 52px;
-  height: 12px;
-  pointer-events: none;
-}
-
-:root[data-theme-style] .app-chrome__traffic span {
-  width: 12px;
-  height: 12px;
-  border-radius: 999px;
-  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.08);
-}
-
-:root[data-theme-style] .app-chrome__traffic span:nth-child(1) {
-  background: #ff5f57;
-}
-
-:root[data-theme-style] .app-chrome__traffic span:nth-child(2) {
-  background: #febc2e;
-}
-
-:root[data-theme-style] .app-chrome__traffic span:nth-child(3) {
-  background: #28c840;
-}
-
-:root[data-theme-style] .app-chrome__panel-toggle,
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle {
-  top: calc((var(--app-chrome-height) - var(--chrome-panel-control-size)) / 2);
-  width: var(--chrome-panel-control-size);
-  height: var(--chrome-panel-control-size);
-  box-sizing: border-box;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--r-s);
-  color: var(--fg-faint);
-  background: transparent;
-  line-height: 1;
-  transition:
-    right 0.28s cubic-bezier(0.2, 0.72, 0.2, 1),
-    background var(--dur-fast),
-    border-color var(--dur-fast),
-    color var(--dur-fast),
-    transform 0.16s var(--ease-out);
-}
-
-:root[data-theme-style] .app-chrome__panel-toggle svg {
-  flex: 0 0 auto;
-  display: block;
-}
-
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right {
-  right: 8px;
-}
-
-:root[data-theme-style] .app-chrome__panel-toggle:hover,
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle:hover {
-  color: var(--fg);
-  border-color: var(--border);
-  background: var(--bg-elev);
-}
-
-:root[data-theme-style] .app-chrome__panel-toggle--active,
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--active {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
-}
-
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left:hover,
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right:hover,
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left.app-chrome__panel-toggle--active,
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right.app-chrome__panel-toggle--active {
-  border-color: transparent;
-  background: transparent;
-}
-
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left.app-chrome__panel-toggle--active,
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right.app-chrome__panel-toggle--active {
-  color: var(--fg-faint);
-}
-
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left.app-chrome__panel-toggle--active:hover,
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right.app-chrome__panel-toggle--active:hover {
-  color: var(--fg);
-}
-
-:root[data-theme-style] .tabbar {
-  --tabbar-tab-width: 176px;
-  height: 100%;
-  gap: 10px;
-  align-items: center;
-  min-width: 0;
-}
-
-:root[data-theme-style] .app--darwin .app-chrome--tabs .tabbar,
-:root[data-theme-style] .workspace-tabs-bar .tabbar {
-  padding: 0;
-}
-
-:root[data-theme-style] .tabbar__tabs {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: none;
-  gap: 6px;
-  height: 46px;
-  align-items: center;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-:root[data-theme-style] .tabbar__tabs::-webkit-scrollbar {
-  display: none;
-}
-
-:root[data-theme-style] .app-chrome--tabs .tabbar {
-  flex: 1 1 auto;
-  max-width: 100%;
-}
-
-:root[data-theme-style] .app-chrome--tabs .tabbar__tabs {
-  flex: 0 1 auto;
-  width: max-content;
-  max-width: calc(100% - var(--chrome-panel-control-size, 30px) - 10px);
-}
-
-:root[data-theme-style] .app-chrome--tabs .tabbar > .tooltip-trigger:has(.tabbar__new) {
-  flex: 0 0 var(--chrome-panel-control-size, 30px);
-  width: var(--chrome-panel-control-size, 30px);
-  min-width: var(--chrome-panel-control-size, 30px);
-  display: inline-flex;
-}
-
-.app-chrome--workbench .app-chrome__workbench-search {
-  position: absolute;
-  top: calc((var(--app-chrome-height) - var(--chrome-panel-control-size, 30px)) / 2);
-  left: calc(var(--chrome-left-safe-offset) + var(--chrome-toggle-size) + 8px);
-  z-index: var(--z-local-raised);
-  width: var(--chrome-panel-control-size, 30px);
-  height: var(--chrome-panel-control-size, 30px);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--r-s);
-  background: transparent;
-  color: var(--fg-dim);
-  line-height: 1;
-  transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast);
-}
-
-.app-chrome--workbench .app-chrome__workbench-search:hover {
-  color: var(--fg);
-  border-color: var(--border);
-  background: var(--surface-2);
-}
-
-.app--workbench .app-chrome--tabs .tabbar__tabs {
-  display: none;
-}
-
-.app--workbench .app-chrome--tabs .tabbar > .tooltip-trigger:has(.tabbar__new) {
-  display: none;
-}
-
-.app--workbench .app-chrome--tabs .tabbar__command {
-  display: none;
-}
-
-:root[data-theme-style] .tabbar__tab {
-  flex: 0 0 var(--tabbar-tab-width);
-  width: var(--tabbar-tab-width);
-  height: 34px;
-  min-width: var(--tabbar-tab-width);
-  max-width: var(--tabbar-tab-width);
-  gap: 8px;
-  padding: 0 37px 0 11px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-s);
-  background: transparent;
-  color: var(--fg-dim);
-  font-size: 12.5px;
-  font-weight: 500;
-  box-shadow: none;
-  transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast), box-shadow var(--dur-fast);
-  animation: none;
-}
-
-:root[data-theme-style] .app-chrome--tabs .tabbar__tab + .tabbar__tab:not(.tabbar__tab--drop-before)::before {
-  content: "";
-  position: absolute;
-  top: 7px;
-  bottom: 7px;
-  left: -4px;
-  width: 1px;
-  border-radius: 1px;
-  background: var(--border-2);
-  pointer-events: none;
-}
-
-:root[data-theme-style] .tabbar__tab:not(.tabbar__tab--active):hover {
-  background: var(--surface-3);
-  color: var(--fg);
-}
-
-:root[data-theme-style] .tabbar__tab--active {
-  color: var(--fg);
-  border-color: var(--border-2);
-  background: var(--surface-2);
-  box-shadow:
-    var(--app-graphite-shadow),
-    inset 0 -2px 0 var(--project-accent, var(--accent));
-  font-weight: 600;
-}
-
-:root[data-theme-style] .tabbar__tab:focus {
-  outline: none;
-}
-
-:root[data-theme-style] .tabbar__tab:focus-visible {
-  box-shadow: 0 0 0 3px var(--accent-soft), var(--app-graphite-shadow);
-}
-
-:root[data-theme-style] .tabbar__tab--active:focus-visible {
-  box-shadow:
-    0 0 0 3px var(--accent-soft),
-    var(--app-graphite-shadow),
-    inset 0 -2px 0 var(--project-accent, var(--accent));
-}
-
-:root[data-theme-style] .tabbar__tab-label {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-weight: inherit;
-}
-
-:root[data-theme-style] .tabbar__status {
-  background: var(--project-accent, var(--fg-faint));
-  box-shadow: none;
-  transform-origin: center;
-  animation: none;
-  transition: opacity var(--dur-fast), transform var(--dur-fast), background var(--dur-fast), box-shadow var(--dur-fast);
-}
-
-:root[data-theme-style] .tabbar__tab--active .tabbar__status {
-  background: var(--project-accent, var(--fg-faint));
-  box-shadow: none;
-  animation: none;
-}
-
-:root[data-theme-style] .tabbar__status--running,
-:root[data-theme-style] .tabbar__tab--active .tabbar__status--running {
-  background: var(--project-accent, var(--accent));
-  box-shadow: 0 0 0 4px var(--accent-soft);
-  animation: graphite-tab-breathe 2.4s var(--ease-standard) infinite;
-}
-
-:root[data-theme-style] .tabbar__tab-close {
-  right: 11px;
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
-  opacity: 0;
-  color: var(--fg-faint);
-  pointer-events: none;
-  transition: opacity var(--dur-fast), background var(--dur-fast), color var(--dur-fast);
-}
-
-:root[data-theme-style] .tabbar__tab--active .tabbar__tab-close {
-  opacity: 0;
-  pointer-events: none;
-}
-
-:root[data-theme-style] .tabbar__tab:hover .tabbar__tab-close {
-  opacity: 0.7;
-  pointer-events: auto;
-}
-
-:root[data-theme-style] .tabbar__tab-close:hover {
-  opacity: 1;
-  background: var(--border-2);
-  color: var(--fg);
-}
-
-:root[data-theme-style] .tabbar__new,
-:root[data-theme-style] .tabbar__command {
-  height: 32px;
-  border-radius: var(--r-s);
-  color: var(--fg-faint);
-}
-
-:root[data-theme-style] .tabbar__new {
-  width: 30px;
-  height: 30px;
-}
-
-:root[data-theme-style] .tabbar__new {
-  border-color: transparent;
-  background: transparent;
-}
-
-:root[data-theme-style] .tabbar__command {
-  width: clamp(180px, 26vw, 340px);
-  min-width: 148px;
-  max-width: 340px;
-  flex: 0 1 clamp(180px, 26vw, 340px);
-  gap: 9px;
-  padding: 0 12px;
-  border-color: transparent;
-  background: var(--surface-3);
-}
-
-:root[data-theme-style] .tabbar__command--compact {
-  width: var(--chrome-panel-control-size);
-  min-width: var(--chrome-panel-control-size);
-  max-width: var(--chrome-panel-control-size);
-  height: var(--chrome-panel-control-size);
-  flex: 0 0 var(--chrome-panel-control-size);
-  justify-content: center;
-  gap: 0;
-  padding: 0;
-  border-color: transparent;
-  background: transparent;
-  color: var(--fg-dim);
-}
-
-:root[data-theme-style] .app--darwin .app-chrome--tabs .tabbar__command--compact {
-  position: relative;
-  top: 0.5px;
-}
-
-:root[data-theme-style] .tabbar__command--compact .tabbar__command-text--full {
-  max-width: 0;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(-4px);
-}
-
-:root[data-theme-style] .tabbar__command--compact .tabbar__command-text--compact {
-  display: none;
-  max-width: 0;
-  opacity: 0;
-  pointer-events: none;
-}
-
-:root[data-theme-style] .tabbar__command--compact .tabbar__command-kbd {
-  display: none;
-}
-
-:root[data-theme-style] .tabbar__mode-badge {
-  height: 16px;
-  padding: 0 5px;
-  border-radius: 5px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-
-:root[data-theme-style] .tabbar__new:hover,
-:root[data-theme-style] .tabbar__command:hover {
-  color: var(--fg);
-  border-color: var(--border);
-  background: var(--bg-elev);
-}
-
-:root[data-theme-style] .tabbar__command-kbd {
-  margin-left: auto;
-  color: var(--fg-faint);
-  border-color: var(--border);
-  border-radius: 5px;
-  background: var(--surface-2);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 58%, transparent);
-}
-
-@media (max-width: 980px) {
-  :root[data-theme-style] .tabbar {
-    --tabbar-tab-width: 148px;
-    gap: 8px;
-  }
-
-  :root[data-theme-style] .tabbar__spacer {
-    min-width: 8px;
-  }
-
-  :root[data-theme-style] .tabbar__command {
-    width: clamp(132px, 22vw, 240px);
-    min-width: 132px;
-    flex-basis: clamp(132px, 22vw, 240px);
-    gap: 7px;
-    padding: 0 9px;
-  }
-
-  :root[data-theme-style] .tabbar__command--compact {
-    width: var(--chrome-panel-control-size);
-    min-width: var(--chrome-panel-control-size);
-    flex-basis: var(--chrome-panel-control-size);
-    gap: 0;
-    padding: 0;
-  }
-}
-
-@media (max-width: 760px) {
-  :root[data-theme-style] .tabbar {
-    gap: 6px;
-  }
-
-  :root[data-theme-style] .tabbar__command {
-    width: 76px;
-    min-width: 76px;
-    flex-basis: 76px;
-    justify-content: center;
-    padding: 0 8px;
-  }
-
-  :root[data-theme-style] .tabbar__command-text {
-    display: none;
-  }
-
-  :root[data-theme-style] .tabbar__command-kbd {
-    margin-left: 0;
-    padding: 1px 4px;
-  }
-}
-
-@media (max-width: 620px) {
-  :root[data-theme-style] .tabbar__command {
-    width: 32px;
-    min-width: 32px;
-    flex-basis: 32px;
-    padding: 0;
-  }
-
-  :root[data-theme-style] .tabbar__command-kbd {
-    display: none;
-  }
 }
 
 :root[data-theme-style] .sidebar {
@@ -28437,36 +26554,36 @@ body > .mermaid-diagram--fullscreen {
   background: var(--bg-elev-2);
 }
 
-:root[data-theme-style] .layout--workbench-chrome-hidden .topicbar,
-:root[data-theme-style] .layout--workbench-chrome-hidden .topicbar__chrome-btn,
-:root[data-theme-style] .layout--workbench-chrome-hidden .topicbar__icon-btn,
-:root[data-theme-style] .layout--workbench-chrome-hidden .topicbar__action-btn {
+:root[data-theme-style] .app--workbench .topicbar,
+:root[data-theme-style] .app--workbench .topicbar__chrome-btn,
+:root[data-theme-style] .app--workbench .topicbar__icon-btn,
+:root[data-theme-style] .app--workbench .topicbar__action-btn {
   box-shadow: none;
 }
 
-:root[data-theme-style] .layout--workbench-chrome-hidden .topicbar {
+:root[data-theme-style] .app--workbench .topicbar {
   background: var(--bg-elev);
 }
 
-:root[data-theme-style] .layout--workbench-chrome-hidden .topicbar__identity,
-:root[data-theme-style] .layout--workbench-chrome-hidden .topicbar__title-row,
-:root[data-theme-style] .layout--workbench-chrome-hidden .topicbar__title-row h1,
-:root[data-theme-style] .layout--workbench-chrome-hidden .tooltip-trigger:has(.topicbar__icon-btn) {
+:root[data-theme-style] .app--workbench .topicbar__identity,
+:root[data-theme-style] .app--workbench .topicbar__title-row,
+:root[data-theme-style] .app--workbench .topicbar__title-row h1,
+:root[data-theme-style] .app--workbench .tooltip-trigger:has(.topicbar__icon-btn) {
   background: transparent;
   box-shadow: none;
   filter: none;
 }
 
-:root[data-theme-style] .layout--workbench-chrome-hidden .topicbar__icon-btn,
-:root[data-theme-style] .layout--workbench-chrome-hidden .topicbar__chrome-btn {
+:root[data-theme-style] .app--workbench .topicbar__icon-btn,
+:root[data-theme-style] .app--workbench .topicbar__chrome-btn {
   background: transparent;
   filter: none;
 }
 
-:root[data-theme-style] .layout--workbench-chrome-hidden .topicbar__icon-btn:hover,
-:root[data-theme-style] .layout--workbench-chrome-hidden .topicbar__icon-btn:focus-visible,
-:root[data-theme-style] .layout--workbench-chrome-hidden .topicbar__chrome-btn:hover:not(.topicbar__chrome-btn--blocked),
-:root[data-theme-style] .layout--workbench-chrome-hidden .topicbar__chrome-btn:focus-visible:not(.topicbar__chrome-btn--blocked) {
+:root[data-theme-style] .app--workbench .topicbar__icon-btn:hover,
+:root[data-theme-style] .app--workbench .topicbar__icon-btn:focus-visible,
+:root[data-theme-style] .app--workbench .topicbar__chrome-btn:hover:not(.topicbar__chrome-btn--blocked),
+:root[data-theme-style] .app--workbench .topicbar__chrome-btn:focus-visible:not(.topicbar__chrome-btn--blocked) {
   border-color: transparent;
   background: transparent;
 }
@@ -29212,79 +27329,15 @@ body > .mermaid-diagram--fullscreen {
   border-bottom: 1px solid var(--border-soft);
 }
 
-:root[data-theme-style] .workbench-dock__tabs {
-  position: relative;
-  width: auto;
-  height: 100%;
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 4px;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-:root[data-theme-style] .workbench-dock__tab {
-  position: relative;
-  flex: 0 0 auto;
-  min-width: auto;
-  max-width: none;
-  height: 27px;
-  width: auto;
-  padding: 0 11px;
-  border: 0;
-  border-radius: 7px;
-  justify-content: flex-start;
-  gap: 6px;
-  color: var(--fg-faint);
-  font-size: 12.5px;
-  font-weight: 600;
-  background: transparent;
-  transition: color var(--dur-fast), background var(--dur-fast);
-}
-
-:root[data-theme-style] .workbench-dock__tab svg {
-  width: 14px;
-  height: 14px;
-}
-
-:root[data-theme-style] .workbench-dock__tab-label {
-  display: inline;
-  min-width: auto;
-  overflow: visible;
-  text-overflow: clip;
-}
-
-:root[data-theme-style] .workbench-dock__tab--active {
-  color: var(--fg);
-  /* Simple flat selected fill — a touch darker than the dock background,
-     no shadow, like a focused browser tab. */
-  background: color-mix(in srgb, var(--fg) 8%, var(--chat-bg));
-  box-shadow: none;
-}
-
-:root[data-theme-style] .workbench-dock__tab:hover {
-  color: var(--fg-dim);
-  background: color-mix(in srgb, var(--fg) 4%, var(--chat-bg));
-}
-
-:root[data-theme-style] .workbench-dock__tab--active::after {
-  display: none;
-}
-
-/* Classic and Workbench use compact text tabs in the right dock. A restrained
-/* Classic and Workbench use compact text tabs in the right dock. A restrained
+/* Workbench uses compact text tabs in the right dock. A restrained
    hairline clarifies each hit target without turning the strip into boxed
    segmented controls. Creation keeps its separate equal-column treatment. */
-.app--classic .workbench-dock__tab + .workbench-dock__tab,
+
 .app--workbench .workbench-dock__tab + .workbench-dock__tab {
   position: relative;
 }
 
-.app--classic .workbench-dock__tab + .workbench-dock__tab::before,
+
 .app--workbench .workbench-dock__tab + .workbench-dock__tab::before {
   content: "";
   position: absolute;
@@ -29300,7 +27353,7 @@ body > .mermaid-diagram--fullscreen {
 /* Theme-style turns the strip into browser-like tabs (small rounded rects,
 /* Theme-style turns the strip into browser-like tabs (small rounded rects,
    selected one raised); the hairline separator reads as clutter between them. */
-:root[data-theme-style] .app--classic .workbench-dock__tab + .workbench-dock__tab::before,
+
 :root[data-theme-style] .app--workbench .workbench-dock__tab + .workbench-dock__tab::before {
   display: none;
 }
@@ -29801,51 +27854,6 @@ body > .mermaid-diagram--fullscreen {
   background: linear-gradient(120deg, #ff5a2c, #ff8a3d);
 }
 
-/* Theme direction accents for the design-signature controls copied from the
-/* Theme direction accents for the design-signature controls copied from the
-   new_design comps: panel toggles, run-mode badges, active sessions, and file
-   tree folder rows all use each theme's accent + accent-soft pair. */
-:root[data-theme-style] .app--darwin .app-chrome--tabs {
-  padding-right: calc(var(--chrome-toggle-size) + var(--chrome-toggle-size) + 16px);
-}
-
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right {
-  right: 8px;
-}
-
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__tools--fixed {
-  right: calc(8px + var(--chrome-toggle-size) + 8px);
-}
-
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left.app-chrome__panel-toggle--active,
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right.app-chrome__panel-toggle--active {
-  color: var(--accent);
-}
-
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left.app-chrome__panel-toggle--active::before,
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right.app-chrome__panel-toggle--active::before {
-  opacity: 1;
-  transform: scale(1);
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
-}
-
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left.app-chrome__panel-toggle--active:hover,
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right.app-chrome__panel-toggle--active:hover {
-  color: var(--accent);
-}
-
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--left.app-chrome__panel-toggle--active:hover::before,
-:root[data-theme-style] .app--darwin .app-chrome--tabs .app-chrome__panel-toggle--right.app-chrome__panel-toggle--active:hover::before {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-}
-
-:root[data-theme-style] .tabbar__mode-badge--plan {
-  color: var(--accent);
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
-}
-
 :root[data-theme-style] .project-tree__topic--active {
   border-radius: var(--project-tree-row-radius);
   background: var(--accent-soft);
@@ -29949,9 +27957,6 @@ body > .mermaid-diagram--fullscreen {
   padding: 14px 12px 10px;
 }
 
-.app--darwin .layout--workbench-chrome-hidden .sidebar--workbench {
-  padding-top: 46px;
-}
 
 .sidebar--workbench .sidebar__head {
   flex: 0 0 auto;
@@ -30500,7 +28505,7 @@ body > .mermaid-diagram--fullscreen {
 }
 
 .sidebar--workbench .project-tree__topic-unread-dot,
-.app--classic .project-tree__topic-unread-dot,
+
 .app--creation .project-tree__topic-unread-dot {
   position: absolute;
   top: 50%;
@@ -30518,7 +28523,7 @@ body > .mermaid-diagram--fullscreen {
   transition: opacity var(--dur-fast), transform var(--dur-fast);
 }
 
-.app--classic .project-tree__topic-unread-dot,
+
 .app--creation .project-tree__topic-unread-dot {
   right: 10px;
 }
@@ -30569,8 +28574,7 @@ body > .mermaid-diagram--fullscreen {
   color: var(--fg-faint);
 }
 
-.sidebar--workbench .project-tree__topic-actions,
-.app--classic .project-tree__topic-actions {
+.sidebar--workbench .project-tree__topic-actions {
   position: absolute;
   top: 50%;
   right: 8px;
@@ -30587,9 +28591,8 @@ body > .mermaid-diagram--fullscreen {
 .sidebar--workbench .project-tree__topic:hover .project-tree__topic-actions,
 .sidebar--workbench .project-tree__topic:focus-within .project-tree__topic-actions,
 .sidebar--workbench .project-tree__topic--menu-open .project-tree__topic-actions,
-.app--classic .project-tree__topic:hover .project-tree__topic-actions,
-.app--classic .project-tree__topic:focus-within .project-tree__topic-actions,
-.app--classic .project-tree__topic--menu-open .project-tree__topic-actions {
+
+{
   opacity: 1;
   pointer-events: auto;
   transform: translateY(-50%) translateX(0);
@@ -30599,18 +28602,11 @@ body > .mermaid-diagram--fullscreen {
 .sidebar--workbench .project-tree__topic:focus-within .project-tree__topic-side,
 .sidebar--workbench .project-tree__topic--menu-open .project-tree__topic-side,
 .sidebar--workbench .project-tree__topic--unread .project-tree__topic-side,
-.app--classic .project-tree__topic:hover .project-tree__topic-side,
-.app--classic .project-tree__topic:focus-within .project-tree__topic-side,
-.app--classic .project-tree__topic--menu-open .project-tree__topic-side,
-.app--classic .project-tree__topic--unread .project-tree__topic-side {
+
+
+{
   opacity: 0;
   transform: translateX(-3px);
-}
-
-.app--classic .project-tree__topic:hover .project-tree__topic-side,
-.app--classic .project-tree__topic:focus-within .project-tree__topic-side,
-.app--classic .project-tree__topic--menu-open .project-tree__topic-side {
-  min-width: 56px;
 }
 
 .app--creation .project-tree__topic--unread .project-tree__topic-side,
@@ -30619,16 +28615,14 @@ body > .mermaid-diagram--fullscreen {
   opacity: 0;
 }
 
-.sidebar--workbench .project-tree__topic-action-slot,
-.app--classic .project-tree__topic-action-slot {
+.sidebar--workbench .project-tree__topic-action-slot {
   flex: 0 0 auto;
   width: 26px;
   height: 26px;
   display: inline-flex;
 }
 
-.sidebar--workbench .project-tree__topic-action,
-.app--classic .project-tree__topic-action {
+.sidebar--workbench .project-tree__topic-action {
   --reasonix-draggable: no-drag;
   width: 26px;
   height: 26px;
@@ -30644,8 +28638,7 @@ body > .mermaid-diagram--fullscreen {
   transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast), transform var(--dur-fast);
 }
 
-.sidebar--workbench .project-tree__topic-action:hover,
-.app--classic .project-tree__topic-action:hover {
+.sidebar--workbench .project-tree__topic-action:hover {
   color: var(--fg);
   border-color: color-mix(in srgb, var(--fg-faint) 28%, transparent);
   background: var(--bg-elev);
@@ -30654,22 +28647,19 @@ body > .mermaid-diagram--fullscreen {
 
 .sidebar--workbench .project-tree__topic-action--pinned,
 .sidebar--workbench .project-tree__topic-action--pinned:hover,
-.app--classic .project-tree__topic-action--pinned,
-.app--classic .project-tree__topic-action--pinned:hover {
+{
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
   background: var(--accent-soft);
 }
 
-.sidebar--workbench .project-tree__topic-action--archive:hover,
-.app--classic .project-tree__topic-action--archive:hover {
+.sidebar--workbench .project-tree__topic-action--archive:hover {
   color: var(--fg);
 }
 
 .sidebar--workbench .project-tree__topic-action:disabled,
 .sidebar--workbench .project-tree__topic-action:disabled:hover,
-.app--classic .project-tree__topic-action:disabled,
-.app--classic .project-tree__topic-action:disabled:hover {
+{
   cursor: not-allowed;
   opacity: 0.4;
   color: var(--fg-faint);
@@ -30965,10 +28955,10 @@ body > .mermaid-diagram--fullscreen {
    - Do NOT touch global base tokens (--bg / --border / --text-base /
      --scrollbar-size) — override them scoped to .app--creation if needed.
    ========================================================================== */
-.app--creation .layout--creation-chrome-hidden {
-  --app-chrome-height: 0px;
+/* Creation hides the status bar outright (see .app--creation .statusbar), so
+   its grid row collapses to zero as well. */
+.app--creation .layout {
   --statusbar-height: 0px;
-  grid-template-rows: minmax(0, 1fr);
 }
 
 .app--creation .statusbar {
@@ -31474,20 +29464,6 @@ body > .mermaid-diagram--fullscreen {
   }
 }
 
-.app--creation .layout--creation-chrome-hidden .sidebar,
-.app--creation .layout--creation-chrome-hidden .chat-pane,
-.app--creation .layout--creation-chrome-hidden .sidebar-resizer,
-.app--creation .layout--creation-chrome-hidden .workspace-panel-resizer,
-.app--creation .layout--creation-chrome-hidden .context-inspector,
-.app--creation .layout--creation-chrome-hidden .workbench-dock {
-  grid-row: 1;
-}
-
-.app--creation .layout--creation-chrome-hidden .sidebar-resizer,
-:root[data-theme-style] .app--creation .layout--creation-chrome-hidden .sidebar-resizer {
-  top: 0;
-}
-
 .app--creation .topicbar,
 :root[data-theme-style] .app--creation .topicbar {
   min-height: 56px;
@@ -31599,15 +29575,10 @@ body > .mermaid-diagram--fullscreen {
   opacity: 1;
 }
 
-.app--creation .topicbar__actions .topicbar__chrome-btn--workspace,
-:root[data-theme-style] .app--creation .topicbar__actions .topicbar__chrome-btn--workspace {
+.topicbar__actions .topicbar__chrome-btn--workspace {
   color: color-mix(in srgb, var(--fg-dim) 78%, transparent);
 }
 
-.app--creation .topicbar__actions .topicbar__chrome-btn--workspace.topicbar__chrome-btn--active,
-:root[data-theme-style] .app--creation .topicbar__actions .topicbar__chrome-btn--workspace.topicbar__chrome-btn--active {
-  color: var(--fg);
-}
 
 /* Creation topicbar: slim ExternalOpener split control to match utility icons. */
 .app--creation .topicbar__actions .external-opener,
@@ -35113,13 +33084,11 @@ body > .mermaid-diagram--fullscreen {
 }
 
 /* In workbench mode, hide the time/side and actions when shortcuts are shown */
-.sidebar--workbench .project-tree__topic--show-shortcut .project-tree__topic-side,
-.app--classic .project-tree__topic--show-shortcut .project-tree__topic-side {
+.sidebar--workbench .project-tree__topic--show-shortcut .project-tree__topic-side {
   opacity: 0;
   transform: translateX(-3px);
 }
-.sidebar--workbench .project-tree__topic--show-shortcut .project-tree__topic-actions,
-.app--classic .project-tree__topic--show-shortcut .project-tree__topic-actions {
+.sidebar--workbench .project-tree__topic--show-shortcut .project-tree__topic-actions {
   opacity: 0;
   pointer-events: none;
   transform: translateY(-50%) translateX(4px);
@@ -35174,78 +33143,22 @@ body > .mermaid-diagram--fullscreen {
   --windows-window-controls-safe: calc(var(--windows-window-controls-width) + var(--windows-window-controls-gap));
 }
 
-.app--windows-frameless .app-chrome--native-tabs,
-:root[data-theme-style] .app--windows-frameless .app-chrome--native-tabs {
-  --windows-frameless-titlebar-tools-offset: var(--windows-window-controls-safe);
-  padding-right: calc(var(--windows-frameless-titlebar-tools-offset) + var(--chrome-panel-control-size, 30px) + 18px);
-}
-
-.app--windows-frameless .app-chrome--native-tabs .app-chrome__panel-toggle--right,
-:root[data-theme-style] .app--windows-frameless .app-chrome--native-tabs .app-chrome__panel-toggle--right {
-  right: calc(var(--windows-frameless-titlebar-tools-offset) + 8px);
-}
-
 .app--windows-frameless .topicbar,
 :root[data-theme-style] .app--windows-frameless .topicbar {
   padding-right: var(--windows-window-controls-safe);
 }
 
-/* When workspace panel is open the workbench-dock covers the right edge, so the
-/* When workspace panel is open the workbench-dock covers the right edge, so the
-   topicbar no longer needs the window-controls safe space — use the normal 18px
-   padding instead to prevent buttons from being pushed off-screen or overlapping
-   the dock. */
-.app--windows-frameless .layout--workspace-open .topicbar,
-.app--windows-frameless .layout--workspace-maximized .topicbar,
-:root[data-theme-style] .app--windows-frameless .layout--workspace-open .topicbar,
-:root[data-theme-style] .app--windows-frameless .layout--workspace-maximized .topicbar {
-  padding-right: 18px;
-}
-
-/* Workbench hides AppChrome, so its dock is also the native title surface.
-/* Workbench hides AppChrome, so its dock is also the native title surface.
-   Keep the Windows caption buttons on a dedicated first row and render the
-   complete dock tab strip below it, matching Classic's separated chrome. */
-.app--windows-frameless.app--workbench .workbench-dock__tools,
-:root[data-theme-style] .app--windows-frameless.app--workbench .workbench-dock__tools {
-  position: relative;
-  height: calc(40px + var(--windows-window-controls-height));
-  padding: var(--windows-window-controls-height) 12px 0;
-}
-
-.app--windows-frameless.app--workbench .workbench-dock__tools::before,
-:root[data-theme-style] .app--windows-frameless.app--workbench .workbench-dock__tools::before {
-  content: "";
-  position: absolute;
-  top: calc(var(--windows-window-controls-height) - 1px);
-  right: 0;
-  left: 0;
-  height: 1px;
-  background: var(--border-soft);
-  pointer-events: none;
-}
-
-/* macOS keeps dock tabs and the fixed workspace toggle in one title row. The
-   toggle stays anchored to the window edge while this row reserves its hit
-   area; the four tabs share the remaining width instead of sliding under it. */
-.app--darwin.app--workbench .workbench-dock__tools,
-:root[data-theme-style] .app--darwin.app--workbench .workbench-dock__tools {
-  padding-right: 48px;
-}
-
+/* Tabs stay at their content width and the strip at theirs, so the add button
+   sits beside the last tab instead of at the far edge of an empty row. The
+   strip still shrinks down to each tab's min-width and then clips with the
+   overflow fade, so a crowded strip behaves as before. */
 .app--darwin.app--workbench .workbench-dock__tabs,
 :root[data-theme-style] .app--darwin.app--workbench .workbench-dock__tabs {
-  flex: 1 1 auto;
-  width: 100%;
-  min-width: 0;
   gap: 2px;
 }
 
 .app--darwin.app--workbench .workbench-dock__tab,
 :root[data-theme-style] .app--darwin.app--workbench .workbench-dock__tab {
-  flex: 1 1 0;
-  min-width: 0;
-  max-width: none;
   padding: 0 5px;
   gap: 4px;
   justify-content: center;
@@ -35256,16 +33169,6 @@ body > .mermaid-diagram--fullscreen {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* Workbench keeps its workspace toggle in the fixed top-right dock-toggle
-/* Workbench keeps its workspace toggle in the fixed top-right dock-toggle
-   instead of an AppChrome rail; shift it left of the Windows caption strip
-   (min/max/close) so it never sits under the window controls. Same safe inset
-   as the classic-mode panel toggle. */
-.app--windows-frameless.app--workbench .app__dock-toggle,
-:root[data-theme-style] .app--windows-frameless.app--workbench .app__dock-toggle {
-  right: calc(var(--windows-window-controls-safe) + 8px);
 }
 
 /* Creation sets tools padding via shorthand; re-assert the Windows safe
@@ -35289,21 +33192,10 @@ body > .mermaid-diagram--fullscreen {
   justify-content: flex-start;
 }
 
-.app--windows-frameless .workbench-dock__tabs,
-:root[data-theme-style] .app--windows-frameless .workbench-dock__tabs {
-  max-width: calc(100% - 4px);
-}
-
 @media (max-width: 820px) {
   .app .layout,
   :root[data-theme-style] .app .layout {
-    --chrome-left-toggle-offset: var(--chrome-left-safe-offset);
     grid-template-columns: minmax(0, 1fr) !important;
-  }
-
-  .app--darwin .layout,
-  :root[data-theme-style] .app--darwin .layout {
-    --chrome-left-toggle-offset: 94px;
   }
 
   .app .sidebar,
@@ -35331,23 +33223,17 @@ body > .mermaid-diagram--fullscreen {
     grid-column: 1 !important;
   }
 
-  .app .layout--workbench-chrome-hidden.layout--terminal-drawer-open .terminal-drawer,
-  :root[data-theme-style] .app .layout--workbench-chrome-hidden.layout--terminal-drawer-open .terminal-drawer,
-  .app--creation .layout--creation-chrome-hidden.layout--terminal-drawer-open .terminal-drawer,
-  :root[data-theme-style] .app--creation .layout--creation-chrome-hidden.layout--terminal-drawer-open .terminal-drawer {
-    grid-row: 2;
-  }
-
-  .app .layout--workbench-chrome-hidden.layout--terminal-drawer-open,
-  :root[data-theme-style] .app .layout--workbench-chrome-hidden.layout--terminal-drawer-open {
-    grid-template-rows: minmax(0, 1fr) var(--terminal-height, 280px) var(--statusbar-height);
-  }
-
   .app .chat-pane,
-  :root[data-theme-style] .app .chat-pane,
+  :root[data-theme-style] .app .chat-pane {
+    grid-column: 1 !important;
+    min-width: 0;
+  }
+
+  /* The bar keeps the whole row even when everything else collapses into the
+     single narrow-viewport column. */
   .app .topicbar,
   :root[data-theme-style] .app .topicbar {
-    grid-column: 1 !important;
+    grid-column: 1 / -1 !important;
     min-width: 0;
   }
 
@@ -35359,15 +33245,8 @@ body > .mermaid-diagram--fullscreen {
    Windows + Creation: Vertical alignment for titlebar elements
    ========================================================================= */
 
-/* Align sidebar logo with the shorter 40px Windows title strip center line */
-.app--windows.app--creation .sidebar__brand,
-:root[data-theme-style] .app--windows.app--creation .sidebar__brand {
-  margin-top: -32px !important;
-}
-
-/* Align topicbar (replaces app-chrome in Creation mode) with Windows controls
-/* Align topicbar (replaces app-chrome in Creation mode) with Windows controls
-   without changing the shared macOS/Linux Creation geometry above. */
+/* Match the bar to the shorter 40px Windows caption strip without changing the
+   shared macOS/Linux Creation geometry above. */
 .app--windows.app--creation .topicbar,
 :root[data-theme-style] .app--windows.app--creation .topicbar {
   position: relative;
@@ -38759,13 +36638,11 @@ body > .mermaid-diagram--fullscreen {
   padding-bottom: 4px !important;
 }
 
-/* Classic and Workbench share the same compact four-view strip at the dock's
-/* Classic and Workbench share the same compact four-view strip at the dock's
+/* Workbench's compact four-view strip at the dock's
    minimum width. Creation keeps its equal-column tab treatment. */
 @container (max-width: 420px) {
-  .app--classic .workbench-dock__tab,
   .app--workbench .workbench-dock__tab,
-  :root[data-theme-style] .app--classic .workbench-dock__tab,
+  
   :root[data-theme-style] .app--workbench .workbench-dock__tab {
     padding-left: 10px;
     padding-right: 10px;
@@ -38843,7 +36720,7 @@ body > .mermaid-diagram--fullscreen {
    topic bar defaults to --bg-elev; in light themes that reads as a hard
    white band, so use #F5F6F9 to blend it into the chat area. Dark themes
    keep the themed elevation so the header never turns light-on-dark.
-   !important beats the theme-style / chrome-hidden topicbar rules. */
+   !important beats the theme-style topicbar rules. */
 .topicbar,
 :root[data-theme="dark"] .topicbar,
 :root[data-theme-style] .topicbar {
@@ -39209,3 +37086,1172 @@ body > .mermaid-diagram--fullscreen {
 }
 :root .composer-choice--permission-ask { color: var(--composer-permission-ask); }
 :root .composer-choice--permission-yolo { color: var(--err); }
+/* Right-dock launcher + tab container (ported from the right-dock redesign). */
+
+
+.context-menu__item > .context-menu__chevron {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--fg-faint);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+
+/* Floating launcher card (悬浮工作区面板) show/hide toggle. Lives in the
+   topic bar's actions row while the dock is collapsed (tight after the
+   command palette button). The chevron reflects the card's state: left (show)
+   when dismissed, right (hide) when visible. */
+.app__launcher-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  --reasonix-draggable: no-drag;
+  pointer-events: auto;
+}
+
+.app__launcher-toggle .topicbar__chrome-btn {
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.app__launcher-toggle .topicbar__chrome-btn:hover:not(:disabled),
+.app__launcher-toggle .topicbar__chrome-btn:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--fg) 10%, var(--bg-elev)) !important;
+  color: var(--fg) !important;
+}
+
+.app__launcher-toggle .topicbar__chrome-btn--launcher:not(:hover):not(:focus-visible) {
+  color: var(--fg-faint);
+}
+
+.app__launcher-toggle .topicbar__chrome-btn--launcher.topicbar__chrome-btn--active {
+  background: color-mix(in srgb, var(--fg) 10%, var(--bg-elev)) !important;
+  color: var(--fg) !important;
+}
+
+
+.workbench-dock__tabs {
+  --reasonix-draggable: no-drag;
+  position: relative;
+  flex: 0 1 auto;
+  width: max-content;
+  max-width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  /* Tabs may shrink to their min-width, but the strip must never overflow
+     into the add button or the dock-toggle: clip, and fade the right edge so
+     a squeezed-out tab dissolves instead of being cut off mid-glyph. The fade
+     is a painted overlay (::after) rather than a mask-image — masks force
+     per-frame compositor repaints of the whole strip while the FLIP slide
+     animates transforms during a drag, which reads as jank. The add button
+     lives outside this container, so it stays fully opaque. */
+  overflow: hidden;
+}
+
+
+.workbench-dock__tabs::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 28px;
+  background: linear-gradient(to right, transparent, var(--bg));
+  pointer-events: none;
+  /* Only shown while the strip actually overflows (see
+     .workbench-dock__tabs--overflow, driven by a ResizeObserver): when the
+     strip has room the overlay must not fade the last tab. */
+  display: none;
+}
+
+
+.workbench-dock__tabs--overflow::after {
+  display: block;
+}
+
+
+.workbench-dock__tab {
+  --reasonix-draggable: no-drag;
+  /* Fade-end color for the label overlay: the resting tab is transparent
+     over the strip's --bg surface. */
+  --label-fade-end: var(--bg);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 0 1 auto;
+  min-width: 30px;
+  max-width: 118px;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-faint);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 560;
+}
+
+
+.workbench-dock__tab svg {
+  flex: 0 0 auto;
+}
+
+
+.workbench-dock__tab-label {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  /* The ::after right-edge fade marks the cut; the ellipsis is kept because
+     the typography contract requires a real truncation indicator. */
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+.workbench-dock__tab:hover {
+  color: var(--fg-dim);
+}
+
+
+.workbench-dock__tab {
+  transition: transform 120ms ease;
+}
+
+
+.workbench-dock__tab--active {
+  /* Label fade matches the selected fill. */
+  --label-fade-end: var(--bg-elev);
+  background: var(--bg-elev);
+  color: var(--fg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
+}
+
+
+/* --- Dock launcher: workspace panel docked to the RIGHT of the transcript.
+   It is a layout sibling of the transcript content (not an overlay): it
+   consumes the right margin and the history column flows in the remaining
+   space. Rounded card with a title header, icon rows and trailing chevrons;
+   hides entirely when the surface is too narrow. --- */
+.dock-launcher {
+  --reasonix-draggable: no-drag;
+  position: relative;
+  z-index: var(--z-local-popover);
+  order: 2;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin: 8px 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 232px;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+}
+
+
+.dock-launcher__header {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-faint);
+  user-select: none;
+}
+
+
+.dock-launcher__entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 520;
+  white-space: nowrap;
+  text-align: left;
+}
+
+
+.dock-launcher__entry:hover {
+  background: var(--bg-hover, rgba(128, 128, 128, 0.08));
+}
+
+
+.dock-launcher__entry svg {
+  color: var(--fg-dim);
+  flex: 0 0 auto;
+}
+
+
+.dock-launcher__entry-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  /* Long text clips flat at the row edge (reference: pill chips cut at the
+     window margin) — no ellipsis, no pre-edge fade. */
+}
+
+
+.dock-launcher__entry-chevron {
+  color: var(--fg-faint);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+
+.dock-launcher__entry:hover .dock-launcher__entry-chevron,
+.dock-launcher__entry:focus-visible .dock-launcher__entry-chevron {
+  opacity: 1;
+}
+
+
+.dock-launcher__entry-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+
+.dock-launcher__entry-stats-added {
+  color: var(--ok);
+}
+
+
+.dock-launcher__entry-stats-removed {
+  color: var(--danger);
+}
+
+
+.dock-launcher__entry-stats + .dock-launcher__entry-chevron {
+  margin-left: 2px;
+}
+
+
+/* The docked launcher consumes the transcript's right edge, so EVERY footer
+   panel (composer, todo bar, rewind banner, decision cards) reserves the same
+   inset and lines up with the history bubbles: footer keeps its 32px left
+   pad, rows keep their 32px inline pad, and children mirror the launcher's
+   width+margin (232+8) on the right. Applied as margin on the children — NOT
+   footer padding — because later .footer shorthand rules would reset
+   padding-right. Creation-hero layout is centered and excluded. */
+/* The docked launcher consumes the transcript's right edge, so the footer
+   reserves the same inset on ITS OWN box: 240px (launcher 232 + margin 8)
+   plus the shared inline pad. The inset must be footer PADDING, not margins
+   on the children — todo bar, rewind banner, prompt-shelf/decision cards all
+   center themselves with `margin: X auto`, and overriding one side of that
+   shorthand with margin-right made `margin-left: auto` absorb the free space
+   and shoved the panel to the column's right edge. With the inset on the
+   footer, every child resolves its own centering against the same content
+   box as the history rows. Higher specificity than the themed .footer
+   shorthand rules, which would otherwise reset padding-right; creation-hero
+   layout centers itself and is excluded. */
+html[data-dock-launcher="full"] .app:not(.app--creation) .layout:not(.layout--workspace-open) .footer {
+  padding-right: calc(240px + var(--transcript-inline-pad, 16px));
+}
+
+/* While the dock column is open the card overlays the transcript instead of
+   competing for the already-narrow chat column; no space is reserved for it,
+   which is why the footer inset above skips this state. */
+.layout--workspace-open .dock-launcher {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  margin: 0;
+  z-index: var(--z-local-popover);
+}
+
+
+/* Branch row: click to open the inline branch switcher. */
+.dock-launcher__branch-wrap {
+  position: relative;
+}
+
+
+/* The wrap is a plain block, so the button inside shrink-to-fits and stops
+   short of the card edge — force it full width or the chevron floats far
+   from the right border. */
+.dock-launcher__branch-wrap > .dock-launcher__entry {
+  width: 100%;
+}
+
+
+.dock-launcher__entry--open {
+  background: var(--bg-hover, rgba(128, 128, 128, 0.08));
+}
+
+
+.dock-launcher__entry-chevron--down {
+  margin-left: auto;
+  opacity: 1;
+  transform: rotate(90deg);
+}
+
+
+/* The switcher opens to the LEFT of the launcher (ChatGPT reference), not
+   below it: the launcher hugs the window's right edge, so leftward is where
+   the room is. Top-aligned with the branch row. */
+.dock-launcher__branch-menu {
+  position: absolute;
+  top: 0;
+  right: calc(100% + 6px);
+  z-index: var(--z-local-popover);
+  width: 248px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+}
+
+
+.dock-launcher__branch-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  margin-bottom: 4px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-soft);
+  color: var(--fg-faint);
+}
+
+
+.dock-launcher__branch-search:focus-within {
+  border-color: var(--border);
+}
+
+
+.dock-launcher__branch-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+
+
+.dock-launcher__branch-search input::placeholder {
+  color: var(--fg-faint);
+}
+
+
+.dock-launcher__branch-section {
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--fg-faint);
+  user-select: none;
+}
+
+
+.dock-launcher__branch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 200px;
+  overflow: auto;
+}
+
+
+.dock-launcher__branch-create {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-soft);
+}
+
+
+.dock-launcher__branch-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  text-align: left;
+}
+
+
+.dock-launcher__branch-item:hover:not(:disabled) {
+  background: var(--bg-hover, rgba(128, 128, 128, 0.08));
+}
+
+
+.dock-launcher__branch-item:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+
+.dock-launcher__branch-item--active {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+
+.dock-launcher__branch-item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  /* Clip flat at the menu edge, same as launcher rows. */
+}
+
+
+.dock-launcher__branch-item svg {
+  color: var(--ok);
+  flex: 0 0 auto;
+}
+
+
+.dock-launcher__branch-menu-note {
+  padding: 6px 8px;
+  font-size: 11.5px;
+  color: var(--fg-faint);
+}
+
+
+.dock-launcher__branch-menu-note--err {
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+
+.dock-launcher__branch-menu-spinner {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-soft);
+  border-top-color: var(--fg-dim);
+  animation: spin 0.8s linear infinite;
+}
+
+
+/* The dock wraps TabContainer in this unstyleable-looking div. Without a rule
+   it stays a content-sized block, so .tab-container's `flex: 1 1 auto` never
+   applied and the container collapsed to its content — a short view left the
+   dock mostly empty, and the container's own `overflow: hidden` then clipped
+   the tab-overview popover, which is positioned inside it. */
+.workbench-dock__panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tab-container {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+
+
+/* The dock header keeps the upstream workbench-dock chrome (tools strip +
+   rounded tab capsule); per-tab close and the + add button are the only
+   additions. The tools strip itself is defined upstream (42px, draggable);
+   these rules cover the added close/add buttons inside the capsule. */
+.workbench-dock__tab {
+  cursor: pointer;
+  min-width: 85px;
+  max-width: 155px;
+  transition:
+    transform 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease,
+    --label-fade-end 120ms ease;
+}
+
+
+/* While a tab is dragged it leaves the strip and floats above it, and its
+   original slot shows a dashed outline that slides left/right to preview
+   where the tab will land on release. The floating layer reuses the base
+   tab styles (font, padding, icon sizing) so the dragged copy looks exactly
+   like the original; --floating only overrides positioning and elevation. */
+.workbench-dock__tab--floating {
+  --reasonix-draggable: no-drag;
+  position: fixed;
+  background: var(--bg-elev);
+  color: var(--fg);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  cursor: grabbing;
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
+  z-index: var(--z-floating-menu);
+}
+
+
+.workbench-dock__tab-slot {
+  --reasonix-draggable: no-drag;
+  flex: 0 0 auto;
+  display: inline-flex;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px dashed var(--border);
+  transition: transform 120ms ease;
+  pointer-events: none;
+}
+
+
+.workbench-dock__tab-slot .workbench-dock__tab-label {
+  visibility: hidden;
+}
+
+
+.workbench-dock__tab-label {
+  flex: 1 1 auto;
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  /* The ::after right-edge fade marks the cut; the ellipsis is kept because
+     the typography contract requires a real truncation indicator. */
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+/* Long tab titles fade out at the label's right edge instead of getting an
+   ellipsis. The overlay sits inside the label, so it only covers the strip
+   of text that overflow:hidden would otherwise cut — a short title never
+   reaches it, no overflow detection needed. The fade end color tracks the
+   tab's own background via --label-fade-end (set on .workbench-dock__tab
+   for base/hover/active states), so the fade never clashes with the tab's
+   hover or selected fill. */
+.workbench-dock__tab-label::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  background: linear-gradient(to right, transparent, var(--label-fade-end, var(--bg)));
+  pointer-events: none;
+}
+
+
+.workbench-dock__tab-close {
+  --reasonix-draggable: no-drag;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+  padding: 0;
+  margin-left: 1px;
+  /* Hidden until the tab is hovered (or the drag ghost shows it): the
+     resting tab stays clean. It keeps its box (opacity, not display) so the
+     label width never jumps when the button appears. */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast, 120ms);
+}
+
+
+.workbench-dock__tab:hover .workbench-dock__tab-close,
+.workbench-dock__tab--active .workbench-dock__tab-close,
+.workbench-dock__tab--floating .workbench-dock__tab-close {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+
+.workbench-dock__tab-close:hover {
+  background: var(--bg-hover, rgba(128, 128, 128, 0.08));
+  color: var(--fg);
+}
+
+
+.workbench-dock__tab-add {
+  --reasonix-draggable: no-drag;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+  padding: 0;
+  /* Hug the tab strip: the tools row's 8px gap is cancelled down to a 4px
+     breathing room. Never shrinks, so when the strip compresses the button
+     stays visible and ends up pinned to the right edge. */
+  margin-left: -4px;
+}
+
+
+.workbench-dock__tab-add:hover {
+  /* Match the right-dock tab hover fill. */
+  background: color-mix(in srgb, var(--fg) 5%, var(--chat-bg));
+  color: var(--fg-dim);
+}
+
+
+.tab-container__content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+
+
+
+.tab-container__content > .context-panel,
+.tab-container__content > .workspace-panel,
+.tab-container__content > .terminal-panel,
+.tab-container__content > .browser-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.tab-add-menu {
+  --reasonix-draggable: no-drag;
+  position: absolute;
+  top: 46px;
+  left: 10px;
+  right: auto;
+  z-index: var(--z-dock);
+  min-width: 170px;
+  max-width: calc(100% - 20px);
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--bg-elev);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+
+.tab-add-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+
+.tab-add-menu__item:hover {
+  background: var(--bg-hover, rgba(128, 128, 128, 0.08));
+}
+
+
+.tab-add-menu__item svg {
+  color: var(--fg-faint);
+}
+
+
+.workbench-dock__tabs {
+  width: 100%;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+}
+
+
+/* The strip above is a translucent --bg wash over the dock surface, so the
+   right-edge fade overlays must land on the wash's composited color, not the
+   raw --bg. A raw --bg endpoint is darker than the surface the wash actually
+   paints, which leaves a visible (lighter/darker) band at the strip's right
+   edge and on clipped tab titles. Use the same 72% wash composited over the
+   dock surface (--chat-bg). */
+.workbench-dock__tabs::after {
+  background: linear-gradient(to right, transparent, color-mix(in srgb, var(--bg) 72%, var(--chat-bg)));
+}
+
+
+.workbench-dock__tab {
+  /* Title right-edge fade endpoint follows the translucent strip wash. */
+  --label-fade-end: color-mix(in srgb, var(--bg) 72%, var(--chat-bg));
+}
+
+
+.workbench-dock__tab {
+  flex: 0 1 155px;
+  max-width: 155px;
+  height: 28px;
+  border-radius: 7px;
+}
+
+
+/* The + add button is a sibling of the strip, so the base 24px rule doesn't
+   follow this skin's taller tabs; sync its hit area / hover fill height so
+   it reads as one more tab. Width stays equal to height so the button
+   remains a rounded square. */
+.workbench-dock__tab-add {
+  width: 28px;
+  height: 28px;
+}
+
+
+.workbench-dock__tab--active {
+  /* Keep the label right-edge fade on the selected fill: the base
+     .workbench-dock__tab--active rule sets --label-fade-end to --bg-elev, but
+     this skin recolors the selected background to --bg-elev-2, so an
+     unsynced fade-end leaves a pale block at the title's right edge. */
+  --label-fade-end: var(--bg-elev-2);
+  background: var(--bg-elev-2);
+}
+
+
+:root[data-theme-style] .workbench-dock__tabs {
+  position: relative;
+  width: max-content;
+  height: 100%;
+  /* Content width, not stretched: the + add button (a sibling in the tools
+     row) hugs the last tab. When the row is too narrow the strip shrinks
+     and the button ends up pinned to the right edge instead. */
+  flex: 0 1 auto;
+  max-width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+
+:root[data-theme-style] .workbench-dock__tabs::after {
+  /* The theme strip is transparent, so the fade overlay must blend into the
+     dock surface (--chat-bg) rather than the non-theme --bg. */
+  background: linear-gradient(to right, transparent, var(--chat-bg));
+}
+
+
+:root[data-theme-style] .workbench-dock__tab {
+  /* Fade-end color for the label overlay: the resting tab is transparent
+     over the dock surface. Hover/active override it with their fills. */
+  --label-fade-end: var(--chat-bg);
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 85px;
+  max-width: 155px;
+  height: 27px;
+  /* Width, not flex-basis, carries the 155px target: the strip is
+     width:max-content, and max-content sizing reads each item's width —
+     a flex-basis would be ignored there and the tab would collapse to its
+     min-width (the reason the old flex-basis variant squeezed every tab to
+     85px). flex: 0 1 auto still lets the strip shrink tabs toward 85px. */
+  width: 155px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 7px;
+  justify-content: flex-start;
+  gap: 6px;
+  color: var(--fg-faint);
+  font-size: 12.5px;
+  font-weight: 600;
+  background: transparent;
+  transition: color var(--dur-fast), background var(--dur-fast), transform 120ms ease, --label-fade-end var(--dur-fast);
+}
+
+
+:root[data-theme-style] .workbench-dock__tab-add {
+  /* Sync with the theme-style tab height (27px) so the + button's hit area
+     and hover fill line up with the tabs it sits beside; equal width keeps
+     it a rounded square. */
+  width: 27px;
+  height: 27px;
+}
+
+
+:root[data-theme-style] .workbench-dock__tab--floating {
+  /* The theme-style .workbench-dock__tab rule above (higher specificity)
+     resets position to relative; the portal-rendered drag ghost must stay
+     viewport-fixed so it follows the pointer. Declared after that rule so
+     the fixed value wins the cascade. */
+  position: fixed;
+}
+
+
+:root[data-theme-style] .workbench-dock__tab svg {
+  width: 14px;
+  height: 14px;
+}
+
+
+:root[data-theme-style] .workbench-dock__tab-label {
+  flex: 1 1 auto;
+  display: inline;
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  /* The ::after right-edge fade marks the cut; the ellipsis is kept because
+     the typography contract requires a real truncation indicator. */
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+:root[data-theme-style] .workbench-dock__tab-label::after {
+  /* The fade end tracks the tab's own background (--label-fade-end), which
+     hover/active override with their color-mix fills. */
+  background: linear-gradient(to right, transparent, var(--label-fade-end, var(--chat-bg)));
+}
+
+
+:root[data-theme-style] .workbench-dock__tab--active {
+  color: var(--fg);
+  /* One shared fill for both hover and selected states — the two states are
+     told apart by text color (--fg vs --fg-dim) instead of a second, darker
+     background. */
+  --label-fade-end: color-mix(in srgb, var(--fg) 5%, var(--chat-bg));
+  background: color-mix(in srgb, var(--fg) 5%, var(--chat-bg));
+  box-shadow: none;
+}
+
+
+:root[data-theme-style] .workbench-dock__tab:hover {
+  color: var(--fg-dim);
+  /* Same fill as the selected state (see above). */
+  --label-fade-end: color-mix(in srgb, var(--fg) 5%, var(--chat-bg));
+  background: color-mix(in srgb, var(--fg) 5%, var(--chat-bg));
+}
+
+
+:root[data-theme-style] .workbench-dock__tab--active::after {
+  display: none;
+}
+
+
+/* Workbench uses compact text tabs in the right dock. A restrained
+   hairline clarifies each hit target without turning the strip into boxed
+   segmented controls. Creation keeps its separate equal-column treatment. */
+.app--workbench .workbench-dock__tab + .workbench-dock__tab {
+  position: relative;
+}
+
+
+.app--workbench .workbench-dock__tab + .workbench-dock__tab::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -1px;
+  width: 1px;
+  height: 16px;
+  background: color-mix(in srgb, var(--border-soft) 86%, transparent);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+
+/* Theme-style turns the strip into browser-like tabs (small rounded rects,
+/* Theme-style turns the strip into browser-like tabs (small rounded rects,
+   selected one raised); the hairline separator reads as clutter between them. */
+:root[data-theme-style] .app--workbench .workbench-dock__tab + .workbench-dock__tab::before {
+  display: none;
+}
+
+
+/* The user wants the weak divider back under the theme skin too — but ONLY
+   between two inactive tabs. An active tab's neighbors get no hairline, so
+   the active one reads as a solid raised browser tab. Both sides of the
+   adjacent pair must be :not(.workbench-dock__tab--active). This selector
+   also outranks the display:none rule above ((0,6,1) > (0,5,1)) and is
+   declared after it anyway. */
+:root[data-theme-style] .app--workbench .workbench-dock__tab:not(.workbench-dock__tab--active) + .workbench-dock__tab:not(.workbench-dock__tab--active)::before {
+  content: "";
+  position: absolute;
+  left: -4px;     /* centered in the 8px flex gap */
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  height: auto;   /* reset the non-theme rule's height:16px so top/bottom size it */
+  background: color-mix(in srgb, var(--fg) 17.5%, transparent); /* half the previous 35% */
+  pointer-events: none;
+  transform: none; /* reset the non-theme rule's translateY(-50%), which pushed it 8px up */
+  display: block; /* explicitly override the display:none above */
+}
+
+
+/* Creation sets tools padding via shorthand; re-assert the Windows safe
+/* Creation sets tools padding via shorthand; re-assert the Windows safe
+   inset with higher specificity so 「文件 / 改动」 cannot sit under min/max/close.
+   Tabs fill this free strip; each tab is an equal column that self-centers. */
+
+.app--windows-frameless .workbench-dock__tabs,
+:root[data-theme-style] .app--windows-frameless .workbench-dock__tabs {
+  max-width: calc(100% - 4px);
+}
+/* Dock tab picker: the dock's empty state. It follows the dock's own width via
+   a container query — a list while the dock is narrow, a card grid once it is
+   wide enough for two or more columns. */
+.tab-picker {
+  container: tab-picker / inline-size;
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 40px 20px;
+}
+.tab-picker__content {
+  display: flex;
+  width: 100%;
+  max-width: 20rem;
+  flex-direction: column;
+  gap: 20px;
+}
+.tab-picker__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: center;
+}
+.tab-picker__title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.75rem;
+  color: var(--fg);
+}
+.tab-picker__hint {
+  margin: 0;
+  font-size: var(--ui-font-size, 14px);
+  line-height: 1.25rem;
+  color: var(--fg-dim);
+}
+.tab-picker__list {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 8px;
+}
+.tab-picker__item {
+  display: flex;
+  height: 3rem;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--bg-elev);
+  padding: 0 12px;
+  color: var(--fg);
+  font-size: var(--ui-font-size, 14px);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.tab-picker__item:hover {
+  background: color-mix(in srgb, var(--fg) 8%, var(--bg-elev));
+}
+.tab-picker__icon {
+  flex: 0 0 auto;
+  color: var(--fg-dim);
+}
+.tab-picker__label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+@container tab-picker (width >= 480px) {
+  .tab-picker__content { max-width: 34rem; }
+  .tab-picker__list { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); }
+  .tab-picker__item { flex-direction: column; justify-content: center; gap: 6px; height: 5.5rem; }
+  .tab-picker__label { flex: 0 0 auto; text-align: center; }
+}
+
+/* Tab overview: the dock strip's leading dropdown (open tabs, recently closed
+   tabs, a filter over both, and the close actions). */
+.tab-overview {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+.workbench-dock__tab-overview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  margin: 0 4px 0 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.workbench-dock__tab-overview:hover,
+.workbench-dock__tab-overview--open {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--fg);
+}
+.tab-overview__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: var(--z-local-popover);
+  display: flex;
+  width: 264px;
+  max-height: 60vh;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--bg-elev);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+.tab-overview__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  margin-bottom: 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  color: var(--fg-dim);
+}
+.tab-overview__search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--ui-font-size, 14px);
+  outline: none;
+}
+.tab-overview__section {
+  padding: 6px 8px 2px;
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+.tab-overview__row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--ui-font-size, 14px);
+  text-align: left;
+  cursor: pointer;
+}
+.tab-overview__row:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.tab-overview__row--active {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+.tab-overview__row-icon {
+  flex: 0 0 auto;
+  color: var(--fg-dim);
+}
+.tab-overview__row-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab-overview__row-time {
+  flex: 0 0 auto;
+  color: var(--fg-faint);
+  font-size: 12px;
+}
+.tab-overview__note {
+  padding: 8px;
+  color: var(--fg-dim);
+  font-size: var(--ui-font-size, 14px);
+}
+.tab-overview__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-soft);
+}
+.tab-overview__actions button {
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--ui-font-size, 14px);
+  text-align: left;
+  cursor: pointer;
+}
+.tab-overview__actions button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.tab-overview__actions button:disabled {
+  color: var(--fg-faint);
+  cursor: default;
+}

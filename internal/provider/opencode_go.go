@@ -34,7 +34,7 @@ func OpenCodeGoChatModels() map[string]OpenCodeGoModelLimits {
 		"glm-5.3": {Context: 1_000_000, MaxOutput: 131_072}, "glm-5.2": {Context: 1_000_000, MaxOutput: 131_072},
 		"glm-5.1": {Context: 202_752, MaxOutput: 32_768}, "kimi-k3": {Context: 1_048_576, MaxOutput: 131_072},
 		"kimi-k2.7-code": {Context: 262_144, MaxOutput: 262_144}, "kimi-k2.6": {Context: 262_144, MaxOutput: 65_536},
-		"deepseek-v4-pro": {Context: 1_000_000, MaxOutput: 384_000}, "deepseek-v4-flash": {Context: 1_000_000, MaxOutput: 384_000},
+		"deepseek-flash": {Context: 1_000_000, MaxOutput: 384_000}, "deepseek-v4-pro": {Context: 1_000_000, MaxOutput: 384_000}, "deepseek-v4-flash": {Context: 1_000_000, MaxOutput: 384_000},
 		"deepseek-v4-flash-vision-exp": {Context: 1_000_000, MaxOutput: 384_000}, "mimo-v2.5-pro": {Context: 1_048_576, MaxOutput: 128_000},
 		"mimo-v2.5": {Context: 1_000_000, MaxOutput: 128_000}, "hy3": {Context: 256_000, MaxOutput: 64_000},
 	})
@@ -211,6 +211,10 @@ func OpenCodeGoModelInfo(kind, baseURL, model string) (ModelInfo, bool) {
 		return ModelInfo{}, false
 	}
 	info := ModelInfo{ID: strings.TrimSpace(model), InputModalities: []ModelModality{ModalityText}}
+	if model == "deepseek-v4-flash-vision-exp" {
+		info.InputModalities = []ModelModality{ModalityText, ModalityImage}
+		return info, true
+	}
 	vision := map[string]map[string]bool{
 		OpenCodeGoRouteChat:      {"kimi-k3": true},
 		OpenCodeGoRouteAnthropic: {"qwen3.8-max": true, "qwen3.7-plus": true, "qwen3.6-plus": true},
@@ -235,10 +239,10 @@ func BuiltinModelInfo(kind, baseURL, model string) (ModelInfo, bool) {
 		u, err := url.Parse(strings.TrimSpace(baseURL))
 		if err == nil && strings.EqualFold(u.Scheme, "https") && strings.EqualFold(u.Hostname(), "api.deepseek.com") {
 			id := strings.TrimSpace(model)
-			if id == "deepseek-v4-flash-vision-exp" {
+			if IsOfficialDeepSeekImageModel(id) {
 				return ModelInfo{ID: id, InputModalities: []ModelModality{ModalityText, ModalityImage}}, true
 			}
-			if id == "deepseek-v4-flash" || id == "deepseek-v4-pro" {
+			if IsOfficialDeepSeekTextModel(id) {
 				return ModelInfo{ID: id, InputModalities: []ModelModality{ModalityText}}, true
 			}
 		}

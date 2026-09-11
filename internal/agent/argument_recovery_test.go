@@ -105,7 +105,7 @@ func TestArgumentStormEncouragesCorrection(t *testing.T) {
 		t.Fatal("soft final exit not armed")
 	}
 	out := executeBatchOutputs(a, context.Background(), []provider.ToolCall{{ID: "good", Name: "bash", Arguments: `{"command":"pwd"}`}})[0]
-	if out != "executed" || len(b.inputs) != 1 {
+	if stripReceiptCitation(out) != "executed" || len(b.inputs) != 1 {
 		t.Fatalf("corrected call output %q inputs %v", out, b.inputs)
 	}
 }

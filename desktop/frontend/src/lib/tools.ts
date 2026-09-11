@@ -24,7 +24,9 @@ export interface ToolFileDiff {
 
 function parse(args: string): Record<string, unknown> {
   try {
-    return JSON.parse(args) as Record<string, unknown>;
+    const value: unknown = JSON.parse(args);
+    return value !== null && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown> : {};
   } catch {
     return {};
   }

@@ -47,6 +47,7 @@ type Messages struct {
 	TaskBudget                       string // tool_budget variant: task spend budget reached
 	LoopGuard                        string // loop_guard: no-progress tool loop
 	ProgressGuard                    string // progress_guard: repeated work without new evidence
+	OperationNeedsUser               string // operation_needs_user: host stopped retrying one operation
 	SoftBudgetConverge               string // loop_guard: converging a long read-only investigation
 	EvidenceNudge                    string // evidence_nudge: unverified mutations
 	ReasoningGovernor                string // reasoning_governor engaged

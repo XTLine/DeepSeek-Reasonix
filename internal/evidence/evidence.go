@@ -2,6 +2,8 @@ package evidence
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -362,6 +364,7 @@ type Ledger struct {
 	observations     []TextObservation
 	nextSequence     uint64
 	backgroundLeases []BackgroundLease
+	ops              *OperationLedger
 }
 
 func NewLedger() *Ledger { return &Ledger{} }
@@ -377,6 +380,7 @@ func (l *Ledger) Reset() {
 	l.observations = nil
 	l.nextSequence = 0
 	l.backgroundLeases = nil
+	l.ops.Reset()
 }
 
 // ResetBackgroundLeases starts a new run inside the same delivery scope. The
@@ -426,11 +430,12 @@ func (l *Ledger) BackgroundLeases() []BackgroundLease {
 	return out
 }
 
-// Record appends a receipt. Failed receipts are retained for auditability but
-// are never accepted by the HasSuccessful* matchers.
-func (l *Ledger) Record(r Receipt) {
+// Record appends a receipt and returns it as stored, including the host-issued
+// ID a later citation resolves. Failed receipts are retained for auditability
+// but are never accepted by the HasSuccessful* matchers.
+func (l *Ledger) Record(r Receipt) Receipt {
 	if l == nil {
-		return
+		return r
 	}
 	r.Command = strings.TrimSpace(r.Command)
 	r.Step = strings.TrimSpace(r.Step)
@@ -445,6 +450,13 @@ func (l *Ledger) Record(r Receipt) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.nextSequence++
+	if r.ID == "" {
+		// A short content+position digest, not the provider's call ID: the model
+		// cites this across rounds, so it must be stable, cheap in tokens, and
+		// carry nothing about the host filesystem.
+		h := sha256.Sum256(fmt.Appendf(nil, "%s\x00%d\x00%s\x00%s", r.ToolName, l.nextSequence, r.Command, strings.Join(r.Paths, "\x00")))
+		r.ID = "r_" + hex.EncodeToString(h[:4])
+	}
 	r.Sequence = l.nextSequence
 	if r.ToolName == "complete_step" && r.Step != "" && r.TodoStep == nil {
 		if match := latestTodoStep(r.Step, l.receipts); match.Found {
@@ -452,6 +464,7 @@ func (l *Ledger) Record(r Receipt) {
 		}
 	}
 	l.receipts = append(l.receipts, r)
+	return r
 }
 
 // Len returns the number of receipts recorded this turn, giving callers a
@@ -531,21 +544,6 @@ func (l *Ledger) HasWriteOrCommandSince(index int) bool {
 	return false
 }
 
-func (l *Ledger) HasSuccessfulCommand(command string) bool {
-	command = strings.TrimSpace(command)
-	if l == nil || command == "" {
-		return false
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for _, r := range l.receipts {
-		if r.Success && r.ToolName == "bash" && CommandMatches(command, r.Command) {
-			return true
-		}
-	}
-	return false
-}
-
 // HasCompletedReview reports whether a review completed with evidence that is
 // fresh for the latest mutation. Structured review_report receipts are the
 // strongest proof and also cover collected background reviews. Foreground
@@ -610,41 +608,6 @@ func completedStructuredReviewReceipt(r Receipt, requiredPaths []string) bool {
 	return err == nil && report.Kind == ReviewKindReview && report.CoversPaths(requiredPaths)
 }
 
-// HasFailedCommand reports whether the cited command ran this turn but exited
-// non-zero — so callers can distinguish "ran and failed" from "never ran".
-func (l *Ledger) HasFailedCommand(command string) bool {
-	command = strings.TrimSpace(command)
-	if l == nil || command == "" {
-		return false
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for _, r := range l.receipts {
-		if !r.Success && r.ToolName == "bash" && CommandMatches(command, r.Command) {
-			return true
-		}
-	}
-	return false
-}
-
-// SuccessfulCommands returns up to limit successful bash commands from this
-// turn, most recent first, for self-correction hints in rejection errors.
-func (l *Ledger) SuccessfulCommands(limit int) []string {
-	if l == nil || limit <= 0 {
-		return nil
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	var out []string
-	for i := len(l.receipts) - 1; i >= 0 && len(out) < limit; i-- {
-		r := l.receipts[i]
-		if r.Success && r.ToolName == "bash" && r.Command != "" {
-			out = append(out, r.Command)
-		}
-	}
-	return out
-}
-
 // TouchedPaths returns up to limit distinct paths from this turn's successful
 // receipts, most recent first; writtenOnly restricts it to writer receipts.
 func (l *Ledger) TouchedPaths(limit int, writtenOnly bool) []string {
@@ -668,55 +631,6 @@ func (l *Ledger) TouchedPaths(limit int, writtenOnly bool) []string {
 		}
 	}
 	return out
-}
-
-// HasSuccessfulBashMentioningPaths reports whether every path appears in some
-// successful bash command this turn — files created or edited through shell
-// redirection (`seq … > file`) leave no reader/writer receipt, so the command
-// text naming the path is the receipt.
-func (l *Ledger) HasSuccessfulBashMentioningPaths(paths []string) bool {
-	wanted := normalizePaths(paths)
-	if l == nil || len(wanted) == 0 {
-		return false
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for _, p := range wanted {
-		needle := strings.ToLower(filepath.ToSlash(p))
-		found := false
-		for _, r := range l.receipts {
-			if !r.Success || r.ToolName != "bash" {
-				continue
-			}
-			command := strings.ToLower(strings.ReplaceAll(r.Command, `\`, `/`))
-			if strings.Contains(command, needle) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
-}
-
-func (l *Ledger) HasSuccessfulCommandAfter(command string, after int) bool {
-	command = strings.TrimSpace(command)
-	if l == nil || command == "" {
-		return false
-	}
-	start := max(after+1, 0)
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for i := start; i < len(l.receipts); i++ {
-		r := l.receipts[i]
-		if r.Success && r.ToolName == "bash" && CommandMatches(command, r.Command) {
-			return true
-		}
-	}
-	return false
 }
 
 func (l *Ledger) HasSuccessfulCompleteStepAfter(after int) bool {

@@ -24,6 +24,7 @@ export function buildTopicbarView(input: {
   imTopicSources: Record<string, SidebarImTopicSource>;
   creation: boolean;
   chromeHidden: boolean;
+  windowsBrand: boolean;
   automationReturn: boolean;
   sidebar: { title: string; blocked: boolean; pressed: boolean; collapsed: boolean };
   rename: { editing: boolean; draft: string };
@@ -47,6 +48,7 @@ export function buildTopicbarView(input: {
     automationReturn: input.automationReturn,
     automationReturnLabel: locale === "en" ? "Back to automation" : locale === "zh-TW" ? "返回自動化" : "返回自动化",
     chromeHidden: input.chromeHidden,
+    brand: input.windowsBrand,
     sidebar: input.sidebar,
     title: { text: topicbarTitle, hover: !topicbarCanRename && imDetail ? topicbarTitle : topicTitle(activeTab),
       renameLabel: t("topicBar.renameSession"), editing: input.rename.editing, draft: input.rename.draft,
@@ -79,6 +81,7 @@ export function TopicbarActionsStack(props: {
   onOpenTaskSession: (tabID: string, taskID: string) => Promise<boolean>;
   creation: boolean;
   dockToggle: ReactNode;
+  launcherToggle?: ReactNode;
 }) {
   const { t, activeTab, imDetailActive } = props;
   return (
@@ -93,6 +96,7 @@ export function TopicbarActionsStack(props: {
           <Search size={15} />
         </button>
       </Tooltip>
+      {props.launcherToggle}
       <TopicbarActionsRegion sessionIdentity={activeTab?.id}
         external={shouldMountExternalOpener(activeTab, imDetailActive) && activeTab
           ? { tabId: activeTab.id, dismissSignal: props.dismissSignal } : undefined}
@@ -105,7 +109,7 @@ export function TopicbarActionsStack(props: {
           openSessionSummary: () => props.setTasksOpen((open) => open ? false : "session"), tasksOpen: Boolean(props.tasksOpen),
         } : undefined}
       />
-      {props.creation && props.dockToggle}
+      {props.dockToggle}
       {props.tasksOpen && (
         <div className="taskmonitor-popover" role="dialog" aria-label={t("summary.session")}>
           <Suspense fallback={null}>

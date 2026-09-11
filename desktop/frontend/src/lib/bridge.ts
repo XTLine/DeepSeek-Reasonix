@@ -27,7 +27,9 @@ import { createMockModelScopePreset, type MockProviderPresetTemplate } from "./m
 import { createMockRemoteProjects } from "./mockRemoteProjects";
 import { mockRemoteHostView } from "./mockRemoteHosts";
 import type { RemoteProjectBindings } from "./remoteProjectBridge";
+import type { ToolRecoveryBindings } from "./toolRecovery";
 import type { ScrollDiagnosticBindings } from "./scrollDiagnosticBridge";
+import type { TranscriptProtocolBindings } from "./transcriptProtocol";
 import { makeMockMCPAppBindings, type MCPAppBindings } from "./mcpAppBridge";
 import { makeMockPinnedContextBindings, type PinnedContextBindings } from "./pinnedContextBridge";
 import { createDesktopPreferencesMock } from "./desktopPreferencesMock";
@@ -202,7 +204,7 @@ interface DesktopWindowState {
 }
 // AppBindings is the hand-written React-to-Go contract. _CheckGeneratedBindings
 // catches generated methods missing here; update this interface and typecheck.
-export interface AppBindings extends ModelSettingsBindings, SessionCatalogBindings, ProjectTreeOrganizationBindings, HistoryCatalogBindings, TaskCatalogBindings, BlankProjectBindings, QualityFloorBindings, SessionTitleBindings, ScrollDiagnosticBindings, RemoteProjectBindings, MCPAppBindings, PinnedContextBindings, FollowupBindings {
+export interface AppBindings extends ToolRecoveryBindings, ModelSettingsBindings, SessionCatalogBindings, ProjectTreeOrganizationBindings, HistoryCatalogBindings, TaskCatalogBindings, BlankProjectBindings, QualityFloorBindings, SessionTitleBindings, ScrollDiagnosticBindings, RemoteProjectBindings, MCPAppBindings, PinnedContextBindings, FollowupBindings, TranscriptProtocolBindings {
   Platform(): Promise<string>;
   MinimiseMainWindow(): Promise<void>;
   ToggleMaximiseMainWindow(): Promise<void>;
@@ -239,7 +241,6 @@ export interface AppBindings extends ModelSettingsBindings, SessionCatalogBindin
   SubmitInitialGoalToTabWithID(tabID: string, goal: string, display: string, input: string, invocations: InvocationRequest[], collaborationMode: string, toolApprovalMode: string, submissionID: string): Promise<string[]>;
   SubmitEditedDisplayToTab(tabID: string, display: string, input: string, original: string): Promise<void>;
   SubmitEditedDisplayToTabWithID(tabID: string, display: string, input: string, original: string, submissionID: string): Promise<void>;
-  RunShell(command: string): Promise<void>;
   RunShellForTab(tabID: string, command: string): Promise<void>;
   Steer(text: string): Promise<void>;
   SteerForTab(tabID: string, text: string): Promise<void>;
@@ -322,7 +323,6 @@ export interface AppBindings extends ModelSettingsBindings, SessionCatalogBindin
   // Returns auto-allowed prompt ids; unlisted prompts remain pending (#6432).
   SetModeForTab(tabID: string, mode: string): Promise<string[] | void>;
   SetAutoApproveTools(on: boolean): Promise<void>;
-  SetCollaborationMode(mode: string): Promise<void>;
   SetCollaborationModeForTab(tabID: string, mode: string): Promise<void>;
   SetToolApprovalMode(mode: string): Promise<void>;
   // Same drained-prompt-id contract as SetModeForTab.
@@ -334,7 +334,6 @@ export interface AppBindings extends ModelSettingsBindings, SessionCatalogBindin
   SetGoalForTab(tabID: string, goal: string): Promise<void>;
   ResumeGoalForTab(tabID: string): Promise<boolean>;
   PauseGoalForTab(tabID: string): Promise<boolean>;
-  ClearGoal(): Promise<void>;
   ClearGoalForTab(tabID: string): Promise<void>;
   Compact(): Promise<void>;
   CompactForTab(tabID: string): Promise<void>;
@@ -397,7 +396,6 @@ export interface AppBindings extends ModelSettingsBindings, SessionCatalogBindin
   PickWorkspace(): Promise<string>;
   SwitchWorkspace(path: string): Promise<string>;
   RemoveWorkspace(path: string): Promise<void>;
-  ContextUsage(): Promise<ContextInfo>;
   ContextUsageForTab(tabID: string): Promise<ContextInfo>;
   Balance(): Promise<BalanceInfo>;
   BalanceForTab(tabID: string): Promise<BalanceInfo>;
@@ -407,11 +405,8 @@ export interface AppBindings extends ModelSettingsBindings, SessionCatalogBindin
   CurrentTaskSessionID(): Promise<string>;
   ListTasksForSession(sessionID: string): Promise<TaskSnapshot[]>;
   GetTask(taskID: string): Promise<TaskSnapshot | null>;
-  ListTaskEvents(taskID: string, afterSequence: number): Promise<TaskEvent[]>;
   StopTask(taskID: string, expectedVersion: number, reason: string, idemKey: string): Promise<ControlResult>;
   CancelTask(taskID: string, expectedVersion: number, reason: string, idemKey: string): Promise<ControlResult>;
-  RequeueTask(taskID: string, expectedVersion: number, idemKey: string): Promise<ControlResult>;
-  OpenTaskSession(taskID: string): Promise<ControlResult>;
   ListTasksForTab(tabID: string): Promise<TaskSnapshot[]>;
   ListTaskEventsForTab(tabID: string, taskID: string, afterSequence: number): Promise<TaskEvent[]>;
   StopTaskForTab(tabID: string, taskID: string, expectedVersion: number, reason: string, idemKey: string): Promise<ControlResult>;
@@ -499,16 +494,18 @@ export interface AppBindings extends ModelSettingsBindings, SessionCatalogBindin
   TurnCheckLog(tabID: string, sessionPath: string, toolID: string, resultID: string): Promise<{ output: string; truncated: boolean } | null>;
   GitBranches(): Promise<string[]>;
   GitCheckout(branch: string): Promise<void>;
+  GitCreateBranch(name: string): Promise<void>;
+  GitBranchesForTab(tabID: string, workspaceRoot: string): Promise<string[]>;
+  GitCheckoutForTab(tabID: string, workspaceRoot: string, branch: string): Promise<void>;
+  GitCreateBranchForTab(tabID: string, workspaceRoot: string, name: string): Promise<void>;
+  WorkspaceGitStatsForTab(tabID: string, workspaceRoot: string): Promise<WorkspaceChangesView>;
   WorkspaceGitHistory(tabID: string, path: string): Promise<GitCommitView[]>;
   WorkspaceGitCommitDetail(tabID: string, hash: string, path: string): Promise<GitCommitDetailView>;
-  OpenWorkspacePath(rel: string): Promise<void>;
   OpenWorkspacePathForTab(tabID: string, rel: string): Promise<void>;
   ResolveWorkspacePathForTab(tabID: string, rel: string): Promise<string>;
   ExternalOpeners(): Promise<ExternalOpenersView>; ExternalOpenersForTab(tabID: string): Promise<ExternalOpenersView>;
   SetPreferredExternalOpener(id: string): Promise<void>;
-  OpenWorkspaceInExternalOpener(id: string): Promise<void>;
   OpenWorkspaceInExternalOpenerForTab(tabID: string, id: string): Promise<void>; OpenLocalPathInExternalOpener(path: string, id: string): Promise<void>; SaveLocalPathAs(path: string): Promise<string>;
-  RevealWorkspacePath(rel: string): Promise<void>;
   RevealWorkspacePathForTab(tabID: string, rel: string): Promise<void>;
   RevealPath(path: string): Promise<void>;
   OpenLocalPath(path: string): Promise<void>;
@@ -1089,10 +1086,10 @@ function browserPlatformOverride(): "darwin" | "windows" | "linux" | "" {
   return value === "darwin" || value === "windows" || value === "linux" ? value : "";
 }
 
-function browserMockDesktopLayoutStyle(): "classic" | "workbench" | "creation" {
+function browserMockDesktopLayoutStyle(): "workbench" | "creation" {
   if (typeof window === "undefined" || desktopHost().app) return "workbench";
   const value = new URLSearchParams(window.location.search).get("layout");
-  return value === "classic" || value === "creation" ? value : "workbench";
+  return value === "creation" ? value : "workbench";
 }
 
 function browserPreviewBashSandboxMode(): "enforce" | "off" {
@@ -2834,23 +2831,22 @@ function makeMockApp(): AppBindings {
         async SubmitInitialGoalToTabWithID(_tabID, goal, display, input, invocations, _collaborationMode, _toolApprovalMode, submissionID) { await this.SetGoalForTab(_tabID, goal); if (invocations.length > 0) await this.SubmitInvocationsToTabWithID(_tabID, display, input, invocations, submissionID); else await this.SubmitDisplayToTabWithID(_tabID, display, input, submissionID); return []; },
         async SubmitEditedDisplayToTab(_tabID, display, input, _original) { await withMockTabScope(_tabID, () => this.SubmitDisplay(display, input)); },
         async SubmitEditedDisplayToTabWithID(_tabID, display, input, _original, submissionID) { await this.SubmitDisplayToTabWithID(_tabID, display, input, submissionID); },
-        async RunShell(command) {
-          cancelled = false;
-          emitMockTurnStarted();
-          await delay(100);
-          if (cancelled) return;
-          const id = `shell-${command.slice(0, 32)}`;
-          emit({ kind: "tool_dispatch", tool: { id, name: "bash", args: JSON.stringify({ command }), readOnly: false } });
-          await delay(200);
-          if (cancelled) return;
-          emit({ kind: "tool_progress", tool: { id, name: "bash", output: `$ ${command}\n(mock output)\n`, readOnly: false } });
-          await delay(100);
-          if (cancelled) return;
-          emit({ kind: "tool_result", tool: { id, name: "bash", output: `$ ${command}\n(mock output)\n`, readOnly: false, durationMs: 300 } });
-          emitMockTurnDone();
-        },
         async RunShellForTab(_tabID, command) {
-          await withMockTabScope(_tabID, () => this.RunShell(command));
+          await withMockTabScope(_tabID, async () => {
+            cancelled = false;
+            emitMockTurnStarted();
+            await delay(100);
+            if (cancelled) return;
+            const id = `shell-${command.slice(0, 32)}`;
+            emit({ kind: "tool_dispatch", tool: { id, name: "bash", args: JSON.stringify({ command }), readOnly: false } });
+            await delay(200);
+            if (cancelled) return;
+            emit({ kind: "tool_progress", tool: { id, name: "bash", output: `$ ${command}\n(mock output)\n`, readOnly: false } });
+            await delay(100);
+            if (cancelled) return;
+            emit({ kind: "tool_result", tool: { id, name: "bash", output: `$ ${command}\n(mock output)\n`, readOnly: false, durationMs: 300 } });
+            emitMockTurnDone();
+          });
         },
         async Steer(_text) {
           // Mock: emit a steer event as confirmation in the transcript.
@@ -3015,10 +3011,6 @@ function makeMockApp(): AppBindings {
           });
           return drainMockApprovalPreviews(nextToolApprovalMode);
         },
-        async SetCollaborationMode(mode) {
-          const active = mockTabs.find((tab) => tab.active);
-          if (active) await this.SetCollaborationModeForTab(active.id, mode);
-        },
         async SetCollaborationModeForTab(tabID, mode) {
           const next = normalizeCollaborationMode(mode);
           mockTabs = mockTabs.map((tab) => {
@@ -3107,9 +3099,6 @@ function makeMockApp(): AppBindings {
           });
           return paused;
         },
-        async ClearGoal() {
-          await this.SetGoal("");
-        },
         async ClearGoalForTab(tabID) {
           await this.SetGoalForTab(tabID, "");
         },
@@ -3124,9 +3113,7 @@ function makeMockApp(): AppBindings {
         { turn: 0, prompt: "你好呀", files: ["src/App.tsx"], fileCount: 1, turnFileCount: 1, time: Date.now() - 30_000, canCode: true, canConversation: true },
       ];
     },
-    async CheckpointsForTab() {
-      return this.Checkpoints();
-    },
+    async CheckpointsForTab() { return this.Checkpoints(); },
     async Rewind() {},
     async RewindForTab() {},
     async PreviewRewindForTab() {
@@ -3353,7 +3340,7 @@ function makeMockApp(): AppBindings {
       const index = mockProjectTree.findIndex((node) => node.root === path);
       if (index >= 0) mockProjectTree.splice(index, 1);
     },
-        async ContextUsage() {
+        async ContextUsageForTab() {
           return {
             used: 42124,
             window: 128000,
@@ -3373,52 +3360,49 @@ function makeMockApp(): AppBindings {
               rateBand: "mixed",
             },
           };
-        },
-        async ContextUsageForTab() {
-          return this.ContextUsage();
-        },
-        async Balance() {
-      // Mirror the active mock provider: deepseek-flash carries a balance_url.
-      const p = settings.providers.find((x) => x.name === settings.defaultModel);
-      if (!p?.balanceUrl) return { available: false, display: "" };
-          return { available: true, display: "¥128.50" };
-        },
-        async BalanceForTab() {
-          return this.Balance();
-        },
-        async UsageStats() {
-          // Browser dev mock has no stats files; the panel does not consume
-          // provider aggregates, so keep this initial-bundle fallback lean.
-          return { from: "", to: "", tokens: 0, requests: 0, turns: 0, cacheHit: 0, cacheMiss: 0, activeDays: 0, topModel: "", daily: [], models: [] } as unknown as UsageStatsRange;
-        },
-        async Jobs() {
-          return []; // browser dev mock has no background jobs
-        },
-        async JobsForTab() {
-          return this.Jobs();
-        },
-        async CancelJob() {
-          return false;
-        },
-        async CancelJobForTab(_tabID, jobID) {
-          return this.CancelJob(jobID);
-        },
-        async CancelJobsForTab(_tabID, jobIDs) {
-          return { cancelled: [], notRunning: [...jobIDs] };
-        },
-        async ActiveWorkForTab() {
-          return { running: false, pendingPrompt: false, cancellable: false, jobs: [] };
-        },
-        async BackgroundRuntimes() {
-          return [];
-        },
-        async RevealBackgroundRuntime() {
-          throw new Error("background runtime is unavailable in browser preview");
-        },
-        async WorkspaceConflictForTab() {
-          return {
-            state: "none", ownerWork: { running: false, pendingPrompt: false, cancellable: false, jobs: [] },
-            canReveal: false, canCreateWorktree: false,
+          },
+          async Balance() {
+        // Mirror the active mock provider: deepseek-flash carries a balance_url.
+        const p = settings.providers.find((x) => x.name === settings.defaultModel);
+        if (!p?.balanceUrl) return { available: false, display: "" };
+            return { available: true, display: "¥128.50" };
+          },
+          async BalanceForTab() {
+            return this.Balance();
+          },
+          async UsageStats() {
+            // Browser dev mock has no stats files; the panel does not consume
+            // provider aggregates, so keep this initial-bundle fallback lean.
+            return { from: "", to: "", tokens: 0, requests: 0, turns: 0, cacheHit: 0, cacheMiss: 0, activeDays: 0, topModel: "", daily: [], models: [] } as unknown as UsageStatsRange;
+          },
+          async Jobs() {
+            return []; // browser dev mock has no background jobs
+          },
+          async JobsForTab() {
+            return this.Jobs();
+          },
+          async CancelJob() {
+            return false;
+          },
+          async CancelJobForTab(_tabID, jobID) {
+            return this.CancelJob(jobID);
+          },
+          async CancelJobsForTab(_tabID, jobIDs) {
+            return { cancelled: [], notRunning: [...jobIDs] };
+          },
+          async ActiveWorkForTab() {
+            return { running: false, pendingPrompt: false, cancellable: false, jobs: [] };
+          },
+          async BackgroundRuntimes() {
+            return [];
+          },
+          async RevealBackgroundRuntime() {
+            throw new Error("background runtime is unavailable in browser preview");
+          },
+          async WorkspaceConflictForTab() {
+            return {
+              state: "none", ownerWork: { running: false, pendingPrompt: false, cancellable: false, jobs: [] },
+              canReveal: false, canCreateWorktree: false,
           };
         },
         async RevealWorkspaceWriterForTab() {
@@ -4031,8 +4015,15 @@ function makeMockApp(): AppBindings {
     async GitBranches() {
       return ["main", "dev", "feature/branch-switcher"];
     },
+    async GitBranchesForTab(_tabID: string, _workspaceRoot: string) { return this.GitBranches(); },
+    async GitCheckoutForTab(_tabID: string, _workspaceRoot: string, branch: string) { await this.GitCheckout(branch); },
+    async GitCreateBranchForTab(_tabID: string, _workspaceRoot: string, name: string) { await this.GitCreateBranch(name); },
+    async WorkspaceGitStatsForTab(tabID: string, _workspaceRoot: string) { return this.WorkspaceChanges(tabID); },
     async GitCheckout(_branch: string) {
       console.info("mock GitCheckout", _branch);
+    },
+    async GitCreateBranch(_name: string) {
+      console.info("mock GitCreateBranch", _name);
     },
     async WorkspaceGitHistory(_tabID: string, path: string) {
       return [
@@ -4045,14 +4036,11 @@ function makeMockApp(): AppBindings {
       }
       return { files: ["mock_file_1.ts", "mock_file_2.ts"] };
     },
-    async OpenWorkspacePath(rel: string) {
-      console.info("mock OpenWorkspacePath", rel);
-    },
     async OpenLocalPath(path: string) {
       console.info("mock OpenLocalPath", path);
     },
     async OpenWorkspacePathForTab(_tabID: string, rel: string) {
-      await this.OpenWorkspacePath(rel);
+      console.info("mock OpenWorkspacePath", rel);
     },
     async ResolveWorkspacePathForTab(_tabID: string, rel: string) { return `${cwd.replace(/[\\/]+$/, "")}/${rel.replace(/^[/\\]+/, "").replace(/[\\/]+$/, "")}`; },
     async ExternalOpeners() {
@@ -4067,15 +4055,9 @@ function makeMockApp(): AppBindings {
       } as ExternalOpenersView;
     }, async ExternalOpenersForTab(_tabID: string) { return { ...(await this.ExternalOpeners()), workspaceOpenable: true }; },
     async SetPreferredExternalOpener(_id: string) {},
-    async OpenWorkspaceInExternalOpener(_id: string) {},
-    async OpenWorkspaceInExternalOpenerForTab(_tabID: string, id: string) {
-      await this.OpenWorkspaceInExternalOpener(id);
-    }, async OpenLocalPathInExternalOpener(path: string, id: string) { console.info("mock OpenLocalPathInExternalOpener", path, id); }, async SaveLocalPathAs(path: string) { console.info("mock SaveLocalPathAs", path); return path; },
-    async RevealWorkspacePath(rel: string) {
-      console.info("mock RevealWorkspacePath", rel);
-    },
+    async OpenWorkspaceInExternalOpenerForTab(_tabID: string, _id: string) {}, async OpenLocalPathInExternalOpener(path: string, id: string) { console.info("mock OpenLocalPathInExternalOpener", path, id); }, async SaveLocalPathAs(path: string) { console.info("mock SaveLocalPathAs", path); return path; },
     async RevealWorkspacePathForTab(_tabID: string, rel: string) {
-      await this.RevealWorkspacePath(rel);
+      console.info("mock RevealWorkspacePath", rel);
     },
     async RevealPath(path: string) {
       console.info("mock RevealPath", path);
@@ -4915,7 +4897,7 @@ function makeMockApp(): AppBindings {
           return "";
         },
         async SetDesktopLayoutStyle(style: string) {
-          settings.desktopLayoutStyle = style === "workbench" || style === "creation" ? style : "classic";
+          settings.desktopLayoutStyle = style === "creation" ? "creation" : "workbench";
         },
         async SetDesktopZoomFactor(factor: number) {
           mockDesktopZoomFactor = Math.min(2.0, Math.max(0.5, Number.isFinite(factor) ? factor : 1.0));
@@ -4964,11 +4946,8 @@ function makeMockApp(): AppBindings {
     async CurrentTaskSessionID() { return ""; },
     async ListTasksForSession() { return []; },
     async GetTask() { return null; },
-    async ListTaskEvents() { return []; },
     async StopTask() { return { schema_version: 1, command: "stop", task_id: "", accepted: false, idempotent: false, error: { code: "mock", message: "not available in browser mock" } }; },
     async CancelTask() { return { schema_version: 1, command: "cancel", task_id: "", accepted: false, idempotent: false, error: { code: "mock", message: "not available in browser mock" } }; },
-    async RequeueTask() { return { schema_version: 1, command: "requeue", task_id: "", accepted: false, idempotent: false, error: { code: "mock", message: "not available in browser mock" } }; },
-    async OpenTaskSession() { return { schema_version: 1, command: "open_session", task_id: "", accepted: false, idempotent: false, error: { code: "mock", message: "not available in browser mock" } }; },
     async ListTasksForTab() { return []; },
     ...makeMockTaskCatalogBindings(),
     async ListTaskEventsForTab() { return []; },

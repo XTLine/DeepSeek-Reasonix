@@ -34,7 +34,8 @@ import {
   type ComposerInvocation,
   type StructuredInvocationSubmit,
 } from "../lib/invocationDisplay";
-import { formatTokens } from "../lib/format";
+import { formatTokens, formatTps } from "../lib/format";
+import { formatElapsedMs, turnMetrics } from "../lib/turnMetrics";
 import type { CancelOutcome } from "../lib/inboxCancel";
 import type { ControllerLiveStore } from "../lib/useController";
 import { clearLayoutSize, loadOptionalLayoutSize, saveLayoutSize } from "../lib/layoutPreferences";
@@ -415,12 +416,6 @@ function loadComposerHeight(): number | null {
   return loadOptionalLayoutSize("composerHeight", clampComposerHeight) ?? clampComposerHeight(COMPOSER_DEFAULT_HEIGHT);
 }
 
-function fmtElapsed(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}m ${s % 60}s`;
-}
-
 // --- past:chats hover preview helpers (PR-C2) ---
 // Pure formatting helpers used by the past:chats list tooltip. They never read
 // from disk, never call PreviewSession — they only shape the data that already
@@ -598,6 +593,8 @@ export function Composer({
   turnModelActiveMs = 0,
   liveStore,
   turnArgChars = 0,
+  turnOutputEstimated,
+  lastTurnOutputEstimated,
   retry,
   suspendedByDecision = false,
   pendingApprovalLabel,
@@ -695,14 +692,18 @@ export function Composer({
   // Active provider-output time for the current turn; excludes tool gaps.
   turnModelActiveAt?: number;
   turnModelActiveMs?: number;
-  // Live-stream subscription for the character-count TPS fallback (chars ÷ 4)
-  // when the provider does not emit per-chunk usage events with token counts
-  // during streaming. Subscribing here keeps text deltas off the main state
-  // tree — only the composer re-renders, matching the controller's live-store
-  // contract (pure stream deltas must not re-render the controller owner).
+  // Live-stream subscription for the character-density TPS fallback (see
+  // lib/turnMetrics) when the provider does not emit per-chunk usage events
+  // with token counts during streaming. Subscribing here keeps text deltas off
+  // the main state tree — only the composer re-renders, matching the
+  // controller's live-store contract (pure stream deltas must not re-render the
+  // controller owner).
   liveStore?: ControllerLiveStore;
   // Streaming argument characters provide estimated progress before usage arrives.
   turnArgChars?: number;
+  // Whether the provider flagged this turn's usage as reconstructed.
+  turnOutputEstimated?: boolean;
+  lastTurnOutputEstimated?: boolean;
   retry?: RecoveryRetry;
   // True while a footer decision surface (approval / ask / clear context) owns
   // the UI. Pauses the model-work ticker without rendering a "waiting approval"
@@ -3663,7 +3664,12 @@ export function Composer({
       : pendingAsk
         ? "ask"
         : null;
-  const showRunStrip = Boolean(retry || waitingPrompt || finishing || runtimeState.unknown || runtimeState.kind === "background_job" || runtimeState.kind === "cancelling");
+  // Ordinary work keeps the strip too: it carries the live token/throughput
+  // readout, so it is no longer reserved for states the glow ring cannot name.
+  // `!suspendedByDecision` mirrors the run-state chain, which yields no label
+  // while a decision surface owns the footer; without it the reservation would
+  // hold a strip's height open with nothing to draw in it.
+  const showRunStrip = Boolean((running && !suspendedByDecision) || retry || waitingPrompt || finishing || runtimeState.unknown || runtimeState.kind === "background_job" || runtimeState.kind === "cancelling");
   const effectiveComposerHeight = composerHeight === null
     ? null
     : resolveComposerContentSizing({
@@ -3781,12 +3787,9 @@ export function Composer({
     (cb: () => void) => liveStore?.subscribe(tabId, cb) ?? (() => {}),
     [liveStore, tabId],
   );
-  const liveTextChars = useSyncExternalStore(
+  const liveOutput = useSyncExternalStore(
     subscribeLiveText,
-    () => {
-      const live = liveStore?.getSnapshot(tabId);
-      return live ? live.text.length + live.reasoning.length : 0;
-    },
+    () => liveStore?.getSnapshot(tabId),
   );
   const liveModelActiveAt = useSyncExternalStore(
     subscribeLiveText,
@@ -3803,24 +3806,51 @@ export function Composer({
         : running && !suspendedByDecision
           ? turnPhaseLabel
           : null;
-  const runMetrics = turnStartAt && (running || turnDoneAt)
-    ? (() => {
-        const metricsNow = turnDoneAt || now;
-        const elapsedMs = Math.max(0, metricsNow - turnStartAt - (turnDoneAt ? lastTurnWaitAccumMs ?? waitAccumMs : waitAccumMs));
-        const usageTokens = turnTokens ?? 0;
-        // Include streaming tool-call args in the estimate so TPS stays
-        // meaningful while the model streams a write_file / long tool body.
-        const inFlightChars = Math.max(0, liveTextChars - (turnOutputCharsAtUsage ?? 0)) + (turnArgChars ?? 0);
-        const estimatedChars = !turnDoneAt ? Math.round(inFlightChars / 4)
-          : Math.max(0, (lastTurnOutputTokens ?? turnOutputTokens ?? 0) - (turnOutputTokens ?? 0));
-        const liveTokens = usageTokens + estimatedChars;
-        const outTok: number = (turnOutputTokens ?? 0) + estimatedChars;
-        const modelActiveAt = liveModelActiveAt ?? turnModelActiveAt;
-        const modelElapsedMs = Math.max(0, turnModelActiveMs + (modelActiveAt && modelActiveAt > 0 ? Math.max(0, metricsNow - modelActiveAt) : 0));
-        const tps = outTok > 0 && modelElapsedMs >= 500 ? Math.round(outTok / (modelElapsedMs / 1000)) : null;
-        return { elapsed: fmtElapsed(elapsedMs), tokens: liveTokens > 0 ? `${formatTokens(liveTokens)} ${t("status.tokens")}` : null, tps: tps !== null ? `${tps} tokens/s` : null };
-      })()
-    : null;
+  // Second-quantized: the run strip has no sub-second resolution, and `now` is
+  // a fresh Date.now() every render, so keying the memo on it would never hit.
+  const metricsTick = Math.floor(now / 1000);
+  const runMetrics = useMemo(() => {
+    const metrics = turnMetrics({
+      now, turnStartAt, turnDoneAt, running, waitAccumMs, lastTurnWaitAccumMs,
+      turnTokens, turnOutputTokens, lastTurnOutputTokens, turnOutputCharsAtUsage,
+      turnArgChars, turnModelActiveMs, turnModelActiveAt, liveModelActiveAt,
+      live: liveOutput, turnOutputEstimated, lastTurnOutputEstimated,
+    });
+    if (!metrics) return null;
+    // The parenthesised group reads as a subordinate clause, so the state word
+    // keeps its own sentence. Elapsed leads because the strip's real job is
+    // answering "is this stuck?". Only the token reading carries the estimate
+    // cue: the clock is exact, and throughput is derived from it. The popover
+    // keeps a per-value cue because it also shows settled, exact readings.
+    const estimate = metrics.estimated ? "≈" : "";
+    const live = metrics.tokens > 0 && !turnDoneAt;
+    // Punctuation is not what groups these: the readings are pinned right and
+    // dimmed, so a long state word ellipsises instead of cutting them. The
+    // throughput is returned apart because it is the one reading the strip may
+    // shed whole when the composer is narrow.
+    const stripParts = live
+      ? [formatElapsedMs(metrics.elapsedMs),
+        `${estimate}${formatTokens(metrics.tokens)} ${t("status.tokens")}`]
+      : [];
+    const stripSpeed = live && (liveModelActiveAt ?? turnModelActiveAt) && metrics.tps !== null
+      ? formatTps(metrics.tps)
+      : "";
+    return {
+      elapsed: formatElapsedMs(metrics.elapsedMs),
+      tokens: metrics.tokens > 0
+        ? `${metrics.estimated ? "≈" : ""}${formatTokens(metrics.tokens)} ${t("status.tokens")}`
+        : null,
+      tps: formatTps(metrics.tps, metrics.estimated),
+      stripParts,
+      stripSpeed,
+    };
+  }, [metricsTick, running, turnStartAt, turnDoneAt, waitAccumMs, lastTurnWaitAccumMs,
+    turnTokens, turnOutputTokens, lastTurnOutputTokens, turnOutputCharsAtUsage, turnArgChars,
+    turnModelActiveMs, turnModelActiveAt, liveModelActiveAt, liveOutput, turnOutputEstimated,
+    lastTurnOutputEstimated, t]);
+  // The strip's own sr-only sibling keeps announcing the stable state alone, so
+  // these churning numbers stay out of the live region.
+  const runStrip = runMetrics?.stripParts.length ? runMetrics : null;
   const submitEmpty = !text.trim() && attachments.length === 0 && workspaceRefs.length === 0 &&
     !invocations.some((invocation) => invocation.command.kind === "skill");
   const submitBlocked = submitting || (!pendingFollowup && (pendingPaste > 0 || (submitEmpty && !(goalModeOn && !activeGoal)) || disabled || (!running && submitDisabled) || readOnly));
@@ -4396,7 +4426,19 @@ export function Composer({
         {(readStatusText || (showRunStrip && runStateText)) && (
           <div className={`composer-run-strip${waitingPrompt ? " composer-run-strip--waiting" : ""}`}>
             {!finishing && !runtimeState.unknown && <span className="composer-run-strip__dot" aria-hidden="true" />}
-            <span className="composer-run-strip__text">{readStatusText || runStateText}</span>
+            <span className="composer-run-strip__text">
+              <span className="composer-run-strip__state">{readStatusText || runStateText}</span>
+              {runStrip && (
+                <span className="composer-run-strip__metrics">
+                  {runStrip.stripParts.map((part) => (
+                    <span className="composer-run-strip__metric" key={part}>{` ${part}`}</span>
+                  ))}
+                  {runStrip.stripSpeed && (
+                    <span className="composer-run-strip__metric composer-run-strip__metric--optional">{` ${runStrip.stripSpeed}`}</span>
+                  )}
+                </span>
+              )}
+            </span>
           </div>
         )}
         <span className="sr-only" role="status">{readStatusText || runStateText}</span>

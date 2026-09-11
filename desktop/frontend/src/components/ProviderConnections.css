@@ -94,20 +94,20 @@
 .provider-connection-field > .mem-select { max-width: none; }
 .provider-editor-footer .btn { min-height: 36px; padding-inline: 18px; font-size: 14px; }
 
-.provider-model-dialog { width: min(820px, calc(100vw - 32px)); max-height: calc(100vh - 40px); box-sizing: border-box; padding: 28px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-elev); color: var(--fg); font: 14px var(--font-sans); }
+.provider-model-dialog { width: min(900px, calc(100vw - 32px)); max-height: calc(100vh - 40px); box-sizing: border-box; padding: 28px 32px 24px; border: 1px solid var(--border); border-radius: 16px; background: var(--bg-elev); color: var(--fg); font: 14px var(--font-sans); }
 .provider-model-dialog::backdrop { background: #0008; }
 .provider-model-dialog header, .provider-model-dialog footer { display: flex; align-items: center; gap: 12px; }
 .provider-model-dialog h2 { flex: 1; margin: 0; font-size: 21px; }
 .provider-model-dialog h3 { margin: 0 0 16px; font-size: 16px; }
 .provider-model-dialog__id { display: grid; gap: 12px; margin: 24px 0; }
 .provider-model-dialog__id > span { display: flex; align-items: center; gap: 10px; overflow-wrap: anywhere; }
-.provider-model-dialog__columns { display: grid; grid-template-columns: 1.2fr 1fr; gap: 28px; padding: 24px 0; border-block: 1px solid var(--border); }
-.provider-model-dialog__columns aside { border-left: 1px solid var(--border); padding-left: 24px; }
+.provider-model-dialog__columns { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(280px, .95fr); gap: 32px; padding: 22px 0 24px; border-block: 1px solid var(--border); }
+.provider-model-dialog__columns aside { border-left: 0; border-radius: 12px; background: color-mix(in srgb, var(--bg) 62%, transparent); padding: 18px 20px; }
 .provider-model-dialog section label { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; }
 .provider-model-dialog .mem-input, .provider-model-dialog .mem-select { width: 100%; box-sizing: border-box; font-size: 14px; min-height: 40px; }
 .provider-model-dialog section label .mem-input { grid-column: 1 / -1; }
 .provider-model-dialog p, .provider-model-dialog small { color: var(--fg-faint); line-height: 1.5; }
-.provider-model-dialog p { margin: 8px 0 20px; font-size: 12px; }
+.provider-model-dialog p { margin: 7px 0 16px; font-size: 12px; }
 .provider-model-dialog details { margin-top: 24px; }
 .provider-model-dialog summary { cursor: pointer; margin-bottom: 12px; }
 .provider-model-dialog dl { margin: 0; }
@@ -127,6 +127,11 @@
 .provider-model-dialog__chips label { display: inline-flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
 .provider-model-dialog__chips input { accent-color: var(--accent); margin: 0; }
 .provider-model-dialog__chips label:has(input:disabled:not(:checked)) { color: var(--fg-faint); }
+.provider-model-dialog__effort-card { margin-top: 18px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--bg) 48%, transparent); }
+.provider-model-dialog__effort-card > label { margin-bottom: 9px; }
+.provider-model-dialog__effort-card .provider-model-dialog__chips { margin-bottom: 14px; }
+.provider-model-dialog__effort-card .provider-model-dialog__chips label { padding: 7px 9px; background: var(--bg-elev); }
+.provider-model-dialog__effort-card > p { margin-bottom: 0; }
 
 .provider-model-dialog .mem-input, .provider-model-dialog .mem-select { background: var(--bg-elev); }
 

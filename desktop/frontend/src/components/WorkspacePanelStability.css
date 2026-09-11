@@ -25,7 +25,7 @@
 .layout--workspace-overlay .workbench-dock--overlay {
   position: absolute;
   z-index: var(--z-workspace-float);
-  top: var(--app-chrome-height);
+  top: var(--app-bar-height, var(--topicbar-height));
   right: 0;
   bottom: var(--statusbar-height);
   width: min(var(--workspace-width), calc(100vw - 16px));

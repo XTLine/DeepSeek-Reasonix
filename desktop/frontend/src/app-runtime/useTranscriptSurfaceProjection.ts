@@ -19,9 +19,7 @@ export type TranscriptSurfaceProjectionInput = {
   transitioning: boolean;
   navigationDataReady: boolean;
   preserved: NavigationSurfaceApi["preserved"];
-  singleSurface: boolean;
   controllerReady: boolean;
-  heroLayout: boolean;
   availability: SessionAvailability;
   sessionActivity: boolean;
   imDetailActive: boolean;
@@ -31,7 +29,7 @@ export type TranscriptSurfaceProjectionInput = {
   commitSingleSurface: (tabId: string) => void;
   ports: {
     loadOlderHistory(tabId: string, targetTurn: number | undefined, trigger: HistoryLoadTrigger): Promise<boolean>;
-    commitThenSend(tabId: string, text: string): Promise<void>;
+    commitThenSend(tabId: string, displayText: string, submitText?: string): Promise<void>;
   };
 };
 
@@ -49,7 +47,6 @@ export function useTranscriptSurfaceProjection(input: TranscriptSurfaceProjectio
   // Avoid flash while switching tabs: items may be empty while placeholders show.
   // Exclude IM/Bot detail: hero CSS collapses .main, which also hosts that panel.
   const emptyHero =
-    input.heroLayout &&
     input.availability.kind === "ready" &&
     !input.sessionActivity &&
     !transitioning &&
@@ -86,7 +83,7 @@ export function useTranscriptSurfaceProjection(input: TranscriptSurfaceProjectio
   const visibleTranscriptGeometryKey = visibleTranscriptSurface?.geometrySessionKey ?? input.geometrySessionKey;
   const handleSurfacePaintReady = useCommittedCommand((token: string, outcome: "ready" | "degraded") => {
     const receipt = input.commitPaint(token, outcome);
-    if (input.singleSurface && receipt) input.commitSingleSurface(receipt.targetTabId);
+    if (receipt) input.commitSingleSurface(receipt.targetTabId);
   });
   const latestGuidanceConsumed = useMemo(() => {
     for (let i = input.items.length - 1; i >= 0; i--) {
@@ -98,9 +95,9 @@ export function useTranscriptSurfaceProjection(input: TranscriptSurfaceProjectio
     return null;
   }, [input.items]);
 
-  const handleTranscriptPrompt = useCommittedCommand((text: string) => {
+  const handleTranscriptPrompt = useCommittedCommand((text: string, submitText = text) => {
     if (!activeTabId || !input.controllerReady) return;
-    void ports.commitThenSend(activeTabId, text).catch((err) => {
+    void ports.commitThenSend(activeTabId, text, submitText).catch((err) => {
       console.warn("Failed to submit transcript prompt", err);
     });
   });

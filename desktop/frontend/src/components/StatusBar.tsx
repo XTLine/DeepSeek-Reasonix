@@ -4,6 +4,7 @@ import { AnchoredPopover } from "./AnchoredPopover";
 import { RemoteConnectionErrorDialog } from "./RemoteConnectionErrorDialog";
 import { Tooltip } from "./Tooltip";
 import { contextWindowPercentages } from "../lib/contextWindow";
+import { formatTps } from "../lib/format";
 import { useI18n, type Translator } from "../lib/i18n";
 import { formatMoneyLocalized } from "../lib/money";
 import { normalizeStatusBarItems, type StatusBarItemId } from "../lib/statusBarItems";
@@ -66,12 +67,6 @@ function formatTokenCount(tokens?: number): string {
 function formatTurnCount(turns: number | undefined, t: Translator): string {
   if (typeof turns !== "number" || turns < 0) return "-";
   return t(turns === 1 ? "history.turnOne" : "history.turnOther", { n: turns });
-}
-function formatTps(tps?: number | null, estimated = false): string | null {
-  if (!tps || tps <= 0) return null;
-  const prefix = estimated ? "≈" : "";
-  if (tps < 1) return `${prefix}<1 t/s`;
-  return `${prefix}${Math.round(tps)} t/s`;
 }
 
 const STATUS_SOURCE_ORDER = ["executor", "planner", "subagent", "compaction", "classifier", "title"];

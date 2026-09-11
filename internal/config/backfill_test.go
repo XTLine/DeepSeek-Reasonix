@@ -1142,7 +1142,7 @@ func TestBackfillDeepSeekOfficialPrices(t *testing.T) {
 	if !ok {
 		t.Fatal("deepseek provider missing")
 	}
-	if p.Prices["deepseek-v4-flash"].Output != 1.32 || p.Prices["deepseek-v4-flash"].Currency != "$" || p.Prices["deepseek-v4-pro"].Output != 3.96 || p.Prices["deepseek-v4-pro"].Currency != "$" {
+	if p.Prices["deepseek-v4-flash"].Output != 1.2 || p.Prices["deepseek-v4-flash"].Currency != "$" || p.Prices["deepseek-v4-pro"].Output != 3.96 || p.Prices["deepseek-v4-pro"].Currency != "$" {
 		t.Fatalf("deepseek prices = %+v, want default USD flash/pro prices", p.Prices)
 	}
 }
@@ -1161,7 +1161,7 @@ func TestBackfillDeepSeekOfficialPricesUsesConfiguredLanguage(t *testing.T) {
 	if !ok {
 		t.Fatal("deepseek provider missing")
 	}
-	if p.Prices["deepseek-v4-flash"].Output != 1.32 || p.Prices["deepseek-v4-flash"].Currency != "$" || p.Prices["deepseek-v4-pro"].Output != 3.96 || p.Prices["deepseek-v4-pro"].Currency != "$" {
+	if p.Prices["deepseek-v4-flash"].Output != 1.2 || p.Prices["deepseek-v4-flash"].Currency != "$" || p.Prices["deepseek-v4-pro"].Output != 3.96 || p.Prices["deepseek-v4-pro"].Currency != "$" {
 		t.Fatalf("deepseek prices = %+v, want USD official flash/pro prices", p.Prices)
 	}
 }
@@ -1212,7 +1212,7 @@ func TestApplyDeepSeekOfficialDefaultPricingUsesConfiguredLanguage(t *testing.T)
 	if !ok {
 		t.Fatal("deepseek-flash provider missing")
 	}
-	if flash.Price == nil || flash.Price.Output != 1.32 || flash.Price.Currency != "$" {
+	if flash.Price == nil || flash.Price.Output != 1.2 || flash.Price.Currency != "$" {
 		t.Fatalf("flash price = %+v, want frozen USD default table", flash.Price)
 	}
 	pro, ok := c.Provider("deepseek-pro")
@@ -1430,7 +1430,7 @@ func TestApplyDeepSeekOfficialDefaultPricingExplicitCurrencyWins(t *testing.T) {
 	flash, _ := c.Provider("deepseek-flash")
 	flash.BillingCurrency = "USD"
 	applyDeepSeekOfficialDefaultPricing(c)
-	if flash.Price == nil || flash.Price.Output != 1.32 || flash.Price.Currency != "$" {
+	if flash.Price == nil || flash.Price.Output != 1.2 || flash.Price.Currency != "$" {
 		t.Fatalf("flash price = %+v, want USD billing_currency table", flash.Price)
 	}
 
@@ -1441,7 +1441,7 @@ func TestApplyDeepSeekOfficialDefaultPricingExplicitCurrencyWins(t *testing.T) {
 	// billing currency — force official CNY rates for this assertion.
 	flash.Price = deepSeekV4FlashPriceCNY()
 	applyDeepSeekOfficialDefaultPricing(c)
-	if flash.Price == nil || flash.Price.Output != 9 || flash.Price.Currency != "¥" {
+	if flash.Price == nil || flash.Price.Output != 8 || flash.Price.Currency != "¥" {
 		t.Fatalf("flash price = %+v, want CNY billing_currency table", flash.Price)
 	}
 }
@@ -1497,7 +1497,7 @@ func TestResetOfficialProviderPricingOnUpgradeRunsOnce(t *testing.T) {
 	if deepseek.Price != nil {
 		t.Fatalf("deepseek provider-wide price = %+v, want nil after reset", deepseek.Price)
 	}
-	if p := deepseek.Prices["deepseek-v4-flash"]; p == nil || p.Currency != "$" || p.Output != 1.32 {
+	if p := deepseek.Prices["deepseek-v4-flash"]; p == nil || p.Currency != "$" || p.Output != 1.2 {
 		t.Fatalf("deepseek flash price = %+v, want USD default", p)
 	}
 	if p := deepseek.Prices["deepseek-v4-pro"]; p == nil || p.Currency != "$" || p.Output != 3.96 {

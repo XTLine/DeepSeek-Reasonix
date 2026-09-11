@@ -56,8 +56,21 @@ fails with `-32002 not_ready`.
 ```
 
 `window` is the initial main-window geometry Go derives from the saved state
-and platform rules; the shell creates the window hidden with it and Go later
-positions, maximises and shows it through `host/window.*` from `domReady`.
+and platform rules. Optional `position: {x, y}` carries the saved origin (zero
+and negative coordinates are valid); omission requests centering. The shell
+selects the matching display and fits the rectangle to its DIP work area before
+creating the hidden window. Go later maximises and shows it from `domReady`,
+without overriding the shell's corrected position. Persistence always captures
+the normal-state rectangle, separately from the maximised flag; legacy oversized
+rectangles are fitted rather than resetting every maximised entry to defaults.
+While minimized, the shell retains its last non-minimized snapshot because
+native normal-bounds queries can otherwise expose the maximized frame.
+
+The persisted JSON shape is unchanged. Older shells ignore the optional hello
+position; newer shells accept its omission. Ship shell and service together:
+mixed development builds do not provide the complete restore fix. Downgrading
+can reintroduce the old geometry bug, and older readers may reject negative
+origins below their previous validation floor.
 
 Failure codes are terminal: the shell shows the real error and offers
 "open logs" and "quit". It never falls back to the browser mock.
@@ -84,6 +97,7 @@ the shell discards anything tagged with an old one.
 | `desktop/beforeClose` | `{"reason":"window"\|"quit"\|"tray"\|"updater"}` | `{"prevent":bool}` | `App.beforeClose` |
 | `desktop/shutdown` | `{}` | `{}` | `App.shutdown` |
 | `desktop/hostEvent` | `{"name":string,"payload":any}` | `{}` | second instance, tray open/quit, menu actions |
+| `desktop/browserControl` | `{"enabled":bool}` | `{}` | built-in browser switch, read when a session is built |
 
 Order: `hello` → `start` → window load → `domReady` → (`rendererAttached` after
 each renderer mount) → … → `beforeClose` → (`shutdown` → stdin close → exit).
@@ -165,8 +179,8 @@ resnapshot contracts; they are not covered by this core recovery guarantee.
 ## Native host calls (service → shell)
 
 These replace direct shell-toolkit calls in Go. Each maps to one method of the
-Go `nativeHost` interface; the Wails implementation is retired in the final
-phase.
+Go `nativeHost` interface; the Wails implementation was retired when the Electron shell
+landed.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -251,6 +265,14 @@ interface ReasonixDesktopHost {
     };
     getPathForFile(file: File): string;          // native drop paths
     onServiceState(cb: (state: ServiceState) => void): () => void;
+    browserControl: {                            // settings page for the built-in browser
+      get(): Promise<BrowserControlState | null>;
+      setEnabled(enabled: boolean): Promise<BrowserControlState>;
+      setIgnoreCertificateErrors(enabled: boolean): Promise<BrowserControlState>;
+      clearCache(): Promise<void>;               // keeps cookies and site data
+      clearAllData(): Promise<void>;             // cookies, site data and cache
+      importChromeLogin(): Promise<ChromeImportOutcome>;
+    };
   };
   browser: {                                       // user-driven browser panel; agent calls go through Go
     list(): Promise<BrowserTabView[]>;
@@ -278,6 +300,73 @@ total }`. Website views live in `persist:browser` (shared logins) or
 `ServiceState` is `{ phase: "starting" | "ready" | "restarting" | "failed" | "exited"; generation: string; error?: string }`.
 Business components import the typed SDK, never this object; only the bridge
 adapter reads it.
+
+`BrowserControlState` is `{ controlEnabled, ignoreCertificateErrors, writable,
+warning: "invalid-config" | "unreadable-config" | "unsupported-version" | null }`
+and `ChromeImportOutcome` is either `{ ok: true, profile, cookies, skipped }` or
+`{ ok: false, reason }` with `reason` one of `chrome-missing`,
+`profile-not-found`, `cookies-unreadable`, `safe-storage-denied`,
+`safe-storage-unavailable`, `unsupported-platform`.
+
+## Performance diagnostics
+
+The optional native calls below are restricted to the trusted app main frame.
+Older shells may omit them. No persisted user-data format changes or migrations
+are required.
+
+- `processDiagnostics()` returns `{scope: "electron", samples, growth}`.
+  Samples contain age, nullable CPU interval, process PID/type/creation time,
+  nullable CPU percentage, working set and private memory in MiB, and a
+  truncation flag. Sampling is limited to once per 30 seconds in the foreground
+  and once per 60 seconds otherwise. Retention is at most 12 snapshots and five
+  minutes, with at most 128 processes per snapshot. No titles, URLs or process
+  names are collected. Electron-managed processes only; Go is excluded.
+- `captureRendererProfile(requestId?)` records the current renderer through CDP for
+  five seconds at a requested 10 ms sample interval. It returns a status,
+  duration and at most eight app-script self-time summaries. Normal documents
+  do not enable JS self-profiling. Capture is single-flight, requires the
+  foreground window, observes a ten-minute cooldown, and allows at most three
+  attempts per shell lifetime. Existing debugger/DevTools sessions are not
+  taken over. Blur, hide, navigation, renderer loss or cancellation stops it.
+- `cancelRendererProfile(requestId)` cancels only the matching capture; unscoped
+  renderer cancellation is ignored. This also fences delayed requests across
+  long suspension/resume gaps. Each CDP command has a
+  1.5 second deadline and the owned debugger is released on every terminal path.
+  Analysis runs in a disposable Worker with a 32 MiB old-generation limit,
+  1.5 second deadline, and input limits of 20,000 nodes / 100,000 samples.
+  Raw profiles never enter the UI report.
+- `exportHeapSnapshot()` requires a user-confirmed native warning and save
+  dialog. It saves locally without uploading, and accepts no renderer-supplied
+  path. Snapshots may contain code, chats and secrets and can pause the renderer
+  or use substantial disk space. Electron cannot preempt a snapshot: its busy
+  lease remains held until the actual operation settles.
+
+A memory growth signal requires a continuous PID plus creation-time identity,
+at least five readings spanning two minutes, and three recent readings exceeding
+the initial two-reading baseline by both 256 MiB and 50%. Private memory is used
+when available throughout; otherwise working set is used. This is an observation
+of sustained growth, not proof of a leak or exclusive physical RAM ownership.
+
+Reports appear immediately. Process enrichment waits at most 750 ms; a bounded
+CPU capture can update the same report later. The UI abandons capture enrichment
+after 12 seconds and requests cancellation. These are asynchronous deadlines,
+not preemptive limits on synchronous work. Dismissed reports never reappear.
+The report distinguishes post-trigger samples from the already-ended long task.
+User-requested heap capture suppresses pressure alerts during capture and for
+the normal five-second settling grace afterward.
+
+From `desktop/electron`, run `node scripts/performance-smoke.mjs` to verify the
+production owner, Worker, report enrichment and local heap snapshot with an
+isolated native fixture. `node scripts/performance-benchmark.mjs` compares off,
+lightweight monitoring and short capture in three fresh-process trials each.
+All modes use the same renderer bundle and runtime mode selection. Activity
+signals are pinned and background throttling disabled for unattended native
+measurement. Host event tests separately cover the production focus and
+navigation cancellation policy; the smoke verifies actual CDP and ASAR paths.
+It records CPU time where available, frame timings, working sets and metric
+collection cost in `artifacts/performance/overhead.json`. This synthetic
+benchmark is not a reproduction of the Windows user workload. Field comparison
+must still cover startup, extended use, foreground return and closing tabs.
 
 ## Security boundaries
 

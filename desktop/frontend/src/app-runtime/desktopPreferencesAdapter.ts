@@ -12,8 +12,9 @@ import type { CommandAuthority } from "../lib/commandOutcome";
 import type { BotRuntimeStatusView, DesktopStartupSettingsView, SettingsView } from "../lib/types";
 
 export type DesktopPreferencesSnapshot = DesktopStartupSettingsView | SettingsView;
+// A stored "classic" predates the style's removal; those installs land on workbench.
 export function layoutStyleFromSnapshot(style?: string) {
-  return style === "creation" ? "creation" : style === "classic" ? "classic" : "workbench";
+  return style === "creation" ? "creation" : "workbench";
 }
 export function applyPreferencesAppearance(settings: DesktopPreferencesSnapshot) {
   const theme = normalizeThemePreference(settings.desktopTheme);

@@ -64,6 +64,31 @@ try {
   assert.equal(retry.turnStartAt, active.turnStartAt);
   assert.equal(retry.turnOutputTokens, 20, "same-turn retry retains counters");
   assert.deepEqual(metrics(completed), [21_000, 21_000, 24, 2_000, 0, true], "other tab transitions cannot mutate a completed state");
+
+  // An MCP interaction is a user wait like an approval or an ask. Clearing the
+  // approval while one is outstanding must not close the shared interval, or the
+  // MCP wait never reaches turnWaitAccumMs and the turn clock overcounts it.
+  now = 5_000;
+  const bothPrompts: State = { ...initialState, running: true, turnActive: true,
+    turnStartAt: 1_000, promptWaitStartedAt: 1_000,
+    approval: { id: "a1", tool: "write_file", subject: "Run command" },
+    mcpInteraction: { id: "m1", server: "srv", mode: "form", message: "Fill the form" } };
+  const approvalCleared = reducer(bothPrompts, { type: "clearApproval" });
+  assert.equal(approvalCleared.promptWaitStartedAt, 1_000,
+    "clearing an approval leaves a concurrent MCP wait open");
+  assert.equal(approvalCleared.pendingPrompt, true,
+    "an outstanding MCP interaction still counts as a pending prompt");
+  now = 9_000;
+  const mcpAnswered = reducer(approvalCleared, {
+    type: "expire_prompt", id: "m1", epoch: approvalCleared.promptEpoch, kind: "mcp" });
+  assert.equal(mcpAnswered.promptWaitStartedAt, undefined, "the last prompt closes the interval");
+  assert.equal(mcpAnswered.turnWaitAccumMs, 8_000, "the whole MCP wait is charged exactly once");
+
+  now = 5_000;
+  const drain: State = { ...bothPrompts };
+  const drained = reducer(drain, { type: "approval_drained", ids: ["a1"], epoch: drain.promptEpoch });
+  assert.equal(drained.promptWaitStartedAt, 1_000,
+    "an auto-drained approval also leaves a concurrent MCP wait open");
   console.log("completed-turn telemetry: all assertions passed");
 } finally {
   Date.now = originalNow;

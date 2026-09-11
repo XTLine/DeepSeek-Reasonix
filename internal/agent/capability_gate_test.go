@@ -29,6 +29,12 @@ func withNoClosedLoop(ctx context.Context) context.Context {
 	return ctx
 }
 
+// withClosedLoop puts a run under a delivery scope, where evidence is still
+// enforced at the sign-off boundary rather than reported as a gap.
+func withClosedLoop(ctx context.Context) context.Context {
+	return WithDeliveryExecutionScope(withNoClosedLoop(ctx), DeliveryExecutionScope{ID: "closed-loop-test", TaskText: "deliver the change"})
+}
+
 func TestClosedLoopReviewGateExplainsOpaqueMutationRecovery(t *testing.T) {
 	ledger := evidence.NewLedger()
 	ledger.Record(evidence.Receipt{

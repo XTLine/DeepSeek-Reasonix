@@ -1161,7 +1161,7 @@ status_bar_items = ["cost", "balance"]
 	}
 
 	got := NewApp().Settings()
-	if got.DesktopLanguage != "en" || got.DesktopLayoutStyle != "classic" || got.DesktopTheme != "dark" || got.DesktopThemeStyle != "graphite" || got.DesktopTerminalTheme != "light" || got.CloseBehavior != "background" || got.StatusBarStyle != "text" {
+	if got.DesktopLanguage != "en" || got.DesktopLayoutStyle != "workbench" || got.DesktopTheme != "dark" || got.DesktopThemeStyle != "graphite" || got.DesktopTerminalTheme != "light" || got.CloseBehavior != "background" || got.StatusBarStyle != "text" {
 		t.Fatalf("desktop settings = lang:%q layout:%q theme:%q style:%q close:%q status:%q, want user-level desktop prefs", got.DesktopLanguage, got.DesktopLayoutStyle, got.DesktopTheme, got.DesktopThemeStyle, got.CloseBehavior, got.StatusBarStyle)
 	}
 	if want := []string{"model", "balance", "cache"}; !reflect.DeepEqual(got.StatusBarItems, want) {
@@ -1205,7 +1205,7 @@ func TestDesktopStartupSettingsUsesUserDesktopPreferencesWithoutFullSettingsPayl
 	}
 
 	got := NewApp().DesktopStartupSettings()
-	if got.DesktopLanguage != "en" || got.DesktopLayoutStyle != "classic" || got.DesktopTheme != "dark" || got.DesktopThemeStyle != "graphite" || got.DesktopTerminalTheme != "light" || got.DisplayMode != "standard" || got.StatusBarStyle != "icon" || got.CheckUpdates || got.UpdateChannel != "stable" {
+	if got.DesktopLanguage != "en" || got.DesktopLayoutStyle != "workbench" || got.DesktopTheme != "dark" || got.DesktopThemeStyle != "graphite" || got.DesktopTerminalTheme != "light" || got.DisplayMode != "standard" || got.StatusBarStyle != "icon" || got.CheckUpdates || got.UpdateChannel != "stable" {
 		t.Fatalf("DesktopStartupSettings desktop prefs = %+v, want user-level startup prefs", got)
 	}
 	if want := []string{"workspace", "git_branch", "model"}; !reflect.DeepEqual(got.StatusBarItems, want) {
@@ -4426,8 +4426,24 @@ reasoning_protocol = "none"
 	}
 }
 
-func TestLegacyClassicLayoutQuickClicksSerializeWorkspaceRebuild(t *testing.T) {
-	runQuickClickWorkspaceReconcileTest(t, "classic")
+// A config file written before the classic style was removed still holds the
+// retired value. It must read as workbench — not fail, and not resurrect the
+// multi-tab model that value used to select, which the UI can no longer show.
+func TestRetiredClassicLayoutReadsAsWorkbench(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	if err := editUserConfig(func(c *config.Config) error {
+		c.Desktop.LayoutStyle = "classic"
+		return nil
+	}); err != nil {
+		t.Fatalf("write the retired layout style: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if got := cfg.DesktopLayoutStyle(); got != "workbench" {
+		t.Fatalf("retired classic reads as %q, want workbench", got)
+	}
 }
 
 func TestWorkbenchLayoutQuickClicksSerializeWorkspaceRebuild(t *testing.T) {
@@ -4441,9 +4457,6 @@ func TestCreationLayoutQuickClicksSerializeWorkspaceRebuild(t *testing.T) {
 func runQuickClickWorkspaceReconcileTest(t *testing.T, layoutStyle string) {
 	t.Helper()
 	f := newStaleWorkspaceBindingFixtureWithLayout(t, "quick_click_"+layoutStyle, layoutStyle)
-	if got, want := f.app.singleSurfaceLayoutEnabled(), singleSurfaceLayoutStyle(layoutStyle); got != want {
-		t.Fatalf("singleSurfaceLayoutEnabled(%q) = %v, want %v", layoutStyle, got, want)
-	}
 	blockingCtrl := f.installBlockingSnapshotController()
 
 	type quickAction struct {
@@ -5281,8 +5294,8 @@ func TestConnectKeyFreshInstallUsesDeepSeekChatAndIndependentSearchDefaults(t *t
 		t.Fatalf("default model %q did not resolve", cfg.DefaultModel)
 	}
 	if entry.Kind != "openai" || entry.BaseURL != "https://api.deepseek.com" ||
-		entry.Thinking != "enabled" || !config.EffectiveIndependentWebSearch(entry) || config.EffectiveVision(entry) {
-		t.Fatalf("fresh-install DeepSeek entry = %+v; want Chat Completions, thinking, independent search, and text-only vision", entry)
+		entry.Thinking != "enabled" || !config.EffectiveIndependentWebSearch(entry) || !config.EffectiveVision(entry) {
+		t.Fatalf("fresh-install DeepSeek entry = %+v; want Chat Completions, thinking, independent search, and native image input", entry)
 	}
 	if app.NeedsOnboarding() {
 		t.Fatal("fresh-install onboarding should close after the validated DeepSeek key is stored")

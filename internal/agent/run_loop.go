@@ -21,6 +21,7 @@ import (
 // available, and a failed recovery can still fall back to the complete first
 // response without re-running any tool.
 type streamedTurn struct {
+	messageID          string
 	text               string
 	reasoning          string
 	signature          string
@@ -42,6 +43,7 @@ type streamedTurn struct {
 
 func (s streamedTurn) assistantMessage() provider.Message {
 	return provider.Message{
+		ID:   s.messageID,
 		Role: provider.RoleAssistant, Content: s.text, ReasoningContent: s.reasoning,
 		ReasoningState: s.reasoningState, ThinkingBlocks: s.thinkingBlocks,
 		ReasoningSignature: s.signature, ReasoningID: s.reasoningID, ReasoningStatus: s.reasoningStatus,
@@ -150,10 +152,12 @@ func (a *Agent) beginRunTurn(ctx context.Context, input string, pinned pinnedRev
 		rawContent = a.turn.turnInput
 	}
 	userMessage := provider.Message{
+		ID:   turnUserMessageID(ctx, a.sess.conversation),
 		Role: provider.RoleUser, Origin: inputMessageOrigin(ctx), Content: input, RawContent: rawContent,
 		Images: userImages(ctx), VisionSummary: VisionSummaryFromContext(ctx), CreatedAt: userCreatedAt,
 	}
 	a.appendPinnedRevisionAndUser(ctx, pinned, userMessage)
+	emitAdmittedUserMessage(a.svc.sink, userMessage)
 
 	// The loop fields join the classification computed above rather than
 	// opening a second object: one turn, one turnRuntime. The zero values the
@@ -216,7 +220,7 @@ func (a *Agent) runToolLoop(ctx context.Context, state *turnRuntime) (runErr err
 		// whole attempt lifecycle — stream retries must not rewrite session
 		// history mid-round, so the shape stays stable across body replays.
 		streamed := a.streamWithSamplingRecovery(ctx, step+1)
-		text, reasoning, signature, calls, responsesItems, serverSearch, usage := streamed.text, streamed.reasoning, streamed.signature, streamed.calls, streamed.responsesItems, streamed.serverSearch, streamed.usage
+		text, reasoning, calls, usage := streamed.text, streamed.reasoning, streamed.calls, streamed.usage
 		partialCalls, err := streamed.partialCalls, streamed.err
 		cacheDiagnostics := CompareShape(prevPrefixShape, prefixShape, usage, contentReasons)
 		a.attachSessionContextDiagnostics(&cacheDiagnostics)
@@ -245,25 +249,15 @@ func (a *Agent) runToolLoop(ctx context.Context, state *turnRuntime) (runErr err
 			a.svc.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: msg})
 		}
 
-		// Commit boundary: only a clean terminal attempt reaches here.
-		// Keep reasoning_content on the assistant turn for display and session
-		// archive. Most OpenAI-compatible backends do not replay it; providers
-		// with an explicit round-trip contract retain the raw provider text.
+		// Commit clean terminal attempts, preserving provider reasoning contracts.
 		calls = a.withPreviewFileDiffs(ctx, calls)
-		a.sess.conversation.Add(provider.Message{
-			Role:               provider.RoleAssistant,
-			Content:            text,
-			ReasoningContent:   reasoning,
-			ReasoningSignature: signature,
-			ReasoningID:        streamed.reasoningID,
-			ReasoningStatus:    streamed.reasoningStatus,
-			ReasoningState:     streamed.reasoningState,
-			ThinkingBlocks:     streamed.thinkingBlocks,
-			ToolCalls:          calls,
-			ResponsesItems:     responsesItems,
-			ServerSearch:       serverSearch,
-			WorkDurationMs:     state.workDurationMs(),
-		})
+		if err := assignRecoveryCallIDs(calls); err != nil {
+			return err
+		}
+		assistant := streamed.assistantMessage()
+		assistant.ToolCalls = calls
+		assistant.WorkDurationMs = state.workDurationMs()
+		a.sess.conversation.Add(assistant)
 
 		if len(calls) == 0 {
 			cont, ferr := a.handleFinalResponse(ctx, state, text, reasoning, usage)
@@ -275,7 +269,7 @@ func (a *Agent) runToolLoop(ctx context.Context, state *turnRuntime) (runErr err
 
 		if usage != nil && usage.FinishReason == "length" {
 			truncatedRounds++
-			if err := a.recordTruncatedToolResults(ctx, calls); err != nil {
+			if err := a.recordTruncatedToolResults(withMessageIdentity(ctx, streamed.messageID), calls); err != nil {
 				return err
 			}
 			if truncatedRounds > maxStreamRecoveries {
@@ -287,7 +281,7 @@ func (a *Agent) runToolLoop(ctx context.Context, state *turnRuntime) (runErr err
 
 		// Invariant: executeBatch only ever receives tool calls from a
 		// committed sampling attempt (clean terminal + response intercept).
-		cont, terr := a.handleToolRound(ctx, state, step, text, reasoning, calls, usage)
+		cont, terr := a.handleToolRound(withMessageIdentity(ctx, streamed.messageID), state, step, text, reasoning, calls, usage)
 		if !cont {
 			return terr
 		}
@@ -314,16 +308,19 @@ func (a *Agent) emitStreamAttempt(id string, action event.StreamAttemptAction, a
 		reason = provider.StreamInterruptReason(err)
 	}
 	a.svc.sink.Emit(event.Event{
-		Kind: event.StreamAttempt,
+		Kind:      event.StreamAttempt,
+		MessageID: id,
+		AttemptID: id,
 		StreamAttempt: event.StreamAttemptInfo{
 			ID: id, Action: action, Attempt: attempt, Max: maxSamplingAttempts, Reason: reason,
 		},
 	})
 }
 
-func newStreamAttemptID(attempt int) string {
-	// Host-local only: never persisted, never sent to the model.
-	return fmt.Sprintf("sa-%d-%d", attempt, time.Now().UnixNano())
+func newStreamAttemptID(_ int) string {
+	// A successful attempt retains this local identity when its message is
+	// committed. Failed attempts have distinct identities and cannot alias it.
+	return NewMessageID()
 }
 
 // streamRetrySleep is the body-retry backoff. Tests replace it with a no-op so
@@ -397,7 +394,12 @@ func (a *Agent) handleFinalResponse(ctx context.Context, state *turnRuntime, tex
 			StopReason: reason,
 		}
 	}
+	// The phase belongs at the caller: ReadinessResult runs the same check for
+	// the host, outside any turn. Reopening working keeps the continuation paths
+	// below, each of which starts a provider round, out of the tool bucket.
+	a.emitTurnPhase(event.TurnPhaseVerifying)
 	readiness := a.finalReadinessCheckFor()
+	a.emitTurnPhase(event.TurnPhaseWorking)
 	if state.graceRound && (readiness.reason != "" || !hasVisibleFinalAnswer(text)) {
 		a.contextManager().ObserveUsage(usage)
 		return false, a.gracePause(state)
@@ -409,23 +411,8 @@ func (a *Agent) handleFinalResponse(ctx context.Context, state *turnRuntime, tex
 		a.contextManager().ObserveUsage(usage)
 		return false, a.gracePause(state)
 	}
-	if readiness.reason != "" {
-		// Standard ends with its answer/quality summary. Delivery and Goal hand
-		// the structured gap to the controller, which exposes an explicit recovery
-		// action or lets the Goal FSM decide whether to continue.
-		if a.readinessPauseActive(readiness) {
-			event.RecordReadinessAudit(a.svc.sink, readiness.audit(evidence.ReadinessErrored, false))
-			a.pending.finalReadinessRecovery = true
-			a.persistFinalReadinessRecovery(readiness.missingIDs())
-			return false, &FinalReadinessError{
-				Attempts:          1,
-				Reason:            readiness.reason,
-				Missing:           readiness.missingIDs(),
-				ContinuationClass: readiness.continuationClass(),
-				ProgressKey:       readiness.progressSignature(),
-			}
-		}
-		event.RecordReadinessAudit(a.svc.sink, readiness.audit(evidence.ReadinessAllowed, a.turn.readinessRecovered))
+	if stopped, err := a.handleReadinessGap(readiness); stopped {
+		return false, err
 	}
 	if !hasVisibleFinalAnswer(text) {
 		// Harness-style termination accepts a reasoning-only clean stop. Only
@@ -465,6 +452,7 @@ func (a *Agent) handleFinalResponse(ctx context.Context, state *turnRuntime, tex
 	// carries into the next turn un-folded and can overflow the model window.
 	// No-op below the trigger, so normal turns keep their warm cache.
 	a.contextManager().ObserveUsage(usage)
+	a.closeTurnPhase()
 	return false, nil // model gave a final answer
 }
 
@@ -497,7 +485,11 @@ func (a *Agent) handleToolRound(ctx context.Context, state *turnRuntime, step in
 	if a.task.ledger != nil {
 		receiptMark = a.task.ledger.Len()
 	}
+	// The phase pair around the batch is what makes the accounting mean its
+	// names: it bills this round's wait to the provider and the batch to tools.
+	a.emitTurnPhase(event.TurnPhaseChecking)
 	batch := a.executeBatch(ctx, state, calls)
+	a.emitTurnPhase(event.TurnPhaseWorking)
 	if batch.err != nil {
 		// Any completed results are already stored; a failed durability barrier
 		// prevents starting the next tool.
@@ -511,6 +503,7 @@ func (a *Agent) handleToolRound(ctx context.Context, state *turnRuntime, step in
 		// result is stored, so another acknowledgement adds no host value and can
 		// turn a valid bounded plan into a max-steps pause.
 		a.contextManager().ObserveUsage(usage)
+		a.closeTurnPhase()
 		return false, nil
 	}
 	if boundaryFinalizer {

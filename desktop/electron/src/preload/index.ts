@@ -3,16 +3,19 @@ import { DesktopEventStream, MissedEventSubscriptions } from "../shared/eventStr
 import {
   hostOS,
   IPC,
+  type BrowserControlState,
   type BrowserDownloadView,
   type BrowserLayoutRect,
   type BrowserNavigateTarget,
   type BrowserOpenOptions,
   type BrowserTabView,
+  type ChromeImportOutcome,
   type ContractInfo,
   type IpcResult,
   type ServiceState,
   type WindowTheme,
 } from "../shared/ipc.js";
+import type { GraphicsSettingsState } from "../main/graphics.js";
 
 type Listener = (...args: unknown[]) => void;
 
@@ -187,6 +190,10 @@ contextBridge.exposeInMainWorld("reasonixDesktop", {
   invoke: (method: string, args: unknown[]) => call(IPC.invoke, method, Array.isArray(args) ? args : []),
   on,
   native: {
+    processDiagnostics: () => call(IPC.processDiagnostics),
+    captureRendererProfile: (requestId?: string) => call(IPC.captureRendererProfile, requestId),
+    cancelRendererProfile: (requestId?: string) => call(IPC.cancelRendererProfile, requestId),
+    exportHeapSnapshot: () => call(IPC.exportHeapSnapshot),
     openExternal: (url: string) => call(IPC.openExternal, url).then(() => undefined),
     clipboard: {
       writeText: (text: string) => call(IPC.clipboardWrite, text).then((ok) => ok === true),
@@ -203,6 +210,19 @@ contextBridge.exposeInMainWorld("reasonixDesktop", {
       getAppZoom: () => call(IPC.appZoomGet),
       setAppZoom: (factor: number) => call(IPC.appZoomSet, factor),
       resetAppZoom: () => call(IPC.appZoomReset),
+    },
+    graphics: {
+      get: () => call(IPC.graphicsGet) as Promise<GraphicsSettingsState>,
+      setHardwareAcceleration: (enabled: boolean) => call(IPC.graphicsSet, enabled) as Promise<GraphicsSettingsState>,
+    },
+    browserControl: {
+      get: () => call(IPC.browserControlGet) as Promise<BrowserControlState | null>,
+      setEnabled: (enabled: boolean) => call(IPC.browserControlSetEnabled, enabled) as Promise<BrowserControlState>,
+      setIgnoreCertificateErrors: (enabled: boolean) =>
+        call(IPC.browserControlSetIgnoreCertificateErrors, enabled) as Promise<BrowserControlState>,
+      clearCache: () => call(IPC.browserControlClearCache).then(() => undefined),
+      clearAllData: () => call(IPC.browserControlClearAll).then(() => undefined),
+      importChromeLogin: () => call(IPC.browserControlImportChrome) as Promise<ChromeImportOutcome>,
     },
     getPathForFile: (file: File) => webUtils.getPathForFile(file),
     onServiceState,

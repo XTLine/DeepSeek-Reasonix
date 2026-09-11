@@ -33,7 +33,10 @@ func TestDeleteSessionValidatesLocalBasenameBeforeCleanup(t *testing.T) {
 	}
 	invalid := []string{"", " ", ".", "..", "../escape", `..\escape`, "/absolute", `\absolute`, "nested/session", `nested\session`}
 	if runtime.GOOS == "windows" {
-		invalid = append(invalid, "C:escape", "C:", "CON", "NUL", "AUX", "COM1", "LPT1", "CON.txt")
+		// Device names with an extension are absent: Windows 11 stopped
+		// reserving them, and filepath.IsLocal defers to the host's
+		// RtlIsDosDeviceName_U, so their answer varies by Windows build.
+		invalid = append(invalid, "C:escape", "C:", "CON", "NUL", "AUX", "COM1", "LPT1")
 	}
 	for _, name := range invalid {
 		t.Run("reject "+name, func(t *testing.T) {

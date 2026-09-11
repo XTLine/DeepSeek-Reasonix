@@ -274,7 +274,7 @@ func TestE2EUnbackedDiffEvidenceStillRejected(t *testing.T) {
 	)
 	a := New(mp, evidenceRegistry(), NewSession("sys"), Options{}, event.Discard)
 
-	if err := a.Run(withNoClosedLoop(context.Background()), "sign off without doing the work"); err != nil {
+	if err := a.Run(withClosedLoop(context.Background()), "sign off without doing the work"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !sessionContains(a, "no matching successful writer") {

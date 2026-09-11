@@ -1,3 +1,4 @@
+import type { HistorySwitchPhases } from "./sessionDiagnostics";
 import type { ProviderCatalog } from "./providerCatalogTypes";
 export type { SettingsView } from "./settingsViewTypes";
 export type { ProviderProtocolEndpoint, ProviderCatalog, ProviderPresetView } from "./providerCatalogTypes";
@@ -15,13 +16,16 @@ import type { PinnedFileInfo } from "./pinnedContextBridge";
 import type { RecoveryLineageView } from "./sessionRecoveryTypes";
 export * from "./remoteTypes";
 export type { ContextBudgetInfo, ContextMaintenanceInfo, ContextMaintenanceReceipt, WireContextMaintenance } from "./contextMaintenanceTypes";
+export type { HistoryContentChunk, HistoryContentRef, HistoryEntry, HistorySlice, HistorySliceRequest, SessionClearResult } from "./historyTypes";
 export type { ProjectGroupsSnapshot, ProjectRuntimeTopic, ProjectTopicKey, ProjectTopicPage, ProjectTopicPageRequest, ProjectTreeChangedV2, ProjectTreeOrganizationBindings, ProjectTreeRuntimeSnapshot, ProjectTreeSnapshot, SessionCatalogBindings, SessionCatalogStatus, SessionGroup, SessionReference } from "./sessionCatalogTypes";
 export type EventKind =
+  | "user_message"
   | "turn_started"
   | "reasoning"
   | "text"
   | "message"
   | "tool_dispatch"
+  | "tool_started"
   | "tool_result"
   | "tool_result_preview"
   | "turn_status"
@@ -50,8 +54,9 @@ export type EventKind =
   | "read_status"
   | "provider_unreachable";
 export type StreamAttemptAction = "begin" | "discard" | "commit";
-export type TurnStatus = "queued" | "in_progress" | "waiting_user" | "cancelling" | "completed" | "interrupted" | "failed" | "protocol_failed";
+export type TurnStatus = "queued" | "in_progress" | "waiting_user" | "cancelling" | "completed" | "interrupted" | "failed" | "protocol_failed" | "recovery_required";
 export interface TurnEventEnvelope {
+  sessionId?: string;
   turnId: string;
   seq: number;
   status: TurnStatus | string;
@@ -107,6 +112,7 @@ export interface WireShellExecution {
 }
 
 export interface WireTool {
+  diagnostic?: import("./readStatus").OperationDiagnostic;
 	verifying?: boolean;
   id?: string;
   name: string;
@@ -388,8 +394,13 @@ export interface MemoryCitation {
 }
 
 export interface WireEvent extends RecoveryEventFields {
+	sessionId?: string;
+	source?: string;
+	messageId?: string;
+	attemptId?: string;
 	receipt?: WireCompletionReceipt;
 	readPause?: import("./readPause").WireReadPause;
+	readCompletion?: import("../generated/desktopContract.generated").ReadCompletion;
   kind: EventKind;
   readStatus?: WireReadStatus;
   /** session_changed: the transcript was replaced under the same path (head switch, clear). */
@@ -815,8 +826,15 @@ export interface ChangedFileInfo {
 
 // Bound-method payloads (desktop/app.go).
 export interface HistoryMessage {
+	historyTurn?: number;
+	recordId?: string;
+	attemptId?: string;
+	submissionId?: string;
+	source?: string;
+	messageId?: string;
 	completionReceipt?: WireCompletionReceipt;
 	completionSummary?: WireCompletionSummary;
+	readCompletion?: import("../generated/desktopContract.generated").ReadCompletion;
 	turnId?: string;
 	readPause?: import("./readPause").WireReadPause;
   role: string;
@@ -849,6 +867,11 @@ export interface HistoryMessage {
 }
 
 export interface HistoryToolCall {
+	partial?: boolean;
+	pending?: boolean;
+	parentId?: string;
+	argChars?: number;
+	startedAt?: number;
   id: string;
   name: string;
   arguments: string;
@@ -871,67 +894,9 @@ export interface HistoryPage {
   hasOlder: boolean;
   revision?: number;
   digest?: string;
-}
-
-// ── Windowed history paging (desktop/history_slice.go) ──────────────────────
-// HistorySliceForTab pages toward older history with an opaque cursor; the
-// first call uses cursor "" for the newest page. Entry IDs are stable for the
-// life of a session revision (s<file>:r<epoch>:m<msgIndex>:o<subOrder>).
-
-export interface HistorySliceRequest {
-  cursor: string; // "" = newest page; pass nextCursor to page older
-  turns?: number;
-  entries?: number;
-  bytes?: number;
-}
-
-// HistoryContentRef marks a string field replaced inline by a ≤4KiB preview;
-// the full value is fetchable in chunks via HistoryContentForTab.
-export interface HistoryContentRef {
-  entryId: string;
-  field: string; // content|reasoning|submitText|detail|code|summary|archive|toolResultError|toolArguments|toolSubject|toolSummary|toolDiff
-  size: number;
-  chunks: number;
-  toolCallId?: string;
-  revision: number;
-  revKnown?: boolean;
-  digest: string;
-}
-
-export interface HistoryEntry {
-  entryId: string;
-  turn: number; // 1-based visible turn (0 = before the first turn)
-  order: number; // absolute provider-message index
-  message: HistoryMessage;
-  refs: HistoryContentRef[];
-}
-
-export interface SessionClearResult { sessionPath: string; sessionRevision?: number; sessionDigest?: string; sessionGeneration: number }
-
-export interface HistorySlice {
-  entries: HistoryEntry[];
-  nextCursor: string; // toward older; empty when none
-  hasOlder: boolean;
-  totalTurns: number;
-  startTurn: number;
-  endTurn: number;
-  stale: boolean; // cursor bound to an older session revision: discard + reload
-  revision: number;
-  revisionKnown?: boolean;
-  digest?: string;
-  // Diagnostic read path: index|scan|event-log|live-index|live-fallback.
-  source?: string;
-  error?: string; // failed read; empty entries alone are not an error
-}
-
-export interface HistoryContentChunk {
-  entryId: string;
-  field: string;
-  chunk: number;
-  chunks: number;
-  data: string;
-  done: boolean;
-  stale: boolean;
+  /** Present only on a page a session switch built; carries the switch's
+   *  content-free phase breakdown. */
+  switch?: HistorySwitchPhases | null;
 }
 
 // ── Two-phase topic activation (desktop/topic_activation.go) ────────────────
@@ -1237,6 +1202,9 @@ export interface WorkspaceChangesView {
   gitAvailable: boolean;
   gitErr?: string;
   gitBranch?: string;
+  added?: number;
+  removed?: number;
+  incomplete?: boolean;
 }
 
 export interface WorkspaceChangeDetailView {
@@ -1652,7 +1620,7 @@ export interface MemoryView {
 }
 
 // SettingsTab is the top-level navigation item in the Settings Centre modal.
-export type SettingsTab = "general" | "models" | "model-stats" | "providers" | "bots" | "mcp" | "remote" | "skills" | "subagents" | "plugins" | "memory" | "hooks" | "diagnostics" | "shortcuts" | "permissions" | "sandbox" | "network" | "appearance" | "storage" | "updates";
+export type SettingsTab = "general" | "models" | "model-stats" | "providers" | "bots" | "mcp" | "remote" | "skills" | "subagents" | "plugins" | "memory" | "hooks" | "diagnostics" | "shortcuts" | "permissions" | "sandbox" | "network" | "browser" | "appearance" | "storage" | "updates";
 
 /** Extension runtime doctor report from App.RuntimeDoctor. */
 export interface RuntimeDoctorReport {
@@ -2271,7 +2239,7 @@ export type { ModelSettingsChange, ModelSettingsResult } from "./modelSettingsTy
 export interface DesktopStartupSettingsView {
   bot: BotSettingsView;
   desktopLanguage: string; // "" | "en" | "zh"; empty = auto
-  desktopLayoutStyle: string; // "classic" | "workbench"
+  desktopLayoutStyle: string; // "workbench" | "creation"
   desktopTheme: string; // "auto" | "dark" | "light"
   desktopThemeStyle: string;
   desktopTerminalTheme: string; // "auto" follows app | "dark" | "light"

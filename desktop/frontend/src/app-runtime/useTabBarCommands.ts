@@ -1,8 +1,7 @@
-import { useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import { app } from "../lib/bridge";
 import { useCommittedCommand } from "../lib/useCommittedCommand";
 import { guardBackendNavigationResult } from "../lib/navigationSurfaceTransition";
-import { enqueueNavigationRequest, type PendingNavigationRequest } from "../lib/openTopicCoalescing";
 import { useOverlayStore } from "../store/overlays";
 import type { ActiveWorkView, TabMeta } from "../lib/types";
 import type { ComposerProfile } from "../lib/composerProfile";
@@ -17,6 +16,8 @@ export type TabBarCommandsInput = {
   t: Translator;
   showToast(message: string, level: "error", options?: { durationMs?: number }): void;
   setTabMetas: Dispatch<SetStateAction<TabMeta[]>>;
+  // setTabOrderIds, ports.reorderTabs and ports.switchRemoteTab lost their only
+  // reader with the app tab strip; they stay declared until the caller drops them.
   setTabOrderIds: Dispatch<SetStateAction<string[]>>;
   setComposerProfilesByTab: Dispatch<SetStateAction<Record<string, ComposerProfile>>>;
   setTabRevealSignal: Dispatch<SetStateAction<number>>;
@@ -40,21 +41,14 @@ export type TabBarCommandsInput = {
 };
 
 /**
- * Owns the tab-bar commands (change/close/bulk-close/reorder with active-work
- * gates), the single-flight tab switch queue, the background-runtime reveals
- * and the delivery-worktree continuation. Tab close prompts and reveal
- * navigation share one navigation-intent/surface lifecycle; only the visible
- * tab list, reveal signal and close prompt stay on the caller's stores.
+ * Owns the tab close command and prompt, the background-runtime reveals and the
+ * delivery-worktree continuation. Tab close prompts and reveal navigation share
+ * one navigation-intent/surface lifecycle; only the visible tab list, reveal
+ * signal and close prompt stay on the caller's stores.
  */
 export function useTabBarCommands(input: TabBarCommandsInput) {
   const { activeTabId, t, showToast, ports } = input;
   const [pendingClose, setPendingClose] = useState<{ tabId: string; work: ActiveWorkView; stopping: boolean } | null>(null);
-  // Tab switches serialize through one queue so a slow switch cannot land
-  // events/hydration on the wrong session; switchTab's own load is already
-  // seq-guarded, this serializes the backend activation around it.
-  const tabSwitchSeqRef = useRef(0);
-  const tabSwitchRunningRef = useRef(false);
-  const tabSwitchPendingRef = useRef<PendingNavigationRequest<{ tabId: string; optimisticTab?: TabMeta; navigationIntentSeq: number }> | null>(null);
   const setTransientOverlayDismissSignal = useOverlayStore((state) => state.setTransientOverlayDismissSignal);
 
   const closeTransientOverlays = useCommittedCommand(() => {
@@ -63,33 +57,6 @@ export function useTabBarCommands(input: TabBarCommandsInput) {
 
   const enterChatViewForTabNavigation = useCommittedCommand(() => {
     ports.enterChatView();
-  });
-
-  const enqueueTabSwitch = useCommittedCommand((tabId: string, optimisticTab?: TabMeta): Promise<void> => {
-    enterChatViewForTabNavigation();
-    // Claim the shared navigation epoch at click time, before this request
-    // can wait behind an older tab switch. That immediately invalidates any
-    // in-flight blank/topic completion from a previous user intent.
-    const navigationIntentSeq = ports.noteNavigationIntent();
-    ports.beginNavigationSurface(navigationIntentSeq);
-    return enqueueNavigationRequest(
-      { seqRef: tabSwitchSeqRef, runningRef: tabSwitchRunningRef, pendingRef: tabSwitchPendingRef },
-      { tabId, optimisticTab, navigationIntentSeq },
-      async (request) => {
-        try {
-          if (!ports.isNavigationIntentCurrent(request.navigationIntentSeq)) return;
-          if (request.optimisticTab?.remote) await ports.switchRemoteTab(request.optimisticTab, request.navigationIntentSeq);
-          else await ports.switchTab(request.tabId, request.optimisticTab, request.navigationIntentSeq);
-          if (!ports.isNavigationIntentCurrent(request.navigationIntentSeq)) return;
-          await ports.refreshTabMetas(
-            () => ports.isNavigationIntentCurrent(request.navigationIntentSeq),
-            { afterMutation: true },
-          );
-        } finally {
-          ports.settleNavigationSurface(request.navigationIntentSeq);
-        }
-      },
-    );
   });
 
   const revealBackgroundRuntime = useCommittedCommand(async (tabId: string): Promise<void> => {
@@ -116,14 +83,6 @@ export function useTabBarCommands(input: TabBarCommandsInput) {
     } finally {
       ports.settleNavigationSurface(navigationIntentSeq);
     }
-  });
-
-  const handleTabChange = useCommittedCommand((id: string) => {
-    closeTransientOverlays();
-    const selected = input.tabMetas.find((tab) => tab.id === id);
-    input.setTabMetas((current) => current.map((tab) => ({ ...tab, active: tab.id === id })));
-    void enqueueTabSwitch(id, selected);
-    input.setTabRevealSignal((signal) => signal + 1);
   });
 
   const finishTabClose = useCommittedCommand(async (
@@ -226,55 +185,14 @@ export function useTabBarCommands(input: TabBarCommandsInput) {
     }
   });
 
-  const handleTabsClose = useCommittedCommand(async (ids: string[], nextActiveTabId?: string) => {
-    closeTransientOverlays();
-    const currentIds = input.tabMetas.map((tab) => tab.id);
-    const targets = ids.filter((id, index) => currentIds.includes(id) && ids.indexOf(id) === index);
-    if (targets.length === 0) return;
-    for (const id of targets) {
-      let work: ActiveWorkView | null = null;
-      try {
-        work = await app.ActiveWorkForTab(id);
-      } catch { /* the close path remains authoritative */ }
-      if (work && (work.running || work.pendingPrompt || work.jobs.length > 0)) {
-        setPendingClose({ tabId: id, work, stopping: false });
-        return;
-      }
-      await finishTabClose(id, "stop_and_close");
-    }
-    if (nextActiveTabId && currentIds.includes(nextActiveTabId)) {
-      const selected = input.tabMetas.find((tab) => tab.id === nextActiveTabId);
-      input.setTabMetas((current) => current.map((tab) => ({ ...tab, active: tab.id === nextActiveTabId })));
-      void enqueueTabSwitch(nextActiveTabId, selected);
-    }
-    await ports.refreshTabMetas(undefined, { afterMutation: true });
-    input.setTabRevealSignal((signal) => signal + 1);
-  });
-
-  const handleTabsReorder = useCommittedCommand(async (ids: string[]) => {
-    input.setTabOrderIds(ids);
-    input.setTabMetas((current) => {
-      const byId = new Map(current.map((tab) => [tab.id, tab]));
-      const ordered = ids.map((id) => byId.get(id)).filter((tab): tab is TabMeta => Boolean(tab));
-      return ordered.length === current.length ? ordered : current;
-    });
-    await ports.reorderTabs(ids);
-    await ports.refreshTabMetas(undefined, { afterMutation: true });
-    input.setTabRevealSignal((signal) => signal + 1);
-  });
-
   return {
     pendingClose,
     setPendingClose,
-    enqueueTabSwitch,
     revealBackgroundRuntime,
-    handleTabChange,
     finishTabClose,
     handleTabClose,
     resolvePendingClose,
     revealWorkspaceWriter,
     continueInDeliveryWorktree,
-    handleTabsClose,
-    handleTabsReorder,
   };
 }

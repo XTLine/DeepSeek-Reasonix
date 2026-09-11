@@ -438,6 +438,8 @@ const keys = (rows: TranscriptRow[]) => rows.map((row) => row.key).join(",");
   eq(historyEntryIdForItemId("h3-2"), undefined, "legacy item ids carry no entry");
   const answerRow: TranscriptRow = { kind: "answer", key: "a:he:entry-9", item: { kind: "assistant", id: "he:entry-9", text: "x", reasoning: "", streaming: false } };
   eq(historyEntryIdForRow(answerRow), "entry-9", "answer rows expose their entry for lazy ref resolution");
+  const userRow: TranscriptRow = { kind: "user", key: "u:u0", turn: 0, item: { kind: "user", id: "u0", messageId: "user-1", text: "preview" } };
+  eq(historyEntryIdForRow(userRow), "m:user-1", "mounted optimistic user rows resolve by canonical message identity");
   eq(historyEntryIdForRow({ kind: "older-history", key: "older-history" }), undefined, "the paging row has no entry");
 }
 

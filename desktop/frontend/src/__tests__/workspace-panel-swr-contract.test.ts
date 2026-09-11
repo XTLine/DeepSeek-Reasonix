@@ -35,7 +35,7 @@ assert.doesNotMatch(
   "history refresh does not replace an already-painted list with a loading branch",
 );
 
-const cwdReset = panel.match(/useEffect\(\(\) => \{[\s\S]*?\}, \[cwd, loadDir, open\]\);/)?.[0] ?? "";
+const cwdReset = panel.match(/useEffect\(\(\) => \{[\s\S]*?\}, \[cwd, loadDir, open, workspaceMemoryKey\]\);/)?.[0] ?? "";
 assert.ok(cwdReset, "workspace cwd reset effect is present");
 assert.doesNotMatch(cwdReset, /setSelected(?:File|Change)Path\(null\)/, "cwd reset does not erase restored per-project selections");
 

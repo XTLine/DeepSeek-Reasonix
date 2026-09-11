@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"reasonix/internal/agent"
 	"reasonix/internal/boot"
 	"reasonix/internal/browser"
 	"reasonix/internal/config"
@@ -100,8 +101,8 @@ func TestBrowserBrokerSessionScopeTravelsOverHTTP(t *testing.T) {
 	if len(tabs) != 1 || tabs[0].ID != "t1" {
 		t.Fatalf("tabs = %+v", tabs)
 	}
-	if len(exec.sessions) != 1 || exec.sessions[0] != "/remote/sessions/a.jsonl" {
-		t.Fatalf("host saw sessions %v, want the tag path", exec.sessions)
+	if want := agent.CanonicalSessionPath("/remote/sessions/a.jsonl"); len(exec.sessions) != 1 || exec.sessions[0] != want {
+		t.Fatalf("host saw sessions %v, want the tag path %q", exec.sessions, want)
 	}
 }
 
@@ -258,7 +259,7 @@ func TestBuildTaggedScopesBrokerToSession(t *testing.T) {
 	if _, err := gotOpts.BrowserExecutor.Tabs(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(hostExec.sessions) == 0 || hostExec.sessions[len(hostExec.sessions)-1] != "/remote/sessions/b.jsonl" {
-		t.Fatalf("host saw sessions %v, want the built controller's tag path", hostExec.sessions)
+	if want := agent.CanonicalSessionPath("/remote/sessions/b.jsonl"); len(hostExec.sessions) == 0 || hostExec.sessions[len(hostExec.sessions)-1] != want {
+		t.Fatalf("host saw sessions %v, want the built controller's tag path %q", hostExec.sessions, want)
 	}
 }

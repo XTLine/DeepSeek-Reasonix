@@ -58,16 +58,16 @@ func TestOpenCodeGoResponsesModelsMatchPinnedLimits(t *testing.T) {
 }
 
 func TestFilterOfficialOpenCodeGoModelsKeepsOnlyRouteCompatibleModels(t *testing.T) {
-	all := []string{"grok-4.5", "gpt-5.6-luna", "muse-spark-1.2-contributor", "glm-5.3", "glm-5.2", "hy3", "qwen3.8-max", "qwen3.7-plus", "deepseek-v4-flash", "unknown-future-model"}
+	all := []string{"grok-4.5", "gpt-5.6-luna", "muse-spark-1.2-contributor", "glm-5.3", "glm-5.2", "hy3", "qwen3.8-max", "qwen3.7-plus", "deepseek-flash", "deepseek-v4-flash", "unknown-future-model"}
 	tests := []struct {
 		name    string
 		kind    string
 		baseURL string
 		want    []string
 	}{
-		{name: "chat", kind: "openai", baseURL: "https://opencode.ai/zen/go/v1", want: []string{"glm-5.3", "glm-5.2", "hy3", "qwen3.8-max", "qwen3.7-plus", "deepseek-v4-flash"}},
-		{name: "anthropic", kind: "anthropic", baseURL: "https://opencode.ai/zen/go", want: []string{"qwen3.8-max", "qwen3.7-plus", "deepseek-v4-flash"}},
-		{name: "responses", kind: "responses", baseURL: "https://opencode.ai/zen/go/v1", want: []string{"grok-4.5", "gpt-5.6-luna", "muse-spark-1.2-contributor", "deepseek-v4-flash"}},
+		{name: "chat", kind: "openai", baseURL: "https://opencode.ai/zen/go/v1", want: []string{"glm-5.3", "glm-5.2", "hy3", "qwen3.8-max", "qwen3.7-plus", "deepseek-flash", "deepseek-v4-flash"}},
+		{name: "anthropic", kind: "anthropic", baseURL: "https://opencode.ai/zen/go", want: []string{"qwen3.8-max", "qwen3.7-plus", "deepseek-flash", "deepseek-v4-flash"}},
+		{name: "responses", kind: "responses", baseURL: "https://opencode.ai/zen/go/v1", want: []string{"grok-4.5", "gpt-5.6-luna", "muse-spark-1.2-contributor", "deepseek-flash", "deepseek-v4-flash"}},
 		{name: "custom endpoint is untouched", kind: "anthropic", baseURL: "https://relay.example/zen/go", want: all},
 	}
 

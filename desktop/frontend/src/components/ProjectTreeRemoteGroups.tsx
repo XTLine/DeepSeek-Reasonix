@@ -347,14 +347,13 @@ export function useRemoteProjectGroups(
 }
 
 export function RemoteProjectEmptyState({
-  busy, error, ready, isExpanded, depth, classicTopics, t, onEnsure,
+  busy, error, ready, isExpanded, depth, t, onEnsure,
 }: {
   busy: boolean;
   error: string;
   ready: boolean;
   isExpanded: boolean;
   depth: number;
-  classicTopics: boolean;
   t: Translator;
   onEnsure: () => void;
 }) {
@@ -374,10 +373,6 @@ export function RemoteProjectEmptyState({
     >
       {error ? t("projectTree.remoteConnectFailed") : t("projectTree.remoteConnect")}
     </button>
-  ) : classicTopics ? (
-    <div className="project-tree__topic-placeholder" style={{ paddingLeft: 14 + (depth + 1) * 16 }}>
-      {t("projectTree.noTopics")}
-    </div>
   ) : null;
   if (!inner) return null;
   return (

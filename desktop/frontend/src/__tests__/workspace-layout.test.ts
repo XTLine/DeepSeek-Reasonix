@@ -42,9 +42,17 @@ const PREVIEW_DEFAULT_WIDTH = 660;
 const CHAT_COMFORT_MIN_WIDTH = 560;
 
 console.log("\nworkspace dock layout");
-eq(/\.app--darwin\.app--workbench \.workbench-dock__tools,[\s\S]*?padding-right:\s*48px;/.test(stylesSource), true, "macOS workspace header reserves the fixed toggle hit area");
-eq(/\.app--darwin\.app--workbench \.workbench-dock__tabs,[\s\S]*?flex:\s*1 1 auto;[\s\S]*?width:\s*100%;[\s\S]*?min-width:\s*0;/.test(stylesSource), true, "macOS workspace tabs fill the remaining title row");
-eq(/\.app--darwin\.app--workbench \.workbench-dock__tab,[\s\S]*?flex:\s*1 1 0;[\s\S]*?min-width:\s*0;[\s\S]*?max-width:\s*none;/.test(stylesSource), true, "macOS workspace tabs divide the available row without overlap");
+eq(/\.app__dock-toggle/.test(stylesSource), false, "the workspace toggle is a bar action button, not a fixed overlay the bar must dodge");
+// Tabs size to their label and the strip to its tabs, so the add button sits
+// beside the last tab. A stretch rule (equal columns) or the removed
+// max-width: 520px container query would fill the row instead.
+eq(
+  /\.workbench-dock__tabs \{[\s\S]*?flex: 0 1 auto;[\s\S]*?width: max-content;/.test(stylesSource) &&
+    /\.workbench-dock__tab \{[\s\S]*?flex: 0 1 auto;[\s\S]*?min-width: 30px;[\s\S]*?max-width: 118px;/.test(stylesSource) &&
+    !/@container \(max-width: 520px\) \{\s*\.workbench-dock__tabs/.test(stylesSource),
+  true,
+  "right-dock tabs keep their content width instead of stretching to fill the strip",
+);
 
 const expandedAvailable = availableWorkspacePanelWidth({
   viewportWidth: 1280,
@@ -174,12 +182,22 @@ eq(
   "terminal drawer stays visible on narrow viewports",
 );
 eq(
-  /\.layout--terminal-drawer-open \{[\s\S]*?grid-template-rows: var\(--app-chrome-height\) minmax\(0, 1fr\) var\(--terminal-height, 280px\) var\(--statusbar-height\)/.test(stylesSource),
+  /\.layout--terminal-drawer-open \{[\s\S]*?grid-template-rows: auto minmax\(0, 1fr\) var\(--terminal-height, 280px\) var\(--statusbar-height\)/.test(stylesSource),
   true,
-  "terminal-drawer-open layout reserves a grid row for the status bar below the terminal drawer",
+  "terminal-drawer-open layout keeps the shell bar's row and reserves one for the status bar below the terminal drawer",
+);
+// grid-template-columns interpolates only between track lists of equal length,
+// so the closed state must keep the dock's track at zero width rather than
+// dropping it — otherwise the toggle snaps while the sidebar's column animates.
+eq(
+  /\.layout--sidebar-collapsed \{\s*--sidebar-width: 0px;\s*grid-template-columns: 0px minmax\(0, 1fr\) minmax\(0px, 0px\);/.test(stylesSource) &&
+    /grid-template-columns: var\(--sidebar-expanded-width\) minmax\(0, 1fr\) minmax\(0px, 0px\);/.test(stylesSource) &&
+    /\.layout--workspace-open \{[\s\S]*?grid-template-columns: var\(--sidebar-width\) minmax\(0, 1fr\) minmax\(0, var\(--workspace-width\)\);/.test(stylesSource),
+  true,
+  "the dock keeps a zero-width third track while closed so opening and closing it interpolates",
 );
 eq(
-  /@media \(max-width: 820px\) \{[\s\S]*?\.layout--terminal-drawer-open \.terminal-drawer-resizer[\s\S]*?grid-column: 1 !important[\s\S]*?\.layout--workbench-chrome-hidden\.layout--terminal-drawer-open \.terminal-drawer[\s\S]*?grid-row: 2;[\s\S]*?\.layout--workbench-chrome-hidden\.layout--terminal-drawer-open[\s\S]*?minmax\(0, 1fr\) var\(--terminal-height, 280px\) var\(--statusbar-height\)/.test(stylesSource),
+  /@media \(max-width: 820px\) \{[\s\S]*?\.layout--terminal-drawer-open \.terminal-drawer,[\s\S]*?display: flex !important;[\s\S]*?grid-column: 1 !important;[\s\S]*?grid-row: 3;[\s\S]*?\.layout--terminal-drawer-open \.terminal-drawer-resizer,[\s\S]*?grid-column: 1 !important/.test(stylesSource),
   true,
   "narrow viewport keeps the resizer and drawer in the content column above the status bar",
 );
@@ -208,9 +226,10 @@ eq(
   "composer mode controls keep spacing and icon baselines stable on hover",
 );
 eq(
-  /\.app--creation \.layout\.layout--creation-chrome-hidden\.layout--terminal-drawer-open \{[\s\S]*?grid-template-rows: minmax\(0, 1fr\) var\(--terminal-height, 280px\)/.test(stylesSource),
+  /\.app--creation \.layout \{[\s\S]*?--statusbar-height: 0px;/.test(stylesSource)
+    && /\.app--creation \.statusbar \{\s*display: none;/.test(stylesSource),
   true,
-  "creation style keeps the terminal drawer below the chat pane",
+  "creation style collapses the status bar row so the terminal drawer sits directly below the chat pane",
 );
 eq(
   /sessions\.length > 0 && \([\s\S]*?<TerminalSessionRail/.test(terminalPanelSource),

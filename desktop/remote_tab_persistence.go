@@ -13,15 +13,6 @@ type desktopRemoteTabEntry struct {
 	SessionReset bool   `json:"sessionReset,omitempty"`
 }
 
-func singleSurfaceLayoutStyle(style string) bool {
-	switch strings.ToLower(strings.TrimSpace(style)) {
-	case "workbench", "creation":
-		return true
-	default:
-		return false
-	}
-}
-
 func singleSurfaceTabsFile(f desktopTabsFile) desktopTabsFile {
 	if len(f.Tabs)+len(f.RemoteTabs) <= 1 {
 		return f

@@ -14,13 +14,6 @@ import (
 	"reasonix/internal/config"
 )
 
-func seedClassicBridgeTestHost(t *testing.T, hostID string) {
-	seedBridgeTestHost(t, hostID)
-	if err := editUserConfig(func(c *config.Config) error { return c.SetDesktopLayoutStyle("classic") }); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func readPersistedTabsFile(t *testing.T) desktopTabsFile {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(config.ReasonixHomeDir(), tabsFileName))
@@ -85,7 +78,7 @@ func TestRemoteTabOpenPersistRoundTrip(t *testing.T) {
 		ensureView:  RemoteServerView{HostID: "box", State: "ready", LocalURL: fs.server.URL},
 		ensureToken: "s3cret",
 	}
-	seedClassicBridgeTestHost(t, "box")
+	seedBridgeTestHost(t, "box")
 	a := &App{remoteRuntime: kernel}
 	cleanupRemoteTabPumps(t, a)
 
@@ -113,11 +106,14 @@ func TestRemoteTabOpenPersistRoundTrip(t *testing.T) {
 		t.Fatalf("persisted active tab = %q, want the active remote id", f.ActiveTab)
 	}
 
-	if err := a.CloseRemoteTab(meta.ID); err != nil {
-		t.Fatal(err)
+	// The one-surface policy refuses a direct close of the sole visible
+	// surface, so the persisted entry survives it. A surface only leaves
+	// through host removal, which TestRemoveRemoteHost… covers.
+	if err := a.CloseRemoteTab(meta.ID); err == nil || !strings.Contains(err.Error(), "cannot close the last tab") {
+		t.Fatalf("closing the sole visible surface = %v, want the last-surface refusal", err)
 	}
-	if f = readPersistedTabsFile(t); len(f.RemoteTabs) != 0 {
-		t.Fatalf("closed tab still persisted: %+v", f.RemoteTabs)
+	if f = readPersistedTabsFile(t); len(f.RemoteTabs) != 1 {
+		t.Fatalf("a refused close must keep the persisted entry: %+v", f.RemoteTabs)
 	}
 }
 

@@ -146,6 +146,19 @@ type FinalReadinessError struct {
 	Missing           []string
 	ContinuationClass ReadinessContinuationClass
 	ProgressKey       string
+	// Operations names the concrete changes the host could not settle, so the
+	// report points at a real change with a real next action instead of a
+	// category the user has to map back onto their work themselves.
+	Operations []ReadinessOperationGap
+}
+
+// ReadinessOperationGap is one unsettled host-observed change in a readiness
+// report. Action is the closed-set next step, never prose.
+type ReadinessOperationGap struct {
+	OperationID string   `json:"operation_id"`
+	Paths       []string `json:"paths,omitempty"`
+	State       string   `json:"state"`
+	Action      string   `json:"action"`
 }
 
 func (e *FinalReadinessError) Error() string {

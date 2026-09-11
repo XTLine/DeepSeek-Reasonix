@@ -6,16 +6,12 @@ import type { useDesktopNavigation } from "./useDesktopNavigation";
 import type { WorkspaceNavigationPorts } from "./navigationOwner";
 import type { ControlResult, SessionMeta, TabMeta } from "../lib/types";
 import type { TopicShortcutEntry } from "../lib/topicShortcuts";
-import type { Translator } from "../lib/i18n";
 import type { Dispatch, SetStateAction } from "react";
 
 const loadNavigationOwner = () => import("./navigationOwner");
 
 export type SessionNavigationCommandsInput = {
   activeTab: TabMeta | undefined;
-  running: boolean;
-  singleSurface: boolean;
-  t: Translator;
   showToast: (message: string, level: "error") => void;
   closeTransientOverlays: () => void;
   clearImDetail: () => void;
@@ -45,7 +41,7 @@ export type SessionNavigationCommandsInput = {
  * coalesce through the shared navigation epoch from useDesktopNavigation.
  */
 export function useSessionNavigationCommands(input: SessionNavigationCommandsInput) {
-  const { activeTab, running, singleSurface, t, showToast, navigation, ports } = input;
+  const { activeTab, showToast, navigation, ports } = input;
 
   const blankSessionTarget = useCommittedCommand(() => {
     const workspaceRoot = activeTab?.workspaceRoot || "";
@@ -84,10 +80,8 @@ export function useSessionNavigationCommands(input: SessionNavigationCommandsInp
     return navigation.enqueueNavigation({ kind: "sidebar-im", connection });
   });
 
-  const onResumeSession = useCommittedCommand((session: SessionMeta): Promise<void> => {
-    if (running && !singleSurface) return Promise.resolve();
-    return navigation.enqueueNavigation({ kind: "resume-session", session });
-  });
+  const onResumeSession = useCommittedCommand((session: SessionMeta): Promise<void> =>
+    navigation.enqueueNavigation({ kind: "resume-session", session }));
 
   const onRecoveryCreated = useCommittedCommand(() => {
     input.markProjectChanged((value) => value + 1);
@@ -99,9 +93,6 @@ export function useSessionNavigationCommands(input: SessionNavigationCommandsInp
   });
 
   const openTaskMonitorSession = useCommittedCommand(async (tabID: string, taskID: string): Promise<boolean> => {
-    if (running && !singleSurface) {
-      throw new Error(t("history.failedOpenSession"));
-    }
     // Claim the navigation epoch before the first bridge await. If the user
     // switches tabs while the task/session lookup is pending, its completion is
     // stale and must not enqueue a newer navigation request.

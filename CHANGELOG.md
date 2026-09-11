@@ -8,6 +8,11 @@ branch.
 
 ### Added
 
+- **Durable tool recovery:** fsynced tool-start barriers, persistent attempt
+  identities, restart-safe unknown-effect handling, and a shared Electron/Remote
+  inspection and confirmation panel. Explicit retries remain disabled by default
+  and require read-only execution or a fenced, authoritative absence check.
+
 - **MCP 2026-07-28 protocol:** multi-round-trip form/URL elicitation across
   Desktop, CLI TUI, and serve; headless entries stay on the core surface and
   cancel unanswered requests instead of guessing.
@@ -43,6 +48,14 @@ branch.
   while a connection is busy.
 
 ### Fixed
+
+- **Read evidence recovery:** partial reads no longer freeze independent work
+  or ordinary final answers. Explicit full reads retain bounded completion
+  checks. Rejected edits track operation/version requirements so successful
+  retries, fresh versions and confirmed deletion retire obsolete blocks.
+- **File and shell boundaries:** guard raced creates/overwrites and move-source
+  changes, recognize `git --no-pager` inspections, and retain structured recovery
+  diagnostics without changing provider tool schemas.
 
 - **Relay image input:** ID-only or invalid model metadata now stays unknown.
   Both Desktop model editors expose per-model Auto / On / Off overrides, with

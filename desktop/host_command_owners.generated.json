@@ -1008,18 +1008,6 @@
       ]
     }
   },
-  "ClearGoal": {
-    "domain": "desktop/app.go",
-    "owner": "App.ClearGoal",
-    "sources": [
-      "desktop/app.go"
-    ],
-    "scope": {
-      "kind": "owner-state",
-      "resolver": "App.ClearGoal",
-      "inputs": []
-    }
-  },
   "ClearGoalForTab": {
     "domain": "desktop/app.go",
     "owner": "App.ClearGoalForTab",
@@ -1358,18 +1346,6 @@
       "inputs": [
         "tabID"
       ]
-    }
-  },
-  "ContextUsage": {
-    "domain": "desktop/app.go",
-    "owner": "App.ContextUsage",
-    "sources": [
-      "desktop/app.go"
-    ],
-    "scope": {
-      "kind": "owner-state",
-      "resolver": "App.ContextUsage",
-      "inputs": []
     }
   },
   "ContextUsageForTab": {
@@ -2364,6 +2340,20 @@
       "inputs": []
     }
   },
+  "GetToolRecoveryForTab": {
+    "domain": "desktop/tool_recovery.go",
+    "owner": "App.GetToolRecoveryForTab",
+    "sources": [
+      "desktop/tool_recovery.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.GetToolRecoveryForTab",
+      "inputs": [
+        "tabID"
+      ]
+    }
+  },
   "GetTopicSummary": {
     "domain": "desktop/session_catalog_runtime.go",
     "owner": "App.GetTopicSummary",
@@ -2404,6 +2394,21 @@
       "inputs": []
     }
   },
+  "GitBranchesForTab": {
+    "domain": "desktop/workspace_git_branches.go",
+    "owner": "App.GitBranchesForTab",
+    "sources": [
+      "desktop/workspace_git_branches.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.GitBranchesForTab",
+      "inputs": [
+        "tabID",
+        "workspaceRoot"
+      ]
+    }
+  },
   "GitCheckout": {
     "domain": "desktop/workspace_changes.go",
     "owner": "App.GitCheckout",
@@ -2415,6 +2420,52 @@
       "resolver": "App.GitCheckout",
       "inputs": [
         "branch"
+      ]
+    }
+  },
+  "GitCheckoutForTab": {
+    "domain": "desktop/workspace_git_branches.go",
+    "owner": "App.GitCheckoutForTab",
+    "sources": [
+      "desktop/workspace_git_branches.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.GitCheckoutForTab",
+      "inputs": [
+        "tabID",
+        "workspaceRoot",
+        "branch"
+      ]
+    }
+  },
+  "GitCreateBranch": {
+    "domain": "desktop/workspace_changes.go",
+    "owner": "App.GitCreateBranch",
+    "sources": [
+      "desktop/workspace_changes.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.GitCreateBranch",
+      "inputs": [
+        "name"
+      ]
+    }
+  },
+  "GitCreateBranchForTab": {
+    "domain": "desktop/workspace_git_branches.go",
+    "owner": "App.GitCreateBranchForTab",
+    "sources": [
+      "desktop/workspace_git_branches.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.GitCreateBranchForTab",
+      "inputs": [
+        "tabID",
+        "workspaceRoot",
+        "name"
       ]
     }
   },
@@ -2986,21 +3037,6 @@
       ]
     }
   },
-  "ListTaskEvents": {
-    "domain": "desktop/app.go",
-    "owner": "App.ListTaskEvents",
-    "sources": [
-      "desktop/app.go"
-    ],
-    "scope": {
-      "kind": "owner-inputs",
-      "resolver": "App.ListTaskEvents",
-      "inputs": [
-        "taskID",
-        "afterSequence"
-      ]
-    }
-  },
   "ListTaskEventsForTab": {
     "domain": "desktop/app.go",
     "owner": "App.ListTaskEventsForTab",
@@ -3122,22 +3158,6 @@
       ]
     }
   },
-  "MCPAppCallTool": {
-    "domain": "desktop/mcp_apps_app.go",
-    "owner": "App.MCPAppCallTool",
-    "sources": [
-      "desktop/mcp_apps_app.go"
-    ],
-    "scope": {
-      "kind": "owner-inputs",
-      "resolver": "App.MCPAppCallTool",
-      "inputs": [
-        "instanceToken",
-        "toolName",
-        "args"
-      ]
-    }
-  },
   "MCPAppCallToolForTab": {
     "domain": "desktop/mcp_apps_app.go",
     "owner": "App.MCPAppCallToolForTab",
@@ -3196,20 +3216,6 @@
       "inputs": []
     }
   },
-  "MCPCloseAppInstance": {
-    "domain": "desktop/mcp_apps_app.go",
-    "owner": "App.MCPCloseAppInstance",
-    "sources": [
-      "desktop/mcp_apps_app.go"
-    ],
-    "scope": {
-      "kind": "owner-inputs",
-      "resolver": "App.MCPCloseAppInstance",
-      "inputs": [
-        "instanceToken"
-      ]
-    }
-  },
   "MCPCloseAppInstanceForTab": {
     "domain": "desktop/mcp_apps_app.go",
     "owner": "App.MCPCloseAppInstanceForTab",
@@ -3253,24 +3259,6 @@
       ]
     }
   },
-  "MCPOpenAppInstance": {
-    "domain": "desktop/mcp_apps_app.go",
-    "owner": "App.MCPOpenAppInstance",
-    "sources": [
-      "desktop/mcp_apps_app.go"
-    ],
-    "scope": {
-      "kind": "owner-inputs",
-      "resolver": "App.MCPOpenAppInstance",
-      "inputs": [
-        "server",
-        "tool",
-        "generation",
-        "callID",
-        "resourceURI"
-      ]
-    }
-  },
   "MCPOpenAppInstanceForTab": {
     "domain": "desktop/mcp_apps_app.go",
     "owner": "App.MCPOpenAppInstanceForTab",
@@ -3287,20 +3275,6 @@
         "generation",
         "callID",
         "resourceURI"
-      ]
-    }
-  },
-  "MCPOpenAppLink": {
-    "domain": "desktop/mcp_apps_app.go",
-    "owner": "App.MCPOpenAppLink",
-    "sources": [
-      "desktop/mcp_apps_app.go"
-    ],
-    "scope": {
-      "kind": "owner-inputs",
-      "resolver": "App.MCPOpenAppLink",
-      "inputs": [
-        "rawURL"
       ]
     }
   },
@@ -3607,6 +3581,21 @@
       ]
     }
   },
+  "OpenChannelTranscriptSessionForTab": {
+    "domain": "desktop/transcript_api.go",
+    "owner": "App.OpenChannelTranscriptSessionForTab",
+    "sources": [
+      "desktop/transcript_api.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.OpenChannelTranscriptSessionForTab",
+      "inputs": [
+        "tabID",
+        "path"
+      ]
+    }
+  },
   "OpenDownloadPage": {
     "domain": "desktop/updater_app.go",
     "owner": "App.OpenDownloadPage",
@@ -3708,20 +3697,6 @@
       ]
     }
   },
-  "OpenTaskSession": {
-    "domain": "desktop/app.go",
-    "owner": "App.OpenTaskSession",
-    "sources": [
-      "desktop/app.go"
-    ],
-    "scope": {
-      "kind": "owner-inputs",
-      "resolver": "App.OpenTaskSession",
-      "inputs": [
-        "taskID"
-      ]
-    }
-  },
   "OpenTaskSessionByKey": {
     "domain": "desktop/task_catalog.go",
     "owner": "App.OpenTaskSessionByKey",
@@ -3780,20 +3755,6 @@
       "inputs": []
     }
   },
-  "OpenWorkspaceInExternalOpener": {
-    "domain": "desktop/external_opener.go",
-    "owner": "App.OpenWorkspaceInExternalOpener",
-    "sources": [
-      "desktop/external_opener.go"
-    ],
-    "scope": {
-      "kind": "owner-inputs",
-      "resolver": "App.OpenWorkspaceInExternalOpener",
-      "inputs": [
-        "id"
-      ]
-    }
-  },
   "OpenWorkspaceInExternalOpenerForTab": {
     "domain": "desktop/external_opener.go",
     "owner": "App.OpenWorkspaceInExternalOpenerForTab",
@@ -3806,20 +3767,6 @@
       "inputs": [
         "tabID",
         "id"
-      ]
-    }
-  },
-  "OpenWorkspacePath": {
-    "domain": "desktop/app.go",
-    "owner": "App.OpenWorkspacePath",
-    "sources": [
-      "desktop/app.go"
-    ],
-    "scope": {
-      "kind": "owner-inputs",
-      "resolver": "App.OpenWorkspacePath",
-      "inputs": [
-        "rel"
       ]
     }
   },
@@ -4561,6 +4508,20 @@
       ]
     }
   },
+  "RemoteTabMetadata": {
+    "domain": "desktop/remote_tab_snapshot.go",
+    "owner": "App.RemoteTabMetadata",
+    "sources": [
+      "desktop/remote_tab_snapshot.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.RemoteTabMetadata",
+      "inputs": [
+        "tabID"
+      ]
+    }
+  },
   "RemoteTabSkills": {
     "domain": "desktop/remote_tab_commands.go",
     "owner": "App.RemoteTabSkills",
@@ -4600,6 +4561,66 @@
       "resolver": "App.RemoteTabStatus",
       "inputs": [
         "tabID"
+      ]
+    }
+  },
+  "RemoteTranscriptContentForTab": {
+    "domain": "desktop/remote_transcript_api.go",
+    "owner": "App.RemoteTranscriptContentForTab",
+    "sources": [
+      "desktop/remote_transcript_api.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.RemoteTranscriptContentForTab",
+      "inputs": [
+        "tabID",
+        "req"
+      ]
+    }
+  },
+  "RemoteTranscriptPageForTab": {
+    "domain": "desktop/remote_transcript_api.go",
+    "owner": "App.RemoteTranscriptPageForTab",
+    "sources": [
+      "desktop/remote_transcript_api.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.RemoteTranscriptPageForTab",
+      "inputs": [
+        "tabID",
+        "req"
+      ]
+    }
+  },
+  "RemoteTranscriptReplayForTab": {
+    "domain": "desktop/remote_transcript_api.go",
+    "owner": "App.RemoteTranscriptReplayForTab",
+    "sources": [
+      "desktop/remote_transcript_api.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.RemoteTranscriptReplayForTab",
+      "inputs": [
+        "tabID",
+        "req"
+      ]
+    }
+  },
+  "RemoteTranscriptSnapshotForTab": {
+    "domain": "desktop/remote_transcript_api.go",
+    "owner": "App.RemoteTranscriptSnapshotForTab",
+    "sources": [
+      "desktop/remote_transcript_api.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.RemoteTranscriptSnapshotForTab",
+      "inputs": [
+        "tabID",
+        "req"
       ]
     }
   },
@@ -4996,22 +5017,6 @@
       "inputs": []
     }
   },
-  "RequeueTask": {
-    "domain": "desktop/app.go",
-    "owner": "App.RequeueTask",
-    "sources": [
-      "desktop/app.go"
-    ],
-    "scope": {
-      "kind": "owner-inputs",
-      "resolver": "App.RequeueTask",
-      "inputs": [
-        "taskID",
-        "expectedVersion",
-        "idemKey"
-      ]
-    }
-  },
   "RequeueTaskByKey": {
     "domain": "desktop/task_catalog.go",
     "owner": "App.RequeueTaskByKey",
@@ -5238,6 +5243,21 @@
       ]
     }
   },
+  "ResolveToolRecoveryForTab": {
+    "domain": "desktop/tool_recovery.go",
+    "owner": "App.ResolveToolRecoveryForTab",
+    "sources": [
+      "desktop/tool_recovery.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.ResolveToolRecoveryForTab",
+      "inputs": [
+        "tabID",
+        "req"
+      ]
+    }
+  },
   "ResolveWorkspacePathForTab": {
     "domain": "desktop/workspace_path.go",
     "owner": "App.ResolveWorkspacePathForTab",
@@ -5439,6 +5459,21 @@
       ]
     }
   },
+  "ResumeTranscriptSessionForTab": {
+    "domain": "desktop/transcript_api.go",
+    "owner": "App.ResumeTranscriptSessionForTab",
+    "sources": [
+      "desktop/transcript_api.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.ResumeTranscriptSessionForTab",
+      "inputs": [
+        "tabID",
+        "path"
+      ]
+    }
+  },
   "RetryInboxItem": {
     "domain": "desktop/inbox_app.go",
     "owner": "App.RetryInboxItem",
@@ -5507,20 +5542,6 @@
       "resolver": "App.RevealPath",
       "inputs": [
         "path"
-      ]
-    }
-  },
-  "RevealWorkspacePath": {
-    "domain": "desktop/app.go",
-    "owner": "App.RevealWorkspacePath",
-    "sources": [
-      "desktop/app.go"
-    ],
-    "scope": {
-      "kind": "owner-inputs",
-      "resolver": "App.RevealWorkspacePath",
-      "inputs": [
-        "rel"
       ]
     }
   },
@@ -5597,20 +5618,6 @@
         "tabID",
         "checkpointID",
         "scope"
-      ]
-    }
-  },
-  "RunShell": {
-    "domain": "desktop/app.go",
-    "owner": "App.RunShell",
-    "sources": [
-      "desktop/app.go"
-    ],
-    "scope": {
-      "kind": "owner-inputs",
-      "resolver": "App.RunShell",
-      "inputs": [
-        "command"
       ]
     }
   },
@@ -6172,20 +6179,6 @@
     "scope": {
       "kind": "owner-inputs",
       "resolver": "App.SetCloseBehavior",
-      "inputs": [
-        "mode"
-      ]
-    }
-  },
-  "SetCollaborationMode": {
-    "domain": "desktop/app.go",
-    "owner": "App.SetCollaborationMode",
-    "sources": [
-      "desktop/app.go"
-    ],
-    "scope": {
-      "kind": "owner-inputs",
-      "resolver": "App.SetCollaborationMode",
       "inputs": [
         "mode"
       ]
@@ -7831,6 +7824,22 @@
       ]
     }
   },
+  "SubmitRemoteTabWithSubmission": {
+    "domain": "desktop/remote_tab.go",
+    "owner": "App.SubmitRemoteTabWithSubmission",
+    "sources": [
+      "desktop/remote_tab.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.SubmitRemoteTabWithSubmission",
+      "inputs": [
+        "tabID",
+        "text",
+        "submissionID"
+      ]
+    }
+  },
   "SubmitToTab": {
     "domain": "desktop/app.go",
     "owner": "App.SubmitToTab",
@@ -8073,6 +8082,66 @@
       "inputs": [
         "tabID",
         "toolID"
+      ]
+    }
+  },
+  "TranscriptContentForTab": {
+    "domain": "desktop/transcript_api.go",
+    "owner": "App.TranscriptContentForTab",
+    "sources": [
+      "desktop/transcript_api.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.TranscriptContentForTab",
+      "inputs": [
+        "tabID",
+        "req"
+      ]
+    }
+  },
+  "TranscriptPageForTab": {
+    "domain": "desktop/transcript_api.go",
+    "owner": "App.TranscriptPageForTab",
+    "sources": [
+      "desktop/transcript_api.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.TranscriptPageForTab",
+      "inputs": [
+        "tabID",
+        "req"
+      ]
+    }
+  },
+  "TranscriptReplayForTab": {
+    "domain": "desktop/transcript_api.go",
+    "owner": "App.TranscriptReplayForTab",
+    "sources": [
+      "desktop/transcript_api.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.TranscriptReplayForTab",
+      "inputs": [
+        "tabID",
+        "req"
+      ]
+    }
+  },
+  "TranscriptSnapshotForTab": {
+    "domain": "desktop/transcript_api.go",
+    "owner": "App.TranscriptSnapshotForTab",
+    "sources": [
+      "desktop/transcript_api.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.TranscriptSnapshotForTab",
+      "inputs": [
+        "tabID",
+        "req"
       ]
     }
   },
@@ -8381,6 +8450,21 @@
       "inputs": [
         "tabID",
         "path"
+      ]
+    }
+  },
+  "WorkspaceGitStatsForTab": {
+    "domain": "desktop/workspace_git_branches.go",
+    "owner": "App.WorkspaceGitStatsForTab",
+    "sources": [
+      "desktop/workspace_git_branches.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.WorkspaceGitStatsForTab",
+      "inputs": [
+        "tabID",
+        "workspaceRoot"
       ]
     }
   },

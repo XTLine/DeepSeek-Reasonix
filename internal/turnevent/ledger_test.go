@@ -126,8 +126,11 @@ func TestLedgerSubmissionReceiptSurvivesCompletionAndIsOneShot(t *testing.T) {
 		t.Fatalf("EventsAfter: %v", err)
 	}
 	last := records[len(records)-1]
-	if last.SubmissionID != "" || last.RuntimeEpoch != "" {
-		t.Fatalf("automatic follow-up inherited routing metadata: %+v", last)
+	if last.SubmissionID != "" || last.Event.SubmissionID != "" {
+		t.Fatalf("automatic follow-up inherited the previous submission: %+v", last)
+	}
+	if last.RuntimeEpoch != "epoch-1" || last.Event.RuntimeEpoch != "epoch-1" {
+		t.Fatalf("automatic follow-up lost its owning runtime epoch: %+v", last)
 	}
 	if got := l.TurnIDForSubmission("submission-1"); got != first {
 		t.Fatalf("receipt after replacement = %q, want original %q", got, first)
@@ -253,8 +256,8 @@ func TestLedgerRecoveryClosesRunningToolsWithoutReplay(t *testing.T) {
 	if result.Event.Tool.Args != "" || result.Event.Tool.Output != "" {
 		t.Fatalf("synthetic result must not replay tool input/output: %#v", result.Event.Tool)
 	}
-	if recs[3].Kind != "turn_done" || recs[3].Status != event.TurnInterrupted {
-		t.Fatalf("terminal = %#v, want interrupted turn_done", recs[3])
+	if recs[3].Kind != "turn_done" || recs[3].Status != event.TurnRecoveryRequired || result.Event.Tool.RunState != "unknown" {
+		t.Fatalf("terminal = %#v, want recovery_required for a legacy unproven write", recs[3])
 	}
 }
 

@@ -10,7 +10,8 @@ const noop = () => {};
 register(new URL("../../scripts/svg-loader.mjs", import.meta.url));
 const { SidebarRegion } = await import("../app-shell/SidebarRegion");
 const t = ((key: string) => key) as Translator;
-for (const layout of ["classic", "workbench", "creation"]) {
+// workbench and creation are the only two styles, and their flags are exclusive.
+for (const layout of ["workbench", "creation"]) {
   for (const automation of [false, true]) {
     const markup = renderToStaticMarkup(<>
       <SidebarRegion className="sidebar" workbench={layout === "workbench"}
@@ -38,4 +39,4 @@ for (const layout of ["classic", "workbench", "creation"]) {
     dom.window.close();
   }
 }
-console.log("automation regions: shared three-layout page projection passed");
+console.log("automation regions: shared layout page projection passed");

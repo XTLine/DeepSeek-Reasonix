@@ -24,7 +24,6 @@ type StatusBarProps = NonNullable<AppBottomRegionsProps["status"]>;
 export function buildWorkspaceDockProps(input: {
   surface: { renderable: boolean; overlay: boolean; gridOpen: boolean };
   creation: boolean;
-  remoteAvailable: boolean;
   showContext: boolean;
   remote: boolean;
   t: Translator;
@@ -58,11 +57,9 @@ export function buildWorkspaceDockProps(input: {
     overlay: surface.overlay,
     mode: input.mode,
     creation: input.creation,
-    remoteAvailable: input.remoteAvailable,
     showContext: input.showContext,
     t: input.t,
-    onMode: panels.openRightDockMode,
-    onRemote: panels.openRemoteDock,
+    onPickEntry: panels.openDockEntry,
     remote: { onClose: panels.closeWorkspacePanel },
     context: {
       ...input.context, sessionTurns: input.sessionTurns,

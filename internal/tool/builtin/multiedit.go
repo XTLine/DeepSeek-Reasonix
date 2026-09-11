@@ -58,7 +58,8 @@ func (multiEdit) Schema() json.RawMessage {
       },
       "required":["old_string","new_string"]
     }
-  }
+  },
+  "source_token":{"type":"string","description":"Optional: the source_token printed by the read_file that showed you this file. Citing it names the exact version you are editing, so a change made outside this session is caught instead of silently overwritten."}
 },
 "required":["path","edits"]
 }`)

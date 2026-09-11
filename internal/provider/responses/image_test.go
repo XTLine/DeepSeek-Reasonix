@@ -34,7 +34,7 @@ func TestOfficialDeepSeekVisionSKUEmbedsUserImages(t *testing.T) {
 }
 
 func TestOfficialRequestURLImageHardLimit(t *testing.T) {
-	c := New(Config{BaseURL: "https://relay.test", RequestURL: "https://api.deepseek.com/responses", Model: "deepseek-v4-flash", Extra: map[string]any{"vision": true}, ModelInfo: &provider.ModelInfo{InputModalities: []provider.ModelModality{provider.ModalityText, provider.ModalityImage}}}).(*client)
+	c := New(Config{BaseURL: "https://relay.test", RequestURL: "https://api.deepseek.com/responses", Model: "deepseek-v4-pro", Extra: map[string]any{"vision": true}, ModelInfo: &provider.ModelInfo{InputModalities: []provider.ModelModality{provider.ModalityText, provider.ModalityImage}}}).(*client)
 	req, _, _ := c.buildRequestBody(provider.Request{Messages: []provider.Message{{Role: provider.RoleUser, Content: "describe", Images: []string{"data:image/png;base64,AAAA"}}}})
 	body, err := json.Marshal(req)
 	if err != nil || strings.Contains(string(body), "AAAA") {
@@ -169,7 +169,7 @@ func mustRequest(t *testing.T, c *client, messages []provider.Message) map[strin
 
 func TestOfficialDeepSeekResponsesImageMetadataMatchesTextOnlyWireBytes(t *testing.T) {
 	c := New(Config{
-		Name: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash",
+		Name: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-pro",
 		Extra: map[string]any{"vision": true},
 	}).(*client)
 	plain := []provider.Message{

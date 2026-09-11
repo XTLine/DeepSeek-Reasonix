@@ -5,6 +5,7 @@ import { LocaleProvider } from "../lib/i18n";
 import { renderToStaticMarkup } from "react-dom/server";
 import { historyMessagesToItems, initialState, reducer } from "../lib/useController";
 import { NoticeCard } from "../components/TranscriptCards";
+import { useTranscriptRowRenderer } from "../components/useTranscriptRowRenderer";
 import { searchOutputMetadata, parseSearchSources } from "../lib/searchSources";
 import type { WireEvent } from "../lib/types";
 const ev=(s:typeof initialState,e:WireEvent)=>reducer(s,{type:"event",e});
@@ -13,6 +14,18 @@ state=ev(state,{kind:"turn_done",turnId:"one",err:"opaque rejection",protocolRec
 const action=state.items.find(i=>i.kind==="notice"&&i.action==="recover_context");
 assert(action?.kind==="notice");
 assert.equal(action.recoveryId,"token");
+const submissions: Array<{ display: string; submit?: string }> = [];
+function RecoveryRow() {
+  const render = useTranscriptRowRenderer({ checkpoints: [], subcallsByParent: new Map(), creationMode: false, running: false,
+    actionPending: false, rewindDisabled: false, actionHoverMenus: false, lastTurn: 0,
+    onFoldToggle: () => {}, onReasoningManualOpen: () => {}, onPrompt: (display, submit) => { submissions.push({ display, submit }); } });
+  const row = render({ kind: "notice", key: "recovery", item: action as Extract<typeof action, { kind: "notice" }> });
+  if (React.isValidElement<{ onAction?: () => void }>(row)) row.props.onAction?.();
+  return row;
+}
+assert.match(renderToStaticMarkup(<LocaleProvider><RecoveryRow /></LocaleProvider>), /<button/, "the production row renderer exposes recovery");
+assert.equal(submissions[0]?.submit, "/recover-context token");
+assert(!submissions[0]?.display.includes("token"), "opaque recovery token is not user-facing copy");
 assert.match(renderToStaticMarkup(<LocaleProvider><NoticeCard item={action} onAction={()=>{}} /></LocaleProvider>),/button/);
 state=ev(state,{kind:"turn_started",turnId:"two"});
 const before=state;

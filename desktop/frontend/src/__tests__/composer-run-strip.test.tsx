@@ -1,8 +1,10 @@
 // Run: tsx src/__tests__/composer-run-strip.test.tsx
 //
-// Ordinary work uses the perimeter trace and an accessible status announcement.
-// Timing/throughput live in the context popover; approval/ask retain an in-card
-// attention strip, and stop keeps a fixed home next to send.
+// Ordinary work keeps the perimeter trace and now carries a live
+// token/throughput strip too; the accessible announcement still speaks the
+// stable state text alone. Timing/throughput detail lives in the context
+// popover; approval/ask retain an in-card attention strip, and stop keeps a
+// fixed home next to send.
 
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -302,7 +304,8 @@ console.log("\ncomposer run strip");
   const { root, calls } = await renderComposer({ running: true, turnStartAt: Date.now() });
 
   const strip = document.querySelector(".composer-card .composer-run-strip");
-  eq(strip, null, "ordinary running state has no visible strip");
+  eq(strip?.querySelector(".composer-run-strip__text")?.textContent, "Reasonix is working",
+    "ordinary running state shows the run strip");
   const live = document.querySelector(".composer-card .sr-only[role=\"status\"]");
   eq(live?.textContent, "Reasonix is working", "live region announces the stable state text only");
   ok(document.querySelector(".composer-card--running") !== null, "running card keeps its running modifier");
@@ -353,10 +356,11 @@ console.log("\ncomposer run strip");
   );
 
   await rerender({ pendingAsk: false, disabled: false });
-  ok(
-    document.querySelector(".composer-run-strip") === null,
-    "resolving the prompt removes the attention strip",
-  );
+  const resolved = document.querySelector(".composer-run-strip");
+  eq(resolved?.classList.contains("composer-run-strip--waiting"), false,
+    "resolving the prompt removes the attention strip");
+  eq(resolved?.querySelector(".composer-run-strip__text")?.textContent, "Reasonix is working",
+    "the resolved prompt falls back to the ordinary work strip");
 
   await act(async () => {
     root.unmount();
@@ -514,8 +518,55 @@ console.log("\ncomposer run strip");
   });
 
   const ticker = await readRunMetrics();
-  ok(ticker.includes("10 tokens/s"), "streaming TPS uses provider-output time instead of full turn age");
+  ok(ticker.includes("10 t/s"), "streaming TPS uses provider-output time instead of full turn age");
+  ok(ticker.includes("≈10 t/s"), "the streaming reading carries the estimate marker");
   ok(ticker.includes("18 tokens"), "streaming token total adds the current request estimate to completed usage");
+
+  await act(async () => {
+    root.unmount();
+  });
+  dom.window.close();
+}
+
+// The run strip carries those same readings during ordinary work, and withholds
+// throughput once the model stops emitting rather than freezing a stale rate.
+{
+  const dom = installDom();
+  const live = { id: "assistant-1", text: "x".repeat(40), reasoning: "", reasoningComplete: false };
+  const stripText = () => document.querySelector(".composer-run-strip__text")?.textContent ?? "";
+  const { root, rerender } = await renderComposer({
+    running: true,
+    tabId: "tab-strip",
+    turnStartAt: Date.now() - 60_000,
+    turnTokens: 8,
+    turnOutputTokens: 10,
+    turnOutputCharsAtUsage: 0,
+    turnModelActiveMs: 2_000,
+    turnModelActiveAt: Date.now(),
+    liveStore: { subscribe: () => () => {}, getSnapshot: () => live },
+  });
+
+  ok(stripText().includes("18 tokens"), "the run strip carries the live token readout");
+  ok(stripText().includes("10 t/s"), "an emitting model contributes throughput to the strip");
+  eq((stripText().match(/≈/g) ?? []).length, 1, "the strip marks the estimate once");
+  ok(!/[()·]/.test(stripText()), "no grouping punctuation: colour and position do the separating");
+  const readings = document.querySelector(".composer-run-strip__metrics");
+  const readingsText = readings?.textContent ?? "";
+  ok(/^ \d+(m \d+)?s ≈18 tokens 10 t\/s$/.test(readingsText),
+    `readings read as clock, tokens, throughput (got "${readingsText}")`);
+  const shed = document.querySelector(".composer-run-strip__metric--optional");
+  eq(shed?.textContent, " 10 t/s", "throughput owns the trailing segment so a narrow strip sheds it whole");
+  ok(!(shed?.textContent ?? "").includes("tokens"),
+    "the clock and token count sit outside the shedable segment and are never cut");
+
+  await rerender({ turnModelActiveAt: undefined });
+  ok(stripText().includes("18 tokens"), "the token readout survives the model going quiet");
+  ok(!stripText().includes("t/s"), "a quiet model withholds throughput instead of freezing a rate");
+  eq(document.querySelector(".composer-run-strip__metric--optional"), null,
+    "a quiet model contributes no shedable segment");
+
+  await rerender({ running: false, turnDoneAt: Date.now() });
+  ok(stripText() === "", "a settled turn drops the strip readings");
 
   await act(async () => {
     root.unmount();
@@ -536,7 +587,7 @@ console.log("\ncomposer run strip");
   ok((await readRunMetrics()).includes("100 tokens"), "approval wait retains turn tokens");
   await rerender({ pendingApprovalLabel: null, disabled: false,
     retry: { attempt: 1, max: 3 } });
-  ok((await readRunMetrics()).includes("10 tokens/s"), "retry retains throughput");
+  ok((await readRunMetrics()).includes("10 t/s"), "retry retains throughput");
   await rerender({ running: false, retry: undefined, turnDoneAt: start + 20_000,
     lastTurnOutputTokens: 24, turnWaitAccumMs: 0 });
   const completed = await readRunMetrics();
@@ -626,7 +677,7 @@ console.log("\ncomposer run strip");
 
   const card = document.querySelector(".composer-card") as HTMLElement;
   eq(card.style.getPropertyValue("--composer-height"), "104px", "render path writes the logical height, not a compensated one");
-  eq(card.style.getPropertyValue("--composer-run-strip-reserved"), "0px", "ordinary running state reserves no strip height");
+  eq(card.style.getPropertyValue("--composer-run-strip-reserved"), "30px", "ordinary running state reserves the metrics strip height");
 
   // Drag while running: the live writer stays in logical-height space.
   await act(async () => {
@@ -641,7 +692,7 @@ console.log("\ncomposer run strip");
     await flushTimers();
   });
   eq(card.style.getPropertyValue("--composer-height"), "124px", "drag release keeps the same logical-height space as the render path");
-  eq(card.style.getPropertyValue("--composer-run-strip-reserved"), "0px", "dragging does not restore the removed strip reservation");
+  eq(card.style.getPropertyValue("--composer-run-strip-reserved"), "30px", "dragging keeps the running strip reservation");
   eq(handle.getAttribute("aria-valuenow"), "124", "separator reports the logical height");
 
   await rerender({ running: false, turnStartAt: undefined });

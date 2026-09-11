@@ -7,10 +7,12 @@ import (
 	"time"
 
 	"reasonix/internal/event"
+	"reasonix/internal/evidence"
 	"reasonix/internal/provider"
+	"reasonix/internal/tool"
 )
 
-func (a *Agent) emitBatchToolResult(c provider.ToolCall, o toolOutcome, duration, started int64, parallel bool, batchStart time.Time) error {
+func (a *Agent) emitBatchToolResult(ctx context.Context, c provider.ToolCall, o toolOutcome, duration, started int64, parallel bool, batchStart time.Time) error {
 	t, _, ambiguous := a.svc.tools.ResolveCall(c.Name)
 	ok := t != nil && len(ambiguous) == 0
 	readOnly := ok && t.ReadOnly()
@@ -18,6 +20,7 @@ func (a *Agent) emitBatchToolResult(c provider.ToolCall, o toolOutcome, duration
 		readOnly = *c.ResolvedReadOnly
 	}
 	tr := event.Tool{
+		RunState:     outcomeRunState(o),
 		ID:           c.ID,
 		Name:         c.Name,
 		Args:         c.Arguments,
@@ -29,6 +32,9 @@ func (a *Agent) emitBatchToolResult(c provider.ToolCall, o toolOutcome, duration
 		Truncated:    o.truncated,
 		DurationMs:   duration,
 		Execution:    toEventShellExecution(o.execution, duration),
+	}
+	if o.diagnostic != nil {
+		tr.Diagnostic, _ = json.Marshal(o.diagnostic)
 	}
 	if o.subagentOutcome != nil {
 		tr.SubagentRef = o.subagentOutcome.Ref
@@ -52,7 +58,7 @@ func (a *Agent) emitBatchToolResult(c provider.ToolCall, o toolOutcome, duration
 			tr.WorkspaceAllPaths = mutation.AllPaths
 		}
 	}
-	if err := event.EmitChecked(a.svc.sink, event.Event{Kind: event.ToolResult, Tool: tr}); err != nil {
+	if err := event.EmitChecked(a.svc.sink, event.Event{Kind: event.ToolResult, MessageID: messageIdentity(ctx), Tool: tr}); err != nil {
 		return err
 	}
 	if o.truncated && o.truncMsg != "" {
@@ -88,18 +94,33 @@ func (a *Agent) recordToolExecutionAudit(readOnly, parallel bool, startedAt, dur
 }
 
 func (a *Agent) storeBatchToolResult(ctx context.Context, call provider.ToolCall, o toolOutcome) {
+	if o.executed && o.errMsg == "" && !o.blocked {
+		a.retireWrittenSource(o.evidenceSource)
+	}
 	state := outcomeRunState(o)
 	msg := provider.Message{Role: provider.RoleTool, Content: o.output, Images: o.images, VisionSummary: o.visionSummary, ToolCallID: call.ID, Name: call.Name, ToolRunState: state, ToolExecution: toProviderToolExecution(o.execution)}
+	if o.diagnostic != nil {
+		msg.ToolDiagnostic, _ = json.Marshal(o.diagnostic)
+		if o.diagnostic.Code == tool.WriteTargetAbsent && a.task.ledger != nil {
+			a.task.ledger.RecordTextObservation(evidence.TextObservation{Path: o.diagnostic.Path, Absent: true})
+		}
+	}
 	if o.rawOutput != "" && o.rawOutput != o.output {
 		msg.RawContent = o.rawOutput
 	}
 	if env, ok := a.finalizedReadEnvelope(ctx, call, o); ok {
+		if env.HasMore {
+			msg.ToolDiagnostic, _ = json.Marshal(tool.OperationDiagnostic{Code: tool.ReadPartial, Path: env.Source.CanonicalPath, OperationID: call.ID, ActualSnapshot: env.Source.Snapshot, RequiredRanges: env.DeliveredRanges, Recovery: "continue with the next window only if the task requires more coverage"})
+		}
 		if raw, err := json.Marshal(env); err == nil {
 			msg.ReadResult = raw
 		}
 		a.observeReadShadow(env, o.readActiveMillis)
 		a.rememberReadDelivery(call.ID, o.output, env)
-		if a.readPipelineActive() {
+		args, _ := parseReadFileArgs([]byte(call.Arguments))
+		// Rollback may retain the rest for optional recovery, but ordinary
+		// partial windows still provide exact evidence for visible local edits.
+		if a.readPipelineActive() || (o.rawOutput != "" && !args.fullRead()) {
 			if observer, ok := tReadObserver(a, call); ok {
 				if observed, ok := observer.ObserveModelText(json.RawMessage(call.Arguments), o.output); ok {
 					if len(env.DeliveredRanges) == 0 {
@@ -109,7 +130,7 @@ func (a *Agent) storeBatchToolResult(ctx context.Context, call provider.ToolCall
 						observed.LineHashes = observed.LineHashes[:min(count, len(observed.LineHashes))]
 					}
 					observed.Snapshot = env.Source.Snapshot
-					a.recordModelTextObservationValue(observed)
+					a.recordModelTextObservation(observed, call.ID)
 				}
 			}
 		}

@@ -46,6 +46,7 @@ func (a *Agent) withWriteRecovery(ctx context.Context, call provider.ToolCall) c
 
 func (a *Agent) verifyInterruptedWrites(ctx context.Context, r *provider.InterruptedTurnRecovery) *provider.InterruptedTurnRecovery {
 	a.turn.writeRecovery = make(map[string]provider.ToolCall)
+	a.turn.unknownRecovery = make(map[string]provider.ToolCall)
 	if r == nil || len(r.UnknownTools) == 0 {
 		return r
 	}
@@ -66,6 +67,7 @@ func (a *Agent) verifyInterruptedWrites(ctx context.Context, r *provider.Interru
 				keyCall.Name = name
 			}
 			a.turn.writeRecovery[writeRecoveryKey(keyCall)] = *call
+			a.turn.unknownRecovery[writeRecoveryKey(keyCall)] = *call
 		}
 		if call == nil || len(call.WriteIntents) == 0 {
 			continue
@@ -84,12 +86,23 @@ func (a *Agent) verifyInterruptedWrites(ctx context.Context, r *provider.Interru
 	return r
 }
 
+func recoverPreviousUnknown(turn *turnRuntime, call provider.ToolCall, t tool.Tool) (toolOutcome, bool) {
+	if t.ReadOnly() {
+		return toolOutcome{}, false
+	}
+	if _, exists := turn.unknownRecovery[writeRecoveryKey(call)]; !exists {
+		return toolOutcome{}, false
+	}
+	message := "The previous side-effecting tool call has an unknown outcome. Do not repeat it; inspect its effects with read-only tools first."
+	return toolOutcome{output: message, errMsg: message, blocked: true}, true
+}
+
 // A terminal length limit can leave syntactically valid but incomplete args.
 func (a *Agent) recordTruncatedToolResults(ctx context.Context, calls []provider.ToolCall) error {
 	for _, call := range calls {
 		outcome := toolOutcome{output: "error: tool was not executed because the model output reached its length limit; regenerate complete arguments", errMsg: "truncated tool arguments"}
 		a.storeBatchToolResult(ctx, call, outcome)
-		if err := a.emitBatchToolResult(call, outcome, 0, 0, false, time.Time{}); err != nil {
+		if err := a.emitBatchToolResult(ctx, call, outcome, 0, 0, false, time.Time{}); err != nil {
 			return err
 		}
 	}

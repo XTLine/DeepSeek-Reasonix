@@ -22,6 +22,7 @@ var English = Messages{
 	TaskBudget:                       "This task reached its spend budget; asking for a final answer.",
 	LoopGuard:                        "The assistant is not making progress; asking it to change approach.",
 	ProgressGuard:                    "The assistant keeps repeating work without new evidence; asking it to change approach.",
+	OperationNeedsUser:               "The same change failed the same way twice; it is paused for you instead of being retried.",
 	SoftBudgetConverge:               "Converging a long read-only investigation.",
 	EvidenceNudge:                    "Several mutations are unverified; asking for the cheapest discriminating check.",
 	ReasoningGovernor:                "Exploration phase with expensive thinking; riding reduced reasoning depth until evidence work starts.",

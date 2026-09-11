@@ -301,11 +301,6 @@ func oneOf(value string, candidates ...string) bool {
 	return slices.Contains(candidates, value)
 }
 
-func buildScrollDiagnosticsZip(payload string) ([]byte, error) {
-	data, _, err := buildScrollDiagnosticsArchive(payload)
-	return data, err
-}
-
 func buildScrollDiagnosticsArchive(payload string) ([]byte, string, error) {
 	decoded, err := decodeScrollDiagnosticsPayload(payload)
 	if err != nil {

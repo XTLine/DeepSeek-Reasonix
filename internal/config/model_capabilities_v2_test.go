@@ -50,7 +50,7 @@ func TestCapabilityOverrideDirectCatalogResolution(t *testing.T) {
 func TestCapabilityOfficialHardLimitAndExplicitOff(t *testing.T) {
 	r := &ModelCapabilityResolver{}
 	for _, kind := range []string{"openai", "anthropic", "responses"} {
-		e := ProviderEntry{Name: "deepseek", Kind: kind, BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", Vision: true, ModelOverrides: map[string]ProviderModelOverride{"deepseek-v4-flash": {Vision: capabilityBoolPtr(true)}}}
+		e := ProviderEntry{Name: "deepseek", Kind: kind, BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-pro", Vision: true, ModelOverrides: map[string]ProviderModelOverride{"deepseek-v4-pro": {Vision: capabilityBoolPtr(true)}}}
 		if got := r.Resolve(&e); got.State != CapabilityUnsupported || got.ImageInputEnableAllowed || got.ImageInputBlockReason == "" {
 			t.Fatalf("%s hard limit: %+v", kind, got)
 		}

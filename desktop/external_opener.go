@@ -208,12 +208,6 @@ func (a *App) SetPreferredExternalOpener(id string) error {
 	})
 }
 
-// OpenWorkspaceInExternalOpener opens the active workspace using either the
-// requested installed app or the persisted/fallback selection when id is empty.
-func (a *App) OpenWorkspaceInExternalOpener(id string) error {
-	return a.OpenWorkspaceInExternalOpenerForTab("", id)
-}
-
 // OpenWorkspaceInExternalOpenerForTab is tab-scoped so a rapid tab switch cannot
 // send the wrong project to an external application.
 func (a *App) OpenWorkspaceInExternalOpenerForTab(tabID, id string) error {

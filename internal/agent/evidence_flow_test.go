@@ -890,7 +890,7 @@ func TestEvidenceFlowRejectsUncitedCommand(t *testing.T) {
 	}}
 
 	a := New(prov, reg, NewSession(""), Options{}, event.Discard)
-	if err := a.Run(withNoClosedLoop(context.Background()), "vet the tree and sign off"); err != nil {
+	if err := a.Run(withClosedLoop(context.Background()), "vet the tree and sign off"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -1170,7 +1170,7 @@ func TestEvidenceFlowTodoCompletionSurvivesFailedCompleteStep(t *testing.T) {
 	}}
 
 	a := New(prov, reg, NewSession(""), Options{}, event.Discard)
-	if err := a.Run(withNoClosedLoop(context.Background()), "attempt completion after a failed sign-off"); err != nil {
+	if err := a.Run(withClosedLoop(context.Background()), "attempt completion after a failed sign-off"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 

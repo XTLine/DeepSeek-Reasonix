@@ -38,7 +38,6 @@ async function startRemoteNavigation(input: {
 /** Owns the existing last-click-wins queue; no App render or view model is queued. */
 export function useDesktopNavigation(input: {
   visible: SessionResource;
-  singleSurface: boolean;
   ports: Omit<DesktopNavigationPorts, "reveal" | "projectChanged" | "closeHistory" | "notice" | "applyHistorySessions">;
   setTabRevealSignal: Dispatch<SetStateAction<number>>;
   setTranscriptRevealSignal: Dispatch<SetStateAction<number>>;
@@ -67,7 +66,7 @@ export function useDesktopNavigation(input: {
     input.beginSurface(navigationIntentSeq);
     try {
       return await operations({ kind: "application" }, "navigation", {
-        queue, capture: { intent, navigationIntentSeq, singleSurface: input.singleSurface,
+        queue, capture: { intent, navigationIntentSeq,
           ports: { ...input.ports, reveal, projectChanged, closeHistory, notice, applyHistorySessions } },
       }, executeQueuedNavigation);
     } finally { settle(navigationIntentSeq); }

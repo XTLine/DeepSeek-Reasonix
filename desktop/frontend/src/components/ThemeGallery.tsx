@@ -1006,7 +1006,7 @@ function ThemeEditorInline({
     return out;
   }, [state.tokens]);
 
-  const appLayoutClass = ["app--classic", "app--workbench", "app--creation"]
+  const appLayoutClass = ["app--workbench", "app--creation"]
     .find((className) => document.querySelector(`.${className}`)) || "";
 
   return createPortal(

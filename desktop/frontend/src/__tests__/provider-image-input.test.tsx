@@ -80,9 +80,10 @@ assert(modeInput("on").disabled);
 assert(!modeInput("off").disabled);
 assert.equal(imageInputState("auto", { ...unknown, automaticState: undefined, source: "override", state: "supported" }), "unknown", "old backend must not fabricate automatic support");
 assert.equal(imageInputState("on", { ...unknown, imageInputEnableAllowed: false }), "unsupported");
-assert(imageInputHardBlocked("https://api.deepseek.com", "deepseek-v4-flash"));
+assert(imageInputHardBlocked("https://api.deepseek.com", "deepseek-v4-pro"));
 assert(!imageInputHardBlocked("https://eu.deepseek.com/anthropic", "future-vision"));
-assert(!imageInputHardBlocked("https://api.deepseek.com.relay.test", "deepseek-v4-flash"));
+assert(!imageInputHardBlocked("https://api.deepseek.com.relay.test", "deepseek-v4-pro"));
+assert(!imageInputHardBlocked("https://api.deepseek.com", "deepseek-v4-flash"));
 assert(!imageInputHardBlocked("https://api.deepseek.com", "deepseek-v4-flash-vision-exp"));
 assert.equal(mergeImageInputModes(initial.modelOverrides, initial.models, { "RELAY-MODEL": "off" })[0].vision, null);
 
