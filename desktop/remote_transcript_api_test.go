@@ -41,6 +41,32 @@ func TestRemoteTranscriptNegotiatesOldServeWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestRemoteTranscriptNegotiatesProjectionRestoreFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/transcript/snapshot" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		http.Error(w, "transcript projection is unavailable\nsession event log uses a newer schema", http.StatusConflict)
+	}))
+	defer server.Close()
+	app, tab := remoteTranscriptFixture(server)
+	result, err := app.RemoteTranscriptSnapshotForTab(tab.id, transcript.PageRequest{})
+	if err != nil || result.Supported || result.Snapshot != nil {
+		t.Fatalf("negotiation = %+v, %v", result, err)
+	}
+}
+
+func TestRemoteTranscriptKeepsSessionConflictsFatal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "transcript session is not bound to this runtime", http.StatusConflict)
+	}))
+	defer server.Close()
+	app, tab := remoteTranscriptFixture(server)
+	if _, err := app.RemoteTranscriptSnapshotForTab(tab.id, transcript.PageRequest{}); err == nil {
+		t.Fatal("session mismatch was negotiated as an old Serve")
+	}
+}
+
 func TestRemoteTranscriptRejectsLateSessionResponse(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

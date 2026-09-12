@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"reasonix/internal/control"
 	"reasonix/internal/transcript"
@@ -68,6 +69,15 @@ func (a *App) remoteTranscriptRead(tabID, route string, request any, destination
 		return false, nil
 	case http.StatusOK:
 	default:
+		// A Serve can advertise the transcript routes while its selected
+		// controller cannot restore the projection sidecar (for example, after a
+		// newer TUI wrote the session event schema). Negotiate down to /history
+		// instead of trapping the whole remote surface behind a retryable 409.
+		// Other conflicts, especially a session-path mismatch, remain fatal.
+		if response.StatusCode == http.StatusConflict &&
+			strings.HasPrefix(strings.TrimSpace(string(body)), "transcript projection is unavailable") {
+			return false, nil
+		}
 		return false, fmt.Errorf("remote transcript read failed (HTTP %d)", response.StatusCode)
 	}
 	// Old Serve builds may route an unknown GET to their HTML index. Only
