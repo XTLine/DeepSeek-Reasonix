@@ -121,7 +121,7 @@ const serveDetachedHealMarker = "detached-heal"
 // ServeCapsToken is the rolling capability revision advertised in serve help.
 // Bump this when the desktop requires a newer wire/runtime contract. The CLI
 // imports this value so the advertised token cannot drift from the probe.
-const ServeCapsToken = "reasonix-serve-caps-20260912a"
+const ServeCapsToken = "reasonix-serve-caps-20260826a"
 
 // LocateCommand probes for a usable reasonix binary and the exact Serve
 // capabilities required by the desktop. Capability probes are authoritative:
