@@ -49,6 +49,8 @@ func TestReclaimSuccessSurvivesConcurrentStatusPoll(t *testing.T) {
 	}))
 	defer srv.Close()
 	app := NewApp()
+	events := &eventLog{}
+	app.remoteEventHook = events.add
 	tab := &remoteTab{id: "remote", state: "ready", gen: 1, client: srv.Client(), base: srv.URL,
 		routing: remoteTabSessionRouting{currentPath: "/session.jsonl"},
 		session: remoteTabSessionState{takenOver: true}}
@@ -75,5 +77,8 @@ func TestReclaimSuccessSurvivesConcurrentStatusPoll(t *testing.T) {
 	defer app.remoteTabMu.Unlock()
 	if tab.session.takenOver {
 		t.Fatal("status poll discarded successful reclaim")
+	}
+	if events.count("remote-tab:remote:state ") != 1 {
+		t.Fatalf("successful reclaim did not republish ready: %v", events.recorded())
 	}
 }

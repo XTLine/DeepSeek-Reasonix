@@ -691,6 +691,11 @@ func (a *App) ReclaimRemoteTabSession(tabID string) error {
 	} else {
 		a.remoteTabMu.Unlock()
 	}
+	// A successful reclaim changes the readable transcript source from the
+	// external writer's file view back to Serve's controller. Republish ready
+	// for this tab so the mounted surface reloads history under its existing
+	// session/selection fences without navigating the user.
+	a.emitRemoteEvent(fmt.Sprintf("remote-tab:%s:state", tabID), RemoteTabStateView{State: "ready"})
 	a.goRemoteTabSafe("reclaimStatusRefresh", func() { _, _ = a.RemoteTabStatus(tabID) })
 	return nil
 }
