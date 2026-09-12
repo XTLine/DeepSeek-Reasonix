@@ -31493,6 +31493,13 @@
           }
         },
         {
+          "name": "reclaimBlocked",
+          "optional": true,
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
           "name": "takenOver",
           "optional": true,
           "type": {

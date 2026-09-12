@@ -563,6 +563,7 @@ export interface TabMeta extends RemoteTabMetaFields {
   readOnly?: boolean;
   /** Remote tab whose session a local runtime on the serve host took over. */
   takenOver?: boolean;
+  reclaimBlocked?: boolean;
   filePath?: string;
   projectColor?: string;
   label: string;

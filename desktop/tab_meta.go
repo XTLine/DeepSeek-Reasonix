@@ -21,6 +21,7 @@ type TabMeta struct {
 	ReadOnly          bool   `json:"readOnly,omitempty"`
 	// TakenOver marks a local or remote tab spectating a session whose writer is
 	// on the other side of a cooperative handoff.
+	ReclaimBlocked    bool               `json:"reclaimBlocked,omitempty"`
 	TakenOver         bool               `json:"takenOver,omitempty"`
 	ProjectColor      string             `json:"projectColor,omitempty"`
 	Label             string             `json:"label"`

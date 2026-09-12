@@ -130,7 +130,8 @@ type remoteTabSessionState struct {
 	reset      bool
 	// takenOver marks a session a local runtime on the serve host took over:
 	// this tab is a read-only spectator until it reclaims the session.
-	takenOver bool
+	takenOver      bool
+	reclaimBlocked bool
 	// instanceID identifies the Serve process that owns this session. A
 	// changed id requires explicit /new or /resume re-entry before ready.
 	instanceID string
@@ -569,6 +570,7 @@ func remoteTabMetaLocked(tab *remoteTab) TabMeta {
 		Cancellable:     tab.runtime.cancellable,
 		ReadOnly:        tab.session.takenOver,
 		TakenOver:       tab.session.takenOver,
+		ReclaimBlocked:  tab.session.takenOver && tab.session.reclaimBlocked,
 	}
 }
 

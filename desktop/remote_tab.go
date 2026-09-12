@@ -259,6 +259,7 @@ func (a *App) commitRemoteTabAttachResponse(tabID string, tab *remoteTab, gen, r
 		commitRemoteTabAttachRoute(current, target.Path, reset)
 	}
 	current.session.takenOver = target.TakenOver
+	current.session.reclaimBlocked = false
 	if name := strings.TrimSpace(target.Name); name != "" {
 		current.session.name = name
 	}
@@ -635,16 +636,15 @@ func (a *App) ReclaimRemoteTabSession(tabID string) error {
 	}
 	a.remoteTabMu.Lock()
 	observedTab := a.remoteTabs[tabID]
-	observedGen, observedRuntimeRevision, observedSelectionRevision := uint64(0), uint64(0), uint64(0)
+	observedGen, observedSelectionRevision := uint64(0), uint64(0)
 	if observedTab != nil {
 		observedGen = observedTab.gen
-		observedRuntimeRevision = observedTab.runtime.revision
 		observedSelectionRevision = observedTab.selectionRevision
 	}
 	a.remoteTabMu.Unlock()
 	stillCurrent := func(tab *remoteTab) bool {
 		return tab != nil && tab == observedTab && tab.client == client && tab.gen == observedGen &&
-			tab.runtime.revision == observedRuntimeRevision && tab.selectionRevision == observedSelectionRevision &&
+			tab.selectionRevision == observedSelectionRevision &&
 			agent.CanonicalSessionPath(tab.routing.currentPath) == agent.CanonicalSessionPath(expectedPath)
 	}
 	reconcileOwnership := func() { a.reconcileRemoteTabReclaimOwnership(tabID, client, base, expectedPath, stillCurrent) }
@@ -681,6 +681,8 @@ func (a *App) ReclaimRemoteTabSession(tabID string) error {
 	a.remoteTabMu.Lock()
 	if tab := a.remoteTabs[tabID]; stillCurrent(tab) {
 		tab.session.takenOver = false
+		tab.session.reclaimBlocked = false
+		tab.runtime.revision++ // Invalidate status reads begun before ownership returned.
 		meta := remoteTabMetaLocked(tab)
 		a.remoteTabMu.Unlock()
 		a.emitRemoteEvent("remote-tab:updated", meta)

@@ -232,7 +232,8 @@ type remoteTabStatusPayload struct {
 	Cancellable     *bool                       `json:"cancellable"`
 	// TakenOver reports Serve's single-writer handoff state: a local runtime
 	// on the serve host owns the session and this tab is read-only.
-	TakenOver *bool `json:"takenOver"`
+	TakenOver   *bool `json:"takenOver"`
+	Reclaimable *bool `json:"reclaimable"`
 }
 
 func (a *App) recordRemoteTabSessionStatus(tabID string, client *http.Client, gen, statusSeq uint64, status json.RawMessage) bool {
@@ -287,7 +288,7 @@ func (a *App) recordRemoteTabSessionStatus(tabID string, client *http.Client, ge
 		before.Running != after.Running || before.TurnStartedAt != after.TurnStartedAt ||
 		before.PendingPrompt != after.PendingPrompt || before.BackgroundJobs != after.BackgroundJobs ||
 		before.CancelRequested != after.CancelRequested || before.Cancellable != after.Cancellable ||
-		before.TakenOver != after.TakenOver {
+		before.TakenOver != after.TakenOver || before.ReclaimBlocked != after.ReclaimBlocked {
 		a.emitRemoteEvent("remote-tab:updated", after)
 	}
 	if readyBarrier {
@@ -329,6 +330,7 @@ func applyRemoteTabStatusPayload(tab *remoteTab, payload remoteTabStatusPayload)
 	}
 	if payload.TakenOver != nil {
 		tab.session.takenOver = *payload.TakenOver
+		tab.session.reclaimBlocked = *payload.TakenOver && payload.Reclaimable != nil && !*payload.Reclaimable
 	}
 	if payload.PendingPrompt != nil {
 		tab.runtime.pendingPrompt = *payload.PendingPrompt

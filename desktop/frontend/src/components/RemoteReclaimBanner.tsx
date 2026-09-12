@@ -1,25 +1,28 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useT } from "../lib/i18n";
 
 export function RemoteReclaimBanner({
   tabId,
   busyTabId,
+  reclaimBlocked = false,
   onReclaim,
 }: {
   tabId: string;
   busyTabId: string | null;
+  reclaimBlocked?: boolean;
   onReclaim: (tabId: string) => void;
 }) {
   const t = useT();
   const [armedTabId, setArmedTabId] = useState<string | null>(null);
+  useEffect(() => { setArmedTabId(null); }, [reclaimBlocked]);
   const armed = armedTabId === tabId;
   const busy = busyTabId !== null;
 
   return (
     <div className="banner banner--warning banner--actionable">
-      <span className="banner__msg">{t("takeover.remoteBanner")}</span>
+      <span className="banner__msg">{t(reclaimBlocked ? "takeover.remoteUnregistered" : "takeover.remoteBanner")}</span>
       <span className="banner__spacer" />
-      <button
+      {!reclaimBlocked && <button
         type="button"
         className={`btn btn--small${armed ? " btn--danger" : ""}`}
         disabled={busy}
@@ -39,7 +42,7 @@ export function RemoteReclaimBanner({
           : armed
             ? t("takeover.reclaimConfirmButton")
             : t("takeover.reclaim")}
-      </button>
+      </button>}
     </div>
   );
 }
