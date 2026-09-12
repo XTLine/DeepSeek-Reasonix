@@ -276,6 +276,7 @@ type ownershipView struct {
 	Mirrored         bool   `json:"mirrored"`
 	ReclaimRequested bool   `json:"reclaimRequested"`
 	TakenOver        bool   `json:"takenOver"`
+	Reclaimable      bool   `json:"reclaimable"`
 	HolderPID        int    `json:"holderPid,omitempty"`
 	HolderHost       string `json:"holderHost,omitempty"`
 }
@@ -297,6 +298,7 @@ func (s *Server) ownership(w http.ResponseWriter, r *http.Request) {
 		view.Holder = "external"
 		view.Mirrored = true
 		view.TakenOver = true
+		view.Reclaimable = true
 		view.ReclaimRequested = m.reclaimRequested
 		s.appendServeIdentity(&view)
 		writeJSON(w, view)
@@ -320,6 +322,10 @@ func (s *Server) ownership(w http.ResponseWriter, r *http.Request) {
 	}
 	if leaseHeldByForeignRuntime(realPath) {
 		view.Holder = "other"
+		view.TakenOver = true
+		if info, err := agent.LoadSessionLeaseInfo(realPath); err == nil && info != nil {
+			view.HolderPID, view.HolderHost = info.PID, info.Hostname
+		}
 	}
 	if view.Holder == "" {
 		view.Holder = "free"
@@ -647,27 +653,17 @@ func (s *Server) reclaim(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		// A session held by a local process that was never adopted (the adopt
-		// can fail silently) has no mirror forwarder to signal. The reclaim
-		// can only wait for the lease to free — cap it short so the caller
-		// gets actionable feedback instead of a two-minute hang.
+		// An unregistered writer has no heartbeat on which to receive reclaim.
+		// Refuse immediately; only that process can release its live OS lock.
 		if leaseHeldByForeignRuntime(realPath) {
-			slog.Info("serve: reclaim on un-mirrored foreign-held session (adopter absent)",
-				"session", canonical)
-			deadline := time.Now().Add(10 * time.Second)
-			for leaseHeldByForeignRuntime(realPath) {
-				if time.Now().After(deadline) {
-					http.Error(w, "session is held by a local Reasonix window that never registered a mirror; close that window or retry after it exits", http.StatusConflict)
-					return
-				}
-				time.Sleep(handoffPollInterval)
-			}
-			s.bindMu.Lock()
-			defer s.bindMu.Unlock()
-			s.resumeSession(w, r, realPath)
+			http.Error(w, "session writer has not connected session sharing; exit this session in the remote terminal or window before reopening it", http.StatusConflict)
 			return
 		}
-		http.Error(w, "session is not held by any known runtime", http.StatusConflict)
+		// The unregistered writer may have exited since the client's last
+		// status read. Resume under the ordinary lease admission checks.
+		s.bindMu.Lock()
+		defer s.bindMu.Unlock()
+		s.resumeSession(w, r, realPath)
 		return
 	}
 	m.reclaimRequested = true
@@ -966,6 +962,7 @@ func (s *Server) externalStatusView(path string) map[string]any {
 		"pendingPrompt":    false,
 		"backgroundJobs":   0,
 		"takenOver":        true,
+		"reclaimable":      false,
 		"sessionName":      strings.TrimSuffix(filepath.Base(path), ".jsonl"),
 		"sessionPath":      agent.CanonicalSessionPath(path),
 	}
@@ -988,6 +985,7 @@ func (s *Server) mirrorStatusView(path string) map[string]any {
 		"pendingPrompt":    false,
 		"backgroundJobs":   0,
 		"takenOver":        true,
+		"reclaimable":      true,
 		"sessionName":      strings.TrimSuffix(filepath.Base(path), ".jsonl"),
 		"sessionPath":      agent.CanonicalSessionPath(path),
 	}
