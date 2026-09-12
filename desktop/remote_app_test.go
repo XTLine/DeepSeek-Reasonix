@@ -154,6 +154,7 @@ type fakeRemoteKernel struct {
 	ensureToken       string
 	ensureErr         error
 	ensureCalls       int
+	updateCalls       int
 	snapshotMiss      bool
 	switchProxyErr    error
 	switchProxyCalls  [][5]string
@@ -242,6 +243,10 @@ func (f *fakeRemoteKernel) AddForward(string, RemoteForwardInput) (RemoteForward
 func (f *fakeRemoteKernel) RemoveForward(string, string) error { return nil }
 func (f *fakeRemoteKernel) EnsureServer(context.Context, string, string) (RemoteServerView, string, error) {
 	f.ensureCalls++
+	return f.ensureView, f.ensureToken, f.ensureErr
+}
+func (f *fakeRemoteKernel) UpdateServer(context.Context, string, string) (RemoteServerView, string, error) {
+	f.updateCalls++
 	return f.ensureView, f.ensureToken, f.ensureErr
 }
 func (f *fakeRemoteKernel) SwitchCredentialProxyModel(_ context.Context, hostID, workspace, currentRef, nextRef, expectedPath string) error {

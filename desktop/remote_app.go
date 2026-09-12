@@ -139,13 +139,15 @@ type RemoteForwardView struct {
 }
 
 type RemoteServerView struct {
-	HostID     string `json:"hostId"`
-	Workspace  string `json:"workspace"`
-	State      string `json:"state"`
-	Message    string `json:"message,omitempty"`
-	LocalURL   string `json:"localUrl,omitempty"`
-	InstanceID string `json:"instanceId,omitempty"`
-	Error      string `json:"error,omitempty"`
+	HostID          string `json:"hostId"`
+	Workspace       string `json:"workspace"`
+	State           string `json:"state"`
+	Message         string `json:"message,omitempty"`
+	LocalURL        string `json:"localUrl,omitempty"`
+	InstanceID      string `json:"instanceId,omitempty"`
+	ServeVersion    string `json:"serveVersion,omitempty"`
+	UpdateAvailable bool   `json:"updateAvailable,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 // ── Kernel seam ──
@@ -177,6 +179,9 @@ type remoteKernel interface {
 	RemoveForward(hostID, forwardID string) error
 
 	EnsureServer(ctx context.Context, hostID, workspace string) (RemoteServerView, string, error)
+	// UpdateServer stops the serve and re-ensures it with ForceUpgrade; the
+	// caller must warn that in-flight turns are interrupted.
+	UpdateServer(ctx context.Context, hostID, workspace string) (RemoteServerView, string, error)
 	SwitchCredentialProxyModel(ctx context.Context, hostID, workspace, currentRef, nextRef, expectedPath string) error
 	StopServer(hostID, workspace string) error
 	ServerStatus(hostID, workspace string) RemoteServerView
