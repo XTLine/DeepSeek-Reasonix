@@ -5,11 +5,17 @@ export function RemoteReclaimBanner({
   tabId,
   busyTabId,
   reclaimBlocked = false,
+	holderPid,
+	holderHost,
+	holderKind,
   onReclaim,
 }: {
   tabId: string;
   busyTabId: string | null;
   reclaimBlocked?: boolean;
+	holderPid?: number;
+	holderHost?: string;
+	holderKind?: string;
   onReclaim: (tabId: string) => void;
 }) {
   const t = useT();
@@ -17,10 +23,11 @@ export function RemoteReclaimBanner({
   useEffect(() => { setArmedTabId(null); }, [reclaimBlocked]);
   const armed = armedTabId === tabId;
   const busy = busyTabId !== null;
+	const holder = [holderKind === "tui" ? t("takeover.holderTui") : "", holderHost, holderPid ? `PID ${holderPid}` : ""].filter(Boolean).join(" · ");
 
   return (
     <div className="banner banner--warning banner--actionable">
-      <span className="banner__msg">{t(reclaimBlocked ? "takeover.remoteUnregistered" : "takeover.remoteBanner")}</span>
+      <span className="banner__msg">{t(reclaimBlocked ? "takeover.remoteUnregistered" : "takeover.remoteBanner")}{holder ? ` ${t("takeover.holder", { holder })}` : ""}</span>
       <span className="banner__spacer" />
       {!reclaimBlocked && <button
         type="button"

@@ -132,6 +132,9 @@ type remoteTabSessionState struct {
 	// this tab is a read-only spectator until it reclaims the session.
 	takenOver      bool
 	reclaimBlocked bool
+	holderPID      int
+	holderHost     string
+	holderKind     string
 	// instanceID identifies the Serve process that owns this session. A
 	// changed id requires explicit /new or /resume re-entry before ready.
 	instanceID string
@@ -571,6 +574,9 @@ func remoteTabMetaLocked(tab *remoteTab) TabMeta {
 		ReadOnly:        tab.session.takenOver,
 		TakenOver:       tab.session.takenOver,
 		ReclaimBlocked:  tab.session.takenOver && tab.session.reclaimBlocked,
+		HolderPID:       tab.session.holderPID,
+		HolderHost:      tab.session.holderHost,
+		HolderKind:      tab.session.holderKind,
 	}
 }
 

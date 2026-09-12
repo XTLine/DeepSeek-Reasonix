@@ -3,7 +3,7 @@
 
 export const DESKTOP_PROTOCOL_VERSION = 1;
 
-export const DESKTOP_CONTRACT_DIGEST = "sha256:08cdb8f4643e718e84dd1361c21ba19f9050090be3a142068f429a94c6e5a97d";
+export const DESKTOP_CONTRACT_DIGEST = "sha256:139a0703f014d1c46927d792b46c36e1b3c584ecf970af08913967682c3e920c";
 
 export const DESKTOP_COMMANDS = [
   "AIRenameSession",
@@ -3537,6 +3537,9 @@ export interface TabMeta {
   readOnly?: boolean;
   reclaimBlocked?: boolean;
   takenOver?: boolean;
+  holderPid?: number;
+  holderHost?: string;
+  holderKind?: string;
   projectColor?: string;
   label: string;
   ready: boolean;

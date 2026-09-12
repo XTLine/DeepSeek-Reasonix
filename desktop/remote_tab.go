@@ -655,7 +655,8 @@ func (a *App) ReclaimRemoteTabSession(tabID string) error {
 	defer cancel()
 	body, _ := json.Marshal(map[string]any{
 		"sessionPath": expectedPath,
-		"mode":        "wait",
+		"mode":        "interrupt",
+		"force":       true,
 		"timeoutMs":   15000,
 	})
 	resp, err := serveDo(ctx, client, http.MethodPost, serveURL(base, "/reclaim"), body)
@@ -682,6 +683,7 @@ func (a *App) ReclaimRemoteTabSession(tabID string) error {
 	if tab := a.remoteTabs[tabID]; stillCurrent(tab) {
 		tab.session.takenOver = false
 		tab.session.reclaimBlocked = false
+		tab.session.holderPID, tab.session.holderHost, tab.session.holderKind = 0, "", ""
 		tab.runtime.revision++ // Invalidate status reads begun before ownership returned.
 		meta := remoteTabMetaLocked(tab)
 		a.remoteTabMu.Unlock()

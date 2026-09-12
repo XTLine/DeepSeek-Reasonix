@@ -139,6 +139,8 @@ export const zhTW: Record<DictKey, string> = {
   "takeover.unavailable": "暫無法接管：{reason}",
   "takeover.remoteBanner": "此會話正由遠端的另一個 Reasonix 終端或視窗使用，此處唯讀。",
   "takeover.remoteUnregistered": "遠端終端或視窗尚未建立會話同步連線。請先在該終端或視窗退出此會話，再於此處重新開啟。",
+	"takeover.holder": "佔用者：{holder}。",
+	"takeover.holderTui": "終端",
   "takeover.reclaimTitle": "接管回來",
   "takeover.reclaimConfirm": "遠端機器上的本機視窗正在持有該會話；接管回來後那一側將變為唯讀。",
   "takeover.reclaimConfirmButton": "確認接管回來",

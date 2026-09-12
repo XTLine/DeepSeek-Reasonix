@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -34,8 +35,11 @@ func TestRemoteStatusReclaimCapabilityChangesWithoutOwnershipChange(t *testing.T
 
 func TestReclaimSuccessSurvivesConcurrentStatusPoll(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
+	requestBody := make(chan []byte, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/reclaim" {
+			body, _ := io.ReadAll(r.Body)
+			requestBody <- body
 			close(started)
 			<-release
 			w.WriteHeader(http.StatusNoContent)
@@ -58,6 +62,13 @@ func TestReclaimSuccessSurvivesConcurrentStatusPoll(t *testing.T) {
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+	var reclaim struct {
+		Mode  string `json:"mode"`
+		Force bool   `json:"force"`
+	}
+	if err := json.Unmarshal(<-requestBody, &reclaim); err != nil || reclaim.Mode != "interrupt" || !reclaim.Force {
+		t.Fatalf("reclaim request = %+v, err=%v", reclaim, err)
 	}
 	app.remoteTabTasks.Wait()
 	app.remoteTabMu.Lock()

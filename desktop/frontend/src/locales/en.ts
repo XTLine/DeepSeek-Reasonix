@@ -148,6 +148,8 @@ export const en = {
   "takeover.unavailable": "Takeover unavailable: {reason}",
   "takeover.remoteBanner": "This session is in use by another Reasonix terminal or window on the remote machine. This view is read-only.",
   "takeover.remoteUnregistered": "The remote terminal or window has not connected session sharing. Exit this session there, then reopen it here.",
+	"takeover.holder": "Holder: {holder}.",
+	"takeover.holderTui": "TUI",
   "takeover.reclaimTitle": "Take the session back",
   "takeover.reclaimConfirm": "The remote machine's local window owns this session now; taking it back makes that side read-only.",
   "takeover.reclaimConfirmButton": "Confirm take back",

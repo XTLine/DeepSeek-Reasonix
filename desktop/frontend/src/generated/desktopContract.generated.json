@@ -31507,6 +31507,27 @@
           }
         },
         {
+          "name": "holderPid",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "holderHost",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "holderKind",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "projectColor",
           "optional": true,
           "type": {

@@ -279,6 +279,7 @@ type ownershipView struct {
 	Reclaimable      bool   `json:"reclaimable"`
 	HolderPID        int    `json:"holderPid,omitempty"`
 	HolderHost       string `json:"holderHost,omitempty"`
+	HolderKind       string `json:"holderKind,omitempty"`
 }
 
 // ownership reports who currently writes a session, whether a remote SSE
@@ -300,7 +301,7 @@ func (s *Server) ownership(w http.ResponseWriter, r *http.Request) {
 		view.TakenOver = true
 		view.Reclaimable = true
 		view.ReclaimRequested = m.reclaimRequested
-		s.appendServeIdentity(&view)
+		s.appendExternalIdentity(&view, realPath, m.targetWriterID, "tui")
 		writeJSON(w, view)
 		return
 	}
@@ -326,11 +327,20 @@ func (s *Server) ownership(w http.ResponseWriter, r *http.Request) {
 		if info, err := agent.LoadSessionLeaseInfo(realPath); err == nil && info != nil {
 			view.HolderPID, view.HolderHost = info.PID, info.Hostname
 		}
+		view.HolderKind = "process"
 	}
 	if view.Holder == "" {
 		view.Holder = "free"
 	}
 	writeJSON(w, view)
+}
+
+func (s *Server) appendExternalIdentity(view *ownershipView, path, writerID, kind string) {
+	info, err := agent.LoadSessionLeaseInfo(path)
+	if err != nil || info == nil || info.WriterID != writerID {
+		return
+	}
+	view.HolderPID, view.HolderHost, view.HolderKind = info.PID, info.Hostname, kind
 }
 
 func (s *Server) appendServeIdentity(view *ownershipView) {
@@ -966,6 +976,7 @@ func (s *Server) externalStatusView(path string) map[string]any {
 		"sessionName":      strings.TrimSuffix(filepath.Base(path), ".jsonl"),
 		"sessionPath":      agent.CanonicalSessionPath(path),
 	}
+	appendExternalStatusIdentity(sess, path, "", "process")
 	return sess
 }
 
@@ -991,8 +1002,23 @@ func (s *Server) mirrorStatusView(path string) map[string]any {
 	}
 	if ok {
 		sess["reclaimRequested"] = m.reclaimRequested
+		appendExternalStatusIdentity(sess, path, m.targetWriterID, "tui")
 	}
 	return sess
+}
+
+func appendExternalStatusIdentity(view map[string]any, path, writerID, kind string) {
+	info, err := agent.LoadSessionLeaseInfo(path)
+	if err != nil || info == nil || (writerID != "" && info.WriterID != writerID) {
+		return
+	}
+	if info.PID > 0 {
+		view["holderPid"] = info.PID
+	}
+	if host := strings.TrimSpace(info.Hostname); host != "" {
+		view["holderHost"] = host
+	}
+	view["holderKind"] = kind
 }
 
 // mirrorEnd is the local writer's farewell: it has closed its tab and dropped

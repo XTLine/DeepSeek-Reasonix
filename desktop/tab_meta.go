@@ -23,6 +23,9 @@ type TabMeta struct {
 	// on the other side of a cooperative handoff.
 	ReclaimBlocked    bool               `json:"reclaimBlocked,omitempty"`
 	TakenOver         bool               `json:"takenOver,omitempty"`
+	HolderPID         int                `json:"holderPid,omitempty"`
+	HolderHost        string             `json:"holderHost,omitempty"`
+	HolderKind        string             `json:"holderKind,omitempty"`
 	ProjectColor      string             `json:"projectColor,omitempty"`
 	Label             string             `json:"label"`
 	Ready             bool               `json:"ready"`

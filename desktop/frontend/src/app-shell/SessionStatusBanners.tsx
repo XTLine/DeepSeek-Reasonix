@@ -10,6 +10,9 @@ export type SessionStatusBannersProps = {
   takenOver: boolean;
   reclaimBlocked?: boolean;
   reclaimSessionPath?: string;
+	holderPid?: number;
+	holderHost?: string;
+	holderKind?: string;
   reclaimTabId: string;
   reclaimBusyTabId: string | null;
   onReclaim: (tabId: string) => void;
@@ -39,6 +42,9 @@ export function SessionStatusBanners(props: SessionStatusBannersProps) {
           tabId={props.reclaimTabId}
           key={`${props.reclaimTabId}:${props.reclaimSessionPath ?? ""}`}
           reclaimBlocked={props.reclaimBlocked}
+		  holderPid={props.holderPid}
+		  holderHost={props.holderHost}
+		  holderKind={props.holderKind}
           busyTabId={props.reclaimBusyTabId}
           onReclaim={props.onReclaim}
         />

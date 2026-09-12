@@ -149,6 +149,8 @@ export const zh: Record<DictKey, string> = {
   "takeover.unavailable": "暂无法接管：{reason}",
   "takeover.remoteBanner": "该会话正由远端的另一个 Reasonix 终端或窗口使用，此处只读。",
   "takeover.remoteUnregistered": "远端终端或窗口尚未建立会话同步连接。请先在该终端或窗口退出此会话，再在这里重新打开。",
+	"takeover.holder": "占用者：{holder}。",
+	"takeover.holderTui": "终端",
   "takeover.reclaimTitle": "取回会话",
   "takeover.reclaimConfirm": "远端机器的本地窗口正持有该会话；接管回来后那侧只读。",
   "takeover.reclaimConfirmButton": "确认取回",

@@ -808,8 +808,12 @@ func TestMirroredStatusAndHistoryBySession(t *testing.T) {
 		t.Fatalf("spectator history = %d %q, want the writer's turn", status, body)
 	}
 	status, body = f.get(t, "/status?runtime=1&session="+filepath.ToSlash(other))
-	if status != http.StatusOK || !strings.Contains(body, `"takenOver":true`) {
+	if status != http.StatusOK || !strings.Contains(body, `"takenOver":true`) ||
+		!strings.Contains(body, `"holderKind":"tui"`) || !strings.Contains(body, `"holderPid":`) {
 		t.Fatalf("spectator status = %d %q, want takenOver", status, body)
+	}
+	if view := f.ownershipView(t, other); view.HolderKind != "tui" || view.HolderPID == 0 || view.HolderHost == "" {
+		t.Fatalf("mirrored owner identity = %+v", view)
 	}
 }
 
