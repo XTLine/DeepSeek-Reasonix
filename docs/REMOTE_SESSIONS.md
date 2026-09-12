@@ -261,9 +261,9 @@ seconds of inactivity.
   resuming that session is refused and the UI reports "session in use".
 - **Handoff**: a local window on the serve host may take over the foreground
   session. Serve then degrades to a read-only mirror that forwards the local
-  writer's frames in real time; 30 seconds without a writer heartbeat
-  reclaims the session automatically, and an explicit reclaim is always
-  possible. The desktop remote tab enters spectator mode and shows a reclaim
+  writer's frames in real time. A cooperative writer can return ownership
+  through **Take back**. Missing heartbeats do not override a live writer's
+  session lock. The desktop remote tab enters spectator mode and shows a reclaim
   banner.
 - The desktop project tree lists the workspace's remote sessions. Selecting a
   row resumes that exact session in the shared transcript and composer
@@ -282,6 +282,26 @@ a read-only spectator. It continues receiving the live transcript and offers
 a **Take back** action:
 
 ![The remote-session tab becomes a read-only spectator and offers Take back](./assets/remote-session-spectator-reclaim.png)
+
+### Resuming in the remote TUI
+
+A CLI started on the remote host discovers the workspace's resident Serve and
+registers its owned session for sharing. This also applies to ordinary
+`--resume`, `--continue`, and interactive `/resume`; `/takeover` is only needed
+when Serve already holds the target session. Discovery retries if Serve starts
+later. The desktop can open the same session, read its history, and observe live
+output without changing the session currently selected in another tab.
+
+**Take back** asks the registered TUI to finish its active work and return its
+write lease. The TUI then exits its session; the desktop becomes writable only
+after Serve has acquired and loaded the returned session. Switching sessions in
+the TUI returns the old mirror and registers the new session.
+
+An older CLI or an unregistered process can hold a session without a sharing
+connection. The desktop explains this state instead of offering a nonfunctional
+**Take back** button. Exit that session in the remote terminal or window, then
+reopen it from the desktop. Updating a binary does not update an already-running
+TUI process.
 
 ## Desktop remote work
 
@@ -393,7 +413,7 @@ never re-prompt; a desktop restart requires entering them again.
 | Suspected incompatible older serve | A failed capability probe upgrades automatically; if needed, `remote serve stop` then reconnect to force a fresh bootstrap |
 | `connect` stuck bootstrapping | Concurrent bootstraps are serialized by a remote file lock that expires after at most 60 seconds; retry shortly |
 | Session reports "in use" | Another process holds the session's lease (another window or serve). Exit from that side or wait for the holder to release |
-| Remote tab switched to spectator mode | A local window on the serve host took over the session; it auto-reclaims after 30 s without a heartbeat, or use the reclaim banner |
+| Remote tab switched to spectator mode | A remote terminal or window owns the session. Use Take back when sharing is connected; otherwise exit the session there and reopen it here |
 | `local-proxy` model calls failing | The watchdog heals automatically; confirm the desktop is online and SSH is connected. Never hand-edit the managed remote provider block |
 | Authentication failure keeps coming back | Auth failure is terminal and never retried. Check the `.env` slots and key passphrase, or switch to the SSH agent |
 | Windows local side | The CLI and desktop are supported, but V1 cannot use the OpenSSH named-pipe agent; configure an identity file or password. Remote hosts must still be Linux/macOS |
