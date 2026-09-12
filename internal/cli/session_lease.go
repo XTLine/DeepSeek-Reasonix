@@ -27,9 +27,16 @@ func persistCLIModelSelection(ctrl control.SessionAPI) error {
 // newer file while its controller resumes an older in-memory snapshot.
 func bindAndLoadCLIResume(leases *control.SessionLeaseKeeper, path string, load func(string) (*agent.Session, error)) (*agent.Session, error) {
 	if leases != nil {
-		if err := leases.Rebind(path); err != nil {
+		err := leases.Rebind(path)
+		if errors.Is(err, agent.ErrSessionLeaseHeld) {
+			if info := pendingCLIHandoff(path); info != nil {
+				err = leases.RebindWithHandoff(path, info.WriterID, info.HandoffID)
+			}
+		}
+		if err != nil {
 			return nil, err
 		}
+		unconfirmedCLIHandoffs.Delete(agent.CanonicalSessionPath(path))
 	}
 	return load(path)
 }

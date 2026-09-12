@@ -13,11 +13,30 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"reasonix/internal/agent"
 	"reasonix/internal/control"
 )
+
+// Only reconcile reservations from a CLI request whose outcome this process
+// could not confirm. Serve grants also carry mirror/return state and must not
+// be reconstructed from the lease sidecar alone. A restarted CLI has a new
+// writer identity and cannot consume the previous process's reservation.
+var unconfirmedCLIHandoffs sync.Map // canonical session path -> source writer ID
+
+func pendingCLIHandoff(path string) *agent.SessionLeaseInfo {
+	source, ok := unconfirmedCLIHandoffs.Load(agent.CanonicalSessionPath(path))
+	if !ok {
+		return nil
+	}
+	info, err := agent.LoadSessionLeaseInfo(path)
+	if err != nil || info == nil || info.WriterID != source || info.HandoffTo != agent.SessionWriterID() || info.HandoffID == "" || !time.Now().Before(info.HandoffExpiresAt) {
+		return nil
+	}
+	return info
+}
 
 func localCLILease(info *agent.SessionLeaseInfo) bool {
 	if info == nil || info.PID <= 0 || info.WriterID == "" {
@@ -93,6 +112,7 @@ func acquireCLIPeerSession(path string, record cliPeerRecord, leases *control.Se
 		defer retryCancel()
 		err = cliPeerDo(retryCtx, record, http.MethodPost, "/handoff", body, &grant)
 		if err != nil {
+			unconfirmedCLIHandoffs.Store(agent.CanonicalSessionPath(path), record.WriterID)
 			return nil, fmt.Errorf("handoff outcome unconfirmed; retry resume to reconcile ownership: %w", err)
 		}
 	}
@@ -103,6 +123,7 @@ func acquireCLIPeerSession(path string, record cliPeerRecord, leases *control.Se
 	if err != nil {
 		return nil, err
 	}
+	unconfirmedCLIHandoffs.Delete(agent.CanonicalSessionPath(path))
 	binding := &cliTakeoverBinding{path: path, grant: grant, previous: previous}
 	if manager != nil {
 		current, _, _, _ := manager.snapshot()

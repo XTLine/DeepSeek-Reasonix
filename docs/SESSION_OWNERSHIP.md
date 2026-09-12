@@ -102,7 +102,11 @@ holder keeps one grant per successor, so a lost HTTP response is reconciled by
 retrying the same request — the grant is returned idempotently, never
 re-issued. A third writer is refused. If the successor cannot confirm the
 outcome, the reservation remains durable for the named writer; retrying
-resume reconciles ownership. Takeover failures roll back atomically: the
+resume in the same receiving CLI process reconciles a CLI reservation, even
+when its source has exited. The receiver retains the unconfirmed CLI request
+identity and validates the durable reservation before consuming it; Serve
+reservations still require their mirror/return grant. A restarted receiver has
+a new writer identity and must wait for the old reservation to expire. Takeover failures roll back atomically: the
 taker's own lease and controller are restored before the target is released,
 and a failed reverse reservation keeps the detached target fenced and retried
 rather than publishing mirror-end.

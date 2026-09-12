@@ -286,6 +286,9 @@ func cliOwnership(ctx context.Context, client *http.Client, record cliServeRecor
 }
 
 func queryCLITakeover(ctx context.Context, path string) (cliOwnershipView, error) {
+	if pendingCLIHandoff(path) != nil {
+		return cliOwnershipView{Holder: "free"}, nil
+	}
 	info, held, inspectErr := agent.InspectSessionLease(path)
 	if inspectErr == nil && !held && (info == nil || info.HandoffID == "" || time.Now().After(info.HandoffExpiresAt)) {
 		return cliOwnershipView{Holder: "free"}, nil
@@ -849,9 +852,15 @@ func cliAcquireFreeSession(path string, leases *control.SessionLeaseKeeper, mana
 		}
 	}
 	previous, err := leases.RebindDetaching(path)
+	if errors.Is(err, agent.ErrSessionLeaseHeld) {
+		if info := pendingCLIHandoff(path); info != nil {
+			previous, err = leases.RebindDetachingWithHandoff(path, info.WriterID, info.HandoffID)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
+	unconfirmedCLIHandoffs.Delete(agent.CanonicalSessionPath(path))
 	binding.previous = previous
 	return binding, nil
 }

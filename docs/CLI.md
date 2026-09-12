@@ -36,8 +36,6 @@ Running `reasonix` without a subcommand starts the interactive terminal UI. Use
 | `-c`, `--continue` | Resume the most recent session. |
 | `-r`, `--resume [QUERY]` | Open the session picker, or resume a matching session. |
 | `--copy` | Continue in a writable copy of the resumed session. |
-| `--takeover` | With `--resume`/`--continue`: when a resident serve on this machine holds the session, take it over instead of refusing. |
-| `--takeover-mode MODE` | Takeover drain mode: `wait` (default) lets the holder finish its turn, `interrupt` cancels it first. |
 | `--allowed-tools RULES` | Add session-only permission allow rules. Repeatable; `--allowedTools` is an alias. |
 | `--permission-mode MODE` | Start with a specific permission posture. |
 | `--yolo` | Start in YOLO mode; alias for `--dangerously-skip-permissions`. |
@@ -374,8 +372,7 @@ takeover instead of a dead end:
   final unsaved turn, yields the lease, and drops to a read-only banner; press
   `R` there to retry ownership or `Q` to exit.
 
-Choose the mode in the takeover prompt (or with `--takeover` for
-`--resume`/`--continue`):
+Choose the mode in the interactive takeover prompt:
 
 | Choice | Behavior |
 | --- | --- |
@@ -389,7 +386,14 @@ directly for the session at picker index `N` (or the last refused target).
 Failure rolls back atomically: the taker keeps its previous session and the
 holder keeps writing unless it explicitly yielded. If the handoff response is
 lost, the durable lease reservation still names the intended successor —
-retrying resume reconciles ownership instead of forcing a process kill.
+retrying `/resume` in the same CLI process reconciles ownership, even if the
+source CLI has exited. Restarting the receiving CLI creates a new writer identity;
+it must wait for the old reservation to expire.
+
+For non-interactive runs, opt in with `reasonix run --resume SESSION --takeover
+--takeover-mode wait "prompt"` (or use `interrupt`). These two flags belong to
+`reasonix run`; interactive `reasonix` uses the prompt above. Both resident
+serve and interactive CLI holders can cooperate.
 
 Cooperation requires the holder to be a current Reasonix on this machine: a
 resident serve, or an interactive CLI advertising the local handoff endpoint.

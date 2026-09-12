@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,7 +37,9 @@ func startSourceProcess(t *testing.T, path string) (cliPeerRecord, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	child := exec.Command(executable, "-test.run=^TestCLIPeerProcessHelper$", "-test.v")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	child := exec.CommandContext(ctx, executable, "-test.run=^TestCLIPeerProcessHelper$", "-test.v")
 	child.Env = append(os.Environ(), "REASONIX_TEST_PEER_SESSION="+path)
 	stdout, err := child.StdoutPipe()
 	if err != nil {
@@ -50,6 +53,16 @@ func startSourceProcess(t *testing.T, path string) (cliPeerRecord, func()) {
 	if err := child.Start(); err != nil {
 		t.Fatal(err)
 	}
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			_ = stdin.Close()
+			if err := child.Wait(); err != nil {
+				t.Errorf("source process: %v", err)
+			}
+		})
+	}
+	t.Cleanup(stop)
 	scanner := bufio.NewScanner(stdout)
 	ready := false
 	for scanner.Scan() {
@@ -59,8 +72,6 @@ func startSourceProcess(t *testing.T, path string) (cliPeerRecord, func()) {
 		}
 	}
 	if !ready {
-		_ = stdin.Close()
-		_ = child.Wait()
 		t.Fatal("source process did not start")
 	}
 	data, err := os.ReadFile(filepath.Join(cliPeerDirectory(), fmt.Sprintf("cli-%d.json", child.Process.Pid)))
@@ -70,13 +81,6 @@ func startSourceProcess(t *testing.T, path string) (cliPeerRecord, func()) {
 	var record cliPeerRecord
 	if json.Unmarshal(data, &record) != nil {
 		t.Fatal("invalid peer registration")
-	}
-	stop := func() {
-		_, _ = stdin.Write([]byte("\n"))
-		_ = stdin.Close()
-		if err := child.Wait(); err != nil {
-			t.Errorf("source process: %v", err)
-		}
 	}
 	return record, stop
 }
@@ -484,12 +488,15 @@ func TestSSHServeHandoffLifecycle(t *testing.T) {
 	}
 }
 
-// TestCLIPeerReservationSurvivesSourceExit covers the lost-response case
-// across real processes: the successor's handoff response never arrives (the
-// source exits first), the outcome stays unconfirmed for a plain retry, but
-// the durable reservation still names the intended successor — and only that
-// writer can reconcile it.
+// TestCLIPeerReservationSurvivesSourceExit drops the HTTP grant, exits the
+// source, and retries through the same entry points used by the CLI.
 func TestCLIPeerReservationSurvivesSourceExit(t *testing.T) {
+	for _, entry := range []string{"startup", "resume", "load failure"} {
+		t.Run(entry, func(t *testing.T) { testCLIPeerLostResponse(t, entry) })
+	}
+}
+
+func testCLIPeerLostResponse(t *testing.T, entry string) {
 	home := t.TempDir()
 	t.Setenv("REASONIX_HOME", home)
 	path := filepath.Join(home, "session.jsonl")
@@ -534,35 +541,48 @@ func TestCLIPeerReservationSurvivesSourceExit(t *testing.T) {
 	if json.Unmarshal(data, &record) != nil {
 		t.Fatal("invalid peer registration")
 	}
-	body, _ := json.Marshal(cliPeerRequest{SessionPath: path, TargetWriterID: agent.SessionWriterID(), SourceWriterID: record.WriterID, Mode: "wait"})
-	var grant cliTakeoverGrant
-	if err := cliPeerDo(ctx, record, http.MethodPost, "/handoff", body, &grant); err != nil {
-		t.Fatal(err)
-	}
-	if grant.HandoffID == "" {
-		t.Fatal("source did not grant the handoff")
-	}
-
-	// The response arrived here, but the successor crashed before consuming the
-	// reservation: kill the source, then retry the acquisition the way a fresh
-	// resume would.
-	if _, err := stdin.Write([]byte("\n")); err != nil {
-		t.Fatal(err)
-	}
-	_ = stdin.Close()
-	select {
-	case <-waited:
-	case <-time.After(20 * time.Second):
-		t.Fatal("source process never exited")
-	}
-	if _, err := os.Stat(filepath.Join(cliPeerDirectory(), fmt.Sprintf("cli-%d.json", child.Process.Pid))); !os.IsNotExist(err) {
-		t.Fatalf("registration survived source exit: %v", err)
-	}
+	grants := make(chan cliTakeoverGrant, 1)
+	var once sync.Once
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() {
+			var grant cliTakeoverGrant
+			body, _ := json.Marshal(cliPeerRequest{SessionPath: path, TargetWriterID: agent.SessionWriterID(), SourceWriterID: record.WriterID, Mode: "wait"})
+			if err := cliPeerDo(ctx, record, http.MethodPost, "/handoff", body, &grant); err != nil {
+				t.Error(err)
+				return
+			}
+			grants <- grant
+			// The source completed release, but no grant reaches the client.
+			_ = stdin.Close()
+			select {
+			case err := <-waited:
+				if err != nil {
+					t.Error(err)
+				}
+			case <-ctx.Done():
+				t.Error("source did not exit")
+			}
+		})
+		http.Error(w, "response lost", http.StatusBadGateway)
+	}))
+	defer proxy.Close()
+	unreachable := record
+	unreachable.Address = strings.TrimPrefix(proxy.URL, "http://")
 	leases := control.NewSessionLeaseKeeper()
 	defer leases.Release()
-	_, err = acquireCLIPeerSession(path, record, leases, nil, "wait")
+	_, err = acquireCLIPeerSession(path, unreachable, leases, nil, "wait")
 	if err == nil || !strings.Contains(err.Error(), "unconfirmed") {
-		t.Fatalf("retry after response loss = %v, want an unconfirmed outcome", err)
+		t.Fatalf("lost response = %v, want unconfirmed", err)
+	}
+	var grant cliTakeoverGrant
+	select {
+	case grant = <-grants:
+	case <-ctx.Done():
+		t.Fatal("source did not grant handoff")
+	}
+	defer unconfirmedCLIHandoffs.Delete(agent.CanonicalSessionPath(path))
+	if _, err := os.Stat(filepath.Join(cliPeerDirectory(), fmt.Sprintf("cli-%d.json", child.Process.Pid))); !os.IsNotExist(err) {
+		t.Fatalf("registration survived source exit: %v", err)
 	}
 	// The source released its lease into a reservation, so the OS lock is free
 	// while the reservation itself stays durable for the named successor.
@@ -583,8 +603,42 @@ func TestCLIPeerReservationSurvivesSourceExit(t *testing.T) {
 	if !errors.Is(err, agent.ErrSessionLeaseHeld) {
 		t.Fatalf("uninvited writer acquired the reserved session: %v", err)
 	}
-	if err := leases.RebindWithHandoff(path, record.WriterID, grant.HandoffID); err != nil {
-		t.Fatalf("intended successor could not reconcile: %v", err)
+	switch entry {
+	case "startup":
+		loaded, err := bindAndLoadCLIResume(leases, path, loadResumableSession)
+		if err != nil {
+			t.Fatalf("startup retry: %v", err)
+		}
+		if got := loaded.Snapshot(); len(got) == 0 || got[len(got)-1].Content != "latest unsaved peer prompt" {
+			t.Fatalf("retry lost latest history: %+v", got)
+		}
+	case "resume", "load failure":
+		m := newPeerTestTUI(t)
+		sourcePath := m.ctrl.SessionPath()
+		if entry == "load failure" {
+			loadErr := errors.New("cannot load candidate")
+			err := m.commitSessionSwitchWithLoader(path, func(string) (*agent.Session, error) { return nil, loadErr })
+			if !errors.Is(err, loadErr) {
+				t.Fatalf("load failure: %v", err)
+			}
+			if m.ctrl.SessionPath() != sourcePath || m.leases.HeldPath() != agent.CanonicalSessionPath(sourcePath) {
+				t.Fatal("failed reconciliation lost source binding")
+			}
+			if err := m.ctrl.Snapshot(); err != nil {
+				t.Fatalf("source cannot save: %v", err)
+			}
+			return
+		}
+		if err := m.commitSessionSwitch(path); err != nil {
+			t.Fatalf("resume retry: %v", err)
+		}
+		if m.ctrl.SessionPath() != path {
+			t.Fatal("resume did not publish target")
+		}
+		if history := m.ctrl.History(); len(history) == 0 || history[len(history)-1].Content != "latest unsaved peer prompt" {
+			t.Fatalf("resume lost latest history: %+v", history)
+		}
+		leases = m.leases
 	}
 	if got := leases.HeldPath(); got != agent.CanonicalSessionPath(path) {
 		t.Fatalf("reconciled keeper holds %q", got)

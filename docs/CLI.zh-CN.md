@@ -31,8 +31,6 @@ reasonix --dir /path/to/project
 | `-c`、`--continue` | 恢复最近一次会话。 |
 | `-r`、`--resume [QUERY]` | 打开会话选择器，或恢复匹配的会话。 |
 | `--copy` | 复制要恢复的会话，并在可写副本中继续。 |
-| `--takeover` | 配合 `--resume`/`--continue`：当本机的常驻 serve 占用会话时，直接接管而不是拒绝。 |
-| `--takeover-mode MODE` | 接管排空模式：`wait`（默认）等持有方完成当前 turn，`interrupt` 先取消再接管。 |
 | `--allowed-tools RULES` | 增加仅当前会话生效的权限 allow 规则；可重复传入，`--allowedTools` 是别名。 |
 | `--permission-mode MODE` | 以指定的权限姿态启动。 |
 | `--yolo` | 以 YOLO 模式启动；是 `--dangerously-skip-permissions` 的别名。 |
@@ -330,7 +328,7 @@ machine session ID。Session lease 会阻止桌面端和 CLI 同时写入同一�
 - 另一个交互式 CLI 也能以同样方式协作。持有方保存最后一条未保存的 turn、让出租约并
   降级为只读横幅；在那边按 `R` 可尝试重新取得所有权，按 `Q` 退出。
 
-在接管提示中选择模式（或在 `--resume`/`--continue` 时用 `--takeover` 指定）：
+在交互式接管提示中选择模式：
 
 | 选项 | 行为 |
 | --- | --- |
@@ -342,7 +340,12 @@ machine session ID。Session lease 会阻止桌面端和 CLI 同时写入同一�
 `/resume` 被拒绝后会出现同样的提示；`/takeover [N]` 则直接对选择器索引为 `N` 的
 会话（或上一次被拒绝的目标）打开提示。失败时原子回滚：接管方保留原有会话，持有方
 在未明确让出前继续写入。如果移交响应丢失，持久的租约预约仍指向预期的接任者——
-重试 resume 会核对并收敛所有权，不需要手动杀进程。
+在同一 CLI 进程中重试 `/resume` 可恢复所有权，即使源 CLI 已退出。
+接管方重启后会生成新的写者身份，需要等待旧预约过期。
+
+非交互运行可使用 `reasonix run --resume SESSION --takeover --takeover-mode wait "prompt"`
+显式接管，也可把模式改为 `interrupt`。这两个参数仅属于 `reasonix run`；
+交互式 `reasonix` 使用上面的提示。常驻 serve 和交互式 CLI 都可以作为协作持有方。
 
 协作要求持有方是本机当前版本的 Reasonix：常驻 serve，或提供本机移交入口的交互式
 CLI。否则请关闭持有方，或使用 `--copy` 在复制会话中继续。
