@@ -330,6 +330,7 @@ type chatTUI struct {
 	// pendingTakeoverPath remembers the last /resume target refused because a
 	// resident serve on this machine holds its lease; "/takeover" force-takes
 	// that session back.
+	preview             *cliSessionPreview
 	pendingTakeoverPath string
 	// quickPick owns searchable single-choice overlays such as /model and
 	// /provider. It never invokes a raw-mode prompt inside Bubble Tea.
@@ -1079,6 +1080,9 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var inputBeforeSelection string
 
 	switch msg := msg.(type) {
+	case cliPreviewLoadedMsg:
+		m.applySessionPreview(msg)
+		return m, nil
 	case cliPeerRequest:
 		return m.handlePeerRequest(msg)
 	case cliPeerDoneMsg:
@@ -1285,11 +1289,17 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, finalize(m, cmds)
 
 	case tea.PasteMsg:
+		if m.preview != nil || m.peerGrant != nil || m.takeoverPrompt != nil {
+			return m, nil
+		}
 		return m.applyComposerPaste(msg, true)
 
 	case tea.KeyPressMsg:
 		if m.takeoverPrompt != nil {
 			return m.handleTakeoverKey(msg)
+		}
+		if m.preview != nil {
+			return m.handlePreviewKey(msg)
 		}
 		if m.peerGrant != nil {
 			return m.handleYieldedKey(msg)
@@ -1885,6 +1895,9 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case agentEventMsg:
+		if m.preview != nil || m.peerGrant != nil {
+			return m, waitForAgentEvent(m.eventCh)
+		}
 		e := event.Event(msg)
 		drained := m.drainAgentEvents(e)
 		cmds = append(cmds, waitForAgentEvent(m.eventCh))
@@ -2260,6 +2273,7 @@ func (m chatTUI) bottomRows() int {
 		m.renderMCPImport(),
 		m.renderResumePicker(),
 		m.renderTakeoverPrompt(),
+		m.renderReadOnlyNotice(),
 		m.renderQuickPicker(),
 		m.renderCopyPicker(),
 		m.renderCompletion(),
@@ -2302,7 +2316,7 @@ func (m chatTUI) bottomRows() int {
 // reserve rows for a composer that cannot receive input, leaving a confusing
 // blank/bordered area at the bottom of the TUI.
 func (m chatTUI) hideComposer() bool {
-	if m.takeoverPrompt != nil || m.mcp != nil || m.clearConfirm != nil || m.mcpImport != nil || m.skillPick != nil || m.resumePick != nil || m.quickPick != nil || m.copyPick != nil || m.rewind != nil || m.pendingApproval != nil {
+	if m.preview != nil || m.peerGrant != nil || m.takeoverPrompt != nil || m.mcp != nil || m.clearConfirm != nil || m.mcpImport != nil || m.skillPick != nil || m.resumePick != nil || m.quickPick != nil || m.copyPick != nil || m.rewind != nil || m.pendingApproval != nil {
 		return true
 	}
 	return (m.chooser != nil && !m.chooser.typing) || (m.elicit != nil && !m.elicit.typing)
@@ -3412,6 +3426,10 @@ func (m chatTUI) View() tea.View {
 		parts = append(parts, card)
 		rowsAboveBox += strings.Count(card, "\n") + 1
 	}
+	if card := m.renderReadOnlyNotice(); card != "" {
+		parts = append(parts, card)
+		rowsAboveBox += strings.Count(card, "\n") + 1
+	}
 	if card := m.renderTakeoverPrompt(); card != "" {
 		parts = append(parts, card)
 		rowsAboveBox += strings.Count(card, "\n") + 1
@@ -4290,6 +4308,10 @@ func elapsedTick(generation uint64) tea.Cmd {
 // output to scrollback; MCP prompt / custom commands resolve to a model turn.
 func (m *chatTUI) runSlashCommand(input string) tea.Cmd {
 	typedCmd := strings.TrimSpace(strings.SplitN(input, " ", 2)[0])
+	if (m.preview != nil || m.peerGrant != nil) && typedCmd != "/quit" && typedCmd != "/exit" {
+		m.notice(i18n.M.TakeoverViewHint)
+		return nil
+	}
 	if m.peerBusy && typedCmd != "/quit" && typedCmd != "/exit" {
 		m.notice(i18n.M.TakeoverBusy)
 		return nil

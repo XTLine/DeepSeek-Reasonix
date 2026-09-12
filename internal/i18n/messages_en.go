@@ -3,12 +3,15 @@ package i18n
 // English is the baseline catalogue. The drift-guard test reflects over its
 // fields, so every other catalogue must populate the same set.
 var English = Messages{
+	TakeoverView:     "View saved history, read-only (v)",
+	TakeoverViewHint: "Read-only snapshot · R: retry resume · V: refresh · Esc: back · Q: exit",
+
 	TakeoverYielded:        "This session was handed off. Press R to retry ownership, or Q to exit.",
 	TakeoverTitle:          "Take over session",
 	TakeoverCancel:         "Cancel",
 	TakeoverWait:           "Wait for current work, then take over (w)",
 	TakeoverInterrupt:      "Interrupt current work and take over (i)",
-	TakeoverTerminalPrompt: "Choose w / i, or Enter to cancel:",
+	TakeoverTerminalPrompt: "Choose w / i / v, or Enter to cancel:",
 	TakeoverUnavailable:    "No reachable cooperative session owner; an older CLI may need upgrading",
 	TakeoverBusy:           "Checking or transferring session ownership…",
 	TakeoverDone:           "Session taken over; this terminal can now continue",

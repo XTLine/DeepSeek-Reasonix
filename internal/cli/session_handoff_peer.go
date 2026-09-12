@@ -211,7 +211,7 @@ func (m chatTUI) handlePeerRequest(req cliPeerRequest) (tea.Model, tea.Cmd) {
 		req.reply <- cliPeerResponse{view: cliOwnershipView{Holder: "cli", Running: cliControllerHasActiveRuntimeWork(m.ctrl)}}
 		return m, next
 	}
-	if m.peerBusy || m.modelSwitchPending || m.takeoverPrompt != nil || (m.takeover != nil && (m.takeover.Reclaiming() || m.takeover.hasMirror())) {
+	if m.peerBusy || m.preview != nil || m.modelSwitchPending || m.takeoverPrompt != nil || (m.takeover != nil && (m.takeover.Reclaiming() || m.takeover.hasMirror())) {
 		return reject(fmt.Errorf("session is already switching or mirrored by Serve"))
 	}
 	ctrl, ok := m.ctrl.(*control.Controller)

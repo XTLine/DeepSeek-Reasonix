@@ -1091,13 +1091,17 @@ func chatREPL(args []string, version string) int {
 	}()
 	var takeoverBinding *cliTakeoverBinding
 	var startupResumeSession *agent.Session
+	var startupPreviewPath string
 	if resumePath != "" {
 		startupResumeSession, err = bindAndLoadCLIResume(leases, resumePath, loadResumableSession)
 		takeoverMode := ""
 		if errors.Is(err, agent.ErrSessionLeaseHeld) {
 			takeoverMode = promptCLITakeoverMode(resumePath, err)
 		}
-		if takeoverMode != "" {
+		if takeoverMode == "view" {
+			startupPreviewPath, resumePath, err = resumePath, "", nil
+		}
+		if takeoverMode == "wait" || takeoverMode == "interrupt" {
 			takeoverBinding, err = cliTakeoverHeldSessionMode(resumePath, err, leases, takeoverManager, takeoverMode)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
@@ -1299,6 +1303,9 @@ func chatREPL(args []string, version string) int {
 	// in the normal buffer so native touch scrollback and soft-keyboard focus
 	// keep working; finalized transcript lines are emitted via tea.Println.
 	diagnostics.Milestone("terminal_takeover_begin")
+	if startupPreviewPath != "" {
+		m.openSessionPreview(startupPreviewPath)
+	}
 	m.peer, err = newCLIPeerServer(cliPeerDirectory())
 	if err != nil {
 		m.notice("CLI handoff endpoint: " + err.Error())

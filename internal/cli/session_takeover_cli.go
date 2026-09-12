@@ -324,23 +324,28 @@ func promptCLITakeoverMode(path string, leaseErr error) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	view, err := queryCLITakeover(ctx, path)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return ""
-	}
+	view, queryErr := queryCLITakeover(ctx, path)
 	fmt.Fprintln(os.Stderr, control.SessionInUseMessage(leaseErr))
-	fmt.Fprintln(os.Stderr, i18n.M.TakeoverWait)
-	if view.Running {
-		fmt.Fprintln(os.Stderr, i18n.M.TakeoverInterrupt)
+	if queryErr != nil {
+		fmt.Fprintln(os.Stderr, queryErr)
+	} else {
+		fmt.Fprintln(os.Stderr, i18n.M.TakeoverWait)
+		if view.Running {
+			fmt.Fprintln(os.Stderr, i18n.M.TakeoverInterrupt)
+		}
 	}
+	fmt.Fprintln(os.Stderr, i18n.M.TakeoverView)
 	fmt.Fprint(os.Stderr, i18n.M.TakeoverTerminalPrompt+" ")
 	answer, _ := readCLITakeoverAnswer()
 	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "v":
+		return "view"
 	case "w", "y", "yes":
-		return "wait"
+		if queryErr == nil {
+			return "wait"
+		}
 	case "i":
-		if view.Running {
+		if queryErr == nil && view.Running {
 			return "interrupt"
 		}
 	}

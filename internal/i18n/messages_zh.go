@@ -4,12 +4,15 @@ package i18n
 // as English unless a phrase genuinely demands re-ordering — call sites pass
 // arguments positionally and won't reshuffle.
 var Chinese = Messages{
+	TakeoverView:     "只读查看已保存的历史（v）",
+	TakeoverViewHint: "只读历史快照 · R：重试恢复 · V：刷新 · Esc：返回 · Q：退出",
+
 	TakeoverYielded:        "会话已移交。按 R 尝试重新接管，按 Q 退出。",
 	TakeoverTitle:          "接管会话",
 	TakeoverCancel:         "取消",
 	TakeoverWait:           "等待当前工作结束后接管（w）",
 	TakeoverInterrupt:      "中断当前工作并接管（i）",
-	TakeoverTerminalPrompt: "输入 w / i，或按回车取消：",
+	TakeoverTerminalPrompt: "输入 w / i / v，或按回车取消：",
 	TakeoverUnavailable:    "未找到可连接的协作占用端；旧版 CLI 可能需要升级",
 	TakeoverBusy:           "正在查询或移交会话…",
 	TakeoverDone:           "会话已接管，可以在此终端继续",

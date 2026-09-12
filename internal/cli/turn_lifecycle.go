@@ -32,7 +32,7 @@ func (m *chatTUI) startControllerTurn(displayed, restore string, start func()) t
 }
 
 func (m *chatTUI) startControllerTurnWithQueue(displayed, restore, queued string, start func()) tea.Cmd {
-	if m.peerBusy || m.peerGrant != nil || m.takeoverPrompt != nil {
+	if m.preview != nil || m.peerBusy || m.peerGrant != nil || m.takeoverPrompt != nil {
 		return nil
 	}
 	if m.takeover != nil && m.takeover.Reclaiming() {

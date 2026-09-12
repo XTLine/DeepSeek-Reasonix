@@ -26,7 +26,7 @@ func TestTakeoverChoiceTracksRunningStateAndRejectsStaleQuery(t *testing.T) {
 	}
 	for _, running := range []bool{false, true} {
 		m.applyTakeoverQuery(cliTakeoverQueryMsg{request: m.takeoverPrompt, view: cliOwnershipView{Running: running}})
-		want := 2
+		want := 3
 		if running {
 			want++
 		}

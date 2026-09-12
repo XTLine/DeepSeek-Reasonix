@@ -56,7 +56,7 @@ func (m *chatTUI) applyTakeoverQuery(msg cliTakeoverQueryMsg) {
 	}
 	p := m.takeoverPrompt
 	p.querying, p.err = false, msg.err
-	items := []quickPickerItem{{ID: "cancel", Label: i18n.M.TakeoverCancel}}
+	items := []quickPickerItem{{ID: "cancel", Label: i18n.M.TakeoverCancel}, {ID: "view", Label: i18n.M.TakeoverView}}
 	if msg.err == nil {
 		items = append(items, quickPickerItem{ID: "wait", Label: i18n.M.TakeoverWait})
 		if msg.view.Running {
@@ -86,13 +86,17 @@ func (m chatTUI) handleTakeoverKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if choice.choice == nil {
 		return m, nil
 	}
+	if choice.choice.ID == "view" {
+		m.openSessionPreview(p.path)
+		return m, nil
+	}
 	if cliControllerHasActiveRuntimeWork(m.ctrl) || m.modelSwitchPending {
 		m.notice(i18n.M.ResumeBusy)
 		return m, nil
 	}
 	mode := choice.choice.ID
 	var reopen func()
-	if ctrl, ok := m.ctrl.(*control.Controller); ok && m.peerGrant == nil {
+	if ctrl, ok := m.ctrl.(*control.Controller); ok && m.peerGrant == nil && m.preview == nil {
 		var err error
 		reopen, err = ctrl.BeginSessionHandoff(false)
 		if err != nil {
@@ -162,6 +166,12 @@ func (m chatTUI) finishTakeover(msg cliTakeoverDoneMsg) (tea.Model, tea.Cmd) {
 		p.err = err
 		m.notice("takeover: " + err.Error())
 	} else {
+		if m.preview != nil {
+			if m.preview.reopen != nil {
+				m.preview.reopen()
+			}
+			m.preview = nil
+		}
 		m.peerGrant = nil
 		if m.peerReopen != nil {
 			m.peerReopen()
