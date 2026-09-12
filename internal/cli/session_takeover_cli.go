@@ -164,6 +164,12 @@ func cliTakeoverHeldSessionMode(sessionPath string, leaseErr error, leases *cont
 	var leaseError *agent.SessionLeaseError
 	if errors.As(leaseErr, &leaseError) && leaseError != nil && leaseError.Info != nil {
 		pid = leaseError.Info.PID
+		if !localCLILease(leaseError.Info) {
+			return nil, fmt.Errorf("session owner is not on this host")
+		}
+		if peer, err := findCLIPeer(leaseError.Info); err == nil {
+			return acquireCLIPeerSession(sessionPath, *peer, leases, manager, mode)
+		}
 	}
 	if pid <= 0 {
 		return nil, fmt.Errorf("%w; no local serve identity to take over from", agent.ErrSessionLeaseHeld)
@@ -280,6 +286,16 @@ func cliOwnership(ctx context.Context, client *http.Client, record cliServeRecor
 }
 
 func queryCLITakeover(ctx context.Context, path string) (cliOwnershipView, error) {
+	info, held, inspectErr := agent.InspectSessionLease(path)
+	if inspectErr == nil && !held && (info == nil || info.HandoffID == "" || time.Now().After(info.HandoffExpiresAt)) {
+		return cliOwnershipView{Holder: "free"}, nil
+	}
+	if peer, err := findCLIPeer(info); err == nil {
+		return queryCLIPeer(ctx, *peer, path)
+	}
+	if info != nil && !localCLILease(info) {
+		return cliOwnershipView{}, fmt.Errorf("session owner is not on this host")
+	}
 	var lastErr error
 	for _, record := range discoverCLIServesForTakeover() {
 		client, err := cliServeClient(ctx, record)
