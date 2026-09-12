@@ -292,16 +292,19 @@ when Serve already holds the target session. Discovery retries if Serve starts
 later. The desktop can open the same session, read its history, and observe live
 output without changing the session currently selected in another tab.
 
-**Take back** asks the registered TUI to finish its active work and return its
-write lease. The TUI then exits its session; the desktop becomes writable only
-after Serve has acquired and loaded the returned session. Switching sessions in
-the TUI returns the old mirror and registers the new session.
+**Take back** shows the registered TUI's host and PID, asks for confirmation,
+interrupts active work, and returns its write lease. The TUI then exits its
+session; the desktop becomes writable only after Serve has acquired and loaded
+the returned session. Switching sessions in the TUI returns the old mirror and
+registers the new session.
 
 An older CLI or an unregistered process can hold a session without a sharing
-connection. The desktop explains this state instead of offering a nonfunctional
-**Take back** button. Exit that session in the remote terminal or window, then
-reopen it from the desktop. Updating a binary does not update an already-running
-TUI process.
+connection. When its lease identifies a live Reasonix executable on the Serve
+host, the desktop shows that host and PID and can force-stop the verified holder
+after confirmation. Serve still waits for the OS lock to be released before it
+loads the session. An unverifiable holder stays read-only and must be exited in
+the remote terminal or window. Updating a binary does not update an
+already-running TUI process.
 
 ## Desktop remote work
 
@@ -413,7 +416,7 @@ never re-prompt; a desktop restart requires entering them again.
 | Suspected incompatible older serve | A failed capability probe upgrades automatically; if needed, `remote serve stop` then reconnect to force a fresh bootstrap |
 | `connect` stuck bootstrapping | Concurrent bootstraps are serialized by a remote file lock that expires after at most 60 seconds; retry shortly |
 | Session reports "in use" | Another process holds the session's lease (another window or serve). Exit from that side or wait for the holder to release |
-| Remote tab switched to spectator mode | A remote terminal or window owns the session. Use Take back when sharing is connected; otherwise exit the session there and reopen it here |
+| Remote tab switched to spectator mode | A remote terminal or window owns the session. Use Take back to interrupt a registered TUI or a verified local Reasonix holder; otherwise exit the unverifiable holder there and reopen the session |
 | `local-proxy` model calls failing | The watchdog heals automatically; confirm the desktop is online and SSH is connected. Never hand-edit the managed remote provider block |
 | Authentication failure keeps coming back | Auth failure is terminal and never retried. Check the `.env` slots and key passphrase, or switch to the SSH agent |
 | Windows local side | The CLI and desktop are supported, but V1 cannot use the OpenSSH named-pipe agent; configure an identity file or password. Remote hosts must still be Linux/macOS |

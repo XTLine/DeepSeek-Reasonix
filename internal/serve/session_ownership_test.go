@@ -966,3 +966,25 @@ func TestAutoReclaimCompletesOutstandingReclaim(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestForceReclaimValidatesAndTerminatesExactReasonixHolder(t *testing.T) {
+	host, _ := os.Hostname()
+	previousCheck, previousTerminate := reasonixSessionHolderProcess, terminateReasonixSessionHolder
+	t.Cleanup(func() {
+		reasonixSessionHolderProcess = previousCheck
+		terminateReasonixSessionHolder = previousTerminate
+	})
+	checked, terminated := 0, 0
+	reasonixSessionHolderProcess = func(pid int) bool { checked = pid; return pid == 424242 }
+	terminateReasonixSessionHolder = func(pid int) error { terminated = pid; return nil }
+	info := &agent.SessionLeaseInfo{PID: 424242, Hostname: host, WriterID: "writer-generation"}
+	if err := validateAndTerminateSessionWriter(info, "writer-generation"); err != nil {
+		t.Fatal(err)
+	}
+	if checked != info.PID || terminated != info.PID {
+		t.Fatalf("force reclaim checked=%d terminated=%d", checked, terminated)
+	}
+	if err := validateAndTerminateSessionWriter(info, "different-generation"); err == nil {
+		t.Fatal("force reclaim accepted a changed writer generation")
+	}
+}

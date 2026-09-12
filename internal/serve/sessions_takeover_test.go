@@ -67,7 +67,7 @@ func TestForeignWriterOwnershipExplainsUnavailableReclaim(t *testing.T) {
 		t.Fatalf("foreign status = %d %s", status, body)
 	}
 	status, body = f.post(t, "/reclaim", map[string]any{"sessionPath": other})
-	if status != http.StatusConflict || !strings.Contains(body, "remote terminal or window") {
+	if status != http.StatusConflict || !strings.Contains(body, "retry with force") {
 		t.Fatalf("reclaim = %d %s", status, body)
 	}
 	if !held.Load() {
