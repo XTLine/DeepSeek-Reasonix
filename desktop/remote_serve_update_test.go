@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,5 +134,59 @@ func TestEnsureServerDoesNotForceUpgrade(t *testing.T) {
 	}
 	if view.State != "ready" || view.ServeVersion != "1.9.5" {
 		t.Fatalf("ready view must carry the serve version: %+v", view)
+	}
+}
+
+func TestUpdateRemoteServerReattachesTabs(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", Workspace: "~/app", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+	before := kernel.ensureCalls
+	if err := a.UpdateRemoteServer("box", "~/app"); err != nil {
+		t.Fatal(err)
+	}
+	if kernel.updateCalls != 1 {
+		t.Fatalf("kernel UpdateServer calls = %d, want 1", kernel.updateCalls)
+	}
+	waitForTabState(t, a, meta.ID, "ready")
+	a.remoteTabMu.Lock()
+	_, client := a.remoteTabs[meta.ID].state, a.remoteTabs[meta.ID].client
+	a.remoteTabMu.Unlock()
+	if client == nil {
+		t.Fatal("reattached tab must have a live client")
+	}
+	if kernel.ensureCalls <= before {
+		t.Fatalf("reattach must drive a fresh ensure: %d -> %d", before, kernel.ensureCalls)
+	}
+}
+
+func TestUpdateRemoteServerErrorStillReattaches(t *testing.T) {
+	fs := newFakeServe(t, "s3cret", nil)
+	kernel := &fakeRemoteKernel{
+		statuses:   []RemoteConnectionStatusView{{HostID: "box", State: "connected"}},
+		ensureView: RemoteServerView{HostID: "box", Workspace: "~/app", State: "ready", LocalURL: fs.server.URL}, ensureToken: "s3cret",
+	}
+	seedBridgeTestHost(t, "box")
+	a := &App{remoteRuntime: kernel}
+	cleanupRemoteTabPumps(t, a)
+	meta := openReadyRemoteTab(t, a, RemoteTabOpenOptions{NewSession: true})
+	kernel.ensureErr = errors.New("boom")
+	before := kernel.ensureCalls
+	err := a.UpdateRemoteServer("box", "~/app")
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v, want the kernel failure", err)
+	}
+	if kernel.updateCalls != 1 {
+		t.Fatalf("kernel UpdateServer calls = %d, want 1", kernel.updateCalls)
+	}
+	waitForTabState(t, a, meta.ID, "error")
+	if kernel.ensureCalls <= before {
+		t.Fatalf("a failed update must still reattach tabs: %d -> %d", before, kernel.ensureCalls)
 	}
 }

@@ -3,7 +3,7 @@
 
 export const DESKTOP_PROTOCOL_VERSION = 1;
 
-export const DESKTOP_CONTRACT_DIGEST = "sha256:09e42772bf1f9f5619f90a36c16fcd4b2ab5ebf73655fe73bc39d8cf4ae59f08";
+export const DESKTOP_CONTRACT_DIGEST = "sha256:cf1ba48af804b67084fc0a8af410b4d1565e099a055fbfad2e7d2a5123c17c75";
 
 export const DESKTOP_COMMANDS = [
   "AIRenameSession",
@@ -583,6 +583,7 @@ export const DESKTOP_COMMANDS = [
   "UpdateMCPServer",
   "UpdatePlugin",
   "UpdateRemoteHost",
+  "UpdateRemoteServer",
   "UpdateSubagentProfile",
   "UpgradeDeepSeekProviderAccess",
   "UsageStats",
@@ -3072,6 +3073,8 @@ export interface RemoteServerView {
   message?: string;
   localUrl?: string;
   instanceId?: string;
+  serveVersion?: string;
+  updateAvailable?: boolean;
   error?: string;
 }
 
@@ -4978,6 +4981,7 @@ export interface GeneratedDesktopCommands {
   UpdateMCPServer(arg0: string, arg1: MCPServerInput): Promise<void>;
   UpdatePlugin(arg0: string): Promise<string>;
   UpdateRemoteHost(arg0: string, arg1: RemoteHostInput): Promise<RemoteHostView>;
+  UpdateRemoteServer(arg0: string, arg1: string): Promise<void>;
   UpdateSubagentProfile(arg0: string, arg1: string, arg2: SubagentProfileInput): Promise<void>;
   UpgradeDeepSeekProviderAccess(arg0: string): Promise<string>;
   UsageStats(arg0: UsageStatsRequest): Promise<UsageStatsRange>;
