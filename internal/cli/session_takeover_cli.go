@@ -707,7 +707,7 @@ func (m *cliTakeoverManager) returnLeaseFor(expected *cliTakeoverBinding, revisi
 // one. It lets /resume and related TUI switches keep their original failure
 // atomicity while still honoring Serve's reverse reservation.
 func (m *cliTakeoverManager) RebindAway(path string) (bool, error) {
-	if m == nil {
+	if m == nil || m.leases == nil {
 		return false, nil
 	}
 	m.sendMu.Lock()

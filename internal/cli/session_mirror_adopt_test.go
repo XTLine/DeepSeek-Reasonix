@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -127,12 +128,17 @@ func TestCLIOrdinaryMirrorDiscoveryRetriesAndRejectsWrongGrant(t *testing.T) {
 	defer func() { discoverCLIServesForTakeover = previous }()
 	discoverCLIServesForTakeover = func() []cliServeRecord { return nil }
 	m.push(true)
+	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/auth/token" {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(cliTakeoverGrant{SessionPath: path, MirrorID: "mirror", SourceWriterID: "serve", TargetWriterID: "another-writer", ReturnHandoffID: "return"})
+		writer := agent.SessionWriterID()
+		if attempts.Add(1) == 1 {
+			writer = "another-writer"
+		}
+		_ = json.NewEncoder(w).Encode(cliTakeoverGrant{SessionPath: path, MirrorID: "mirror", SourceWriterID: "serve", TargetWriterID: writer, ReturnHandoffID: "return"})
 	}))
 	defer srv.Close()
 	discoverCLIServesForTakeover = func() []cliServeRecord { return []cliServeRecord{{base: srv.URL}} }
@@ -143,5 +149,66 @@ func TestCLIOrdinaryMirrorDiscoveryRetriesAndRejectsWrongGrant(t *testing.T) {
 	}
 	if leases.HeldPath() != agent.CanonicalSessionPath(path) {
 		t.Fatal("discovery lost ordinary lease")
+	}
+	m.discoverAfter = time.Time{}
+	m.push(true)
+	if binding, _, _, _ := m.snapshot(); binding == nil || binding.path != agent.CanonicalSessionPath(path) {
+		t.Fatal("discovery did not recover when a valid Serve became available")
+	}
+}
+
+func TestCLIAdoptionSerializesWithOrdinaryResumeAcquisition(t *testing.T) {
+	dir := t.TempDir()
+	source, target := filepath.Join(dir, "source.jsonl"), filepath.Join(dir, "target.jsonl")
+	leases := control.NewSessionLeaseKeeper()
+	defer leases.Release()
+	if err := leases.Rebind(source); err != nil {
+		t.Fatal(err)
+	}
+	ctrl := control.New(control.Options{SessionPath: source})
+	defer ctrl.Close()
+	m := newCLITakeoverManager(event.Discard, leases)
+	m.AttachController(ctrl)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/token" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		close(entered)
+		<-release
+		_ = json.NewEncoder(w).Encode(cliTakeoverGrant{SessionPath: source, MirrorID: "ordinary", SourceWriterID: "serve", TargetWriterID: agent.SessionWriterID(), ReturnHandoffID: "return"})
+	}))
+	defer srv.Close()
+	defer unblock()
+	previous := discoverCLIServesForTakeover
+	discoverCLIServesForTakeover = func() []cliServeRecord { return []cliServeRecord{{base: srv.URL}} }
+	defer func() { discoverCLIServesForTakeover = previous }()
+	discovered := make(chan struct{})
+	go func() { m.push(true); close(discovered) }()
+	<-entered
+	acquired := make(chan *cliTakeoverBinding, 1)
+	acquisitionErr := make(chan error, 1)
+	go func() {
+		binding, err := cliAcquireFreeSession(target, leases, m)
+		acquired <- binding
+		acquisitionErr <- err
+	}()
+	unblock()
+	<-discovered
+	binding := <-acquired
+	if err := <-acquisitionErr; err != nil {
+		t.Fatal(err)
+	}
+	if binding.priorMirror == nil || binding.priorMirror.path != agent.CanonicalSessionPath(source) {
+		t.Fatal("resume missed the newly registered source mirror")
+	}
+	if err := cliReturnFailedTakeover(binding, leases, m); err != nil {
+		t.Fatal(err)
+	}
+	if leases.HeldPath() != agent.CanonicalSessionPath(source) {
+		t.Fatal("failed candidate did not restore the registered source")
 	}
 }
