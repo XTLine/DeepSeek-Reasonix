@@ -265,11 +265,7 @@ func (m *chatTUI) runResumeCommand(input string) {
 	}
 	m.followSessionLease()
 	if err := m.commitSessionSwitch(target.session.Path); err != nil {
-		m.notice("resume: " + sessionLeaseHeldNotice(err))
-		if cliSessionTakeoverCandidate(err) {
-			m.pendingTakeoverPath = target.session.Path
-			m.notice("run /takeover to take this session over from the resident serve")
-		}
+		m.recordResumeConflict(target.session.Path, err)
 		return
 	}
 	m.replayActiveBranch(i18n.M.ResumedTitle)

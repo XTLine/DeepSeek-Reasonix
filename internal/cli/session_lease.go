@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -53,7 +54,23 @@ func sessionLeaseResumeRefusal(err error) string {
 // sessionLeaseHeldNotice is the in-TUI refusal for /resume and /switch, where
 // exiting to rerun with --copy is not the natural move.
 func sessionLeaseHeldNotice(err error) string {
+	if !errors.Is(err, agent.ErrSessionLeaseHeld) {
+		return err.Error()
+	}
 	return control.SessionInUseMessage(err) + "; " + control.SessionLeaseCloseHint
+}
+
+// recordResumeConflict pins a refused selection to its path, never its mutable
+// picker index. Non-ownership failures must not offer a takeover of an old row.
+func (m *chatTUI) recordResumeConflict(path string, err error) {
+	m.pendingTakeoverPath = ""
+	m.notice("resume: " + sessionLeaseHeldNotice(err))
+	if errors.Is(err, agent.ErrSessionLeaseHeld) {
+		m.pendingTakeoverPath = path
+		if cliSessionTakeoverCandidate(err) {
+			m.notice("run /takeover to take this session over from the resident serve")
+		}
+	}
 }
 
 // rebindSessionLease moves the chat TUI's session lease to path before the

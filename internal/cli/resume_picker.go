@@ -130,11 +130,7 @@ func (m chatTUI) applyResumePick() (tea.Model, tea.Cmd) {
 	}
 	m.followSessionLease()
 	if err := m.commitSessionSwitch(target.Path); err != nil {
-		m.notice("resume: " + sessionLeaseHeldNotice(err))
-		if cliSessionTakeoverCandidate(err) {
-			m.pendingTakeoverPath = target.Path
-			m.notice("run /takeover to take this session over from the resident serve")
-		}
+		m.recordResumeConflict(target.Path, err)
 		return m, nil
 	}
 	m.replayActiveBranch(i18n.M.ResumedTitle)
