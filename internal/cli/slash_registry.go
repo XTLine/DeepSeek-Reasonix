@@ -29,6 +29,7 @@ func builtinSlashSpecs() []builtinSlashSpec {
 		{name: "/clear", insert: "/clear", hint: i18n.M.CmdClear, showInHelp: true},
 		{name: "/cls", insert: "/cls", hint: i18n.M.CmdCls, showInHelp: true},
 		{name: "/resume", insert: "/resume ", hint: i18n.M.CmdResume, showInHelp: true},
+		{name: "/takeover", insert: "/takeover ", hint: i18n.M.CmdTakeover, showInHelp: true},
 		{name: "/rename", insert: "/rename ", hint: i18n.M.CmdRename, showInHelp: true},
 		{name: "/rewind", insert: "/rewind", hint: i18n.M.CmdRewind, showInHelp: true},
 		{name: "/tree", insert: "/tree", hint: i18n.M.CmdTree, showInHelp: true},

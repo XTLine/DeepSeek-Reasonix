@@ -36,6 +36,8 @@ Running `reasonix` without a subcommand starts the interactive terminal UI. Use
 | `-c`, `--continue` | Resume the most recent session. |
 | `-r`, `--resume [QUERY]` | Open the session picker, or resume a matching session. |
 | `--copy` | Continue in a writable copy of the resumed session. |
+| `--takeover` | With `--resume`/`--continue`: when a resident serve on this machine holds the session, take it over instead of refusing. |
+| `--takeover-mode MODE` | Takeover drain mode: `wait` (default) lets the holder finish its turn, `interrupt` cancels it first. |
 | `--allowed-tools RULES` | Add session-only permission allow rules. Repeatable; `--allowedTools` is an alias. |
 | `--permission-mode MODE` | Start with a specific permission posture. |
 | `--yolo` | Start in YOLO mode; alias for `--dangerously-skip-permissions`. |
@@ -358,6 +360,42 @@ path, a session ID, or an opaque machine session ID from `--events-jsonl` /
 `reasonix session show --json`. Session leases prevent the desktop app and CLI
 from writing the same transcript concurrently.
 
+### Take over an occupied session
+
+When the session you resume is already held by another Reasonix window or
+process on this machine, the refusal names the holder and offers a cooperative
+takeover instead of a dead end:
+
+- A resident `reasonix serve` (the process a desktop left behind over SSH) can
+  hand the session over. The serve snapshots the holder's unsaved work before
+  releasing, the taking CLI becomes the writer, and the remote desktop tab
+  stays attached read-only and can take the session back later.
+- Another interactive CLI can cooperate the same way. The holder saves its
+  final unsaved turn, yields the lease, and drops to a read-only banner; press
+  `R` there to retry ownership or `Q` to exit.
+
+Choose the mode in the takeover prompt (or with `--takeover` for
+`--resume`/`--continue`):
+
+| Choice | Behavior |
+| --- | --- |
+| Wait (`w`) | Let the holder finish its running turn, then take over. Bounded by a two-minute drain window. |
+| Interrupt (`i`) | Cancel the holder's running turn first. Offered only while a turn is running. |
+| View (`v`) | Read-only preview of the saved history. No write lease is taken; your draft and current session stay intact. |
+| Cancel | Keep the current session. |
+
+The same prompt appears after a refused `/resume`, and `/takeover [N]` opens it
+directly for the session at picker index `N` (or the last refused target).
+Failure rolls back atomically: the taker keeps its previous session and the
+holder keeps writing unless it explicitly yielded. If the handoff response is
+lost, the durable lease reservation still names the intended successor —
+retrying resume reconciles ownership instead of forcing a process kill.
+
+Cooperation requires the holder to be a current Reasonix on this machine: a
+resident serve, or an interactive CLI advertising the local handoff endpoint.
+Otherwise close the holder, or rerun with `--copy` to continue in a duplicated
+session.
+
 ## Permissions
 
 ```sh
@@ -480,6 +518,7 @@ the displayed list matches the commands the TUI accepts.
 | `/model` | Search configured models and switch the active model. |
 | `/provider` | Choose a provider, then choose one of its configured models. |
 | `/resume` | Search recent sessions and switch to one. |
+| `/takeover [N]` | Take over the session at picker index N (default: the last refused resume target) from the window or process holding it. |
 | `/status` | Show model, effort, cache, Git, background jobs, and balance details. |
 | `/theme [auto\|light\|dark\|style]` | View or change the CLI background mode and accent palette. |
 | `/currency [auto\|CNY\|USD]` | View or change the user-global fee display currency and refresh the runtime. |

@@ -316,6 +316,7 @@ var ChineseTraditional = Messages{
 	CmdBranch:           "建立對話分支",
 	CmdSwitchBranch:     "切換對話分支",
 	CmdResume:           "恢復已儲存的會話",
+	CmdTakeover:         "接管被其他視窗或處理程序佔用的會話",
 	CmdModel:            "切換模型",
 	CmdStatus:           "顯示工作階段狀態",
 	CmdWorkMode:         "會話質量底線：standard / delivery",

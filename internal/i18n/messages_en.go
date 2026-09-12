@@ -326,6 +326,7 @@ var English = Messages{
 	CmdBranch:           "create a conversation branch",
 	CmdSwitchBranch:     "switch conversation branch",
 	CmdResume:           "resume a saved session",
+	CmdTakeover:         "take over a session held by another window or process",
 	CmdRename:           "rename a session",
 	CmdModel:            "switch model",
 	CmdStatus:           "show session status",

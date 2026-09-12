@@ -64,6 +64,60 @@ Format-1 sessions keep the previous rules until they are upgraded:
    Lease rebinds keep that lane; later conflicts update the same path. There is
    no recovery-on-recovery chain.
 
+## Cooperative takeover and handoff
+
+Every ownership transfer is cooperative: nothing preempts a live lease. When a
+resume finds the session held, the refusal names the holder, and the surfaces
+offer a takeover when the holder can cooperate.
+
+**Serve handoff (desktop over SSH).** A resident `reasonix serve` discovered
+through the bootstrap state files under `<home>/remote` answers an ownership
+query (`GET /ownership`) and accepts `POST /handoff`. It drains the current
+turn (`wait`) or cancels it (`interrupt`), snapshots the in-memory transcript,
+and publishes a target-writer reservation (`ReleaseForHandoff`) before the
+grant returns. The taking CLI consumes the reservation
+(`TryAcquireSessionLeaseWithHandoff`), reloads the snapshot, and mirrors its
+typed frames back through `POST /external/frames`; the remote tab stays
+attached read-only. The remote side can `POST /reclaim`: the CLI sees the
+request on its next frame push or heartbeat, quiesces, and returns the lease
+through the grant's reverse reservation, which serve consumes to re-own the
+session with the CLI's latest transcript. A writer that goes silent is
+auto-reclaimed after a staleness window.
+
+**CLI-to-CLI handoff.** An interactive CLI advertises a loopback-only,
+token-authenticated endpoint registered as `<home>/cli-handoff/cli-<pid>.json`
+(host, bearer token, and writer identity are all cross-checked; browser
+origins and foreign Host headers are refused). The endpoint exposes only
+ownership queries and the handoff request — never prompt submission or tools.
+Requests are admitted through the TUI event loop so a handoff cannot race a
+session or model switch. The admitting side seals turn admission
+(`BeginSessionHandoff`), waits for idle (or cancels first), snapshots, and
+reserves the lease for the requester. After the grant, the holder is read-only:
+`R` retries ownership, `Q` exits.
+
+**Reservations and failure.** A reservation names one successor writer and a
+handoff generation, fenced by the OS lease lock and bounded by an expiry
+window; a plain contender cannot race between publication and unlock. The
+holder keeps one grant per successor, so a lost HTTP response is reconciled by
+retrying the same request — the grant is returned idempotently, never
+re-issued. A third writer is refused. If the successor cannot confirm the
+outcome, the reservation remains durable for the named writer; retrying
+resume reconciles ownership. Takeover failures roll back atomically: the
+taker's own lease and controller are restored before the target is released,
+and a failed reverse reservation keeps the detached target fenced and retried
+rather than publishing mirror-end.
+
+**Read-only view.** When no cooperation is possible, the takeover prompt still
+offers a read-only preview of the saved history: no lease is taken, the
+holder's file is untouched, the viewer's draft and session are preserved, and
+every mutating entry point is sealed until the preview closes. It is a
+point-in-time view, not a live mirror.
+
+Live spectating of a CLI-held session, bidirectional take-back between plain
+CLIs, and migrating a running tool process are out of scope for this protocol:
+a handoff moves the transcript and the write lease, and the outgoing side
+stops before the incoming side starts.
+
 ## Heads as versions
 
 Fork-from-here, `/branch`, and a conversation rewind append a `fork` marker

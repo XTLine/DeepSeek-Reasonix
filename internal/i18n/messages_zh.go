@@ -327,6 +327,7 @@ var Chinese = Messages{
 	CmdBranch:           "创建对话分支",
 	CmdSwitchBranch:     "切换对话分支",
 	CmdResume:           "恢复已保存的会话",
+	CmdTakeover:         "接管被其他窗口或进程占用的会话",
 	CmdRename:           "重命名会话",
 	CmdModel:            "切换模型",
 	CmdStatus:           "显示会话状态",

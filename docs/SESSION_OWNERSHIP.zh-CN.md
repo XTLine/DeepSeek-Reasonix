@@ -53,6 +53,43 @@ Reasonix 1.39.0 之前保存的会话使用格式 1：整文件 transcript 加�
    Session 首次 writer generation 决定的稳定 recovery 文件。lease 重绑不会
    改变该 lane；后续冲突更新同一路径，不再嵌套。
 
+## 协作接管与移交
+
+所有所有权转移都是协作式的：任何操作都不会抢占活跃租约。resume 发现会话被占用时，
+拒绝信息会指名持有方；当持有方可以协作时，各入口会提供接管选项。
+
+**serve 移交（SSH 上的桌面端）。** 通过 `<home>/remote` 下的 bootstrap 状态文件
+发现的常驻 `reasonix serve` 会应答所有权查询（`GET /ownership`）并接受
+`POST /handoff`。它先排空当前 turn（`wait`）或取消（`interrupt`），把内存中的
+transcript 落盘，再发布指向目标写者的预约（`ReleaseForHandoff`），然后才返回
+grant。接管的 CLI 消费该预约（`TryAcquireSessionLeaseWithHandoff`），重新加载
+快照，并通过 `POST /external/frames` 把自己的类型化帧镜像回去；远端标签页保持
+只读连接。远端可以 `POST /reclaim` 取回：CLI 在下一次帧推送或心跳中看到请求，
+静默排空后通过 grant 的反向预约归还租约，serve 消费它并带着 CLI 的最新
+transcript 重新持有会话。写者失联超过 staleness 窗口后会被自动回收。
+
+**CLI 之间的移交。** 交互式 CLI 会注册 `<home>/cli-handoff/cli-<pid>.json`，
+通告一个仅监听 loopback、token 鉴权的入口（主机、bearer token 与写者身份三方
+交叉校验；浏览器 Origin 和外来 Host 一律拒绝）。该入口只暴露所有权查询与移交
+请求——绝不接受提交 prompt 或执行工具。请求经由 TUI 事件循环裁决，因此移交
+不会与会话或模型切换竞争。准入方封住 turn 准入（`BeginSessionHandoff`），等待
+空闲（或先取消），落盘快照，再把租约预约给请求方。grant 之后持有方转为只读：
+`R` 重试取得所有权，`Q` 退出。
+
+**预约与失败语义。** 预约只指名一个后继写者和一个移交代，由 OS 租约锁隔离并以
+过期窗口为界；普通竞争者无法在预约发布与解锁之间插入。持有方对每个后继只保留
+一份 grant，因此 HTTP 响应丢失时重发同一请求即可收敛——grant 幂等返回，绝不
+重发新的。第三写者一律拒绝。若后继无法确认结果，预约对指名的写者仍然持久；
+重试 resume 即可核对所有权。接管失败原子回滚：先恢复接管方自己的租约与控制器
+再释放目标；反向预约失败时，被分离的目标保持隔离并重试，而不是发布 mirror-end。
+
+**只读查看。** 无法协作时，接管提示仍提供已保存历史的只读预览：不取租约、不动
+持有方文件、保留查看方的草稿与会话，预览关闭前所有修改入口被封住。它是时点
+视图，不是实时镜像。
+
+CLI 持有会话的实时旁观、普通 CLI 之间的双向取回、迁移运行中的工具进程均不在
+此协议范围内：移交移动的是 transcript 与写租约，旧端先停，新端后启。
+
 ## head 即版本
 
 从消息分叉、`/branch` 和对话回溯都会追加一条 `fork` 标记和一条 `select`

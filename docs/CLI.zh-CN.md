@@ -31,6 +31,8 @@ reasonix --dir /path/to/project
 | `-c`、`--continue` | 恢复最近一次会话。 |
 | `-r`、`--resume [QUERY]` | 打开会话选择器，或恢复匹配的会话。 |
 | `--copy` | 复制要恢复的会话，并在可写副本中继续。 |
+| `--takeover` | 配合 `--resume`/`--continue`：当本机的常驻 serve 占用会话时，直接接管而不是拒绝。 |
+| `--takeover-mode MODE` | 接管排空模式：`wait`（默认）等持有方完成当前 turn，`interrupt` 先取消再接管。 |
 | `--allowed-tools RULES` | 增加仅当前会话生效的权限 allow 规则；可重复传入，`--allowedTools` 是别名。 |
 | `--permission-mode MODE` | 以指定的权限姿态启动。 |
 | `--yolo` | 以 YOLO 模式启动；是 `--dangerously-skip-permissions` 的别名。 |
@@ -317,6 +319,34 @@ reasonix --resume provider-config --copy
 session ID，或来自 `--events-jsonl` / `reasonix session show --json` 的不透明
 machine session ID。Session lease 会阻止桌面端和 CLI 同时写入同一个 transcript。
 
+### 接管被占用的会话
+
+当你要恢复的会话已被本机另一个 Reasonix 窗口或进程持有时，拒绝信息会指名持有方，
+并提供协作接管而不是死路一条：
+
+- 常驻的 `reasonix serve`（桌面端经 SSH 留下的进程）可以移交会话。serve 先把持有方
+  未保存的工作落盘再释放，接管的 CLI 成为写者；远端桌面标签页保持只读连接，之后
+  可以取回会话。
+- 另一个交互式 CLI 也能以同样方式协作。持有方保存最后一条未保存的 turn、让出租约并
+  降级为只读横幅；在那边按 `R` 可尝试重新取得所有权，按 `Q` 退出。
+
+在接管提示中选择模式（或在 `--resume`/`--continue` 时用 `--takeover` 指定）：
+
+| 选项 | 行为 |
+| --- | --- |
+| 等待（`w`） | 等持有方完成正在运行的 turn 再接管。排空窗口以两分钟为上限。 |
+| 中断（`i`） | 先取消持有方正在运行的 turn。仅在持有方有运行中的 turn 时提供。 |
+| 查看（`v`） | 只读预览已保存的历史。不获取写入租约；你的草稿和当前会话保持原样。 |
+| 取消 | 保持当前会话不变。 |
+
+`/resume` 被拒绝后会出现同样的提示；`/takeover [N]` 则直接对选择器索引为 `N` 的
+会话（或上一次被拒绝的目标）打开提示。失败时原子回滚：接管方保留原有会话，持有方
+在未明确让出前继续写入。如果移交响应丢失，持久的租约预约仍指向预期的接任者——
+重试 resume 会核对并收敛所有权，不需要手动杀进程。
+
+协作要求持有方是本机当前版本的 Reasonix：常驻 serve，或提供本机移交入口的交互式
+CLI。否则请关闭持有方，或使用 `--copy` 在复制会话中继续。
+
 ## 权限
 
 ```sh
@@ -412,6 +442,7 @@ SSH 下远端进程无法读取本机剪贴板，请使用终端粘贴快捷键�
 | `/model` | 搜索已配置模型并切换当前模型。 |
 | `/provider` | 选择 provider，再选择该 provider 下的模型。 |
 | `/resume` | 搜索最近会话并切换。 |
+| `/takeover [N]` | 从占用方接管选择器索引为 N 的会话（默认为上一次恢复被拒的目标）。 |
 | `/status` | 显示模型、effort、cache、Git、后台任务和余额信息。 |
 | `/theme [auto\|light\|dark\|style]` | 查看或切换 CLI 背景模式和强调色。 |
 | `/currency [auto\|CNY\|USD]` | 查看或切换用户全局费用展示币种，并刷新当前运行时。 |
