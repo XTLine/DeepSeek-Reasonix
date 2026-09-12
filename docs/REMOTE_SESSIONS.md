@@ -237,6 +237,18 @@ Whether a binary is usable is decided by a capability probe, not a version
 number: an older binary missing any required serve capability is treated as
 missing and upgraded. `serve_install = "never"` forbids all installation.
 
+Saved connections first reuse a compatible live Serve or an existing remote
+binary; an installation policy does not force an upgrade on every connection.
+With `upload`, Desktop uses its local CLI when the platform matches, otherwise
+it obtains the CLI for the remote platform from the verified release provider.
+Development builds use a staged artifact instead of downloading a release:
+`node desktop/scripts/build-remote-cli.mjs linux/amd64` writes it alongside the
+service under `remote-cli/linux-amd64/reasonix`. Both `./dev` and
+`pnpm --dir desktop dev:desktop` prepare this target automatically. Set
+`REASONIX_DEV_REMOTE_TARGETS=linux/amd64,linux/arm64` to prepare other targets.
+Rebuild these artifacts after changing the CLI. Missing development artifacts
+produce an error with the exact build command; the saved policy is preserved.
+
 **Remote state files** (remote `~/.reasonix/remote/`): `serve-<slug>.json`
 (pid, bound loopback address, workspace), `serve-<slug>.token` (0600),
 `serve-<slug>.port`, `serve-<slug>.pid`, `serve-<slug>.log`.

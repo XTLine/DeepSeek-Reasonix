@@ -209,6 +209,15 @@ reasonix remote fs put ./patch.diff gpu-box:'~/projects/app/patch.diff'
 二进制是否可用由能力探测决定而非版本号：缺少所需 serve 能力的旧二进制
 会被当作缺失并升级。`serve_install = "never"` 禁止任何安装。
 
+已保存的连接优先复用兼容且仍在运行的 Serve，或远端已有的二进制；安装策略
+不会让每次连接都强制升级。`upload` 在平台相同时使用本地 CLI，否则由经过
+校验的 release 下载器取得远端平台的 CLI。开发版本使用预先构建的产物，
+不下载发行版：运行 `node desktop/scripts/build-remote-cli.mjs linux/amd64`，
+会在服务程序旁生成 `remote-cli/linux-amd64/reasonix`。`./dev` 和
+`pnpm --dir desktop dev:desktop` 都会自动构建该目标；可设置
+`REASONIX_DEV_REMOTE_TARGETS=linux/amd64,linux/arm64` 构建其他目标。
+修改 CLI 后需要重新构建这些产物。缺失时会显示具体构建命令，不改写保存的策略。
+
 **远端状态文件**（远端 `~/.reasonix/remote/`）：`serve-<slug>.json`（pid、
 绑定的回环地址、工作区）、`serve-<slug>.token`（0600）、`serve-<slug>.port`、
 `serve-<slug>.pid`、`serve-<slug>.log`。
