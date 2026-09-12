@@ -24,6 +24,15 @@ import (
 // fmt.Sprintf. Catalogue values do not include trailing newlines — call sites
 // add framing whitespace, so the same field works wherever it appears.
 type Messages struct {
+	TakeoverTitle          string
+	TakeoverCancel         string
+	TakeoverWait           string
+	TakeoverInterrupt      string
+	TakeoverTerminalPrompt string
+	TakeoverUnavailable    string
+	TakeoverBusy           string
+	TakeoverDone           string
+
 	// welcome / status screen
 	WelcomeTitleFmt string // first-run box title — %s = product name (styled)
 	NoConfigYet     string // first-run cue under the welcome box

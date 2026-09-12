@@ -319,7 +319,10 @@ type chatTUI struct {
 	rewind *rewindPicker
 	// resumePick is the interactive "/resume" session picker overlay. Non-nil
 	// while the user browses saved sessions with ↑/↓ and confirms with Enter.
-	resumePick *resumePicker
+	resumePick         *resumePicker
+	takeoverPrompt     *cliTakeoverPrompt
+	pendingTakeoverCmd tea.Cmd
+	takeoverShutdown   *tuiShutdownMsg
 	// pendingTakeoverPath remembers the last /resume target refused because a
 	// resident serve on this machine holds its lease; "/takeover" force-takes
 	// that session back.
@@ -958,6 +961,10 @@ func (m chatTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	next, cmd := m.update(msg)
 	cm := next.(chatTUI)
+	if cm.pendingTakeoverCmd != nil {
+		cmd = tea.Batch(cmd, cm.pendingTakeoverCmd)
+		cm.pendingTakeoverCmd = nil
+	}
 	if logFirstFrame {
 		cm.firstFrameLogged = true
 		if cm.diagnostics != nil {
@@ -1068,6 +1075,11 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var inputBeforeSelection string
 
 	switch msg := msg.(type) {
+	case cliTakeoverQueryMsg:
+		m.applyTakeoverQuery(msg)
+		return m, nil
+	case cliTakeoverDoneMsg:
+		return m.finishTakeover(msg)
 	case tea.WindowSizeMsg:
 		m.followComposerCursor()
 		m.width = msg.Width
@@ -1268,6 +1280,9 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applyComposerPaste(msg, true)
 
 	case tea.KeyPressMsg:
+		if m.takeoverPrompt != nil {
+			return m.handleTakeoverKey(msg)
+		}
 		// Any keystroke dismisses a finished selection (copy is a right-click),
 		// with a few exceptions: Ctrl/Super/Meta+C and Ctrl+Insert copy the
 		// selection, the paste shortcuts keep it so the async clipboard result
@@ -1904,6 +1919,10 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tuiShutdownMsg:
+		if m.takeoverPrompt != nil && m.takeoverPrompt.busy {
+			m.takeoverShutdown = &msg
+			return m, nil
+		}
 		return m.shutdownAndQuit(msg.completion)
 
 	case modelSwitchMsg:
@@ -2229,6 +2248,7 @@ func (m chatTUI) bottomRows() int {
 		m.renderRewind(),
 		m.renderMCPImport(),
 		m.renderResumePicker(),
+		m.renderTakeoverPrompt(),
 		m.renderQuickPicker(),
 		m.renderCopyPicker(),
 		m.renderCompletion(),
@@ -2271,7 +2291,7 @@ func (m chatTUI) bottomRows() int {
 // reserve rows for a composer that cannot receive input, leaving a confusing
 // blank/bordered area at the bottom of the TUI.
 func (m chatTUI) hideComposer() bool {
-	if m.mcp != nil || m.clearConfirm != nil || m.mcpImport != nil || m.skillPick != nil || m.resumePick != nil || m.quickPick != nil || m.copyPick != nil || m.rewind != nil || m.pendingApproval != nil {
+	if m.takeoverPrompt != nil || m.mcp != nil || m.clearConfirm != nil || m.mcpImport != nil || m.skillPick != nil || m.resumePick != nil || m.quickPick != nil || m.copyPick != nil || m.rewind != nil || m.pendingApproval != nil {
 		return true
 	}
 	return (m.chooser != nil && !m.chooser.typing) || (m.elicit != nil && !m.elicit.typing)
@@ -3381,6 +3401,10 @@ func (m chatTUI) View() tea.View {
 		parts = append(parts, card)
 		rowsAboveBox += strings.Count(card, "\n") + 1
 	}
+	if card := m.renderTakeoverPrompt(); card != "" {
+		parts = append(parts, card)
+		rowsAboveBox += strings.Count(card, "\n") + 1
+	}
 	if card := m.renderResumePicker(); card != "" {
 		parts = append(parts, card)
 		rowsAboveBox += strings.Count(card, "\n") + 1
@@ -4320,7 +4344,7 @@ func (m *chatTUI) runSlashCommand(input string) tea.Cmd {
 	case "/resume":
 		m.runResumeCommand(input)
 	case "/takeover":
-		m.runTakeoverCommand(input)
+		m.runTakeoverSelection(input)
 	case "/status":
 		m.echoLocalCommand(input)
 		m.showStatusDetails()

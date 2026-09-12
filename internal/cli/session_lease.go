@@ -64,12 +64,12 @@ func sessionLeaseHeldNotice(err error) string {
 // picker index. Non-ownership failures must not offer a takeover of an old row.
 func (m *chatTUI) recordResumeConflict(path string, err error) {
 	m.pendingTakeoverPath = ""
+	m.takeoverPrompt = nil
+	m.pendingTakeoverCmd = nil
 	m.notice("resume: " + sessionLeaseHeldNotice(err))
 	if errors.Is(err, agent.ErrSessionLeaseHeld) {
 		m.pendingTakeoverPath = path
-		if cliSessionTakeoverCandidate(err) {
-			m.notice("run /takeover to take this session over from the resident serve")
-		}
+		m.openTakeoverPrompt(path)
 	}
 }
 
@@ -155,6 +155,9 @@ func (m *chatTUI) restoreSessionLease() {
 // (/new, /clear, /branch, fork). A fresh path cannot be held by anyone else,
 // so failure is theoretical — but never silent.
 func (m *chatTUI) followSessionLease() {
+	if m.takeoverPrompt != nil && m.takeoverPrompt.busy {
+		return
+	}
 	if m.leases == nil {
 		return
 	}

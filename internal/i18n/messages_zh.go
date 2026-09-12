@@ -4,6 +4,15 @@ package i18n
 // as English unless a phrase genuinely demands re-ordering — call sites pass
 // arguments positionally and won't reshuffle.
 var Chinese = Messages{
+	TakeoverTitle:          "接管会话",
+	TakeoverCancel:         "取消",
+	TakeoverWait:           "等待当前工作结束后接管（w）",
+	TakeoverInterrupt:      "中断当前工作并接管（i）",
+	TakeoverTerminalPrompt: "输入 w / i，或按回车取消：",
+	TakeoverUnavailable:    "未找到可连接的协作占用端；旧版 CLI 可能需要升级",
+	TakeoverBusy:           "正在查询或移交会话…",
+	TakeoverDone:           "会话已接管，可以在此终端继续",
+
 	WelcomeTitleFmt: "欢迎使用 %s",
 	NoConfigYet:     "还没有配置 — 现在来设置一下吧。",
 

@@ -478,6 +478,7 @@ func runAgent(args []string, version string) int {
 	cont := registerContinueFlag(fs)
 	resume := fs.String("resume", "", "resume by session file path, session ID, or machine session ID (takes precedence over --continue)")
 	copySession := fs.Bool("copy", false, "with --resume/--continue: duplicate the session and continue in the copy (escape hatch when the original is held by another Reasonix process)")
+	takeoverMode := fs.String("takeover-mode", "wait", "takeover mode: wait | interrupt")
 	takeover := fs.Bool("takeover", false, "with --resume/--continue: when a resident serve on this machine holds the session, take it over instead of refusing")
 	effort := fs.String("effort", "", "session reasoning effort override")
 	permissionMode := fs.String("permission-mode", "ask", "permission mode: manual | ask | auto | acceptEdits | dontAsk | plan | bypassPermissions")
@@ -629,7 +630,7 @@ func runAgent(args []string, version string) int {
 		var err error
 		resumeSession, err = bindAndLoadCLIResume(leases, resumePath, loadResumableSession)
 		if errors.Is(err, agent.ErrSessionLeaseHeld) && *takeover {
-			takeoverBinding, err = cliTakeoverHeldSession(resumePath, err, leases, takeoverManager)
+			takeoverBinding, err = cliTakeoverHeldSessionMode(resumePath, err, leases, takeoverManager, *takeoverMode)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 				return 1
@@ -1092,8 +1093,12 @@ func chatREPL(args []string, version string) int {
 	var startupResumeSession *agent.Session
 	if resumePath != "" {
 		startupResumeSession, err = bindAndLoadCLIResume(leases, resumePath, loadResumableSession)
-		if errors.Is(err, agent.ErrSessionLeaseHeld) && cliSessionTakeoverCandidate(err) && promptSessionTakeover(err) {
-			takeoverBinding, err = cliTakeoverHeldSession(resumePath, err, leases, takeoverManager)
+		takeoverMode := ""
+		if errors.Is(err, agent.ErrSessionLeaseHeld) {
+			takeoverMode = promptCLITakeoverMode(resumePath, err)
+		}
+		if takeoverMode != "" {
+			takeoverBinding, err = cliTakeoverHeldSessionMode(resumePath, err, leases, takeoverManager, takeoverMode)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 				return 1

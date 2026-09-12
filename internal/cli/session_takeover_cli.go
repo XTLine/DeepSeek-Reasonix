@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"reasonix/internal/control"
 	"reasonix/internal/event"
 	"reasonix/internal/eventwire"
+	"reasonix/internal/i18n"
 	"reasonix/internal/remote/bootstrap"
 	"reasonix/internal/store"
 )
@@ -111,7 +113,7 @@ var discoverCLIServesForTakeover = discoverCLIServes
 // cliServeForPID finds the resident serve holding the lease by matching the
 // holder PID the lease error reported.
 func cliServeForPID(pid int) *cliServeRecord {
-	records := discoverCLIServes()
+	records := discoverCLIServesForTakeover()
 	for i := range records {
 		if records[i].pid == pid {
 			return &records[i]
@@ -148,6 +150,13 @@ func cliServeClient(ctx context.Context, record cliServeRecord) (*http.Client, e
 // through leases. The previous keeper binding is retained if either step
 // fails; callers commit their controller only after this returns a binding.
 func cliTakeoverHeldSession(sessionPath string, leaseErr error, leases *control.SessionLeaseKeeper, manager *cliTakeoverManager) (*cliTakeoverBinding, error) {
+	return cliTakeoverHeldSessionMode(sessionPath, leaseErr, leases, manager, "wait")
+}
+
+func cliTakeoverHeldSessionMode(sessionPath string, leaseErr error, leases *control.SessionLeaseKeeper, manager *cliTakeoverManager, mode string) (*cliTakeoverBinding, error) {
+	if mode != "wait" && mode != "interrupt" {
+		return nil, fmt.Errorf("invalid takeover mode: %s", mode)
+	}
 	if manager != nil && manager.Reclaiming() {
 		return nil, fmt.Errorf("the remote side is reclaiming the current session")
 	}
@@ -169,9 +178,16 @@ func cliTakeoverHeldSession(sessionPath string, leaseErr error, leases *control.
 	if err != nil {
 		return nil, fmt.Errorf("takeover from local serve (pid %d): %w", pid, err)
 	}
+	view, err := cliOwnership(ctx, client, *record, sessionPath)
+	if err != nil {
+		return nil, err
+	}
+	if view.Holder != "serve" || view.Mirrored {
+		return nil, fmt.Errorf("serve no longer holds this session (%s)", view.Holder)
+	}
 	body, _ := json.Marshal(map[string]any{
 		"sessionPath": sessionPath, "targetWriterId": agent.SessionWriterID(),
-		"force": true, "mode": "wait", "timeoutMs": cliTakeoverTimeout.Milliseconds(),
+		"force": true, "mode": mode, "timeoutMs": cliTakeoverTimeout.Milliseconds(),
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, record.base+"/handoff", bytes.NewReader(body))
 	if err == nil {
@@ -193,6 +209,9 @@ func cliTakeoverHeldSession(sessionPath string, leaseErr error, leases *control.
 	if json.Unmarshal(respBody, &grant) != nil || grant.MirrorID == "" || grant.HandoffID == "" ||
 		grant.ReturnHandoffID == "" || grant.SourceWriterID == "" || grant.TargetWriterID != agent.SessionWriterID() {
 		return nil, fmt.Errorf("takeover from local serve (pid %d): invalid handoff grant", pid)
+	}
+	if agent.CanonicalSessionPath(grant.SessionPath) != agent.CanonicalSessionPath(sessionPath) {
+		return nil, fmt.Errorf("takeover grant targets another session")
 	}
 	binding := &cliTakeoverBinding{path: sessionPath, record: *record, client: client, grant: grant}
 	if manager != nil {
@@ -234,6 +253,82 @@ func promptSessionTakeover(leaseErr error) bool {
 	}
 	answer = strings.ToLower(strings.TrimSpace(answer))
 	return answer == "y" || answer == "yes"
+}
+
+type cliOwnershipView struct {
+	Holder   string `json:"holder"`
+	Running  bool   `json:"running"`
+	Mirrored bool   `json:"mirrored"`
+}
+
+func cliOwnership(ctx context.Context, client *http.Client, record cliServeRecord, path string) (cliOwnershipView, error) {
+	var view cliOwnershipView
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, record.base+"/ownership?"+url.Values{"session": {path}}.Encode(), nil)
+	if err != nil {
+		return view, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return view, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return view, fmt.Errorf("ownership query: HTTP %d", resp.StatusCode)
+	}
+	err = json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&view)
+	return view, err
+}
+
+func queryCLITakeover(ctx context.Context, path string) (cliOwnershipView, error) {
+	var lastErr error
+	for _, record := range discoverCLIServesForTakeover() {
+		client, err := cliServeClient(ctx, record)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		view, err := cliOwnership(ctx, client, record, path)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if view.Holder == "serve" && !view.Mirrored {
+			return view, nil
+		}
+	}
+	if lastErr != nil {
+		return cliOwnershipView{}, fmt.Errorf("%s: %w", i18n.M.TakeoverUnavailable, lastErr)
+	}
+	return cliOwnershipView{}, fmt.Errorf("%s", i18n.M.TakeoverUnavailable)
+}
+
+func promptCLITakeoverMode(path string, leaseErr error) string {
+	if !isInteractive() {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	view, err := queryCLITakeover(ctx, path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return ""
+	}
+	fmt.Fprintln(os.Stderr, control.SessionInUseMessage(leaseErr))
+	fmt.Fprintln(os.Stderr, i18n.M.TakeoverWait)
+	if view.Running {
+		fmt.Fprintln(os.Stderr, i18n.M.TakeoverInterrupt)
+	}
+	fmt.Fprint(os.Stderr, i18n.M.TakeoverTerminalPrompt+" ")
+	answer, _ := readCLITakeoverAnswer()
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "w", "y", "yes":
+		return "wait"
+	case "i":
+		if view.Running {
+			return "interrupt"
+		}
+	}
+	return ""
 }
 
 func readCLITakeoverAnswer() (string, error) {
