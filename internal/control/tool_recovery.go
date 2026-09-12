@@ -56,7 +56,7 @@ func (c *Controller) ResolveToolRecovery(ctx context.Context, req ToolRecoveryRe
 		return ToolRecoverySnapshot{}, err
 	}
 	c.mu.Lock()
-	if c.running || c.finishing || c.rotating || c.closed {
+	if c.running || c.finishing || c.rotating || c.sessionHandoff || c.closed {
 		c.mu.Unlock()
 		return ToolRecoverySnapshot{}, ErrTurnRunning
 	}

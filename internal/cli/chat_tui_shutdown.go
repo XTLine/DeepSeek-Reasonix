@@ -47,7 +47,7 @@ func (c *tuiShutdownCompletion) claimFallback() bool {
 func (m chatTUI) shutdownAndQuit(completion *tuiShutdownCompletion) (tea.Model, tea.Cmd) {
 	defer completion.complete()
 	// Only snapshot if we still own the session (no takeover, or takeover returned).
-	if m.ctrl != nil && (m.takeover == nil || !m.takeover.Returned()) {
+	if m.peerGrant == nil && m.ctrl != nil && (m.takeover == nil || !m.takeover.Returned()) {
 		m.shutdownErr = m.ctrl.SnapshotForShutdown()
 		m.followSessionLease()
 	}

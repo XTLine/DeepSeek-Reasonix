@@ -135,7 +135,7 @@ func (c *Controller) trySteerInboxItem(id, expectedTurnID string) (sessioninbox.
 	}
 	cap := snapshot.Capacity
 	c.mu.Lock()
-	rotating := c.rotating
+	rotating := c.rotating || c.sessionHandoff
 	closed := c.closed
 	c.mu.Unlock()
 	if closed {
@@ -165,7 +165,7 @@ func (c *Controller) trySteerInboxItem(id, expectedTurnID string) (sessioninbox.
 			turnMatches = ledger.ActiveTurnID() == expectedTurnID
 		}
 	}
-	accepted := turnMatches && !c.closed && !c.rotating && c.running && c.executor != nil && len(env.FrozenImages) == 0 && c.executor.SteerItem(id, loader)
+	accepted := turnMatches && !c.closed && !c.rotating && !c.sessionHandoff && c.running && c.executor != nil && len(env.FrozenImages) == 0 && c.executor.SteerItem(id, loader)
 	if accepted {
 		c.inbox.mu.Lock()
 		c.inbox.trackActive(id)

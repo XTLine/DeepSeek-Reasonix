@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"reasonix/internal/agent"
+	"reasonix/internal/control"
 	"reasonix/internal/i18n"
 )
 
@@ -34,6 +35,7 @@ type cliTakeoverDoneMsg struct {
 	binding *cliTakeoverBinding
 	loaded  *agent.Session
 	err     error
+	reopen  func()
 }
 
 func (m *chatTUI) openTakeoverPrompt(path string) {
@@ -89,17 +91,30 @@ func (m chatTUI) handleTakeoverKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	mode := choice.choice.ID
+	var reopen func()
+	if ctrl, ok := m.ctrl.(*control.Controller); ok && m.peerGrant == nil {
+		var err error
+		reopen, err = ctrl.BeginSessionHandoff(false)
+		if err != nil {
+			m.notice(err.Error())
+			return m, nil
+		}
+	}
 	p.busy = true
 	ctrl, leases, manager := m.ctrl, m.leases, m.takeover
 	path := p.path
+	yielded := m.peerGrant != nil
 	return m, func() tea.Msg {
-		result := cliTakeoverDoneMsg{request: p}
+		result := cliTakeoverDoneMsg{request: p, reopen: reopen}
 		if validator, ok := ctrl.(interface{ ValidateSessionModel(string) error }); ok {
 			if result.err = validator.ValidateSessionModel(path); result.err != nil {
 				return result
 			}
 		}
-		if result.err = ctrl.Snapshot(); result.err != nil {
+		if !yielded {
+			result.err = ctrl.Snapshot()
+		}
+		if result.err != nil {
 			return result
 		}
 		binding, err := cliAcquireFreeSession(path, leases, manager)
@@ -119,6 +134,11 @@ func (m chatTUI) handleTakeoverKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m chatTUI) finishTakeover(msg cliTakeoverDoneMsg) (tea.Model, tea.Cmd) {
+	defer func() {
+		if msg.reopen != nil {
+			msg.reopen()
+		}
+	}()
 	if m.takeoverPrompt != msg.request {
 		if msg.binding != nil {
 			_ = cliReturnFailedTakeover(msg.binding, m.leases, m.takeover)
@@ -142,6 +162,11 @@ func (m chatTUI) finishTakeover(msg cliTakeoverDoneMsg) (tea.Model, tea.Cmd) {
 		p.err = err
 		m.notice("takeover: " + err.Error())
 	} else {
+		m.peerGrant = nil
+		if m.peerReopen != nil {
+			m.peerReopen()
+			m.peerReopen = nil
+		}
 		m.pendingTakeoverPath = ""
 		m.takeoverPrompt = nil
 		if m.takeover != nil && msg.binding.grant.MirrorID != "" {

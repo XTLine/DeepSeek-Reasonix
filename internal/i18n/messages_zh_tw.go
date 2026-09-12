@@ -4,6 +4,7 @@ package i18n
 // as English unless a phrase genuinely demands re-ordering — call sites pass
 // arguments positionally and won't reshuffle.
 var ChineseTraditional = Messages{
+	TakeoverYielded:        "會話已移交。按 R 嘗試重新接管，按 Q 離開。",
 	TakeoverTitle:          "接管會話",
 	TakeoverCancel:         "取消",
 	TakeoverWait:           "等待目前工作結束後接管（w）",

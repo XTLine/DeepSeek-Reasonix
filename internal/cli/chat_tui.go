@@ -323,6 +323,10 @@ type chatTUI struct {
 	takeoverPrompt     *cliTakeoverPrompt
 	pendingTakeoverCmd tea.Cmd
 	takeoverShutdown   *tuiShutdownMsg
+	peer               *cliPeerServer
+	peerBusy           bool
+	peerGrant          *cliTakeoverGrant
+	peerReopen         func()
 	// pendingTakeoverPath remembers the last /resume target refused because a
 	// resident serve on this machine holds its lease; "/takeover" force-takes
 	// that session back.
@@ -923,7 +927,7 @@ func (m *chatTUI) prompts() []plugin.Prompt {
 
 func (m chatTUI) Init() tea.Cmd {
 	return tea.Batch(
-		textarea.Blink, forceSyncOutputCmd(),
+		textarea.Blink, forceSyncOutputCmd(), waitForCLIPeer(m.peer),
 		waitForAgentEvent(m.eventCh), fetchBalance(m.ctrl),
 		m.runStatusline(), // nil (no-op) unless a custom status line is configured
 		m.refreshGitStatus(),
@@ -1075,6 +1079,10 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var inputBeforeSelection string
 
 	switch msg := msg.(type) {
+	case cliPeerRequest:
+		return m.handlePeerRequest(msg)
+	case cliPeerDoneMsg:
+		return m.finishPeerHandoff(msg)
 	case cliTakeoverQueryMsg:
 		m.applyTakeoverQuery(msg)
 		return m, nil
@@ -1282,6 +1290,9 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if m.takeoverPrompt != nil {
 			return m.handleTakeoverKey(msg)
+		}
+		if m.peerGrant != nil {
+			return m.handleYieldedKey(msg)
 		}
 		// Any keystroke dismisses a finished selection (copy is a right-click),
 		// with a few exceptions: Ctrl/Super/Meta+C and Ctrl+Insert copy the
@@ -1919,7 +1930,7 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tuiShutdownMsg:
-		if m.takeoverPrompt != nil && m.takeoverPrompt.busy {
+		if m.peerBusy || m.takeoverPrompt != nil && m.takeoverPrompt.busy {
 			m.takeoverShutdown = &msg
 			return m, nil
 		}
@@ -4279,6 +4290,10 @@ func elapsedTick(generation uint64) tea.Cmd {
 // output to scrollback; MCP prompt / custom commands resolve to a model turn.
 func (m *chatTUI) runSlashCommand(input string) tea.Cmd {
 	typedCmd := strings.TrimSpace(strings.SplitN(input, " ", 2)[0])
+	if m.peerBusy && typedCmd != "/quit" && typedCmd != "/exit" {
+		m.notice(i18n.M.TakeoverBusy)
+		return nil
+	}
 	if m.takeover != nil && m.takeover.Reclaiming() && typedCmd != "/quit" && typedCmd != "/exit" {
 		m.notice("the remote side is taking this session back; new input is disabled")
 		return nil

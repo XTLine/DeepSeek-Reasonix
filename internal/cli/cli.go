@@ -1299,6 +1299,11 @@ func chatREPL(args []string, version string) int {
 	// in the normal buffer so native touch scrollback and soft-keyboard focus
 	// keep working; finalized transcript lines are emitted via tea.Println.
 	diagnostics.Milestone("terminal_takeover_begin")
+	m.peer, err = newCLIPeerServer(cliPeerDirectory())
+	if err != nil {
+		m.notice("CLI handoff endpoint: " + err.Error())
+	}
+	defer m.peer.Close()
 	p := tea.NewProgram(m)
 	takeoverManager.SetYieldCallback(func() { p.Send(tuiShutdownMsg{}) })
 	diagnostics.StartWatchdog(p)

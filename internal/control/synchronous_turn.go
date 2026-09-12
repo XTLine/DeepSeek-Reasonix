@@ -24,7 +24,7 @@ func (c *Controller) runSynchronousTurn(
 	// Finishing is part of the gate: TurnDone is still fanning out. Closed
 	// seals a torn-down controller. Blocking callers get an error rather than
 	// parking because they already own and enforce the request boundary.
-	if c.running || c.finishing || c.rotating || c.closed {
+	if c.running || c.finishing || c.rotating || c.sessionHandoff || c.closed {
 		c.mu.Unlock()
 		cancel()
 		return ErrTurnRunning

@@ -56,7 +56,7 @@ func (c *Controller) admitGuardedTurn(body func(ctx context.Context) error, park
 		c.emitDrainingNotice()
 		return turnDroppedDraining
 	}
-	if c.rotating {
+	if c.rotating || c.sessionHandoff {
 		c.mu.Unlock()
 		c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "input was not accepted: the session is being switched — please resend"})
 		return turnDroppedRotating

@@ -3,6 +3,7 @@ package i18n
 // English is the baseline catalogue. The drift-guard test reflects over its
 // fields, so every other catalogue must populate the same set.
 var English = Messages{
+	TakeoverYielded:        "This session was handed off. Press R to retry ownership, or Q to exit.",
 	TakeoverTitle:          "Take over session",
 	TakeoverCancel:         "Cancel",
 	TakeoverWait:           "Wait for current work, then take over (w)",

@@ -155,7 +155,7 @@ func (m *chatTUI) restoreSessionLease() {
 // (/new, /clear, /branch, fork). A fresh path cannot be held by anyone else,
 // so failure is theoretical — but never silent.
 func (m *chatTUI) followSessionLease() {
-	if m.takeoverPrompt != nil && m.takeoverPrompt.busy {
+	if m.peerBusy || m.peerGrant != nil || m.takeoverPrompt != nil && m.takeoverPrompt.busy {
 		return
 	}
 	if m.leases == nil {

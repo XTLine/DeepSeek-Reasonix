@@ -24,6 +24,7 @@ import (
 // fmt.Sprintf. Catalogue values do not include trailing newlines — call sites
 // add framing whitespace, so the same field works wherever it appears.
 type Messages struct {
+	TakeoverYielded        string
 	TakeoverTitle          string
 	TakeoverCancel         string
 	TakeoverWait           string

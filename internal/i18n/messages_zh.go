@@ -4,6 +4,7 @@ package i18n
 // as English unless a phrase genuinely demands re-ordering — call sites pass
 // arguments positionally and won't reshuffle.
 var Chinese = Messages{
+	TakeoverYielded:        "会话已移交。按 R 尝试重新接管，按 Q 退出。",
 	TakeoverTitle:          "接管会话",
 	TakeoverCancel:         "取消",
 	TakeoverWait:           "等待当前工作结束后接管（w）",

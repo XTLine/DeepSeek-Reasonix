@@ -292,7 +292,8 @@ type Controller struct {
 	// the parked queue — but while a still-running turn's TurnDone delivery
 	// was in flight — would park again and then start against freed resources
 	// when the window closed.
-	closed bool
+	closed         bool
+	sessionHandoff bool
 	// parkedTurns holds turn bodies that arrived during the finishing window,
 	// FIFO. finishGuardedTurn starts the oldest one as it closes the window
 	// (see runGuarded/finishGuardedTurn); close() discards any remainder.
@@ -1097,7 +1098,7 @@ func (c *Controller) finishGuardedTurn(err error, completion *guardedTurnComplet
 		c.finishing = false
 		c.canceling = false
 		c.finishingBoundary.end()
-		if c.closed {
+		if c.closed || c.sessionHandoff {
 			c.mu.Unlock()
 			c.refreshRuntimeState(event.Event{})
 			return
@@ -2194,7 +2195,7 @@ func (c *Controller) beginRotation() error {
 	if c.running || c.finishing {
 		return errTurnRunningRotation
 	}
-	if c.rotating {
+	if c.rotating || c.sessionHandoff {
 		return errRotationInProgress
 	}
 	c.rotating = true
