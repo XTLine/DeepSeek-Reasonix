@@ -218,6 +218,12 @@ reasonix remote fs put ./patch.diff gpu-box:'~/projects/app/patch.diff'
 `REASONIX_DEV_REMOTE_TARGETS=linux/amd64,linux/arm64` 构建其他目标。
 修改 CLI 后需要重新构建这些产物。缺失时会显示具体构建命令，不改写保存的策略。
 
+新会话在首次保存文件之前也能加载空历史。Serve 根据已绑定的 Controller
+身份校验读取，不要求历史文件已经存在。对于因此返回会话绑定冲突的旧版 Serve，
+桌面端先确认当前路径，再兼容重试带有会话身份的历史读取，并验证响应中的会话 ID
+和读取后的当前路径。不同会话或切换后迟到的响应会被拒绝；不携带会话身份的内容块
+不会使用这条兼容重试路径。
+
 **远端状态文件**（远端 `~/.reasonix/remote/`）：`serve-<slug>.json`（pid、
 绑定的回环地址、工作区）、`serve-<slug>.token`（0600）、`serve-<slug>.port`、
 `serve-<slug>.pid`、`serve-<slug>.log`。

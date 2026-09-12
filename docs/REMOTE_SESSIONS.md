@@ -249,6 +249,14 @@ service under `remote-cli/linux-amd64/reasonix`. Both `./dev` and
 Rebuild these artifacts after changing the CLI. Missing development artifacts
 produce an error with the exact build command; the saved policy is preserved.
 
+A new session can load its empty transcript before its first file save. Serve
+validates these reads against the bound controller identity, not file existence.
+For older Serve builds that reject this with a session-binding conflict, Desktop
+retries identity-bearing transcript reads only after checking the current path;
+it verifies both the returned session ID and the current path afterward. A
+different session or a late response after switching is rejected. Content chunks
+never use this compatibility retry because they do not carry session identity.
+
 **Remote state files** (remote `~/.reasonix/remote/`): `serve-<slug>.json`
 (pid, bound loopback address, workspace), `serve-<slug>.token` (0600),
 `serve-<slug>.port`, `serve-<slug>.pid`, `serve-<slug>.log`.
