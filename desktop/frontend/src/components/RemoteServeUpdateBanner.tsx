@@ -12,13 +12,19 @@ export function RemoteServeUpdateBanner({ hostId, workspace }: { hostId: string;
   const server = useRemoteStore((s) => s.servers[hostId]?.[workspace]);
   const [armedVersion, setArmedVersion] = useState<string | null>(null);
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
+  const [failure, setFailure] = useState<{ version: string; message: string } | null>(null);
   if (!server?.updateAvailable || !server.serveVersion) return null;
   if (dismissedVersion === server.serveVersion || isRemoteServeUpdateDismissed(hostId, workspace, server.serveVersion)) return null;
   const armed = armedVersion === server.serveVersion;
+  const failed = failure?.version === server.serveVersion;
   const updating = server.state === "updating";
   return (
     <div className="banner banner--warning banner--actionable" data-testid="remote-serve-update-banner">
-      <span className="banner__msg">{t("remote.serveUpdate.banner", { version: server.serveVersion })}</span>
+      <span className="banner__msg">
+        {failed
+          ? t("remote.serveUpdate.failed", { msg: failure!.message })
+          : t("remote.serveUpdate.banner", { version: server.serveVersion })}
+      </span>
       <span className="banner__spacer" />
       <button
         type="button"
@@ -32,7 +38,11 @@ export function RemoteServeUpdateBanner({ hostId, workspace }: { hostId: string;
             return;
           }
           setArmedVersion(null);
-          void app.UpdateRemoteServer(hostId, workspace).catch(() => setArmedVersion(null));
+          setFailure(null);
+          void app.UpdateRemoteServer(hostId, workspace).catch((error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error);
+            setFailure({ version: server.serveVersion!, message: message.slice(0, 180) });
+          });
         }}
       >
         {updating ? t("remote.serveUpdate.updating") : armed ? t("remote.serveUpdate.confirm") : t("remote.serveUpdate.update")}

@@ -1409,6 +1409,7 @@ export const zhTW: Record<DictKey, string> = {
   "remote.serveUpdate.updating": "更新中…",
   "remote.serveUpdate.ignore": "忽略",
   "remote.serveUpdate.cancel": "取消",
+  "remote.serveUpdate.failed": "更新失敗：{msg}",
   "remote.server.state.ready": "就緒",
   "remote.server.state.starting": "啟動中…",
   "remote.server.state.stopped": "已停止",

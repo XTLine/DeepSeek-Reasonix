@@ -1739,6 +1739,7 @@ export const en = {
   "remote.serveUpdate.updating": "Updating…",
   "remote.serveUpdate.ignore": "Ignore",
   "remote.serveUpdate.cancel": "Cancel",
+  "remote.serveUpdate.failed": "Update failed: {msg}",
   "remote.server.state.ready": "Ready",
   "remote.server.state.starting": "Starting…",
   "remote.server.state.stopped": "Stopped",

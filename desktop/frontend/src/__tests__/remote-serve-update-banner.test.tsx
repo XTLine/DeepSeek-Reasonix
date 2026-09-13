@@ -47,6 +47,7 @@ const [{ createRoot }, { RemoteServeUpdateBanner }, { RemotePanel }, { LocalePro
 ]);
 
 const updateCalls: Array<{ hostId: string; workspace: string }> = [];
+let updateBehavior: () => Promise<void> = async () => {};
 installDesktopHostStub(({
   main: {
     App: {
@@ -60,6 +61,7 @@ installDesktopHostStub(({
       async StopRemoteServer() {},
       async UpdateRemoteServer(hostId: string, workspace: string) {
         updateCalls.push({ hostId, workspace });
+        await updateBehavior();
       },
     } as Partial<AppBindings> as AppBindings,
   },
@@ -199,6 +201,35 @@ await act(async () => {
   await Promise.resolve();
 });
 ok(updateCalls.length === 1, "panel confirm drives the update once");
+await act(async () => root.unmount());
+
+// A failed update surfaces its error in the banner and stays retryable.
+window.localStorage.clear();
+updateCalls.length = 0;
+updateBehavior = () => Promise.reject(new Error('forced upgrade install failed: no release for "9.9.9"'));
+useRemoteStore.getState().setServer(readyView());
+root = createRoot(rootElement);
+await act(async () => {
+  root.render(
+    <LocaleProvider>
+      <RemoteServeUpdateBanner hostId="box" workspace="/srv/app" />
+    </LocaleProvider>,
+  );
+  await Promise.resolve();
+});
+await act(async () => {
+  findButton("Update remote Serve")?.click();
+  await Promise.resolve();
+});
+await act(async () => {
+  findButton("Interrupt and update")?.click();
+  await Promise.resolve();
+});
+ok(
+  bannerText().includes("Update failed:") && bannerText().includes("9.9.9"),
+  "a failed update surfaces its error in the banner",
+);
+ok(findButton("Update remote Serve") !== undefined, "the banner stays retryable after a failure");
 await act(async () => root.unmount());
 
 console.log(`\n${passed} passed, ${failed} failed`);
