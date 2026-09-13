@@ -74,6 +74,18 @@ func ensureBinary(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, h
 	return bin, version, rollback, nil
 }
 
+// npmVersionSpec maps a desktop version to its published npm package spec:
+// the release pipeline publishes preview prereleases as canary builds
+// (scripts/resolve-preview-release.sh), so a pinned preview install must
+// request the canary spec.
+func npmVersionSpec(version string) string {
+	base, suffix, ok := strings.Cut(version, "-")
+	if !ok || !strings.HasPrefix(suffix, "preview.") {
+		return version
+	}
+	return base + "-canary." + strings.TrimPrefix(suffix, "preview.")
+}
+
 // npmRollback captures the current global package version so a replacement
 // that later fails its health check can be rolled back with a pinned
 // reinstall. nil when no capable global binary exists to return to.
@@ -83,7 +95,7 @@ func npmRollback(ctx context.Context, conn Conn) func(context.Context) {
 		return nil
 	}
 	return func(rollbackCtx context.Context) {
-		_, _ = conn.Exec(rollbackCtx, fmt.Sprintf("npm i -g reasonix@%s 2>&1", version))
+		_, _ = conn.Exec(rollbackCtx, fmt.Sprintf("npm i -g reasonix@%s 2>&1", npmVersionSpec(version)))
 	}
 }
 
@@ -275,18 +287,20 @@ func installViaNPM(ctx context.Context, conn Conn, minVersion string) (bin, vers
 }
 
 // installViaNPMAt installs an exact published version when the desktop
-// carries one; anything else falls back to latest.
+// carries one; anything else falls back to latest. Preview prereleases are
+// translated to their published canary spec.
 func installViaNPMAt(ctx context.Context, conn Conn, product string) (bin, version string, err error) {
 	target, perr := ParseVersion(product)
 	if perr != nil {
 		return installViaNPM(ctx, conn, "")
 	}
-	res, err := conn.Exec(ctx, fmt.Sprintf("npm i -g reasonix@%s 2>&1", target))
+	spec := npmVersionSpec(target)
+	res, err := conn.Exec(ctx, fmt.Sprintf("npm i -g reasonix@%s 2>&1", spec))
 	if err != nil {
 		return "", "", fmt.Errorf("bootstrap: npm install: %w", err)
 	}
 	if res.ExitCode != 0 {
-		return "", "", fmt.Errorf("bootstrap: npm install reasonix@%s failed: %s", target, tail(res.Stdout, 400))
+		return "", "", fmt.Errorf("bootstrap: npm install reasonix@%s failed: %s", spec, tail(res.Stdout, 400))
 	}
 	loc, ver := locateNPMGlobal(ctx, conn, "")
 	if loc == "" {

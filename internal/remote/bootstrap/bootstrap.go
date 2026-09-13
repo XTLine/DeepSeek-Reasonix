@@ -192,9 +192,14 @@ func launchServe(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, bi
 		return Result{}, err
 	}
 	defer cleanupStagedServeToken(fs, stagedTokenFile)
-	// Retire an incompatible Serve only after its replacement is ready to launch
-	// inside the lock, so preparation failures do not interrupt existing work.
-	if err := retireIncompatibleServe(ctx, conn, fs, paths, workspace, requireLaunchArgs); err != nil {
+	// Retire the recorded serve only after its replacement is ready inside
+	// the lock. A forced upgrade retires even a compatible one - another
+	// client may have relaunched it while this call was installing.
+	if opts.ForceUpgrade {
+		if err := stopRecordedServe(ctx, conn, fs, paths, workspace); err != nil {
+			return Result{}, err
+		}
+	} else if err := retireIncompatibleServe(ctx, conn, fs, paths, workspace, requireLaunchArgs); err != nil {
 		return Result{}, err
 	}
 	if err := fs.Rename(ctx, stagedTokenFile, paths.TokenFile); err != nil {
@@ -405,6 +410,23 @@ func retireIncompatibleServe(ctx context.Context, conn Conn, fs *sftpfs.FS, path
 		return err
 	}
 	return stopOutdatedServe(ctx, conn, fs, paths, workspace)
+}
+
+// stopRecordedServe TERMs whatever live serve the state records for the
+// workspace, compatibility aside: the forced replacement must not race a
+// serve another client relaunched while this one was installing.
+func stopRecordedServe(ctx context.Context, conn Conn, fs *sftpfs.FS, paths StatePaths, workspace string) error {
+	st, err := readState(ctx, fs, paths.StateJSON)
+	if err != nil || st.PID <= 0 || !validServeAddr(st.Addr) || st.Workspace != workspace {
+		return nil
+	}
+	if !pidIsServe(ctx, conn, st.PID, paths) {
+		return nil
+	}
+	if _, stopErr := conn.Exec(ctx, StopCommand(st.PID, paths)); stopErr != nil {
+		return fmt.Errorf("bootstrap: stop recorded serve: %w", stopErr)
+	}
+	return nil
 }
 
 // stopOutdatedServe retires a live process whose binary lacks the wire and

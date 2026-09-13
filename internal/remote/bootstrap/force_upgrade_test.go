@@ -201,6 +201,9 @@ func TestForceUpgradeSkipsLiveServeReuse(t *testing.T) {
 	if res.State.PID != 54321 {
 		t.Fatalf("state pid = %d, want the relaunched serve", res.State.PID)
 	}
+	if !conn.ranContaining("kill -TERM 777") {
+		t.Fatal("a serve another client relaunched mid-update must be retired before the forced launch")
+	}
 }
 
 // TestForceUpgradeContinuesPastShortRung: a rung landing below the target
@@ -260,7 +263,8 @@ func TestForceUpgradeContinuesPastShortRung(t *testing.T) {
 }
 
 // TestForceUpgradeNPMStrategyPinsVersion: the explicit npm strategy pins the
-// install to the desktop version instead of installing latest.
+// install to the desktop version - translated to its published canary spec
+// for preview prereleases - instead of installing latest.
 func TestForceUpgradeNPMStrategyPinsVersion(t *testing.T) {
 	skipOnWindows(t)
 	root := t.TempDir()
@@ -270,14 +274,14 @@ func TestForceUpgradeNPMStrategyPinsVersion(t *testing.T) {
 		switch {
 		case strings.Contains(cmd, "uname"):
 			return ok("Linux x86_64\n")
-		case strings.Contains(cmd, "npm i -g reasonix@1.9.5"):
+		case strings.Contains(cmd, "npm i -g reasonix@1.3.0-canary.42"):
 			pinned = true
 			return ok("")
-		case strings.Contains(cmd, "npm i -g reasonix "):
-			t.Errorf("forced npm upgrade must pin the version; ran: %s", cmd)
+		case strings.Contains(cmd, "npm i -g reasonix"):
+			t.Errorf("forced npm upgrade must pin the translated spec; ran: %s", cmd)
 			return ok("")
 		case strings.Contains(cmd, "npm prefix"):
-			return ok("/npm-global/bin/reasonix\nreasonix v1.9.5\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
+			return ok("/npm-global/bin/reasonix\nreasonix v1.3.0-preview.42\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
 		case strings.Contains(cmd, "nohup"):
 			_ = os.WriteFile(paths.PortFile, []byte("127.0.0.1:44321\n"), 0o600)
 			return ok("54321\n")
@@ -291,17 +295,33 @@ func TestForceUpgradeNPMStrategyPinsVersion(t *testing.T) {
 		Workspace:      "~",
 		Install:        InstallNPM,
 		ForceUpgrade:   true,
-		ProductVersion: "1.9.5",
+		ProductVersion: "1.3.0-preview.42",
 		Clock:          time.Now,
 	})
 	if err != nil {
 		t.Fatalf("EnsureServe: %v", err)
 	}
 	if !pinned {
-		t.Fatal("the forced npm strategy must install reasonix@<ProductVersion>")
+		t.Fatal("the forced npm strategy must install the canary spec for a preview target")
 	}
-	if res.State.Version != "1.9.5" {
-		t.Fatalf("state version = %q, want 1.9.5", res.State.Version)
+	if res.State.Version != "1.3.0-preview.42" {
+		t.Fatalf("state version = %q, want the desktop-style preview", res.State.Version)
+	}
+}
+
+// TestNPMVersionSpec is pure and runs on every platform.
+func TestNPMVersionSpec(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"1.3.0-preview.42", "1.3.0-canary.42"},
+		{"1.3.0-preview.9", "1.3.0-canary.9"},
+		{"1.38.7", "1.38.7"},
+		{"1.40.0-rc.1", "1.40.0-rc.1"},
+		{"dev", "dev"},
+	}
+	for _, c := range cases {
+		if got := npmVersionSpec(c.in); got != c.want {
+			t.Errorf("npmVersionSpec(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
 
