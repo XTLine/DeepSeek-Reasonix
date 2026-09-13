@@ -172,8 +172,8 @@ func TestPlanModeUnsafePhaseToolStopsBeforePermission(t *testing.T) {
 	a.SetPlanMode(true)
 
 	out := a.executeOne(context.Background(), &a.turn, provider.ToolCall{Name: "complete_step"})
-	if !out.blocked || !strings.Contains(out.output, "only available after plan approval") {
-		t.Fatalf("phase opt-out outcome = %+v", out)
+	if out.blocked || !strings.Contains(out.output, "tool_retired") {
+		t.Fatalf("retired tool outcome = %+v", out)
 	}
 	if len(gate.calls) != 0 || executions != 0 {
 		t.Fatalf("phase-blocked call reached permission/execution: gate=%+v executions=%d", gate.calls, executions)
@@ -242,8 +242,6 @@ func TestPlanModeCanReplacePriorExecutionTodoState(t *testing.T) {
 	reg := tool.NewRegistry()
 	reg.Add(mustBuiltinTool(t, "todo_write"))
 	a := New(nil, reg, NewSession(""), Options{}, event.Discard)
-	recoveryGate := &recordingRecoveryGate{decision: RecoveryDecision{Allow: true}}
-	a.SetRecoveryGate(recoveryGate)
 	a.SeedTodoState([]evidence.TodoItem{{Content: "old execution step", Status: "in_progress"}})
 	a.SetPlanMode(true)
 
@@ -261,9 +259,6 @@ func TestPlanModeCanReplacePriorExecutionTodoState(t *testing.T) {
 	got := a.CanonicalTodoState()
 	if len(got) != 2 || got[0].Content != "inspect the new request" {
 		t.Fatalf("plan-mode todo state = %+v, want revised plan", got)
-	}
-	if len(recoveryGate.proposals) != 0 {
-		t.Fatalf("Plan mode sent duplicate Auto plan review proposals: %+v", recoveryGate.proposals)
 	}
 }
 
@@ -297,7 +292,6 @@ func TestPlanModeTodoWriteCanCompleteCurrentItem(t *testing.T) {
 func TestPlanModeTodoCreatedInTurnUsesTodoWriteRecovery(t *testing.T) {
 	reg := tool.NewRegistry()
 	reg.Add(mustBuiltinTool(t, "todo_write"))
-	reg.Add(mustBuiltinTool(t, "complete_step"))
 	a := New(nil, reg, NewSession(""), Options{}, event.Discard)
 	a.SetPlanMode(true)
 
@@ -321,8 +315,8 @@ func TestPlanModeTodoCreatedInTurnUsesTodoWriteRecovery(t *testing.T) {
 			"evidence":[{"kind":"manual","summary":"confirmed the cleanup output"}]
 		}`,
 	})
-	if !signoff.blocked || !strings.Contains(signoff.output, "only available after plan approval") {
-		t.Fatalf("Plan complete_step outcome = %+v, want phase block", signoff)
+	if signoff.blocked || !strings.Contains(signoff.output, "tool_retired") {
+		t.Fatalf("Plan complete_step outcome = %+v, want retirement result", signoff)
 	}
 	if got := a.CanonicalTodoState(); len(got) != 1 || got[0].Status != "in_progress" {
 		t.Fatalf("blocked sign-off changed canonical todos = %+v", got)
@@ -345,7 +339,6 @@ func TestPlanModeTodoCreatedInTurnUsesTodoWriteRecovery(t *testing.T) {
 
 func TestPlanModeKeepsCompleteStepUnavailable(t *testing.T) {
 	reg := tool.NewRegistry()
-	reg.Add(mustBuiltinTool(t, "complete_step"))
 	a := New(nil, reg, NewSession(""), Options{}, event.Discard)
 	a.SeedTodoState([]evidence.TodoItem{{Content: "inspect the request", Status: "in_progress"}})
 	a.SetPlanMode(true)
@@ -359,11 +352,11 @@ func TestPlanModeKeepsCompleteStepUnavailable(t *testing.T) {
 			"evidence":[{"kind":"manual","summary":"checked"}]
 		}`,
 	})
-	if !out.blocked {
-		t.Fatalf("plan-mode complete_step outcome = %+v, want blocked", out)
+	if out.blocked {
+		t.Fatalf("retired tool should be a normal result: %+v", out)
 	}
-	if !strings.Contains(out.output, "plan approval") && !strings.Contains(out.output, "unavailable during planning") && !strings.Contains(out.errMsg, "unavailable") {
-		t.Fatalf("plan-mode complete_step = %+v, want a planning-phase unavailability", out)
+	if !strings.Contains(out.output, "tool_retired") {
+		t.Fatalf("plan-mode complete_step = %+v, want retirement guidance", out)
 	}
 	got := a.CanonicalTodoState()
 	if len(got) != 1 || got[0].Status != "in_progress" {
@@ -530,12 +523,7 @@ func TestPlanModeOffStillUsesSamePermissionGate(t *testing.T) {
 }
 
 func TestRunSubAgentWithSessionInheritsPlanWorkflow(t *testing.T) {
-	completeStep, ok := tool.LookupBuiltin("complete_step")
-	if !ok {
-		t.Fatal("complete_step builtin not registered")
-	}
 	reg := tool.NewRegistry()
-	reg.Add(completeStep)
 	prov := &scriptedProvider{name: "plan-child", turns: [][]provider.Chunk{
 		{toolCallChunk("phase", "complete_step", `{}`), {Type: provider.ChunkDone}},
 		{{Type: provider.ChunkText, Text: "Plan ready."}, {Type: provider.ChunkDone}},
@@ -562,7 +550,7 @@ func TestRunSubAgentWithSessionInheritsPlanWorkflow(t *testing.T) {
 	if !strings.Contains(user, planmode.Marker) {
 		t.Fatalf("Plan child user turn missing workflow marker: %q", user)
 	}
-	if got := lastToolResult(sess, "complete_step"); !strings.Contains(got, "only available after plan approval") {
+	if got := lastToolResult(sess, "complete_step"); !strings.Contains(got, "tool_retired") {
 		t.Fatalf("Plan child complete_step result = %q", got)
 	}
 }

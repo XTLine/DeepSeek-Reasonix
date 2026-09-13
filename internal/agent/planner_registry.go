@@ -11,7 +11,6 @@ import (
 // stapled onto a finished one.
 var plannerNonResearchTools = []string{
 	"bash_output",
-	"complete_step",
 	"slash_command",
 	"todo_write",
 	"wait",

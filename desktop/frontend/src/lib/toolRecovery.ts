@@ -14,6 +14,7 @@ export interface ToolRecoverySnapshot {
   revision: string;
   calls: RecoveryCall[];
   retryEnabled: boolean;
+	retired?: boolean;
 }
 export interface ToolRecoveryRequest {
   sessionPath: string; runtimeEpoch: string; revision: string;

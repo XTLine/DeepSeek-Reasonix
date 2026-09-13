@@ -49,7 +49,7 @@ func TestUnknownPersistedBudgetClassFallsBackToGoalClassification(t *testing.T) 
 	g := &goalMachine{}
 	g.setStatePath(goalStatePath(path))
 	_, _, migrated, _ := g.restoreFromState(path)
-	if !migrated || g.budgetClass != budgetClassWrite || g.turnsLimit != unlimitedGoalTurns {
+	if migrated || !g.disarmed || g.budgetClass != budgetClassWrite || g.turnsLimit != unlimitedGoalTurns {
 		t.Fatalf("unknown budget restore = migrated:%v class:%q turns:%d", migrated, g.budgetClass, g.turnsLimit)
 	}
 }
@@ -275,7 +275,7 @@ func TestLegacySidecarPendingTaskRetriesAfterRestart(t *testing.T) {
 	second := New(Options{WorkspaceRoot: root, SessionDir: root, Executor: agent.New(nil, nil, secondSession, agent.Options{}, event.Discard)})
 	defer second.Close()
 	second.Resume(secondSession, sessionPath)
-	if second.GoalStatus() != GoalStatusRunning || second.Goal() != "recover after process restart" {
+	if second.GoalStatus() != GoalStatusStopped || second.Goal() != "recover after process restart" {
 		t.Fatalf("restart migration = goal:%q status:%q", second.Goal(), second.GoalStatus())
 	}
 	persisted, err := os.ReadFile(goalStatePath(sessionPath))
@@ -548,7 +548,7 @@ func TestLegacySidecarWithGoalMigratesWithoutArchive(t *testing.T) {
 	if got := c.Goal(); got != legacy.Goal {
 		t.Fatalf("Goal() = %q, want %q", got, legacy.Goal)
 	}
-	if got := c.GoalStatus(); got != GoalStatusRunning {
+	if got := c.GoalStatus(); got != GoalStatusStopped {
 		t.Fatalf("status = %q, want running", got)
 	}
 	if runtime := c.GoalRuntime(); runtime.TurnsUsed != 2 || runtime.TurnsLimit != 0 {
@@ -562,7 +562,7 @@ func TestLegacySidecarWithGoalMigratesWithoutArchive(t *testing.T) {
 	if err := json.Unmarshal(persistedRaw, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	if persisted.AutoResearchTaskID != "" || persisted.ResearchMode != GoalResearchOff || persisted.BudgetClass != budgetClassResearch {
+	if persisted.AutoResearchTaskID != "missing-archive" || persisted.ResearchMode != GoalResearchOn {
 		t.Fatalf("migrated sidecar = %+v, want Goal-only research state", persisted)
 	}
 }

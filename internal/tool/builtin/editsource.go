@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"reasonix/internal/fileops"
 	fileenc "reasonix/internal/fileutil/encoding"
 	"reasonix/internal/tool"
 )
@@ -21,27 +22,20 @@ type editSource struct {
 	id      fileIdentity
 }
 
+func overlayObservationTarget(overlay FileOverlay, path string) fileops.Target {
+	if identified, ok := overlay.(FileOverlayIdentity); ok {
+		return fileops.OverlayTargetWithIdentity(path, identified.FileOverlayIdentity())
+	}
+	return fileops.OverlayTarget(path)
+}
+
 // readEditSource resolves path the way Execute and Preview must both see it:
 // the host's unsaved editor buffer when the overlay can serve it, otherwise the
 // decoded disk content. A non-UTF-8 file always stays on the disk route — the
 // overlay contract is text-only, so routing GBK or UTF-16 through it would
 // rewrite the file as UTF-8.
 func readEditSource(ctx context.Context, overlay FileOverlay, path string) (source editSource, readErr error) {
-	defer func() {
-		if readErr != nil {
-			if expected, ok := tool.ExpectedWriteSource(ctx); ok && expected.Path == path && !expected.Absent && os.IsNotExist(readErr) {
-				readErr = &tool.OperationError{Diagnostic: tool.OperationDiagnostic{Code: tool.WriteEvidenceStale, Path: path, ExpectedSnapshot: expected.Snapshot, Recovery: "the expected source disappeared; re-read before retrying"}, Cause: ErrFileChanged}
-				return
-			}
-			return
-		}
-		if expected, ok := tool.ExpectedWriteSource(ctx); ok && expected.Path == path {
-			if expected.Absent || (expected.SourceTextDigest != "" && expected.SourceTextDigest != digestText(source.content)) || (expected.Snapshot != "" && expected.Snapshot != source.readSnapshot(path)) {
-				readErr = &tool.OperationError{Diagnostic: tool.OperationDiagnostic{Code: tool.WriteEvidenceStale, Path: path, ExpectedSnapshot: expected.Snapshot, ActualSnapshot: source.readSnapshot(path), RequiredRanges: expected.Ranges, Recovery: "re-read the file, then retry this operation"}, Cause: fmt.Errorf("%w: source differs from the read-evidence preflight", ErrFileChanged)}
-			}
-		}
-	}()
-	id, err := diskIdentity(path)
+	data, id, err := readDiskIdentity(path)
 	if err != nil {
 		return editSource{}, err
 	}
@@ -53,16 +47,66 @@ func readEditSource(ctx context.Context, overlay FileOverlay, path string) (sour
 		}
 		return editSource{enc: fileenc.UTF8, id: id}, &os.PathError{Op: "read", Path: path, Err: os.ErrNotExist}
 	}
-	content, enc, err := readFileEncoded(path)
-	if err != nil {
-		return editSource{}, err
-	}
+	enc, _ := fileenc.Detect(data)
+	content := string(fileenc.Decode(data, enc))
 	if overlay != nil && enc == fileenc.UTF8 && filepath.IsAbs(path) {
 		if buffered, ok := overlay.ReadTextFile(ctx, path); ok {
 			return editSource{content: buffered, enc: enc, overlay: true, id: overlayIdentity(buffered)}, nil
 		}
 	}
 	return editSource{content: content, enc: enc, id: id}, nil
+}
+
+// lockMutationPath serializes all structured mutations of one real target in
+// this process. Existing hard-link aliases share the native file identity.
+func lockMutationPath(path string) func() {
+	info, _ := os.Stat(path)
+	target := fileops.DiskTarget(path, info)
+	target.Route = "mutation"
+	return fileops.Lock(target)
+}
+
+func (s editSource) observation(overlay FileOverlay, path string) (fileops.Target, fileops.Version, error) {
+	if s.overlay {
+		return overlayObservationTarget(overlay, path), fileops.OverlayVersion(s.content), nil
+	}
+	return s.id.target, s.id.version, nil
+}
+
+func (s editSource) requireObserved(ctx context.Context, overlay FileOverlay, path string) error {
+	store := fileops.FromContext(ctx)
+	if store == nil { // Direct package-level tool calls remain usable in tests and embeddings.
+		return nil
+	}
+	target, version, err := s.observation(overlay, path)
+	if err != nil {
+		return &tool.OperationError{Diagnostic: tool.OperationDiagnostic{Code: tool.FSNotFound, Path: path, Recovery: "read the file, then retry the edit"}, Cause: err}
+	}
+	observed := store.Get(target)
+	if observed.Kind != fileops.Present {
+		return &tool.OperationError{Diagnostic: tool.OperationDiagnostic{Code: tool.FSNotObserved, Path: path, Recovery: "read any current window of this file, then retry"}, Cause: fmt.Errorf("file has not been observed in this agent session")}
+	}
+	if observed.Version != version {
+		return &tool.OperationError{Diagnostic: tool.OperationDiagnostic{Code: tool.FSStaleVersion, Path: path, ExpectedSnapshot: string(observed.Version), ActualSnapshot: string(version), Recovery: "the file changed after it was read; read it again, then retry"}, Cause: ErrFileChanged}
+	}
+	return nil
+}
+
+func (s editSource) commitObservation(ctx context.Context, overlay FileOverlay, path, content string) {
+	store := fileops.FromContext(ctx)
+	if store == nil {
+		return
+	}
+	if s.overlay {
+		store.ObservePresent(overlayObservationTarget(overlay, path), fileops.OverlayVersion(content))
+		return
+	}
+	if info, err := os.Stat(path); err == nil {
+		target, version := fileops.DiskSnapshot(path, info)
+		store.ObservePresent(target, version)
+	} else {
+		store.Forget(fileops.DiskTarget(path, nil))
+	}
 }
 
 func (s editSource) readSnapshot(path string) string {
@@ -74,8 +118,8 @@ func (s editSource) readSnapshot(path string) string {
 }
 
 // write persists content on the same route the source was read from. An overlay
-// that declines a managed write leaves its outcome unknown. Standalone calls
-// without durable recovery retain the legacy disk fallback.
+// that declines a managed write leaves its outcome unknown. It never falls
+// back to disk because that would update a different source than the one read.
 func (s editSource) write(ctx context.Context, overlay FileOverlay, path, content string) error {
 	if err := s.assertUnchanged(ctx, overlay, path); err != nil {
 		return err
@@ -88,14 +132,17 @@ func (s editSource) write(ctx context.Context, overlay FileOverlay, path, conten
 			return err
 		}
 		if ok, err := overlay.WriteTextFile(ctx, path, content); ok {
-			if err != nil && tool.HasWriteIntentHook(ctx) {
+			if err != nil {
+				fileops.FromContext(ctx).Forget(overlayObservationTarget(overlay, path))
 				return fmt.Errorf("write outcome unknown: %w", err)
+			}
+			if err == nil {
+				s.commitObservation(ctx, overlay, path, content)
 			}
 			return err
 		}
-		if tool.HasWriteIntentHook(ctx) {
-			return fmt.Errorf("write outcome unknown: original overlay did not confirm the write")
-		}
+		fileops.FromContext(ctx).Forget(overlayObservationTarget(overlay, path))
+		return fmt.Errorf("write outcome unknown: original overlay did not confirm the write")
 	}
 	if err := s.recordWrite(ctx, path, content, "disk", overlay); err != nil {
 		return err
@@ -103,5 +150,9 @@ func (s editSource) write(ctx context.Context, overlay FileOverlay, path, conten
 	if err := s.assertUnchanged(ctx, overlay, path); err != nil {
 		return err
 	}
-	return writeFileEncoded(path, content, s.enc)
+	if err := writeFileEncoded(path, content, s.enc); err != nil {
+		return err
+	}
+	s.commitObservation(ctx, overlay, path, content)
+	return nil
 }

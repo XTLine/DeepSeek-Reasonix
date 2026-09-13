@@ -40,7 +40,7 @@ func (l *Ledger) OrphanRecovery() *OrphanRecovery {
 
 func (l *Ledger) recoverToolEffects(pendingTools map[string]eventwire.Tool, pendingToolOrder []string) error {
 	if l.active != "" && !l.terminal {
-		requiresRecovery := false
+		hasUnknownEffect := false
 		for _, id := range pendingToolOrder {
 			tool, ok := pendingTools[id]
 			if !ok {
@@ -51,7 +51,7 @@ func (l *Ledger) recoverToolEffects(pendingTools map[string]eventwire.Tool, pend
 				state = provider.ToolRunCancelled
 			}
 			if state == provider.ToolRunUnknown && !tool.ReadOnly {
-				requiresRecovery = true
+				hasUnknownEffect = true
 			}
 			result := event.Event{Kind: event.ToolResult, TurnID: l.active, Source: "ledger_reopen", Tool: event.Tool{
 				RunState: state, AttemptID: tool.AttemptID,
@@ -65,9 +65,10 @@ func (l *Ledger) recoverToolEffects(pendingTools map[string]eventwire.Tool, pend
 		}
 		status := event.TurnInterrupted
 		e := event.Event{Kind: event.TurnDone, TurnID: l.active, Source: "ledger_reopen", Err: errors.New("runtime restarted before the turn reached a terminal event")}
-		if requiresRecovery {
-			status = event.TurnRecoveryRequired
-			e.Recovery = &event.RecoveryStatus{State: "recovery_required", Reason: "runtime_restart", RequiresUserDecision: true}
+		if hasUnknownEffect {
+			// Preserve the uncertainty for history and model guidance without
+			// turning it into a recovery gate or a user-decision state.
+			e.Recovery = &event.RecoveryStatus{State: "unknown", Reason: "runtime_restart"}
 		}
 		e.Status = status
 		if _, ok, appendErr := l.appendLocked(e, status); appendErr != nil || !ok {

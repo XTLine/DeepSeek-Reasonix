@@ -206,10 +206,6 @@ func TestReadEnvelopeKeepsUnicodeWindowsIntact(t *testing.T) {
 	if again.Source.Snapshot != env.Source.Snapshot {
 		t.Fatal("identical unicode window must produce a stable version token")
 	}
-	observed, ok := r.ObserveModelText(json.RawMessage(`{"path":"u.go","offset":1,"limit":2}`), out)
-	if !ok || observed.Version != env.WindowDigest {
-		t.Fatalf("observation version %q must match the envelope window digest %q (ok=%v)", observed.Version, env.WindowDigest, ok)
-	}
 }
 
 func TestReadIntentDefaultsAndExplicitForms(t *testing.T) {
@@ -250,8 +246,6 @@ func TestReadIntentRejectsConflictingParameters(t *testing.T) {
 		args string
 		want string
 	}{
-		{"full with a window", `{"path":"a.go","intent":"full","offset":1}`, "intent=full cannot be combined"},
-		{"full with a limit", `{"path":"a.go","intent":"full","limit":10}`, "intent=full cannot be combined"},
 		{"range without a window", `{"path":"a.go","intent":"range"}`, "intent=range requires"},
 		{"unknown intent", `{"path":"a.go","intent":"peek"}`, "intent must be inspect, range, or full"},
 	}
@@ -265,6 +259,19 @@ func TestReadIntentRejectsConflictingParameters(t *testing.T) {
 				t.Fatalf("ReadEnvelope(%s) must not describe a rejected call", tc.args)
 			}
 		})
+	}
+}
+
+func TestLegacyFullIntentIsOneBoundedWindow(t *testing.T) {
+	dir, _ := writeEnvelopeFixture(t, "a.go", 30)
+	r := readFile{workDir: dir}
+	out, err := r.Execute(context.Background(), json.RawMessage(`{"path":"a.go","intent":"full","offset":10,"limit":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	window, ok := tool.ParseReadWindow(out)
+	if !ok || window.StartLine != 11 || len(window.Lines) != 2 {
+		t.Fatalf("bounded legacy full window = %+v, ok=%v", window, ok)
 	}
 }
 

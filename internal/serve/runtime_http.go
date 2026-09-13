@@ -105,9 +105,8 @@ func (s *Server) effortSwitch(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// qualityFloorSwitch updates the session-scoped delivery floor without
-// rebuilding the controller. Serialize it with turn admission so the value
-// applies wholly before or after a turn, never halfway through admission.
+// qualityFloorSwitch retains the retired route for older clients. It validates
+// the value and session identity but never changes runtime state.
 func (s *Server) qualityFloorSwitch(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Floor string `json:"floor"`
@@ -126,12 +125,7 @@ func (s *Server) qualityFloorSwitch(w http.ResponseWriter, r *http.Request) {
 	if !s.validateExpectedSessionLocked(w, r) {
 		return
 	}
-	ctrl := s.ctl()
-	if controllerHasActiveRuntimeWork(ctrl) {
-		http.Error(w, "cannot change quality floor while active work or background jobs are running", http.StatusConflict)
-		return
-	}
-	if err := ctrl.SetQualityFloor(normalized); err != nil {
+	if err := s.ctl().SetQualityFloor(normalized); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

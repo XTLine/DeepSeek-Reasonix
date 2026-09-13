@@ -1,9 +1,6 @@
 package config
 
-import (
-	"fmt"
-	"strings"
-)
+import "strings"
 
 // Completion-validation modes, mirrored from the agent layer.
 const (
@@ -36,18 +33,11 @@ func validateCompletionValidationModes(configured string) error {
 // renderRecoveryAndCompletionValidation keeps the renderer call stable while
 // deliberately omitting the retired completion-validator settings.
 func renderRecoveryAndCompletionValidation(b *strings.Builder, c *Config) {
-	if strings.TrimSpace(c.Agent.RecoveryModel) != "" {
-		fmt.Fprintf(b, "recovery_model = %q   # optional independent reviewer for low-risk automatic recovery\n", c.Agent.RecoveryModel)
-	} else {
-		b.WriteString("# recovery_model = \"deepseek-pro\"   # optional; empty leaves rule-only recovery\n")
-	}
+	// recovery_model and completion-validation settings are accepted on input
+	// for compatibility but no longer participate in execution or new config.
 }
 
 // diffRecoveryAndCompletionValidation retains the historical renderer hook;
 // retired completion-validator settings are intentionally never emitted.
 func diffRecoveryAndCompletionValidation(agentBuf *strings.Builder, c, d Config, anyAgent *bool) {
-	if c.Agent.RecoveryModel != "" && c.Agent.RecoveryModel != d.Agent.RecoveryModel {
-		fmt.Fprintf(agentBuf, "recovery_model = %q\n", c.Agent.RecoveryModel)
-		*anyAgent = true
-	}
 }

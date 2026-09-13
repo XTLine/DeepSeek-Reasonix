@@ -65,6 +65,9 @@ foreach ($name in $expectedPayload) {
 if ($signingFiles -notcontains "app/Reasonix.exe") {
     throw "Payload signing list does not cover the Electron shell app/Reasonix.exe"
 }
+if ($signingFiles -notcontains "app/resources/bin/reasonix-cli-launcher.exe") {
+    throw "Payload signing list does not cover the CLI entry app/resources/bin/reasonix-cli-launcher.exe"
+}
 
 $payloadFiles = @(Get-ChildItem -LiteralPath $PayloadDirectory -File -Filter "*.exe")
 if ($payloadFiles.Count -ne $expectedPayload.Count) {
@@ -112,7 +115,7 @@ try {
     $portableSources = @(
         [pscustomobject]@{ Portable = "reasonix-launcher.exe"; Payload = "reasonix-launcher.exe" },
         [pscustomobject]@{ Portable = "Reasonix.exe"; Payload = "reasonix-launcher.exe" },
-        [pscustomobject]@{ Portable = "reasonix-cli.exe"; Payload = "reasonix-cli.exe" },
+        [pscustomobject]@{ Portable = "reasonix-cli.exe"; Payload = "app/resources/bin/reasonix-cli-launcher.exe" },
         [pscustomobject]@{ Portable = (Join-Path $activeDir "reasonix-desktop.exe"); Payload = "reasonix-desktop.exe" },
         [pscustomobject]@{ Portable = (Join-Path $activeDir "reasonix-update-helper.exe"); Payload = "reasonix-update-helper.exe" },
         [pscustomobject]@{ Portable = (Join-Path $activeDir "reasonix-cli.exe"); Payload = "reasonix-cli.exe" }

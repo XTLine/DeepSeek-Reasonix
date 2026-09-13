@@ -15,10 +15,11 @@ import (
 
 func TestSubagentSkillGoalRecordsWorkDuration(t *testing.T) {
 	sess := agent.NewSession("")
-	exec := agent.New(nil, tool.NewRegistry(), sess, agent.Options{}, event.Discard)
+	prov := &scriptedTurns{turns: goalToolTurn(GoalStatusComplete, "reviewed", "")}
+	exec := agent.New(prov, goalRegistry(), sess, agent.Options{}, event.Discard)
 	events := make(chan event.Event, 8)
 	c := New(Options{
-		Executor: exec,
+		Executor: exec, Runner: exec,
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.TurnDone || e.Kind == event.Notice {
 				events <- e

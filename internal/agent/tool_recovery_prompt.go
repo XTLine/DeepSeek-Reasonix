@@ -1,21 +1,10 @@
 package agent
 
 import (
-	"reasonix/internal/provider"
 	"slices"
-)
 
-func confirmedRecoveryEffect(msgs []provider.Message, id provider.ActionIdentity) bool {
-	for _, m := range msgs {
-		for _, c := range m.ToolCalls {
-			r := c.Recovery
-			if r != nil && r.State == provider.ToolRunUserConfirmed && r.Identity.CanonicalTool == id.CanonicalTool && r.Identity.ArgumentDigest == id.ArgumentDigest && r.Identity.ResourceScope == id.ResourceScope {
-				return true
-			}
-		}
-	}
-	return false
-}
+	"reasonix/internal/provider"
+)
 
 func (a *Agent) SilentToolRecovery() bool {
 	r := a.transcriptInterruptedRecovery()

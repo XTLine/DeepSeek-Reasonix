@@ -2,12 +2,15 @@
 
 [简体中文](DESKTOP_SHELL_MIGRATION.zh-CN.md)
 
-This is the architecture decision record and the working plan for replacing
-the Wails desktop shell with Electron while keeping the Go kernel, the Go
-desktop business layer and the React UI. It is the reference for the migration
-branch until the final phase closes; the wire contract lives in
-[the host protocol](DESKTOP_HOST_PROTOCOL.md) and the generated entry-point
-inventory in `docs/desktop-migration/INVENTORY.md`.
+This record preserves the Wails-to-Electron decision, migration evidence, and
+remaining acceptance items. The current implementation uses Electron, a Go
+desktop service, and React; the Wails entry point and build dependencies have
+been removed. Migration phases and baseline commands below describe that
+transition, not the routine development workflow. For current work, use
+[Contributing](../CONTRIBUTING.md), [the host protocol](DESKTOP_HOST_PROTOCOL.md),
+and [the generated entry-point inventory](desktop-migration/INVENTORY.md).
+Removal does not establish that every platform acceptance item has passed;
+the recorded open items remain explicit below.
 
 ## Decision
 

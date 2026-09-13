@@ -22,6 +22,7 @@ export function normalizeCompletionReceipt(value?: WireCompletionReceipt): WireC
   if (!value) return undefined;
   return {
     verdict: String(value.verdict ?? "unknown"),
+	assessmentKind: value.assessmentKind === "facts" ? "facts" : undefined,
     diff: normalizeTurnChanges(value.diff),
     interrupted: value.interrupted === true,
     changes: Array.isArray(value.changes) ? value.changes : [],

@@ -33,7 +33,6 @@ func TestACPBuiltinToolsKeepSessionLevelBuiltins(t *testing.T) {
 	tools := toolMap(acpBuiltinTools(&config.Config{}, dir, []string{dir}))
 	for _, name := range []string{
 		"todo_write",
-		"complete_step",
 		"bash_output",
 		"kill_shell",
 		"wait",
@@ -43,6 +42,9 @@ func TestACPBuiltinToolsKeepSessionLevelBuiltins(t *testing.T) {
 		if tools[name] == nil {
 			t.Fatalf("ACP workspace tools missing %q; got %v", name, toolNames(tools))
 		}
+	}
+	if tools["complete_step"] != nil || tools["review_report"] != nil {
+		t.Fatalf("ACP exposed retired proof tools; got %v", toolNames(tools))
 	}
 }
 

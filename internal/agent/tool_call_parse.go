@@ -10,9 +10,12 @@ import (
 	"reasonix/internal/tool"
 )
 
-// parseToolCall resolves the canonical tool, rejects ambiguity/unknown tools,
-// and applies repeat-success and stale-anchor guards.
+// parseToolCall resolves the canonical tool and rejects ambiguity/unknown tools.
 func (a *Agent) parseToolCall(ctx context.Context, turn *turnRuntime, plan *toolCallPlan) (toolOutcome, bool) {
+	if retiredTool(plan.call.Name) {
+		msg := fmt.Sprintf("tool_retired: %s is no longer part of the execution protocol; use file tools, todo_write, or provide the final answer directly", plan.call.Name)
+		return toolOutcome{output: msg, errMsg: "tool_retired"}, true
+	}
 	t, canonicalName, ambiguous := a.svc.tools.ResolveCall(plan.call.Name)
 	if len(ambiguous) > 0 {
 		msg := fmt.Sprintf("ambiguous MCP tool reference %q; use one of: %s", plan.call.Name, strings.Join(ambiguous, ", "))
@@ -30,36 +33,6 @@ func (a *Agent) parseToolCall(ctx context.Context, turn *turnRuntime, plan *tool
 		return toolOutcome{
 			output: fmt.Sprintf("error: unknown tool %q", plan.call.Name),
 			errMsg: fmt.Sprintf("unknown tool %q", plan.call.Name),
-		}, true
-	}
-	recoveryCall := plan.call
-	recoveryCall.Name = canonicalName
-	if out, handled := recoverPreviousWrite(ctx, turn, recoveryCall, t); handled {
-		return out, true
-	}
-	if out, handled := recoverPreviousUnknown(turn, recoveryCall, t); handled {
-		return out, true
-	}
-
-	if out, blocked := a.repeatedSuccessBlock(plan.call, t); blocked {
-		return toolOutcome{
-			output:  out,
-			blocked: true,
-			errMsg:  loopGuardBlockErrMsg,
-		}, true
-	}
-	if out, blocked := a.repeatedFailureBlock(ctx, plan.call, t); blocked {
-		return toolOutcome{
-			output:  out,
-			blocked: true,
-			errMsg:  loopGuardBlockErrMsg,
-		}, true
-	}
-	if out, blocked := a.staleAnchorEditBlock(ctx, plan.call); blocked {
-		return toolOutcome{
-			output:  out,
-			blocked: true,
-			errMsg:  "blocked: fresh read required",
 		}, true
 	}
 	plan.tool = t
@@ -88,4 +61,13 @@ func (a *Agent) parseToolCall(ctx context.Context, turn *turnRuntime, plan *tool
 		plan.effects = evidence.ClassifyToolCall(plan.evidenceName, plan.evidenceArgs, plan.readOnly)
 	}
 	return toolOutcome{}, false
+}
+
+func retiredTool(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "complete_step", "review_report", "read_policy_receipt", "session_read_strategy_receipt":
+		return true
+	default:
+		return false
+	}
 }

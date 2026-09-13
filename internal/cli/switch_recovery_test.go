@@ -301,7 +301,7 @@ func TestSkillRefreshCarriesRecoveryPathAfterSnapshotConflict(t *testing.T) {
 	}
 }
 
-func TestWorkModeSwitchUpdatesInPlaceWithoutRebuildOrLeaseMove(t *testing.T) {
+func TestRetiredWorkModeIsNoOpWithoutRebuildOrLeaseMove(t *testing.T) {
 	dir := t.TempDir()
 	originalPath := filepath.Join(dir, "work-mode-conflict.jsonl")
 
@@ -327,8 +327,8 @@ func TestWorkModeSwitchUpdatesInPlaceWithoutRebuildOrLeaseMove(t *testing.T) {
 	if m.ctrl != oldCtrl {
 		t.Fatal("controller instance must stay the same")
 	}
-	if m.ctrl.AgentPreset() != boot.AgentPresetDelivery {
-		t.Fatalf("controller preset = %q, want delivery", m.ctrl.AgentPreset())
+	if m.ctrl.AgentPreset() != boot.AgentPresetStandard {
+		t.Fatalf("controller preset = %q, want standard", m.ctrl.AgentPreset())
 	}
 	if builds != 0 {
 		t.Fatalf("unexpected rebuilds: %d", builds)

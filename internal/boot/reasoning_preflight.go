@@ -73,7 +73,6 @@ func preflightRoleReasoning(cfg *config.Config, opts Options, resolver provider.
 		{role: "planner", ref: effectivePlannerModel(cfg, opts)},
 		{role: "vision", ref: explicitVisionModel(cfg), optional: true},
 		{role: "guardian", ref: cfg.Agent.GuardianModel},
-		{role: "recovery", ref: cfg.Agent.RecoveryModel},
 	}
 	subagentModel := strings.TrimSpace(cfg.Agent.SubagentModel)
 	if subagentModel == "" {
@@ -87,7 +86,9 @@ func preflightRoleReasoning(cfg *config.Config, opts Options, resolver provider.
 	if cfg.Agent.SubagentModel != "" || subagentEffort != nil {
 		roles = append(roles, roleSelection{role: "subagent", ref: subagentModel, source: "agent.subagent_effort", effort: subagentEffort, optional: true})
 	}
-	keys := make([]string, 0, len(cfg.Agent.SubagentModels)+len(cfg.Agent.SubagentEfforts))
+	// Seed capacity from one map only. Adding the two attacker-controlled map
+	// lengths can overflow before make validates the allocation size.
+	keys := make([]string, 0, len(cfg.Agent.SubagentModels))
 	for key := range cfg.Agent.SubagentModels {
 		keys = append(keys, key)
 	}

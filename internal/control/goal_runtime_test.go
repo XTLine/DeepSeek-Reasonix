@@ -10,21 +10,19 @@ import (
 	"reasonix/internal/agent"
 	"reasonix/internal/event"
 	"reasonix/internal/evidence"
-	"reasonix/internal/goaleval"
 	"reasonix/internal/provider"
 	"reasonix/internal/store"
 	"reasonix/internal/tool"
 )
 
-// goalRuntimeController wires a controller whose goal turns carry no
-// update_goal report, so the bounded evaluator decides every disposition. It
-// returns the TurnDone/Notice channel for waiting.
-func goalRuntimeController(t *testing.T, prov provider.Provider, eval goaleval.Evaluator) (*Controller, *agent.Agent, <-chan event.Event) {
+// goalRuntimeController wires a controller with a scripted reporting model.
+// The legacy evaluator option is accepted but must never be called.
+func goalRuntimeController(t *testing.T, prov provider.Provider, eval any) (*Controller, *agent.Agent, <-chan event.Event) {
 	t.Helper()
 	return goalRuntimeControllerWithTokenBudget(t, prov, eval, 0)
 }
 
-func goalRuntimeControllerWithTokenBudget(t *testing.T, prov provider.Provider, eval goaleval.Evaluator, tokens int) (*Controller, *agent.Agent, <-chan event.Event) {
+func goalRuntimeControllerWithTokenBudget(t *testing.T, prov provider.Provider, eval any, tokens int) (*Controller, *agent.Agent, <-chan event.Event) {
 	t.Helper()
 	ag := agent.New(prov, goalRegistry(), agent.NewSession(""), agent.Options{}, event.Discard)
 	events := make(chan event.Event, 8)
@@ -53,125 +51,47 @@ func waitGoalTurnDone(t *testing.T, events <-chan event.Event) {
 	t.Fatal("goal loop ended without TurnDone")
 }
 
-// TestSimpleGoalWithoutReportCompletesViaEvaluator pins the acceptance
-// criterion: a simple Q&A goal whose model never calls update_goal still ends
-// on the first turn when the evaluator says complete.
-func TestSimpleGoalWithoutReportCompletesViaEvaluator(t *testing.T) {
-	prov := &scriptedTurns{turns: [][]provider.Chunk{textTurn("Here is the answer.")}}
-	c, _, events := goalRuntimeController(t, prov, &fakeGoalEvaluator{outcome: goaleval.OutcomeComplete, reason: "the question is fully answered"})
-
-	c.Submit("/goal explain the cache behavior")
-	waitGoalTurnDone(t, events)
-
-	if prov.call != 1 {
-		t.Fatalf("provider calls = %d, want 1 (evaluator decides on the first turn, no second round)", prov.call)
-	}
-	if got := c.GoalStatus(); got != GoalStatusComplete {
-		t.Fatalf("GoalStatus() = %q, want complete", got)
-	}
-}
-
-func TestGoalEvaluatorUsageCommitsBeforeFSMCompletion(t *testing.T) {
-	sink := NewGoalUsageTee(event.Discard)
-	mainProv := &scriptedTurns{turns: [][]provider.Chunk{textTurn("Here is the answer.")}}
-	evalProv := &scriptedTurns{turns: [][]provider.Chunk{{
-		{Type: provider.ChunkText, Text: `{"outcome":"complete","reason":"done"}`},
-		{Type: provider.ChunkUsage, Usage: &provider.Usage{PromptTokens: 60, CompletionTokens: 17, TotalTokens: 77}},
-		{Type: provider.ChunkDone},
-	}}}
-	executor := agent.New(mainProv, goalRegistry(), agent.NewSession(""), agent.Options{}, sink)
-	evaluator := goaleval.NewSessionWithSink(evalProv, nil, "test/evaluator", sink)
-	c := New(Options{Runner: executor, Executor: executor, GoalEvaluator: evaluator, Sink: sink})
-	c.SetGoal("answer once")
-	if err := newTurnOrchestrator(c).runGoalLoopWithRawDisplay(context.Background(), "answer", "answer", ""); err != nil {
-		t.Fatal(err)
-	}
-	if c.GoalStatus() != GoalStatusComplete {
-		t.Fatalf("status = %q, want complete", c.GoalStatus())
-	}
-	if got := c.GoalRuntime().TokensUsed; got != 77 {
-		t.Fatalf("evaluator usage = %d, want 77 committed before FSM completion", got)
+func TestGoalWithoutReportContinuesWithoutEvaluator(t *testing.T) {
+	for _, evaluator := range []*fakeGoalEvaluator{
+		{outcome: "complete"}, {outcome: "blocked"},
+		{outcome: "uncertain"}, {err: context.DeadlineExceeded}, nil,
+	} {
+		turns := [][]provider.Chunk{textTurn("Here is the answer.")}
+		turns = append(turns, goalToolTurn(GoalStatusComplete, "finished", "")...)
+		prov := &scriptedTurns{turns: turns}
+		c, _, events := goalRuntimeController(t, prov, evaluator)
+		c.Submit("/goal explain the cache behavior")
+		waitGoalTurnDone(t, events)
+		if prov.call != 3 || c.GoalStatus() != GoalStatusComplete {
+			t.Fatalf("expected continuation then model completion: calls=%d status=%s", prov.call, c.GoalStatus())
+		}
+		if evaluator != nil && evaluator.calls != 0 {
+			t.Fatalf("retired evaluator called %d times", evaluator.calls)
+		}
 	}
 }
 
-// TestEvaluatorOutcomesDriveFSM covers the evaluator verdict matrix.
-func TestEvaluatorOutcomesDriveFSM(t *testing.T) {
-	cases := []struct {
-		name       string
-		outcome    goaleval.Outcome
-		wantStatus string
-		wantCause  string
-	}{
-		{"complete", goaleval.OutcomeComplete, GoalStatusComplete, ""},
-		{"blocked", goaleval.OutcomeBlocked, GoalStatusBlocked, ""},
-		{"uncertain fails closed", goaleval.OutcomeUncertain, GoalStatusBlocked, stopCauseEvaluator},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			turn := textTurn("done.")
-			// A continue verdict loops forever unless a budget is configured.
-			budget := 0
-			if tc.wantStatus == GoalStatusRunning {
-				budget = 1
-				turn = []provider.Chunk{
-					{Type: provider.ChunkText, Text: "done."},
-					{Type: provider.ChunkUsage, Usage: &provider.Usage{PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110, RequestCount: 1}},
-					{Type: provider.ChunkDone},
-				}
-			}
-			prov := &scriptedTurns{turns: [][]provider.Chunk{turn}}
-			c, _, events := goalRuntimeControllerWithTokenBudget(t, prov, &fakeGoalEvaluator{outcome: tc.outcome, reason: "verdict"}, budget)
-			c.Submit("/goal assess the impact")
-			waitGoalTurnDone(t, events)
-			if got := c.GoalStatus(); got != tc.wantStatus {
-				t.Fatalf("GoalStatus() = %q, want %q", got, tc.wantStatus)
-			}
-			if rt := c.GoalRuntime(); rt.StopCause != tc.wantCause {
-				t.Fatalf("StopCause = %q, want %q", rt.StopCause, tc.wantCause)
-			}
-		})
-	}
-}
-
-// TestEvaluatorErrorPausesFirstTurn pins fail-closed: an erroring evaluator
-// pauses the goal on the first turn without looping to a fixed cap.
-func TestEvaluatorErrorPausesFirstTurn(t *testing.T) {
-	prov := &scriptedTurns{turns: [][]provider.Chunk{textTurn("done.")}}
-	c, _, events := goalRuntimeController(t, prov, &fakeGoalEvaluator{err: context.DeadlineExceeded})
-	c.Submit("/goal evaluate this")
-	waitGoalTurnDone(t, events)
-	if got := c.GoalStatus(); got != GoalStatusBlocked {
-		t.Fatalf("GoalStatus() = %q, want blocked (fail closed)", got)
-	}
-	if rt := c.GoalRuntime(); rt.StopCause != stopCauseEvaluator || rt.TurnsUsed != 1 {
-		t.Fatalf("runtime = %+v, want evaluator pause after 1 turn", rt)
-	}
-}
-
-// TestEvaluatorUnavailablePausesFirstTurn pins the no-evaluator configuration.
-func TestEvaluatorUnavailablePausesFirstTurn(t *testing.T) {
-	prov := &scriptedTurns{turns: [][]provider.Chunk{textTurn("done.")}}
+func TestGoalModelUsageCommitsBeforeCompletion(t *testing.T) {
+	turns := goalToolTurn(GoalStatusComplete, "finished", "")
+	turns[0] = append([]provider.Chunk{{Type: provider.ChunkUsage, Usage: &provider.Usage{PromptTokens: 60, CompletionTokens: 17, TotalTokens: 77}}}, turns[0]...)
+	prov := &scriptedTurns{turns: turns}
 	c, _, events := goalRuntimeController(t, prov, nil)
-	c.Submit("/goal evaluate this")
+	c.Submit("/goal answer once")
 	waitGoalTurnDone(t, events)
-	if got := c.GoalStatus(); got != GoalStatusBlocked {
-		t.Fatalf("GoalStatus() = %q, want blocked (evaluator unavailable)", got)
-	}
-	if rt := c.GoalRuntime(); rt.StopCause != stopCauseEvaluator {
-		t.Fatalf("StopCause = %q, want %q", rt.StopCause, stopCauseEvaluator)
+	if c.GoalStatus() != GoalStatusComplete || c.GoalRuntime().TokensUsed != 77 {
+		t.Fatalf("completion lost actual usage: status=%s runtime=%+v", c.GoalStatus(), c.GoalRuntime())
 	}
 }
 
-// TestEvaluatorCompleteStillGatedByReadiness: the evaluator's complete claim
-// must pass host readiness — seeded incomplete todos keep the goal going.
-func TestEvaluatorCompleteStillGatedByReadiness(t *testing.T) {
+// The model's explicit continue report keeps the Goal active.
+func TestModelContinueKeepsGoalActive(t *testing.T) {
 	g := &goalMachine{goal: "fix everything", status: GoalStatusRunning, turnsLimit: unlimitedGoalTurns}
 	res := g.advance(goalAdvanceInput{
-		evaluator: &goalEvaluatorVerdict{outcome: goaleval.OutcomeComplete, reason: "all done"},
-		todos:     []evidence.TodoItem{{Content: "Fix the parser", Status: "in_progress"}},
+		report: &goalTurnReport{status: GoalStatusRunning, reason: "work remains"},
+		todos:  []evidence.TodoItem{{Content: "Fix the parser", Status: "in_progress"}},
 	})
 	if !res.cont || g.status != GoalStatusRunning || g.stopCause != "" {
-		t.Fatalf("readiness-rejected complete should continue: result=%+v runtime=%+v", res, g.runtimeView())
+		t.Fatalf("model continue should keep running: result=%+v runtime=%+v", res, g.runtimeView())
 	}
 }
 
@@ -424,9 +344,9 @@ func TestGoalLegacyBudgetTokensSidecarAutoResumes(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := &goalMachine{}
-	migPath, migData, migrated, _ := g.restoreFromState(path)
-	if !migrated {
-		t.Fatal("legacy budget_tokens pause must migrate")
+	_, _, migrated, _ := g.restoreFromState(path)
+	if migrated || !g.disarmed {
+		t.Fatal("restore must normalize without writing or activating")
 	}
 	if g.status != GoalStatusRunning || g.stopCause != "" {
 		t.Fatalf("status/stopCause = %q/%q, want running/empty", g.status, g.stopCause)
@@ -443,7 +363,8 @@ func TestGoalLegacyBudgetTokensSidecarAutoResumes(t *testing.T) {
 	if g.turnsUsed != 1 || g.turnsLimit != unlimitedGoalTurns {
 		t.Fatalf("turns = %d/%d, want 1/unlimited", g.turnsUsed, g.turnsLimit)
 	}
-	if err := g.writeStateErr(migPath, migData); err != nil {
+	migData, err := os.ReadFile(goalStatePath(path))
+	if err != nil {
 		t.Fatal(err)
 	}
 	var migratedState goalState
@@ -540,7 +461,7 @@ func TestGoalSidecarCompatRestoresOldAndNewFields(t *testing.T) {
 		freshExec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard)
 		fresh := New(Options{Executor: freshExec, SessionDir: dir, Label: "fresh"})
 		fresh.Resume(agent.NewSession("sys"), path)
-		if fresh.GoalStatus() != GoalStatusRunning {
+		if fresh.GoalStatus() != GoalStatusStopped {
 			t.Fatalf("restored status = %q, want running after numeric pause migration", fresh.GoalStatus())
 		}
 		if rt := fresh.GoalRuntime(); rt.StopCause != "" || rt.TurnsLimit != 0 {
@@ -613,7 +534,7 @@ func TestGoalRuntimeViewPopulatesFromController(t *testing.T) {
 // FSM — only the structured tool report does.
 func TestFooterTextDoesNotDriveGoalState(t *testing.T) {
 	g := &goalMachine{goal: "migrate the storage", status: GoalStatusRunning, turnsLimit: unlimitedGoalTurns}
-	res := g.advance(goalAdvanceInput{evaluator: &goalEvaluatorVerdict{outcome: goaleval.OutcomeContinue, reason: "work is ongoing"}})
+	res := g.advance(goalAdvanceInput{})
 	if !res.cont || g.status != GoalStatusRunning {
 		t.Fatalf("plain footer-equivalent text changed Goal state: result=%+v runtime=%+v", res, g.runtimeView())
 	}
@@ -633,16 +554,13 @@ func (f minimalFakeTool) Execute(context.Context, json.RawMessage) (string, erro
 	return f.name + " done", nil
 }
 
-// TestGoalDeliveryWorkflowCompletesAfterVerifiedSignoff covers the
-// Goal + closed-loop evidence combination: the model works (edit → verify →
-// review → complete_step), reports complete via update_goal, and the goal
-// completes — no user-facing recovery card.
-func TestGoalDeliveryWorkflowCompletesAfterVerifiedSignoff(t *testing.T) {
+// TestGoalDeliveryWorkflowCompletesFromModelReport covers the simplified Goal
+// contract: tools provide execution facts and update_goal carries the model's
+// structured completion report. No proof tool or recovery card is required.
+func TestGoalDeliveryWorkflowCompletesFromModelReport(t *testing.T) {
 	todoWrite, _ := tool.LookupBuiltin("todo_write")
-	completeStep, _ := tool.LookupBuiltin("complete_step")
 	reg := goalRegistry()
 	reg.Add(todoWrite)
-	reg.Add(completeStep)
 	reg.Add(minimalFakeTool{name: "write_file"})
 	reg.Add(minimalFakeTool{name: "read_file", readOnly: true})
 	reg.Add(minimalFakeTool{name: "bash"})
@@ -653,7 +571,6 @@ func TestGoalDeliveryWorkflowCompletesAfterVerifiedSignoff(t *testing.T) {
 			{toolCallChunk("w1", "write_file", `{"path":"main.go"}`), {Type: provider.ChunkDone}},
 			{toolCallChunk("rv", "read_file", `{"path":"main.go"}`), {Type: provider.ChunkDone}},
 			{toolCallChunk("vf", "bash", `{"command":"go test ./..."}`), {Type: provider.ChunkDone}},
-			{toolCallChunk("sg", "complete_step", `{"step":"Ship main","result":"implemented","evidence":[{"kind":"verification","summary":"tests pass","command":"go test ./..."}]}`), {Type: provider.ChunkDone}},
 			{toolCallChunk("ug", "update_goal", `{"status":"complete","reason":""}`), {Type: provider.ChunkDone}},
 			textTurn("Ship main delivered."),
 		},
@@ -686,10 +603,9 @@ func TestGoalDeliveryWorkflowCompletesAfterVerifiedSignoff(t *testing.T) {
 	}
 }
 
-// TestPlainDeliveryReadinessFailureSurfacesRecoveryCard covers the plain
-// (non-Goal) closed-loop case: Delivery stops after the visible turn and leaves
-// the explicit recovery action to the user.
-func TestPlainDeliveryReadinessFailureSurfacesRecoveryCard(t *testing.T) {
+// TestRetiredDeliverySettingDoesNotCreateRecoveryCard covers a historical
+// delivery value on an ordinary, non-Goal turn.
+func TestRetiredDeliverySettingDoesNotCreateRecoveryCard(t *testing.T) {
 	todoWrite, _ := tool.LookupBuiltin("todo_write")
 	reg := tool.NewRegistry()
 	reg.Add(todoWrite)
@@ -700,9 +616,8 @@ func TestPlainDeliveryReadinessFailureSurfacesRecoveryCard(t *testing.T) {
 		textTurn("premature final"),
 		textTurn("must not be consumed by a hidden readiness retry"),
 	}}
-	// "implement main" is an unanchored mutation. The delivery floor is what
-	// turns its closed-loop evidence gap into a pause; the standard floor lets
-	// the answer stand (TestStandardFloorNeverPausesOnReadinessGap).
+	// "implement main" is an unanchored mutation. The retired delivery value
+	// must not turn its evidence gap into a current pause.
 	ag := agent.New(prov, reg, agent.NewSession(""), agent.Options{}, event.Discard)
 	done := make(chan event.Event, 1)
 	c := New(Options{
@@ -720,8 +635,8 @@ func TestPlainDeliveryReadinessFailureSurfacesRecoveryCard(t *testing.T) {
 	}
 	c.Submit("implement main")
 	ev := <-done
-	if ev.Readiness == nil || len(ev.Readiness.Missing) == 0 {
-		t.Fatalf("TurnDone.Readiness = %+v, want missing requirements for the recovery card", ev.Readiness)
+	if ev.Readiness != nil {
+		t.Fatalf("TurnDone.Readiness = %+v, want no mode-created recovery card", ev.Readiness)
 	}
 	if prov.call != 3 {
 		t.Fatalf("provider calls = %d, want 3 (work + todo + final answer)", prov.call)

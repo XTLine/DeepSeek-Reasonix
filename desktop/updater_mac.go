@@ -735,24 +735,6 @@ func macProcessAlive(pid int) bool {
 	return err == nil
 }
 
-func currentMacAppBundle() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	exe, _ = filepath.EvalSymlinks(exe)
-	const marker = ".app/Contents/MacOS/"
-	idx := strings.Index(exe, marker)
-	if idx < 0 {
-		return "", fmt.Errorf("update: current executable is not inside a macOS .app bundle")
-	}
-	app := exe[:idx+len(".app")]
-	if _, err := os.Stat(filepath.Join(app, "Contents", "Info.plist")); err != nil {
-		return "", fmt.Errorf("update: current app bundle is invalid: %w", err)
-	}
-	return app, nil
-}
-
 func findMacApp(root string) (string, error) {
 	direct := filepath.Join(root, "Reasonix.app")
 	if _, err := os.Stat(filepath.Join(direct, "Contents", "Info.plist")); err == nil {

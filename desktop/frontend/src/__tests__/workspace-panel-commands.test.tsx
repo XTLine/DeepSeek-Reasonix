@@ -5,6 +5,7 @@ import { JSDOM } from "jsdom";
 import { useWorkspacePanelCommands } from "../app-runtime/useWorkspacePanelCommands";
 import { useSessionNavigationCommands, type SessionNavigationCommandsInput } from "../app-runtime/useSessionNavigationCommands";
 import { loadWorkspacePanelOpen, saveWorkspacePanelOpen, useLayoutStore } from "../store/layout";
+import { useActivityBarStore } from "../store/activityBar";
 import { useRemoteStore } from "../store/remote";
 import type { RemoteHostView } from "../lib/types";
 
@@ -21,8 +22,8 @@ const globalRoot = "/fixture/global-workspace";
 let navigation!: ReturnType<typeof useSessionNavigationCommands>;
 let navigationRequest: unknown;
 const setTreeWidth = (width: number) => { restoredWidth = width; };
-function Probe({ workspace, creation, visible }: { workspace: string; creation: boolean; visible: boolean }) {
-  commands = useWorkspacePanelCommands({ workspaceRoot: workspace, creation, visible, closeOverlays, clearLiveWidth,
+function Probe({ workspace, creation, visible, sessionId }: { workspace: string; creation: boolean; visible: boolean; sessionId: string }) {
+  commands = useWorkspacePanelCommands({ sessionId, workspaceRoot: workspace, creation, visible, closeOverlays, clearLiveWidth,
     availableWidth: 800, clampTreeWidth: (width) => width, setTreeWidth, gridOpen: visible, t: (key: string) => key } as never);
   navigation = useSessionNavigationCommands({
     activeTab: { id: "fixture", scope: workspace === globalRoot ? "global" : "project", workspaceRoot: workspace },
@@ -31,7 +32,8 @@ function Probe({ workspace, creation, visible }: { workspace: string; creation: 
   } as SessionNavigationCommandsInput);
   return null;
 }
-const paint = (workspace: string, creation = false, visible = false) => act(async () => root.render(<Probe workspace={workspace} creation={creation} visible={visible} />));
+const paint = (workspace: string, creation = false, visible = false, sessionId = `session:${workspace}`) =>
+  act(async () => root.render(<Probe workspace={workspace} creation={creation} visible={visible} sessionId={sessionId} />));
 try {
   saveWorkspacePanelOpen(false, "A"); saveWorkspacePanelOpen(true, "B");
   await paint("A");
@@ -50,6 +52,17 @@ try {
   assert.equal(widthClears, 1);
   await paint("B");
   assert.equal(useLayoutStore.getState().workspacePanelOpen, true, "different project restores its own preference");
+  await paint("B", false, true);
+  assert.deepEqual(useActivityBarStore.getState().tabs.map(tab => tab.type), ["context"],
+    "an expanded empty dock opens Overview when a session becomes active");
+  const overviewTabId = useActivityBarStore.getState().activeTabId!;
+  await act(async () => useActivityBarStore.getState().closeTab(overviewTabId));
+  await paint("B", false, true);
+  assert.deepEqual(useActivityBarStore.getState().tabs, [],
+    "closing the default tab does not reopen it during the same session");
+  await paint("B", false, true, "session:B:next");
+  assert.deepEqual(useActivityBarStore.getState().tabs.map(tab => tab.type), ["context"],
+    "the next session seeds Overview again when the dock is still expanded");
   await paint("A", true);
   assert.equal(useLayoutStore.getState().workspacePanelOpen, false);
   assert.equal(useLayoutStore.getState().rightDockMode, "files", "Creation cannot leave a hidden overview selected");

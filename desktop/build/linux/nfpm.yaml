@@ -20,6 +20,8 @@ description: |
 vendor: "Reasonix Contributors"
 homepage: "https://github.com/esengine/DeepSeek-Reasonix"
 license: "MIT"
+deb:
+  compression: xz
 scripts:
   postinstall: ./build/linux/postinstall.sh
 # Runtime libraries the bundled Chromium links against at runtime; apt pulls

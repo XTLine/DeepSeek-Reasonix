@@ -26,7 +26,6 @@ export function useAppRuntimeAdapter() {
       setCollaborationModeForTab: controller.setCollaborationModeForTab,
       setToolApprovalMode: controller.setToolApprovalMode,
       setToolApprovalModeForTab: controller.setToolApprovalModeForTab,
-      setQualityFloor: controller.setQualityFloor,
       setComposerProfileForTab: controller.setComposerProfileForTab,
       setGoalForTab: controller.setGoalForTab,
       resumeGoalForTab: controller.resumeGoalForTab,

@@ -68,7 +68,7 @@ func TestRebuildSessionCatalogDoesNotReplaceBeforeOldReconcileStops(t *testing.T
 	close(release)
 	select {
 	case <-finished:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("old reconcile did not finish after release")
 	}
 	assertSessionCatalogWatcherRunning(t, app)

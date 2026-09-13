@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  checkEntryModes,
   checkMembers,
   inferArtifactKind,
   listZipEntries,
@@ -13,6 +14,7 @@ import {
   packagerOptions,
   parseSigningFileList,
   parseTarget,
+  parseVerboseListing,
   PRODUCT,
   readProductIdentity,
   requiredMembers,
@@ -21,6 +23,7 @@ import {
   shellIgnore,
   signingFileList,
   versionTag,
+  validateMacServiceLink,
   WINDOWS_FLAT_PAYLOAD,
 } from "./lib.mjs";
 
@@ -157,6 +160,7 @@ test("required members cover every artifact and the checks report gaps", () => {
   assert.deepEqual(checkMembers([...macEntries, "Reasonix.app/", "Reasonix.app/Contents/"], "darwin-zip"), { missing: [], forbidden: [] });
   assert.deepEqual(checkMembers(macEntries.slice(1), "darwin-zip").missing, [macEntries[0]]);
   assert.deepEqual(checkMembers([...macEntries, "Reasonix.app/Contents/MacOS/reasonix-guard"], "darwin-zip").forbidden, ["Reasonix.app/Contents/MacOS/reasonix-guard"]);
+  assert.deepEqual(checkMembers([...macEntries, "Reasonix.app/Contents/Resources/main.cjs.map"], "darwin-zip").forbidden, [String(/(^|\/)(?:[^/]+\.map|__tests__|testdata|\.cache|coverage|npm-debug\.log|pnpm-debug\.log|yarn-error\.log)(?:$|\/)/)]);
   assert.ok(macEntries.includes("Reasonix.app/Contents/MacOS/reasonix-desktop"));
   assert.ok(macEntries.includes("Reasonix.app/Contents/Resources/service/reasonix"));
   assert.ok(macEntries.includes("Reasonix.app/Contents/Resources/service/reasonix-desktop"));
@@ -165,7 +169,7 @@ test("required members cover every artifact and the checks report gaps", () => {
   const portable = [
     "Reasonix.exe", "reasonix-launcher.exe", "reasonix-cli.exe", "current.json",
     "versions/v1.2.3-rc.1/reasonix-desktop.exe", "versions/v1.2.3-rc.1/reasonix-update-helper.exe", "versions/v1.2.3-rc.1/reasonix-cli.exe",
-    "versions/v1.2.3-rc.1/app/Reasonix.exe", "versions/v1.2.3-rc.1/app/resources/app.asar", "versions/v1.2.3-rc.1/app/resources/app/index.html", "versions/v1.2.3-rc.1/app/resources/build.json",
+    "versions/v1.2.3-rc.1/app/Reasonix.exe", "versions/v1.2.3-rc.1/app/resources/bin/reasonix-cli-launcher.exe", "versions/v1.2.3-rc.1/app/resources/app.asar", "versions/v1.2.3-rc.1/app/resources/app/index.html", "versions/v1.2.3-rc.1/app/resources/build.json",
   ];
   assert.deepEqual(checkMembers(portable, "windows-portable-zip"), { missing: [], forbidden: [] });
   assert.deepEqual(checkMembers(portable.filter((name) => !name.endsWith("app/Reasonix.exe")), "windows-portable-zip").missing, [String(/^versions\/v[^/]+\/app\/Reasonix\.exe$/)]);
@@ -182,6 +186,23 @@ test("required members cover every artifact and the checks report gaps", () => {
   assert.deepEqual(checkMembers([...deb, "./usr/bin/reasonix-guard"], "linux-deb").forbidden, ["usr/bin/reasonix-guard"]);
   assert.deepEqual(checkMembers(requiredMembers("linux-app-dir").map(String), "linux-app-dir").missing, []);
   assert.throws(() => checkMembers([], "nope"), /unknown artifact kind/);
+});
+
+test("macOS service compatibility link stays relative, internal and live", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "reasonix-link-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const app = join(root, "Reasonix.app");
+  const macOS = join(app, "Contents", "MacOS");
+  const service = join(app, "Contents", "Resources", "service");
+  mkdirSync(macOS, { recursive: true });
+  mkdirSync(service, { recursive: true });
+  writeFileSync(join(service, "reasonix-desktop"), "service");
+  symlinkSync("../Resources/service/reasonix-desktop", join(macOS, "reasonix-desktop"));
+  assert.deepEqual(validateMacServiceLink(app), []);
+
+  rmSync(join(macOS, "reasonix-desktop"));
+  symlinkSync("../../../../outside", join(macOS, "reasonix-desktop"));
+  assert.match(validateMacServiceLink(app).join("\n"), /does not resolve|dangling/);
 });
 
 test("artifact kinds are inferred from release names and bundle shapes", () => {
@@ -238,6 +259,37 @@ test("zip listing reads the central directory without extracting", () => {
   }
 });
 
+test("Linux listings reject a private app directory and unreadable files", () => {
+  const deb = parseVerboseListing([
+    "drwxr-xr-x root/root         0 2026-09-05 10:00 ./",
+    "drwxr-xr-x root/root         0 2026-09-05 10:00 ./usr/lib/reasonix/app/",
+    "-rwxr-xr-x root/root 123456789 2026-09-05 10:00 ./usr/lib/reasonix/app/Reasonix",
+    "-rwsr-xr-x root/root    123456 2026-09-05 10:00 ./usr/lib/reasonix/app/chrome-sandbox",
+    "lrwxrwxrwx root/root         0 2026-09-05 10:00 ./usr/lib/reasonix/app/link -> Reasonix",
+  ]);
+  assert.deepEqual(deb.map((row) => row.name), ["./", "./usr/lib/reasonix/app/", "./usr/lib/reasonix/app/Reasonix", "./usr/lib/reasonix/app/chrome-sandbox", "./usr/lib/reasonix/app/link"]);
+  assert.deepEqual(checkEntryModes(deb, "linux-deb"), []);
+  assert.deepEqual(checkMembers(deb.map((row) => row.name), "linux-deb").forbidden, []);
+
+  const privateApp = parseVerboseListing(["drwx------ root/root 0 2026-09-05 10:00 ./usr/lib/reasonix/app/"]);
+  assert.deepEqual(checkEntryModes(privateApp, "linux-deb"), ["./usr/lib/reasonix/app/ has mode drwx------; directories must be drwxr-xr-x"]);
+  const privateFile = parseVerboseListing(["-rw-r----- root/root 10 2026-09-05 10:00 ./usr/lib/reasonix/app/resources/app.asar"]);
+  assert.deepEqual(checkEntryModes(privateFile, "linux-deb"), ["./usr/lib/reasonix/app/resources/app.asar has mode -rw-r-----; files must be world-readable"]);
+  const foreignOwner = parseVerboseListing(["-rwxr-xr-x runner/docker 10 2026-09-05 10:00 ./usr/bin/reasonix-desktop"]);
+  assert.deepEqual(checkEntryModes(foreignOwner, "linux-deb"), ["./usr/bin/reasonix-desktop is owned by runner/docker; package members must be root/root"]);
+
+  const tar = parseVerboseListing([
+    "drwxr-xr-x runner/docker 0 2026-09-05 10:00:00 app/",
+    "-rwxr-xr-x runner/docker 42 2026-09-05 10:00:00 reasonix-desktop",
+  ]);
+  assert.deepEqual(checkEntryModes(tar, "linux-tar"), []);
+  assert.throws(() => parseVerboseListing(["drwxr-xr-x  0 runner docker 0 Sep  5 10:00 app/"]), /unrecognised listing line/);
+});
+
+test("the packaged app directory is made world-readable before Linux packaging", () => {
+  assert.match(read("packaging/package.mjs"), /chmodSync\(bundle, 0o755\)/);
+});
+
 test("the Linux package inputs install the Electron tree beside the update helper", () => {
   const nfpm = read("build/linux/nfpm.yaml");
   assert.match(nfpm, /src: \.\/build\/bin\/app\n\s+dst: \/usr\/lib\/reasonix\/app\n\s+type: tree/);
@@ -270,6 +322,10 @@ test("the NSIS script installs the Electron tree with both payload modes and no 
   assert.match(nsi, /!define PRODUCT_EXECUTABLE "\$\{INFO_PROJECTNAME\}\.exe"/);
   assert.match(nsi, /RMDir \/r "\$INSTDIR\\versions"/);
   assert.match(nsi, /File "\/oname=uninstall\.exe" "\$\{ARG_REASONIX_SIGNED_UNINSTALLER\}"/);
+  const activation = nsi.slice(nsi.indexOf("Reasonix layout activator output:"));
+  const retry = activation.indexOf('MessageBox MB_ICONEXCLAMATION|MB_RETRYCANCEL "$(reasonixActivateLocked)" IDRETRY reasonix_layout_activate');
+  assert.ok(retry > 0, "activation failure offers Retry against the kept staging directory");
+  assert.ok(activation.indexOf('RMDir /r "$R9"') > retry, "staging is discarded only after the user gives up");
 });
 
 test("the installer stamps the shortcuts it created without launching the desktop", () => {

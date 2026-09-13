@@ -15,8 +15,6 @@ type turnLoopState struct {
 	resultFingerprints      map[string]string
 	acceptedDecisions       map[string]acceptedDecision
 	previousErrorCategories map[string]struct{}
-	softBudgetNudged        bool
-	softBudgetNudgeRound    int
 }
 
 func (s *turnLoopState) setDispatchClasses(classes map[string]tool.CallClass) {
@@ -92,21 +90,4 @@ func (s *turnLoopState) advanceErrorCategories(current map[string]int) bool {
 	}
 	s.previousErrorCategories = next
 	return hit
-}
-
-func (s *turnLoopState) markSoftBudgetNudged(round int) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.softBudgetNudged {
-		return false
-	}
-	s.softBudgetNudged = true
-	s.softBudgetNudgeRound = round
-	return true
-}
-
-func (s *turnLoopState) softBudgetNudgedAt() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.softBudgetNudgeRound
 }

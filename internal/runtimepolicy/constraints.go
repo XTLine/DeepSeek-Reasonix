@@ -6,17 +6,15 @@ import (
 	"strings"
 
 	"reasonix/internal/shellparse"
-	"reasonix/internal/taskcontract"
 )
 
 // Constraints are explicit user or host limits. They never encode task
 // complexity, security keywords, or file counts.
 type Constraints struct {
-	ForbidMutation          bool
-	ForbidTests             bool
-	AllowedChecks           []string
-	ForbidExternal          bool
-	RequireFullVerification bool
+	ForbidMutation bool
+	ForbidTests    bool
+	AllowedChecks  []string
+	ForbidExternal bool
 	// AllowRebuild records that the user explicitly asked to rewrite a file
 	// completely. It only ever waives the read-before-overwrite requirement for
 	// a file the same instruction names; the model can never set it.
@@ -26,10 +24,7 @@ type Constraints struct {
 	// re-parse of instruction text at write time.
 	RebuildPaths     []string
 	PlanModeReadOnly bool
-	// PolicyFloor is the session quality floor, set from session state only —
-	// never parsed from user text. It stamps receipts at write time.
-	PolicyFloor taskcontract.PolicyFloor
-	Notes       []string
+	Notes            []string
 }
 
 // ParseConstraints accepts only explicit forbid/limit phrasing.
@@ -47,14 +42,6 @@ func ParseConstraints(instruction string) Constraints {
 	}) {
 		c.ForbidTests = true
 		c.Notes = append(c.Notes, "user_forbid_tests")
-	}
-	if matchesAny(lower, []string{
-		"完整验证", "全面验证", "闭环交付", "完整交付", "交付前检查", "验收闭环",
-		"full verification", "complete verification", "verify everything",
-		"closed-loop delivery", "deliver with verification",
-	}) {
-		c.RequireFullVerification = true
-		c.Notes = append(c.Notes, "user_require_full_verification")
 	}
 	if matchesAny(lower, []string{
 		"完全重写", "从头重写", "整个重写", "直接重写", "覆盖重写", "整个文件重写",

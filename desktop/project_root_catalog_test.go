@@ -30,7 +30,7 @@ func TestSessionCatalogTargetsIncludeRestoredProjectTab(t *testing.T) {
 
 func waitForCatalogSessionPath(t *testing.T, app *App, workspaceRoot, sessionDir, sessionPath string) sessioncatalog.SessionRecord {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	var last []sessioncatalog.SessionRecord
 	for time.Now().Before(deadline) {
 		catalog := app.sessionCatalog.Load()

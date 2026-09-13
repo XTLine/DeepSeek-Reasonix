@@ -7,6 +7,16 @@ import (
 	"strings"
 )
 
+// Receipt kinds classify observed execution facts for display and reporting.
+// They do not authorize, settle, or block later operations.
+const (
+	ReceiptKindRead         = "read"
+	ReceiptKindMutation     = "mutation"
+	ReceiptKindVerification = "verification"
+	ReceiptKindReview       = "review"
+	ReceiptKindCommand      = "command"
+)
+
 // Receipt is the host-runtime record of one tool call. It stays in memory for
 // the current agent turn and is not serialized into prompts or session state.
 type Receipt struct {
@@ -67,11 +77,6 @@ type ReceiptRef struct {
 	// Summary is display-only. It must never be used as an identity key: that
 	// is what made shell prefixes and quoting differences reject real work.
 	Summary string `json:"summary,omitempty"`
-}
-
-func (r ReceiptRef) clone() ReceiptRef {
-	r.Paths = append([]string(nil), r.Paths...)
-	return r
 }
 
 // Ref projects the receipt into its citable form.

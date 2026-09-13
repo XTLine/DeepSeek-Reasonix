@@ -1215,8 +1215,9 @@ func (p *headlessTaskTestProvider) Stream(_ context.Context, req provider.Reques
 // actual wiring for the fix: a `task` sub-agent spawned from a headless run
 // must honor the same --permission-mode contract as the parent executor
 // instead of the mode-unaware default gate that boot used to build
-// unconditionally. Ask and Auto must fail closed on write_file's
-// explicit ask rule even inside the sub-agent; only yolo may bypass it.
+// unconditionally. Read-only and workspace-write fail closed on write_file's
+// explicit ask rule in headless execution; only explicit full access bypasses
+// an ordinary ask rule (explicit deny still wins).
 func TestBuildHeadlessApprovalModePropagatesToTaskSubagentGate(t *testing.T) {
 	runTaskWriteOnce := func(t *testing.T, mode string) bool {
 		t.Helper()
@@ -1256,14 +1257,14 @@ model = "x"
 		return statErr == nil
 	}
 
-	if written := runTaskWriteOnce(t, "ask"); written {
-		t.Fatalf("ask: task sub-agent wrote sub.txt despite having no approval UI")
+	if written := runTaskWriteOnce(t, "read-only"); written {
+		t.Fatalf("read-only: task sub-agent wrote sub.txt despite having no approval UI")
 	}
-	if written := runTaskWriteOnce(t, "auto"); written {
-		t.Fatalf("auto: task sub-agent wrote sub.txt despite the explicit ask rule on write_file")
+	if written := runTaskWriteOnce(t, "workspace-write"); written {
+		t.Fatalf("workspace-write: task sub-agent wrote sub.txt despite the explicit ask rule on write_file")
 	}
-	if written := runTaskWriteOnce(t, "yolo"); !written {
-		t.Fatal("yolo: task sub-agent did not write sub.txt, want the ask rule bypassed")
+	if written := runTaskWriteOnce(t, "danger-full-access"); !written {
+		t.Fatal("danger-full-access: task sub-agent did not write sub.txt, want the ordinary ask rule bypassed")
 	}
 }
 
@@ -2017,8 +2018,8 @@ func TestNormalizeTokenModeSupportsRuntimeProfilesAndLegacyAliases(t *testing.T)
 		"eco":        TokenModeFull,
 		"light":      TokenModeFull,
 		"lite":       TokenModeFull,
-		"delivery":   TokenModeDelivery,
-		"quality":    TokenModeDelivery,
+		"delivery":   TokenModeFull,
+		"quality":    TokenModeFull,
 		"unexpected": TokenModeFull,
 	} {
 		if got := NormalizeTokenMode(input); got != want {
@@ -2032,7 +2033,7 @@ func TestNormalizeTokenModeSupportsRuntimeProfilesAndLegacyAliases(t *testing.T)
 		"balanced": AgentPresetStandard,
 		"economy":  AgentPresetStandard,
 		"light":    AgentPresetStandard,
-		"delivery": AgentPresetDelivery,
+		"delivery": AgentPresetStandard,
 	} {
 		if got := NormalizeAgentPreset(input); got != want {
 			t.Errorf("NormalizeAgentPreset(%q) = %q, want %q", input, got, want)
@@ -2303,7 +2304,6 @@ func unifiedBootToolNames() []string {
 		"ask",
 		"bash",
 		"bash_output",
-		"complete_step",
 		"compress",
 		"edit_file",
 		"kill_shell",
@@ -2624,7 +2624,6 @@ func TestAddBuiltinsWithWorkspaceRootKeepsSessionTools(t *testing.T) {
 	addBuiltins(reg, nil, []string{robustTempDir(t)}, nil, sandbox.Spec{}, 120*time.Second, builtin.SearchSpec{}, &stderr, robustTempDir(t), netclient.ProxySpec{}, nil, nil, builtin.SessionDataGuard{}, builtin.ManagedConfigPaths{}, nil, nil, nil, nil)
 	for _, name := range []string{
 		"todo_write",
-		"complete_step",
 		"bash_output",
 		"kill_shell",
 		"wait",

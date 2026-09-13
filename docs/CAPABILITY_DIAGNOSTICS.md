@@ -150,6 +150,28 @@ and to use `--live` only after you explicitly allow external MCP. Project or
 global skills named `reasonix-guide` override the builtin; you can also hide it
 with `[skills].disabled_skills = ["reasonix-guide"]`.
 
+The guide loads a short router first. Skills, commands, hooks, MCP, plugins,
+and instruction resolution have separate pages embedded in the binary. Read only
+the relevant page with `read_skill`; for a tool hidden behind the capability
+dispatcher, use:
+
+```json
+{"action":"call","capability_id":"tool:read_skill","arguments":{"name":"reasonix-guide","reference":"references/hooks.md"}}
+```
+
+Omit `reference` to retain the existing full skill-body read. Reference reads
+are limited to `references/*.md` in the selected embedded skill package; they
+do not read arbitrary host paths or fall back to a builtin behind a project
+override or disabled skill. File-backed skills continue to use their source
+files for references. No user data format or migration changes.
+
+The session skills catalog shares its fixed character budget across descriptions
+before omitting entries. If names alone exceed the budget, it lists complete
+entries with an omitted count and a discovery hint. Omitted entries remain
+available through `use_capability` search/inspect/call; the preview is not the
+authoritative inventory. Skill selection uses actual task relevance rather than
+mandatory invocation on weak keyword matches.
+
 ## CLI reference
 
 ```bash
@@ -297,3 +319,10 @@ config files.
 Adding the built-in `reasonix-guide` skill appends one line to the next changed
 `session-context` Skills catalog. The skill body is loaded only on invocation.
 Diagnostics itself is not part of the provider prompt.
+
+Changing the static invocation policy or tool description/schema changes the
+prefix used by newly assembled sessions and can require cache warming. Reading
+a guide or reference page adds a tool result without rewriting the current
+system prefix or tool schemas. Catalog rendering is deterministic for the same
+inventory. Prompt wording should be evaluated on the actual deployed providers;
+deterministic integration tests do not measure model selection quality.

@@ -1,5 +1,10 @@
 package main
 
+import (
+	"reasonix/internal/boot"
+	"reasonix/internal/control"
+)
+
 type desktopTabEntry struct {
 	ID                string  `json:"id"`
 	Scope             string  `json:"scope"`
@@ -40,9 +45,9 @@ func persistedDesktopTabEntry(tab *WorkspaceTab) desktopTabEntry {
 		TakeoverSpectator: tab.Takeover.Spectator,
 		Model:             tab.model,
 		Effort:            cloneStringPtr(tab.effort),
-		AgentPreset:       currentTabAgentPreset(tab),
-		TokenMode:         currentTabTokenMode(tab),
-		QualityFloor:      tab.qualityFloor,
+		AgentPreset:       boot.AgentPresetStandard,
+		TokenMode:         boot.TokenModeFull,
+		QualityFloor:      control.QualityFloorStandard,
 		Mode:              persistedTabMode(currentTabMode(tab)),
 		Goal:              persistedTabGoal(tab),
 		ToolApprovalMode:  persistedToolApprovalMode(currentTabToolApprovalMode(tab)),

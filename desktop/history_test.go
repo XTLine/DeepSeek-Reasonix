@@ -1225,9 +1225,9 @@ func TestRebindTabToLoadedSessionPersistsAndRestoresSessionProfile(t *testing.T)
 	if err != nil || !ok {
 		t.Fatalf("LoadBranchMeta current ok=%v err=%v", ok, err)
 	}
-	if currentMeta.TokenMode != boot.TokenModeFull || currentMeta.AgentPreset != "" ||
+	if currentMeta.TokenMode != boot.TokenModeFull || currentMeta.AgentPreset != boot.AgentPresetStandard ||
 		currentMeta.Mode != "plan" || currentMeta.ToolApprovalMode != control.ToolApprovalAuto {
-		t.Fatalf("current session profile = token:%q preset:%q mode:%q approval:%q, want full/empty/plan/auto",
+		t.Fatalf("current session profile = token:%q preset:%q mode:%q approval:%q, want full/standard/plan/auto",
 			currentMeta.TokenMode, currentMeta.AgentPreset, currentMeta.Mode, currentMeta.ToolApprovalMode)
 	}
 	if got := currentTabTokenMode(tab); got != boot.TokenModeFull {
@@ -1657,9 +1657,9 @@ func TestCloseTabPersistsSessionProfileBeforeRemovingVisibleTab(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("LoadBranchMeta current ok=%v err=%v", ok, err)
 	}
-	if meta.TokenMode != boot.TokenModeFull || meta.AgentPreset != "" ||
+	if meta.TokenMode != boot.TokenModeFull || meta.AgentPreset != boot.AgentPresetStandard ||
 		meta.Mode != "plan" || meta.ToolApprovalMode != control.ToolApprovalAuto || meta.Goal != "finish the review" {
-		t.Fatalf("closed session profile = token:%q preset:%q mode:%q approval:%q goal:%q, want full/empty/plan/auto/goal",
+		t.Fatalf("closed session profile = token:%q preset:%q mode:%q approval:%q goal:%q, want full/standard/plan/auto/goal",
 			meta.TokenMode, meta.AgentPreset, meta.Mode, meta.ToolApprovalMode, meta.Goal)
 	}
 }
@@ -1719,9 +1719,9 @@ func TestKeepOnlyVisibleTabPersistsRemovedSessionProfile(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("LoadBranchMeta removed ok=%v err=%v", ok, err)
 	}
-	if meta.TokenMode != boot.TokenModeFull || meta.AgentPreset != "" ||
+	if meta.TokenMode != boot.TokenModeFull || meta.AgentPreset != boot.AgentPresetStandard ||
 		meta.Mode != "plan" || meta.ToolApprovalMode != control.ToolApprovalAuto || meta.Goal != "keep this profile" {
-		t.Fatalf("removed session profile = token:%q preset:%q mode:%q approval:%q goal:%q, want full/empty/plan/auto/goal",
+		t.Fatalf("removed session profile = token:%q preset:%q mode:%q approval:%q goal:%q, want full/standard/plan/auto/goal",
 			meta.TokenMode, meta.AgentPreset, meta.Mode, meta.ToolApprovalMode, meta.Goal)
 	}
 }

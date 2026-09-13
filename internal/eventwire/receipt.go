@@ -8,13 +8,14 @@ import (
 // CompletionReceipt is the JSON form of event.CompletionReceipt: what the host
 // verified about a turn's work, and what it could not.
 type CompletionReceipt struct {
-	Diff          *checkpoint.TurnChanges `json:"diff,omitempty"`
-	Interrupted   bool                    `json:"interrupted,omitempty"`
-	Verdict       string                  `json:"verdict"`
-	Changes       []ReceiptChange         `json:"changes,omitempty"`
-	Verifications []ReceiptVerification   `json:"verifications,omitempty"`
-	Gaps          []ReceiptGap            `json:"gaps,omitempty"`
-	Risks         []string                `json:"risks,omitempty"`
+	AssessmentKind string                  `json:"assessmentKind,omitempty"`
+	Diff           *checkpoint.TurnChanges `json:"diff,omitempty"`
+	Interrupted    bool                    `json:"interrupted,omitempty"`
+	Verdict        string                  `json:"verdict"`
+	Changes        []ReceiptChange         `json:"changes,omitempty"`
+	Verifications  []ReceiptVerification   `json:"verifications,omitempty"`
+	Gaps           []ReceiptGap            `json:"gaps,omitempty"`
+	Risks          []string                `json:"risks,omitempty"`
 }
 
 type ReceiptChange struct {
@@ -43,7 +44,7 @@ func completionReceiptWire(r *event.CompletionReceipt) *CompletionReceipt {
 	if r == nil {
 		return nil
 	}
-	out := &CompletionReceipt{Verdict: r.Verdict, Risks: append([]string(nil), r.Risks...), Diff: r.Diff, Interrupted: r.Interrupted}
+	out := &CompletionReceipt{AssessmentKind: r.AssessmentKind, Verdict: r.Verdict, Risks: append([]string(nil), r.Risks...), Diff: r.Diff, Interrupted: r.Interrupted}
 	for _, c := range r.Changes {
 		out.Changes = append(out.Changes, ReceiptChange{Path: c.Path, Reviewed: c.Reviewed})
 	}
@@ -61,7 +62,7 @@ func CompletionReceiptEvent(r *CompletionReceipt) *event.CompletionReceipt {
 	if r == nil {
 		return nil
 	}
-	out := &event.CompletionReceipt{Verdict: r.Verdict, Diff: r.Diff, Interrupted: r.Interrupted, Risks: append([]string(nil), r.Risks...)}
+	out := &event.CompletionReceipt{AssessmentKind: r.AssessmentKind, Verdict: r.Verdict, Diff: r.Diff, Interrupted: r.Interrupted, Risks: append([]string(nil), r.Risks...)}
 	for _, c := range r.Changes {
 		out.Changes = append(out.Changes, event.ReceiptChange{Path: c.Path, Reviewed: c.Reviewed})
 	}

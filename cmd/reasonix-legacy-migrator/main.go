@@ -163,6 +163,7 @@ func migrateWithRelaunch(installRoot, activeVersion string, relaunch bool) error
 
 	desktopName := installlayout.DesktopBinaryName()
 	cliName := installlayout.CLIBinaryName()
+	flatCLIName := installlayout.FlatCLIBinaryName()
 	helperName := installlayout.UpdateHelperBinaryName()
 	flatDesktop := filepath.Join(installRoot, desktopName)
 	if _, err := os.Lstat(flatDesktop); err != nil {
@@ -172,13 +173,12 @@ func migrateWithRelaunch(installRoot, activeVersion string, relaunch bool) error
 	members := []installlayout.Member{
 		{Name: desktopName, Path: flatDesktop},
 	}
-	if p := optionalRegular(filepath.Join(installRoot, cliName)); p != "" {
+	// The flat root ships the CLI under its portable name; the version
+	// directory whitelist only admits the versioned member name.
+	if p := optionalRegular(filepath.Join(installRoot, flatCLIName)); p != "" {
 		members = append(members, installlayout.Member{Name: cliName, Path: p})
 	} else {
-		// CLI may be absent on some portable trees; synthesize from desktop only
-		// is not allowed — require the whitelist. Prefer copying desktop as a
-		// last-resort placeholder is forbidden; fail closed.
-		return fmt.Errorf("migrate: flat CLI binary %s is required", cliName)
+		return fmt.Errorf("migrate: flat CLI binary %s is required", flatCLIName)
 	}
 	requiredNames := []string{desktopName, cliName}
 	if runtime.GOOS == "windows" {
@@ -297,9 +297,18 @@ func activateInstallerStagingWithRecovery(installRoot, activeVersion, stagingRoo
 
 	launcherName := installlayout.LauncherBinaryName()
 	launcherSource := filepath.Join(stagingRoot, launcherName)
+	cliEntrySource := filepath.Join(stagingRoot, "app", "resources", "bin", "reasonix-cli-launcher.exe")
+	if info, entryErr := os.Lstat(cliEntrySource); entryErr != nil {
+		if !os.IsNotExist(entryErr) {
+			return fmt.Errorf("inspect CLI entry: %w", entryErr)
+		}
+		cliEntrySource = filepath.Join(stagingRoot, cliName)
+	} else if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("CLI entry is not a regular file")
+	}
 	rootMembers := []installlayout.Member{
 		{Name: launcherName, Path: launcherSource},
-		{Name: cliName, Path: filepath.Join(stagingRoot, cliName)},
+		{Name: cliName, Path: cliEntrySource},
 	}
 	requiredRootNames := []string{launcherName, cliName}
 	if alias := installlayout.PortableAliasName(); alias != "" {
@@ -307,21 +316,26 @@ func activateInstallerStagingWithRecovery(installRoot, activeVersion, stagingRoo
 		requiredRootNames = append(requiredRootNames, alias)
 	}
 
-	release, err := desktopinstance.PrepareInstall(installRoot, config.ReasonixHomeDir(), interactive)
+	home := config.ReasonixHomeDir()
+	release, err := desktopinstance.PrepareInstall(installRoot, home, interactive)
 	if err != nil {
 		return err
 	}
 	defer release()
-	if err := installlayout.ActivateVersion(installlayout.ActivationRequest{
+	// The installer only shows an exit code; the recovery log keeps the reason.
+	finish := desktopinstance.AttemptLog(home, "activate-staging", installRoot)
+	err = installlayout.ActivateVersion(installlayout.ActivationRequest{
 		InstallRoot:       installRoot,
 		Version:           activeVersion,
 		RequestID:         "signed-installer-" + activeVersion,
-		CheckProcesses:    func() error { return desktopinstance.CheckInstallVacant(installRoot, config.ReasonixHomeDir()) },
+		CheckProcesses:    func() error { return desktopinstance.CheckInstallVacant(installRoot, home) },
 		Members:           members,
 		RequiredNames:     requiredNames,
 		RootMembers:       rootMembers,
 		RequiredRootNames: requiredRootNames,
-	}); err != nil {
+	})
+	finish(err)
+	if err != nil {
 		return fmt.Errorf("activate signed installer staging: %w", err)
 	}
 	return nil
@@ -456,7 +470,7 @@ func cleanupLegacyFlatFiles(installRoot string) error {
 	// active. Never delete the thin launcher or current.json.
 	names := []string{
 		installlayout.DesktopBinaryName(),
-		installlayout.CLIBinaryName(),
+		installlayout.FlatCLIBinaryName(),
 		installlayout.UpdateHelperBinaryName(),
 	}
 	if runtime.GOOS == "windows" {

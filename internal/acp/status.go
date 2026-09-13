@@ -713,7 +713,7 @@ func (s *acpSession) statusSnapshot() ReasonixSessionStatus {
 	mode = normalizeACPCollaborationMode(mode)
 	// WorkMode is a deprecated wire-compat field pinned to the historical
 	// default; execution modes no longer exist at runtime.
-	workMode := "balanced"
+	workMode := "standard"
 	if runtimeState.PlannerMode != "off" {
 		runtimeState.PlannerMode = "on"
 	}

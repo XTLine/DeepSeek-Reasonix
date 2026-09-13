@@ -25,7 +25,7 @@ export interface MainWindowDeps {
   zoomStore: AppZoomStore;
 }
 
-type Content = "none" | "app" | "failure";
+type Content = "none" | "starting" | "app" | "failure";
 
 function hex(value: number): string {
   return Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, "0");
@@ -34,6 +34,7 @@ function hex(value: number): string {
 export class MainWindow {
   private win: BrowserWindow | null = null;
   private content: Content = "none";
+  private frameless = false;
   private rendererGeneration = 0;
   private closing = false;
   private closeAllowed = false;
@@ -57,6 +58,19 @@ export class MainWindow {
 
   prepareApp(geometry: HelloWindow): void {
     if (this.content === "app" && this.browserWindow) return;
+    // Native window frames cannot be changed after construction. Reuse the
+    // loading window when compatible, applying the service's saved geometry.
+    if (this.content === "starting" && this.browserWindow && this.frameless === geometry.frameless) {
+      const display = geometry.position
+        ? screen.getDisplayMatching({ ...geometry.position, width: geometry.width, height: geometry.height })
+        : screen.getPrimaryDisplay();
+      const rect = restoreWindowRect(geometry, geometry.position, display.workArea);
+      this.browserWindow.setMinimumSize(Math.min(Math.round(geometry.minWidth), display.workArea.width), Math.min(Math.round(geometry.minHeight), display.workArea.height));
+      this.browserWindow.setBounds(rect);
+      this.browserWindow.webContents.setZoomFactor(this.deps.zoomStore.current.appZoomFactor);
+      this.content = "none";
+      return;
+    }
     const previous = this.browserWindow;
     this.win = null;
     this.create(geometry);
@@ -91,6 +105,7 @@ export class MainWindow {
       },
     });
     this.win = win;
+    this.frameless = geometry.frameless;
     this.lastMaximised = false;
     this.lastNormalBounds = win.getNormalBounds();
     // Some platforms report isMaximized=false while iconic. Keep the last
@@ -165,11 +180,19 @@ export class MainWindow {
     return true;
   }
 
+  async showStartup(html: string): Promise<void> {
+    return this.showShellPage(html, "starting");
+  }
+
   async showFailure(html: string): Promise<void> {
+    return this.showShellPage(html, "failure");
+  }
+
+  private async showShellPage(html: string, content: "starting" | "failure"): Promise<void> {
     const win = this.browserWindow;
     if (!win) return;
     this.deps.onRendererLost?.("app failure page");
-    this.content = "failure";
+    this.content = content;
     try {
       await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
     } catch (error) {
@@ -177,7 +200,7 @@ export class MainWindow {
       // may still be loading. That cancellation is not a startup failure.
       if (!win.isDestroyed() && this.browserWindow === win) this.deps.log.error(`failed to load the recovery page: ${errorText(error).slice(0, 300)}`);
     }
-    if (!win.isDestroyed() && !this.deps.isQuitting?.() && this.content === "failure") win.show();
+    if (!win.isDestroyed() && this.browserWindow === win && !this.deps.isQuitting?.() && this.content === content) win.show();
   }
 
   allowClose(): void {

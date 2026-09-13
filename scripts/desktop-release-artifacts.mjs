@@ -3,7 +3,7 @@ import { copyFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFil
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const platforms = ["darwin-universal", "windows-amd64", "windows-arm64", "linux-amd64"];
+export const platforms = ["darwin-arm64", "darwin-amd64", "darwin-universal", "windows-amd64", "windows-arm64", "linux-amd64"];
 const fields = {
   sourceSHA: "RELEASE_SOURCE_SHA", controlSHA: "RELEASE_CONTROL_SHA",
   tag: "RELEASE_TAG", version: "RELEASE_VERSION", channel: "RELEASE_CHANNEL",

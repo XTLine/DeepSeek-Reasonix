@@ -101,7 +101,7 @@ func TestWorkspaceMoveFileBindsAndConfines(t *testing.T) {
 func TestWorkspaceBashDir(t *testing.T) {
 	dir := t.TempDir()
 	b := byName(Workspace{Dir: dir}.Tools())["bash"]
-	out, err := b.Execute(context.Background(), argsJSON(t, map[string]any{"command": "pwd"}))
+	out, err := b.Execute(fullAccessBashTestContext(t.Context()), argsJSON(t, map[string]any{"command": "pwd"}))
 	if err != nil {
 		t.Fatalf("bash: %v", err)
 	}
@@ -141,7 +141,6 @@ func TestWorkspacePreservesSessionLevelBuiltins(t *testing.T) {
 	got := byName(Workspace{Dir: t.TempDir()}.Tools())
 	for _, name := range []string{
 		"todo_write",
-		"complete_step",
 		"bash_output",
 		"kill_shell",
 		"wait",
@@ -151,6 +150,9 @@ func TestWorkspacePreservesSessionLevelBuiltins(t *testing.T) {
 		if got[name] == nil {
 			t.Fatalf("workspace tools missing %q; got %v", name, keys(got))
 		}
+	}
+	if got["complete_step"] != nil || got["session_read_strategy_receipt"] != nil {
+		t.Fatal("retired proof/read-policy tools remain discoverable")
 	}
 }
 

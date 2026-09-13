@@ -38,7 +38,7 @@ Running `reasonix` without a subcommand starts the interactive terminal UI. Use
 | `--copy` | Continue in a writable copy of the resumed session. |
 | `--allowed-tools RULES` | Add session-only permission allow rules. Repeatable; `--allowedTools` is an alias. |
 | `--permission-mode MODE` | Start with a specific permission posture. |
-| `--yolo` | Start in YOLO mode; alias for `--dangerously-skip-permissions`. |
+| `--dangerously-skip-permissions` | Start with `danger-full-access`; this must be selected explicitly. |
 
 Flags may appear before or after the prompt where applicable.
 
@@ -145,7 +145,7 @@ echo "explain this code" | reasonix run
 structured output format is selected. It also accepts `--model`,
 `--max-steps`, `--effort`, `--dir`, `--add-dir`,
 `--continue`, `--resume QUERY`, `--copy`, `--allowed-tools`, `--permission-mode`,
-and `--auto` / `-y` (an alias for `--permission-mode auto`).
+and `--auto` / `-y` (legacy aliases for `--permission-mode workspace-write`).
 
 ### Benchmark arms
 
@@ -189,9 +189,9 @@ check-result cards follow actual running verification tools, not phase names.
 
 | Phase | Emitted when | `capability_phases` bucket |
 | --- | --- | --- |
-| `working` | the turn starts, after each tool batch returns, and after the final-readiness check | `ProviderWaitMs` |
+| `working` | the turn starts, after each tool batch returns, after model generation | `ProviderWaitMs` |
 | `checking` | a tool batch is about to execute | `ToolExecMs` |
-| `verifying` | the final-readiness check runs before a final answer | `ToolExecMs` |
+| `verifying` | an actual verification tool runs | `ToolExecMs` |
 
 A phase is billed to its bucket when the next phase opens, so the durations in
 `--metrics` split a turn into model wait versus tool execution without replaying
@@ -269,8 +269,9 @@ calls ends the turn directly; a response with tools continues through the tool
 loop, and a truly empty response is retried at the frozen-request boundary.
 Legacy `completion_validation`, `completion_evaluator_model`, and
 `REASONIX_COMPLETION_VALIDATION_MODE` settings remain readable but are ignored
-and are no longer emitted by the config renderer. Host-owned readiness, budget,
-tool-safety, and recovery boundaries remain active.
+and are no longer emitted by the config renderer. Explicit budgets, tool-safety and protocol recovery boundaries remain active.
+Goal completion is a model declaration; no host quality gate or independent
+Goal evaluator runs. See [migration details](EXECUTION_MODEL_SIMPLIFICATION.md).
 
 ### Redacted machine interfaces
 
@@ -361,52 +362,31 @@ from writing the same transcript concurrently.
 ## Permissions
 
 ```sh
-reasonix --permission-mode plan
-reasonix --permission-mode acceptEdits
-reasonix run -y "apply the requested changes"
+reasonix --permission-mode read-only
+reasonix --permission-mode workspace-write
+reasonix --permission-mode danger-full-access
 reasonix -p "run the focused tests" --allowed-tools "Bash(go test ./...)"
-reasonix --allowed-tools "Bash(git *) Edit"
-reasonix --allowed-tools "Bash(go test ./...)" --allowed-tools read_file
 ```
 
-| Mode | Behavior |
+| Preset | Behavior |
 | --- | --- |
-| `manual`, `ask` | Ask for ordinary approval decisions. |
-| `auto` | Automatically approve normal fallback operations, including interactive `remember`/`forget`, while preserving explicit ask and deny rules. |
-| `acceptEdits` | Allow file-editing tools; this is not full Auto mode. |
-| `dontAsk` | Deny unapproved requests without opening an approval prompt. |
-| `plan` | Start the plan-first workflow; tool calls still use the active permissions and sandbox. |
-| `bypassPermissions` | Bypass approval prompts; equivalent to YOLO. |
+| `read-only` | Read the workspace; writes and external side effects require a scoped authorization. |
+| `workspace-write` | Write inside the workspace and private session temporary directory. This is the default. |
+| `danger-full-access` | Run as the current OS user without Reasonix filesystem or network sandboxing. Explicit host deny rules still apply before launch. |
 
-For unattended execution with ordinary writer fallback enabled, use
-`reasonix run --auto ...` (or `-y`). The alias cannot be combined with an
-explicit `--permission-mode` value.
-
-`[permissions] allow_dynamic_bash = true` is an advanced opt-in that lets an
-Allow fallback, including Auto, cover command/process substitution, dynamic
-command names, shell `-c`, and other nested/indirect Bash forms. The default is
-`false`; explicit `ask` and `deny` rules still take precedence.
+Inline scripts, pipes, substitutions, and shell `-c` forms follow the same
+preset and sandbox boundary as other commands. Syntax alone never creates an
+approval request.
 
 `--allowed-tools` is a session permission override, not a provider tool-schema
 filter. Rules may be comma- or space-separated, and the flag is repeatable.
 Configured deny rules always win over command-line allow rules.
 
-In non-interactive runs (`reasonix run` / `-p`) there is no prompt to answer, so
-approval modes resolve without blocking. The default `ask` / `manual` posture
-fails closed for explicit Ask decisions and ordinary writer fallback; readers
-still run. `acceptEdits` allows its named file-edit tools, while other Ask
-decisions fail closed. `auto` allows ordinary writer fallback but still denies
-an explicit ask rule; select it with `--permission-mode auto`, `--auto`, or
-`-y`. `dontAsk` denies unapproved writers.
-`bypassPermissions` runs ordinary calls despite ask rules and writer fallback,
-but configured deny rules, the sandbox, and tools that require fresh human
-approval (plan, sandbox escape, managed config write) still apply. Interactive
-Auto auto-allows the default `remember`/`forget` fallback while preserving
-explicit ask and deny rules; interactive YOLO bypasses memory ask prompts but
-still honors deny. In every headless mode, the owning
-top-level controller may still create a bounded, non-sensitive, create-only
-project or reference memory; all other memory mutations remain denied without a
-human.
+In non-interactive runs (`reasonix run` / `-p`) there is no prompt to answer.
+`read-only` therefore fails closed for writes and side effects unless a narrow
+authorization was supplied at startup. `workspace-write` runs normal builds,
+tests, pipes, and inline scripts inside the OS sandbox. `danger-full-access`
+must be explicit and still cannot bypass configured deny rules.
 
 ## Additional directories
 
@@ -435,9 +415,8 @@ single-key shortcuts.
 | Type | Filter a searchable picker. |
 | `Enter` | Select the highlighted row. |
 | `Esc` | Cancel the current picker or approval. |
-| `y` / `a` / `p` / `n`, number keys | Use the matching approval action. |
-| `Shift+Tab` | Cycle `Ask → Auto → Plan → Ask`. |
-| `Ctrl+Y` | Toggle YOLO independently of the composer-mode cycle. |
+| `y` / `a` / `n`, number keys | Allow once, allow the displayed scope for this session, or deny. |
+| `Shift+Tab` | Toggle the Plan collaboration workflow. |
 
 The responsive footer keeps interaction state on the left and, when space
 allows, places model and effort on the right. Its second row shows
@@ -486,12 +465,11 @@ the displayed list matches the commands the TUI accepts.
 | `/paste-image` | Read a clipboard image and insert an editable attachment token. |
 | `/mouse` | Toggle in-app mouse selection, scrollbar, and wheel handling; SSH sessions start with capture off so the terminal's native selection works. |
 | `/effort` | View or change reasoning effort. |
-| `/preset [standard\|delivery]` | Switch the session quality floor; delivery turns on delivery completion gates and shows a PRESET tag in the status line. |
 | `/output-style` | Select an answer style. |
 | `/verbose` | Toggle expanded reasoning display. |
 | `/sandbox` | Inspect sandbox status. |
 | `/goal [objective]` | Start a continuous goal, or inspect its runtime statistics. |
-| `/goal status` | Show the active goal plus turns, requests, tokens, work time, and the last continuation/evaluator reason. |
+| `/goal status` | Show the active goal plus turns, requests, tokens, work time, and the last continuation reason. |
 | `/goal pause` | Pause the running goal (keeps todos, Delivery checkpoint, and runtime history). |
 | `/goal resume` | Resume a manually paused or genuinely blocked goal without changing a numeric quota. |
 | `/goal clear` | End goal mode permanently. |
@@ -509,6 +487,10 @@ active conversation, session-scoped permission overrides, additional directory
 access, and session ownership. `/reload` uses the same fail-atomic rebuild.
 Execution modes no longer exist: planning, verification, and review strength
 follow task risk per turn.
+
+`/preset`, `/work-mode`, and `/profile` remain hidden compatibility commands.
+Recognized legacy values are accepted, report that the setting is retired, and
+leave the session on standard execution; unknown values still return an error.
 
 ## Session catalog diagnostics
 

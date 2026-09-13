@@ -70,6 +70,7 @@ func StripComposePrefixes(content string) string {
 		next := agent.StripTransientUserBlocks(s)
 		next = stripComposeMarker(next, PlanModeMarker)
 		next = stripComposeMarker(next, legacyPlanModeMarker)
+		next = stripComposeMarker(next, planmode.LegacyWorkflowMarker)
 		if next == s {
 			break
 		}

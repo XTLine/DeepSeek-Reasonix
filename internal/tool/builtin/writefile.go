@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
+	"reasonix/internal/fileops"
+	"reasonix/internal/fileutil"
 	fileenc "reasonix/internal/fileutil/encoding"
 	"reasonix/internal/sandbox"
 	"reasonix/internal/tool"
@@ -43,52 +44,13 @@ func (writeFile) Description() string {
 }
 
 func (writeFile) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Full content to write"},"source_token":{"type":"string","description":"Optional: the source_token printed by the read_file that showed you this file. Citing it names the exact version you are editing, so a change made outside this session is caught instead of silently overwritten."}},"required":["path","content"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Full content to write"}},"required":["path","content"]}`)
 }
 
 func (writeFile) ReadOnly() bool { return false }
 
 func (w writeFile) DeclareWriteAccess(args json.RawMessage) (tool.WriteAccessDeclaration, error) {
 	return declareFilePathWriteAccess(w.workDir, args)
-}
-
-// DeclareEvidenceTarget requires whole-file evidence only when the write would
-// replace existing content; creating a new file has no prior content to see.
-func (w writeFile) DeclareEvidenceTarget(ctx context.Context, args json.RawMessage) (tool.EvidenceTargetInfo, error) {
-	var p struct {
-		Path string `json:"path"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return tool.EvidenceTargetInfo{}, fmt.Errorf("invalid args: %w", err)
-	}
-	if strings.TrimSpace(p.Path) == "" {
-		return tool.EvidenceTargetInfo{}, fmt.Errorf("path is required")
-	}
-	path := resolveIn(w.workDir, p.Path)
-	if err := confinePreview(effectiveWriteRoots(ctx, w.rootSet, w.roots), w.guard, w.managed, path); err != nil {
-		return tool.EvidenceTargetInfo{}, err
-	}
-	src, err := readEditSource(ctx, w.overlay, path)
-	if os.IsNotExist(err) {
-		return tool.EvidenceTargetInfo{Path: path, Absent: true}, nil
-	}
-	if err != nil {
-		return tool.EvidenceTargetInfo{}, err
-	}
-	if err := src.assertUnchanged(ctx, w.overlay, path); err != nil {
-		return tool.EvidenceTargetInfo{}, err
-	}
-	info := tool.EvidenceTargetInfo{Path: path, WholeFile: true, Snapshot: src.readSnapshot(path), SourceTextDigest: digestText(src.content)}
-	if src.content == "" {
-		info.WholeFile = false
-		return info, nil
-	}
-	lines := strings.Split(strings.TrimSuffix(strings.ReplaceAll(src.content, "\r\n", "\n"), "\n"), "\n")
-	info.Ranges = []tool.ReadRange{{Start: 0, End: len(lines)}}
-	for _, line := range lines {
-		info.Hashes = append(info.Hashes, digestText(line))
-	}
-	return info, nil
 }
 
 func (w writeFile) Execute(ctx context.Context, args json.RawMessage) (string, error) {
@@ -106,16 +68,26 @@ func (w writeFile) Execute(ctx context.Context, args json.RawMessage) (string, e
 	if err := confineWrite(ctx, effectiveWriteRoots(ctx, w.rootSet, w.roots), w.guard, w.managed, p.Path); err != nil {
 		return "", err
 	}
+	unlock := lockMutationPath(p.Path)
+	defer unlock()
 	// Preserve the existing file's encoding (GBK/UTF-16/BOM) on overwrite instead
 	// of always writing UTF-8, which would silently corrupt a non-UTF-8 file. A
 	// missing file yields enc=UTF8 — the right default for a new one. Reading via
 	// the overlay makes the no-op check see the same buffer Preview does.
 	src, rerr := readEditSource(ctx, w.overlay, p.Path)
-	if rerr == nil && src.content == p.Content {
-		return fmt.Sprintf("%s already contains the exact content; no changes made", p.Path), nil
-	}
 	if rerr != nil && !os.IsNotExist(rerr) {
 		return "", rerr
+	}
+	if rerr != nil && fileops.FromContext(ctx).Get(fileops.DiskTarget(p.Path, nil)).Kind == fileops.Present {
+		return "", &tool.OperationError{Diagnostic: tool.OperationDiagnostic{Code: tool.FSStaleVersion, Path: p.Path, Recovery: "the observed file was removed; read its current state before creating it again"}, Cause: ErrFileChanged}
+	}
+	if rerr == nil {
+		if err := src.requireObserved(ctx, w.overlay, p.Path); err != nil {
+			return "", err
+		}
+		if src.content == p.Content {
+			return fmt.Sprintf("%s already contains the exact content; no changes made", p.Path), nil
+		}
 	}
 	if err := src.assertUnchanged(ctx, w.overlay, p.Path); err != nil {
 		return "", err
@@ -123,7 +95,7 @@ func (w writeFile) Execute(ctx context.Context, args json.RawMessage) (string, e
 	// The host overlay applies the write to the editor buffer and the file in
 	// one step. Text-only, so it handles plain UTF-8 targets (and new files);
 	// non-UTF-8 files stay on the local encoding-preserving path below.
-	if w.overlay != nil && filepath.IsAbs(p.Path) && (rerr != nil || src.enc == fileenc.UTF8) {
+	if w.overlay != nil && filepath.IsAbs(p.Path) && (rerr != nil || src.overlay) {
 		if err := src.recordWrite(ctx, p.Path, p.Content, "overlay", w.overlay); err != nil {
 			return "", err
 		}
@@ -132,19 +104,20 @@ func (w writeFile) Execute(ctx context.Context, args json.RawMessage) (string, e
 		}
 		if ok, werr := w.overlay.WriteTextFile(ctx, p.Path, p.Content); ok {
 			if werr != nil {
-				if tool.HasWriteIntentHook(ctx) {
-					return "", fmt.Errorf("write outcome unknown: %w", werr)
-				}
-				return "", fmt.Errorf("write %s: %w", p.Path, werr)
+				fileops.FromContext(ctx).Forget(overlayObservationTarget(w.overlay, p.Path))
+				return "", fmt.Errorf("write outcome unknown: %w", werr)
 			}
 			if w.receipt != nil {
 				w.receipt(p.Path, rerr == nil, []byte(src.content))
 			}
+			fileops.FromContext(ctx).ObservePresent(overlayObservationTarget(w.overlay, p.Path), fileops.OverlayVersion(p.Content))
 			return fmt.Sprintf("wrote %d bytes to %s", len(p.Content), p.Path), nil
 		}
-		if tool.HasWriteIntentHook(ctx) {
+		if src.overlay {
+			fileops.FromContext(ctx).Forget(overlayObservationTarget(w.overlay, p.Path))
 			return "", fmt.Errorf("write outcome unknown: original overlay did not confirm the write")
 		}
+		// A new target rejected before entry by the transport stays a local create.
 	}
 	if err := src.recordWrite(ctx, p.Path, p.Content, "disk", w.overlay); err != nil {
 		return "", err
@@ -152,23 +125,32 @@ func (w writeFile) Execute(ctx context.Context, args json.RawMessage) (string, e
 	if err := src.assertUnchanged(ctx, w.overlay, p.Path); err != nil {
 		return "", err
 	}
-	if dir := filepath.Dir(p.Path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return "", fmt.Errorf("mkdir %s: %w", dir, err)
-		}
-	}
 	hadPrior := rerr == nil
 	var prior []byte
 	if hadPrior {
 		prior = []byte(src.content)
 	}
-	if err := writeFileEncoded(p.Path, p.Content, src.enc); err != nil {
-		return "", fmt.Errorf("write %s: %w", p.Path, err)
+	var writeErr error
+	if rerr != nil {
+		writeErr = createFileEncoded(p.Path, p.Content, src.enc)
+	} else {
+		writeErr = writeFileEncoded(p.Path, p.Content, src.enc)
 	}
+	if writeErr != nil {
+		if os.IsExist(writeErr) {
+			return "", &tool.OperationError{Diagnostic: tool.OperationDiagnostic{Code: tool.FSAlreadyExists, Path: p.Path, Recovery: "the file was created concurrently; read it before deciding whether to replace it"}, Cause: writeErr}
+		}
+		return "", fmt.Errorf("write %s: %w", p.Path, writeErr)
+	}
+	src.commitObservation(ctx, w.overlay, p.Path, p.Content)
 	if w.receipt != nil {
 		w.receipt(p.Path, hadPrior, prior)
 	}
 	return fmt.Sprintf("wrote %d bytes to %s", len(p.Content), p.Path), nil
+}
+
+func createFileEncoded(path, content string, enc fileenc.Kind) error {
+	return fileutil.AtomicCreateFile(path, fileenc.Encode(content, enc), 0o644)
 }
 
 // BindFileWriteReceipt returns t with a per-runtime write receipt callback when

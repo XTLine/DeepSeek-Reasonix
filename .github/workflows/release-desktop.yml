@@ -305,7 +305,9 @@ jobs:
         include:
           # Keep preflight on the same complete native matrix as publication so
           # it cannot attest a release whose adjacent platform build is broken.
-          - { runner: macos-14, platform: darwin/universal, name: darwin-universal }
+          - { runner: macos-15, platform: darwin/arm64, name: darwin-arm64 }
+          - { runner: macos-15-intel, platform: darwin/amd64, name: darwin-amd64 }
+          - { runner: macos-15, platform: darwin/universal, name: darwin-universal }
           - { runner: windows-latest, platform: windows/amd64, name: windows-amd64 }
           - { runner: windows-11-arm, platform: windows/arm64, name: windows-arm64 }
           - { runner: ubuntu-22.04, platform: linux/amd64, name: linux-amd64 }
@@ -442,17 +444,31 @@ jobs:
             desktop/build/electron/${{ matrix.name }}/app \
             --service desktop/build/bin/reasonix-desktop.exe
 
-      - name: Smoke-test macOS archive startup
-        if: runner.os == 'macOS'
+      - name: Smoke-test native macOS archive startup
+        if: runner.os == 'macOS' && matrix.name != 'darwin-universal'
         run: |
-          ditto -xk dist/Reasonix-darwin-arm64.zip "$RUNNER_TEMP/desktop-startup"
+          ditto -xk "dist/Reasonix-${{ matrix.name }}.zip" "$RUNNER_TEMP/desktop-startup"
+          node desktop/packaging/verify.mjs "$RUNNER_TEMP/desktop-startup/Reasonix.app" --kind darwin-app-dir
           node desktop/packaging/smoke.mjs "$RUNNER_TEMP/desktop-startup/Reasonix.app"
+
+      - name: Smoke-test Universal macOS candidate on Apple Silicon
+        if: runner.os == 'macOS' && matrix.name == 'darwin-universal'
+        run: |
+          node desktop/packaging/verify.mjs desktop/build/candidate/darwin-universal/Reasonix.app --kind darwin-app-dir
+          node desktop/packaging/smoke.mjs desktop/build/candidate/darwin-universal/Reasonix.app
 
       - name: Smoke-test packaged Linux startup
         if: runner.os == 'Linux'
         run: |
           xvfb-run -a node desktop/packaging/smoke.mjs \
             desktop/build/bin/app --service desktop/build/bin/reasonix-desktop
+
+      # Same tree, no handed-over service path: a shell started directly (pinned
+      # taskbar icon, double-click) must find reasonix-desktop beside app/.
+      - name: Smoke-test packaged Linux startup without a configured service
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run -a node desktop/packaging/smoke.mjs desktop/build/bin/app
 
       # Sign every executable that users actually run before rebuilding the
       # portable archive and NSIS installer. Signing only the finished NSIS
@@ -578,6 +594,38 @@ jobs:
             -PortableArchivePath "dist/Reasonix-windows-$arch.zip" `
             -RequireTrusted:$true
 
+      - name: Refresh final signed Windows size report
+        if: runner.os == 'Windows' && env.HAS_SIGNPATH == 'true'
+        env:
+          REASONIX_COMMIT: ${{ needs.resolve.outputs.sha }}
+        run: >-
+          node desktop/packaging/size-report.mjs
+          --platform "${{ matrix.platform }}"
+          --version "${{ needs.resolve.outputs.version }}"
+          --bundle signed-payload
+          --dist dist
+          --output "desktop/build/reports/${{ matrix.name }}"
+
+      - name: Upload package size report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-size-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
+          path: desktop/build/reports/${{ matrix.name }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload desktop source maps
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-sourcemaps-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
+          path: |
+            desktop/build/sourcemaps/${{ matrix.name }}
+            desktop/frontend/sourcemaps
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Sign artifacts (minisign)
         working-directory: desktop
         env:
@@ -607,10 +655,40 @@ jobs:
           # Same-run handoff to the publish job only; 7 days covers debugging.
           retention-days: 7
 
+  mac-universal-intel:
+    name: verify Universal candidate on Intel
+    needs: [resolve, build]
+    if: ${{ always() && !cancelled() && needs.build.result == 'success' && inputs.preflight_artifact_prefix == '' }}
+    runs-on: macos-15-intel
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.resolve.outputs.artifact_prefix }}-darwin-universal
+          path: ${{ runner.temp }}/universal-bundle
+      - name: Mount and smoke-test the exact Universal DMG
+        run: |
+          mount_dir="$RUNNER_TEMP/reasonix-universal"
+          app_dir="$RUNNER_TEMP/reasonix-universal-app/Reasonix.app"
+          mkdir -p "$mount_dir" "$(dirname "$app_dir")"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount_dir" "$RUNNER_TEMP/universal-bundle/files/Reasonix-darwin-universal.dmg"
+          trap 'hdiutil detach "$mount_dir"' EXIT
+          ditto "$mount_dir/Reasonix.app" "$app_dir"
+          codesign --verify --deep --strict "$app_dir"
+          node desktop/packaging/verify.mjs "$app_dir" --kind darwin-app-dir
+          node desktop/packaging/smoke.mjs "$app_dir"
+
   publish:
     name: publish release
-    needs: [resolve, signing-contract, cache-guard, build]
-    if: ${{ always() && !cancelled() && needs.resolve.result == 'success' && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.preflight_artifact_prefix != '' && inputs.orchestrated && inputs.signing_preflight_verified)) && needs.signing-contract.result == 'success' && needs.cache-guard.result == 'success' && !inputs.production_signing_smoke && !inputs.signing_preflight }}
+    needs: [resolve, signing-contract, cache-guard, build, mac-universal-intel]
+    if: ${{ always() && !cancelled() && needs.resolve.result == 'success' && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.preflight_artifact_prefix != '' && inputs.orchestrated && inputs.signing_preflight_verified)) && ((inputs.preflight_artifact_prefix == '' && needs.mac-universal-intel.result == 'success') || (inputs.preflight_artifact_prefix != '' && needs.mac-universal-intel.result == 'skipped')) && needs.signing-contract.result == 'success' && needs.cache-guard.result == 'success' && !inputs.production_signing_smoke && !inputs.signing_preflight }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

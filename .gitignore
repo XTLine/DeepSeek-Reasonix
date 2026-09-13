@@ -28,6 +28,7 @@ mem.prof
 /desktop/desktop
 /desktop/frontend/dist/*
 !/desktop/frontend/dist/.gitkeep
+/desktop/frontend/.reasonix-frontend-artifact.json
 /desktop/frontend/sourcemaps/
 /desktop/electron/dist/
 

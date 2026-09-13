@@ -38,7 +38,7 @@ assert.ok(
   "desktop/wails.json must be retired with the Wails shell",
 );
 
-for (const jobName of ["desktop-prepare", "desktop-go", "desktop-frontend", "desktop-browser", "desktop-macos", "desktop-windows"]) {
+for (const jobName of ["desktop-prepare", "desktop-go", "desktop-frontend", "desktop-browser-group", "desktop-macos", "desktop-windows"]) {
   assert.deepEqual(nodeVersions(jobBody(ciWorkflow, jobName)), ["24"]);
 }
 

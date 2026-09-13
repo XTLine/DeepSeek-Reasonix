@@ -14,7 +14,7 @@ This preference applies to reasoning, tool calls, sub-task progress, work-proces
 Manual expand/collapse is a message-level reading action and is retained for the message row. It does not create another global setting.
 Overrides are keyed by session and stable process-segment identity in a bounded in-memory cache. They survive React re-renders and transcript window recycling, but intentionally do not persist across application restarts.
 
-Warnings, approvals, delivery states, extension cards, and other items that require user action remain outside the completed work-process fold, so Standard mode never makes an action unreachable.
+Warnings, approvals, readiness states, extension cards, and other items that require user action remain outside the completed work-process fold, so standard execution never makes an action unreachable.
 
 ## Configuration and compatibility
 

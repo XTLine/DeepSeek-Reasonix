@@ -29,6 +29,8 @@ function desktopManifest(version: string, base?: string) {
       "linux-amd64": asset("Reasonix-linux-amd64.deb"),
     },
     downloads: {
+      "Reasonix-darwin-arm64.dmg": asset("Reasonix-darwin-arm64.dmg"),
+      "Reasonix-darwin-amd64.dmg": asset("Reasonix-darwin-amd64.dmg"),
       "Reasonix-darwin-universal.dmg": asset("Reasonix-darwin-universal.dmg"),
       "Reasonix-windows-amd64.zip": asset("Reasonix-windows-amd64.zip"),
     },
@@ -249,6 +251,19 @@ describe("desktop Stable GitHub fallback", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("x-reasonix-release-source")).toBe("r2-stable");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps serving the historical two-download manifest", async () => {
+    const historical = desktopManifest("v1.17.21");
+    Reflect.deleteProperty(historical.downloads, "Reasonix-darwin-arm64.dmg");
+    Reflect.deleteProperty(historical.downloads, "Reasonix-darwin-amd64.dmg");
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify(historical), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await handleDesktopReleaseManifest("stable");
+    expect(response.status).toBe(200);
   });
 
   it("accepts null but rejects an empty downloads object as legacy", async () => {

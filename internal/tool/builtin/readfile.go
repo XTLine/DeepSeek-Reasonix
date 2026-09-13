@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -43,9 +42,8 @@ type readFile struct {
 	// overlay, when non-nil, serves content from the host transport (unsaved
 	// editor buffers) before falling back to disk. Consulted only after path
 	// resolution and read confinement, and never for external alias paths.
-	overlay     FileOverlay
-	captured    *tool.ReadResultSource
-	rawSnapshot []byte
+	overlay  FileOverlay
+	captured *tool.ReadResultSource
 }
 
 const (
@@ -123,9 +121,8 @@ func readIntentFor(explicit string, windowGiven bool) (tool.ReadIntent, error) {
 		}
 		return tool.ReadIntentRange, nil
 	case tool.ReadIntentFull:
-		if windowGiven {
-			return "", fmt.Errorf("intent=full cannot be combined with offset or limit; omit them to scan the whole file, or use intent=range for one window")
-		}
+		// Kept as a compatibility hint. Every call remains one bounded window;
+		// the host no longer creates a whole-file debt or completion gate.
 		return tool.ReadIntentFull, nil
 	default:
 		return "", fmt.Errorf("intent must be inspect, range, or full (got %q)", explicit)
@@ -135,7 +132,7 @@ func readIntentFor(explicit string, windowGiven bool) (tool.ReadIntent, error) {
 func (readFile) Name() string { return "read_file" }
 
 func (readFile) Description() string {
-	return "Read a text file with optional line offset/limit. Output prefixes each line with its 1-based number (e.g. `   42→...`) so subsequent edit_file calls can target exact lines. Use `offset` and `limit` to page through large files; the tool reports total length and pagination hints in a trailer. Set `intent` to state why you are reading: inspect (default, a bounded preview), range (an explicit window), or full (scan the whole file). Independent reads with no data dependency should be issued in the same round."
+	return "Read one bounded text window with optional line offset/limit. Output prefixes each line with its 1-based number. Any successful window observes the current file version for later structured edits. Use the next-window hint to page only when more content is useful. Legacy intent and cursor fields are accepted as navigation hints and never create a whole-file completion requirement."
 }
 
 func (readFile) Schema() json.RawMessage {
@@ -143,8 +140,8 @@ func (readFile) Schema() json.RawMessage {
 "type":"object",
 "properties":{
   "path":{"type":"string","description":"File path"},
-  "intent":{"type":"string","enum":["inspect","range","full"],"description":"Why you are reading. inspect (default): a bounded preview; one page is a complete answer. range (default when offset or limit is given): an explicit window. full: scan the whole file, paging until every line has been delivered."},
-  "cursor":{"type":"string","description":"Continuation cursor returned by a previous read_file result. It names the exact next position; pass it back unchanged instead of computing an offset."},
+	"intent":{"type":"string","enum":["inspect","range","full"],"description":"Compatibility hint. Every value reads only this bounded window and creates no whole-file obligation."},
+	"cursor":{"type":"string","description":"Optional continuation cursor from a prior result. Invalid legacy cursors should be replaced with an explicit offset and limit."},
   "offset":{"type":"integer","description":"0-based line offset to start reading from (default 0)","minimum":0},
   "limit":{"type":"integer","description":"Maximum lines to return (default 2000)","minimum":1}
 },
@@ -153,35 +150,6 @@ func (readFile) Schema() json.RawMessage {
 }
 
 func (readFile) ReadOnly() bool { return true }
-
-// ObserveModelText extracts the exact numbered window returned by read_file.
-// It intentionally parses the already-produced output instead of rereading
-// the file, so overlay and encoding routing remain identical to what the model
-// saw and truncated results can still be promoted through RawContent.
-func (r readFile) ObserveModelText(args json.RawMessage, output string) (tool.ModelTextObservation, bool) {
-	var p struct {
-		Path string `json:"path"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil || strings.TrimSpace(p.Path) == "" {
-		return tool.ModelTextObservation{}, false
-	}
-	window, ok := tool.ParseReadWindow(output)
-	if !ok {
-		return tool.ModelTextObservation{}, false
-	}
-	hashes := make([]string, len(window.Lines))
-	for i, line := range window.Lines {
-		sum := sha256.Sum256([]byte(line))
-		hashes[i] = hex.EncodeToString(sum[:])
-	}
-	rp := resolveReadablePath(r.workDir, p.Path, r.paths)
-	return tool.ModelTextObservation{
-		Path:       rp.Path,
-		StartLine:  window.StartLine,
-		LineHashes: hashes,
-		Version:    tool.WindowDigest(rp.Path, window),
-	}, true
-}
 
 // ReadEnvelope reports what one read_file call delivered. The source identity
 // comes from the store that actually served the content, the snapshot stays
@@ -282,49 +250,8 @@ func (readFile) SnipHint() tool.SnipHint {
 }
 
 func (r readFile) Execute(ctx context.Context, args json.RawMessage) (string, error) {
-	p, err := parseReadFileParams(args)
-	if err != nil {
-		return "", err
-	}
-	rp := resolveReadablePath(r.workDir, p.Path, r.paths)
-	p.Path = rp.Path
-	displayPath := rp.DisplayPath
-	if confineRead(r.forbidRoots, p.Path) {
-		err := &os.PathError{Op: "open", Path: p.Path, Err: os.ErrNotExist}
-		if rp.External {
-			return "", fmt.Errorf("read %s: %s", displayPath, rp.ErrorText(err))
-		}
-		return "", err
-	}
-	if r.rawSnapshot != nil {
-		return r.scanEncoded(readContextReader{ctx, bytes.NewReader(r.rawSnapshot)}, p.Offset, p.Limit)
-	}
-
-	// The host overlay (unsaved editor buffers) wins over the disk when it can
-	// serve the path. Content arrives already decoded as text, so the encoding
-	// and binary-detection pipeline below applies to the disk fallback only.
-	if r.overlay != nil && !rp.External && filepath.IsAbs(p.Path) {
-		if content, ok := r.overlay.ReadTextFile(ctx, p.Path); ok {
-			return r.scan(readContextReader{ctx, strings.NewReader(content)}, p.Offset, p.Limit)
-		}
-	}
-
-	// A directory can be os.Open'd but not read as text — catch it up front with
-	// an actionable message (and avoid the doubled "read X: read X:" the scanner's
-	// error would otherwise produce) so the model switches to the ls tool.
-	if info, err := os.Stat(p.Path); err == nil && info.IsDir() {
-		return "", fmt.Errorf("%s is a directory, not a file — use the ls tool to list it, or read a specific file inside it", displayPath)
-	}
-
-	f, err := os.Open(p.Path)
-	if err != nil {
-		if rp.External {
-			return "", fmt.Errorf("read %s: %s", displayPath, rp.ErrorText(err))
-		}
-		return "", fmt.Errorf("read %s: %w", displayPath, err)
-	}
-	defer f.Close()
-	return r.scanEncoded(readContextReader{ctx, f}, p.Offset, p.Limit)
+	output, _, err := r.ExecuteRead(ctx, args)
+	return output, err
 }
 
 func (r readFile) scanEncoded(f io.Reader, offset, limit int) (string, error) {

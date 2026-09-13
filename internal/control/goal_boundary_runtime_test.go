@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"reasonix/internal/agent"
 	"reasonix/internal/evidence"
 	"reasonix/internal/store"
 	"reasonix/internal/tool"
@@ -94,8 +93,12 @@ func TestRemovedNumericPauseSidecarsMigrateToRunning(t *testing.T) {
 				t.Fatal(err)
 			}
 			g := &goalMachine{}
-			_, data, migrated, _ := g.restoreFromState(sessionPath)
-			if !migrated || g.status != GoalStatusRunning || g.stopCause != "" || g.block != "" {
+			_, _, migrated, _ := g.restoreFromState(sessionPath)
+			data, err := os.ReadFile(goalStatePath(sessionPath))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if migrated || !g.disarmed || g.active() || g.status != GoalStatusRunning || g.stopCause != "" || g.block != "" {
 				t.Fatalf("legacy pause did not migrate: %+v", g)
 			}
 			if g.turnsLimit != unlimitedGoalTurns || g.requestsUsed != 143 || g.workDurationMs != 42_000 || g.budgetExtensions != 0 {
@@ -105,7 +108,7 @@ func TestRemovedNumericPauseSidecarsMigrateToRunning(t *testing.T) {
 			if err := json.Unmarshal(data, &normalized); err != nil {
 				t.Fatal(err)
 			}
-			if string(normalized["turnsLimit"]) != "-1" || string(normalized["futurePolicy"]) != `{"mode":"adaptive"}` {
+			if string(normalized["turnsLimit"]) != "20" || string(normalized["futurePolicy"]) != `{"mode":"adaptive"}` {
 				t.Fatalf("normalized sidecar lost downgrade fence/unknown fields: %s", data)
 			}
 		})
@@ -158,7 +161,7 @@ func TestGoalNumericPauseMigrationWriteFailureRollsBackMemory(t *testing.T) {
 	if _, _, migrated, _ := g.restoreFromState(sessionPath); migrated {
 		t.Fatal("failed normalization must not report a committed migration")
 	}
-	if g.status != GoalStatusBlocked || g.stopCause != stopCauseGoalStuck || g.block != "old numeric pause" || g.turnsLimit != 20 {
+	if !g.disarmed || g.active() || g.status != GoalStatusRunning || g.stopCause != "" || g.turnsLimit != unlimitedGoalTurns {
 		t.Fatalf("in-memory state was left half-migrated: %+v", g)
 	}
 	onDisk, err := os.ReadFile(goalStatePath(sessionPath))
@@ -172,7 +175,7 @@ func TestGoalNumericPauseMigrationWriteFailureRollsBackMemory(t *testing.T) {
 
 func TestGoalCompletionAndRealBlockedStillTerminate(t *testing.T) {
 	complete := &goalMachine{goal: "ship", status: GoalStatusRunning, turnsLimit: unlimitedGoalTurns}
-	res := complete.advance(goalAdvanceInput{report: &goalTurnReport{status: GoalStatusComplete}, readiness: agent.ReadinessResult{Ready: true}})
+	res := complete.advance(goalAdvanceInput{report: &goalTurnReport{status: GoalStatusComplete}})
 	if res.notice != goalCompleteNotice || complete.status != GoalStatusComplete {
 		t.Fatalf("complete result=%+v runtime=%+v", res, complete.runtimeView())
 	}
@@ -197,16 +200,21 @@ func TestGoalProgressEvidenceRestoresAsBoundedNoveltyState(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := &goalMachine{}
-	_, data, migrated, _ := g.restoreFromState(sessionPath)
-	if !migrated || g.turnsLimit != unlimitedGoalTurns || g.noProgressLimit != 0 || len(g.progressEvidence) != 2 {
+	_, _, migrated, _ := g.restoreFromState(sessionPath)
+	data, err := os.ReadFile(goalStatePath(sessionPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated || !g.disarmed || g.turnsLimit != unlimitedGoalTurns || g.noProgressLimit != 0 || len(g.progressEvidence) != 2 {
 		t.Fatalf("restore failed: migrated=%v runtime=%+v", migrated, g)
 	}
 	var normalized goalState
-	if err := json.Unmarshal(data, &normalized); err != nil || len(normalized.ProgressEvidence) != 2 {
+	if err := json.Unmarshal(data, &normalized); err != nil || len(normalized.ProgressEvidence) != 4 {
 		t.Fatalf("normalized sidecar = %+v err=%v", normalized, err)
 	}
+	g.resume(nil) // only explicit resume activates a restored goal
 	g.advance(goalAdvanceInput{report: &goalTurnReport{status: GoalStatusRunning}, progressEvidence: []string{"read-a"}})
-	if g.noProgressTurns != 3 {
+	if g.noProgressTurns != 1 {
 		t.Fatalf("restored repeat reset streak to %d", g.noProgressTurns)
 	}
 	g.advance(goalAdvanceInput{report: &goalTurnReport{status: GoalStatusRunning}, progressEvidence: []string{"read-c"}})

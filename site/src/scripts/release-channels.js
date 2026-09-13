@@ -1,6 +1,6 @@
 const STABLE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const DESKTOP_DOWNLOAD_PAGE = "https://reasonix.io/?download=desktop#start";
-const DESKTOP_ASSETS = [
+const DESKTOP_REQUIRED_ASSETS = [
   ["platforms", "darwin-arm64", "Reasonix-darwin-arm64.zip"],
   ["platforms", "darwin-amd64", "Reasonix-darwin-amd64.zip"],
   ["platforms", "windows-amd64", "Reasonix-windows-amd64-installer.exe"],
@@ -10,6 +10,11 @@ const DESKTOP_ASSETS = [
   ["downloads", "Reasonix-darwin-universal.dmg", "Reasonix-darwin-universal.dmg"],
   ["downloads", "Reasonix-windows-amd64.zip", "Reasonix-windows-amd64.zip"],
 ];
+const DESKTOP_ARCH_DMG_ASSETS = [
+  ["downloads", "Reasonix-darwin-arm64.dmg", "Reasonix-darwin-arm64.dmg"],
+  ["downloads", "Reasonix-darwin-amd64.dmg", "Reasonix-darwin-amd64.dmg"],
+];
+const DESKTOP_ASSETS = [...DESKTOP_REQUIRED_ASSETS, ...DESKTOP_ARCH_DMG_ASSETS];
 const DESKTOP_ASSET_NAMES = new Set(DESKTOP_ASSETS.map(([, , name]) => name));
 const OFFICIAL_DESKTOP_RELEASE_TAG = /^(?:desktop-)?(v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$/;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -185,7 +190,12 @@ function normalizeDesktopManifest(manifest, requestedChannel) {
 
   const allowedBases = desktopAssetBases(parsed);
   let selectedBase = "";
-  for (const [group, key, name] of DESKTOP_ASSETS) {
+  const archDMGCount = DESKTOP_ARCH_DMG_ASSETS.filter(([group, key]) => manifest?.[group]?.[key]).length;
+  if (archDMGCount !== 0 && archDMGCount !== DESKTOP_ARCH_DMG_ASSETS.length) return null;
+  const manifestAssets = archDMGCount === DESKTOP_ARCH_DMG_ASSETS.length
+    ? DESKTOP_ASSETS
+    : DESKTOP_REQUIRED_ASSETS;
+  for (const [group, key, name] of manifestAssets) {
     const asset = manifest?.[group]?.[key];
     if (
       !asset ||
@@ -214,14 +224,14 @@ function normalizeDesktopManifest(manifest, requestedChannel) {
     }
     selectedBase = base;
   }
-  return selectedBase ? { parsed } : null;
+  return selectedBase ? { parsed, manifestAssets } : null;
 }
 
 export function desktopReleaseModel(manifest, requestedChannel) {
   const normalized = normalizeDesktopManifest(manifest, requestedChannel);
   if (!normalized) return null;
-  const { parsed } = normalized;
-  const assets = Object.fromEntries(DESKTOP_ASSETS.map(([group, key, name]) => [
+  const { parsed, manifestAssets } = normalized;
+  const assets = Object.fromEntries(manifestAssets.map(([group, key, name]) => [
     name,
     manifest[group][key].url,
   ]));
@@ -266,13 +276,18 @@ export function desktopGitHubReleaseModel(release) {
     }
     found[name] = rawURL;
   }
-  if (DESKTOP_ASSETS.some(([, , name]) => !found[name])) return null;
+  if (DESKTOP_REQUIRED_ASSETS.some(([, , name]) => !found[name])) return null;
+  const archDMGCount = DESKTOP_ARCH_DMG_ASSETS.filter(([, , name]) => found[name]).length;
+  if (archDMGCount !== 0 && archDMGCount !== DESKTOP_ARCH_DMG_ASSETS.length) return null;
+  const releaseAssets = archDMGCount === DESKTOP_ARCH_DMG_ASSETS.length
+    ? DESKTOP_ASSETS
+    : DESKTOP_REQUIRED_ASSETS;
 
   return {
     channel: "stable",
     version: match[1],
     displayVersion: match[1].slice(1),
-    assets: Object.fromEntries(DESKTOP_ASSETS.map(([, , name]) => [name, found[name]])),
+    assets: Object.fromEntries(releaseAssets.map(([, , name]) => [name, found[name]])),
     changelogURL: "https://reasonix.io/changelog/",
   };
 }

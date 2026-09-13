@@ -34,7 +34,7 @@ model = "executor-model"
 	}
 }
 
-func TestBuildFailsWhenRecoveryModelIsUnresolvable(t *testing.T) {
+func TestBuildIgnoresRetiredRecoveryModel(t *testing.T) {
 	isolateConfigHome(t)
 	dir := robustTempDir(t)
 	t.Chdir(dir)
@@ -54,9 +54,10 @@ model = "executor-model"
 `)
 
 	ctrl, err := Build(context.Background(), Options{Sink: event.Discard})
-	if err == nil || !strings.Contains(err.Error(), "recovery_model") {
-		t.Fatalf("Build = (%v, %v), want a recovery_model configuration error", ctrl, err)
+	if err != nil {
+		t.Fatalf("retired recovery_model affected Build: %v", err)
 	}
+	defer ctrl.Close()
 }
 
 func TestBuildLeavesOptionalRolesOffWithoutExplicitModels(t *testing.T) {

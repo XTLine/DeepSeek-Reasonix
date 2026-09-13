@@ -305,8 +305,8 @@ const ld = {
             <span class="meta"><span class="l-en">Universal DMG · Apple Silicon &amp; Intel</span><span class="l-zh">通用 DMG · Apple Silicon 与 Intel</span></span>
             <a class="btn btn-light" href={desktopStableFallback} data-desktop-asset="Reasonix-darwin-universal.dmg"><span class="l-en">Download Universal · <span data-release-version="desktop">latest</span></span><span class="l-zh">下载通用版 · <span data-release-version="desktop">latest</span></span></a>
             <div class="os-options" aria-label="macOS alternate downloads">
-              <a href={desktopStableFallback} data-desktop-asset="Reasonix-darwin-arm64.zip">Apple Silicon zip</a>
-              <a href={desktopStableFallback} data-desktop-asset="Reasonix-darwin-amd64.zip">Intel zip</a>
+              <a href={desktopStableFallback} data-desktop-asset="Reasonix-darwin-arm64.dmg">Apple Silicon DMG</a>
+              <a href={desktopStableFallback} data-desktop-asset="Reasonix-darwin-amd64.dmg">Intel DMG</a>
             </div>
           </div>
           <div class="os-card" data-os="win">
@@ -335,6 +335,10 @@ const ld = {
           <code>sudo xattr -rd com.apple.quarantine /Applications/Reasonix.app</code>
           <button type="button" data-copy="sudo xattr -rd com.apple.quarantine /Applications/Reasonix.app">Copy</button>
           <a href={`${base}/docs/#macos-quarantine`}><span class="l-en">When to use this →</span><span class="l-zh">查看适用场景 →</span></a>
+        </div>
+        <div class="dl-help">
+          <strong><span class="l-en">Updating from 1.38.3 or earlier?</span><span class="l-zh">从 1.38.3 或更早版本升级?</span></strong>
+          <span><span class="l-en">The in-app updater cannot cross the Electron shell change and reports <code>unsupported install_layout "electron-v1"</code>. Quit Reasonix, then install the full package above (Windows installer, macOS DMG, Linux .deb or tar.gz) over the current version. Configuration, sessions and history are kept.</span><span class="l-zh">应用内更新无法跨越 Electron 壳切换,会提示 <code>unsupported install_layout "electron-v1"</code>。请退出 Reasonix,然后用上方的完整安装包(Windows 安装程序、macOS DMG、Linux .deb 或 tar.gz)覆盖安装。配置、会话与历史记录原样保留。</span></span>
         </div>
       </div>
 

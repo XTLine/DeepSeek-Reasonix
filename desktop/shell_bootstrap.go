@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"reasonix/internal/installlayout"
 	"reasonix/internal/proc"
@@ -74,10 +75,39 @@ func shellPathForExecutable(exe, goos string) string {
 	name := installlayout.ShellExecutableNameFor(goos)
 	shell := filepath.Join(dir, installlayout.AppShellDirName, name)
 	if goos == "darwin" {
-		shell = filepath.Join(filepath.Dir(dir), "MacOS", name)
+		if contents, ok := macAppContentsForExecutable(exe); ok {
+			shell = filepath.Join(contents, "MacOS", name)
+		}
 	} else if goos == "linux" && dir == "/usr/bin" {
 		// The native package keeps executables in /usr/bin and Chromium in /usr/lib.
 		shell = filepath.Join("/usr/lib/reasonix", installlayout.AppShellDirName, name)
 	}
 	return shell
+}
+
+// macAppContentsForExecutable recognizes every supported service location in
+// a macOS application bundle without relying on the name of the .app itself.
+// It is deliberately lexical: callers that mutate or trust the bundle must
+// additionally resolve symlinks and validate Info.plist.
+func macAppContentsForExecutable(exe string) (string, bool) {
+	exe = filepath.Clean(strings.TrimSpace(exe))
+	if exe == "" || !filepath.IsAbs(exe) {
+		return "", false
+	}
+	dir := filepath.Dir(exe)
+	for dir != filepath.Dir(dir) {
+		if filepath.Base(dir) == "Contents" && strings.HasSuffix(filepath.Dir(dir), ".app") {
+			rel, err := filepath.Rel(dir, exe)
+			if err != nil {
+				return "", false
+			}
+			rel = filepath.ToSlash(rel)
+			if strings.HasPrefix(rel, "MacOS/") || strings.HasPrefix(rel, "Resources/service/") {
+				return dir, true
+			}
+			return "", false
+		}
+		dir = filepath.Dir(dir)
+	}
+	return "", false
 }

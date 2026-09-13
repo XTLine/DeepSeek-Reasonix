@@ -102,6 +102,9 @@ func TestControllerFreezesTurnResultBeforeTerminalPublication(t *testing.T) {
 			if done.Receipt == nil || done.Receipt.Diff == nil {
 				t.Fatalf("terminal receipt missing: %+v", done)
 			}
+			if done.Receipt.AssessmentKind != "facts" || done.Receipt.Verdict != "unknown" {
+				t.Fatalf("checkpoint-only result became a quality assessment: %+v", done.Receipt)
+			}
 			diff := done.Receipt.Diff
 			if diff.Coverage != "complete" || diff.Added != 1 || diff.Removed != 1 || len(diff.Files) != 1 || diff.Files[0].Patch != "" {
 				t.Fatalf("summary: %+v", diff)

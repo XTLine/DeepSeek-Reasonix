@@ -8,7 +8,6 @@ import type { useComposerInsertCommands } from "../app-runtime/useComposerInsert
 import type { WorkspaceVerificationRevealRequest } from "../components/WorkspacePanel";
 import type { WorkspaceDockRegionProps } from "./WorkspaceDockRegion";
 import type { AppBottomRegionsProps } from "./AppBottomRegions";
-import type { ComposerProfile } from "../lib/composerProfile";
 import type { RightDockMode } from "../store/layout";
 import { defaultCreationRightDockTreeWidth, defaultRightDockTreeWidth, TERMINAL_DEFAULT_HEIGHT, TERMINAL_MIN_HEIGHT } from "../store/layout";
 
@@ -42,7 +41,6 @@ export function buildWorkspaceDockProps(input: {
   panels: WorkspacePanelApi;
   inserts: InsertCommands;
   verification: { verificationRevealRequest: WorkspaceVerificationRevealRequest | null; closeTurnResult?: () => void };
-  qualityFloor: ComposerProfile["qualityFloor"];
   onFileTreeRefresh: () => void;
   onSessionRevertCommitted: WorkspaceDockRegionProps["workspace"]["onSessionRevertCommitted"];
   onOpenInTerminal: WorkspaceDockRegionProps["workspace"]["onOpenInTerminal"];
@@ -80,7 +78,7 @@ export function buildWorkspaceDockProps(input: {
       initialViewMode: input.mode === "changed" ? "changed" : "files",
       completionSummary: input.completionSummary, turnStartAt: input.turnStartAt,
       sessionPath: input.meta?.sessionPath, onDismissTurnResult: input.verification.closeTurnResult,
-      verificationRevealRequest: input.verification.verificationRevealRequest, qualityFloor: input.qualityFloor,
+      verificationRevealRequest: input.verification.verificationRevealRequest,
       showViewTabs: false, creationMode: input.creation,
     },
     resizer: surface.gridOpen ? {

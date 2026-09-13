@@ -65,7 +65,7 @@ func (t *UseCapabilityTool) classifyCapabilityTarget(id string, args json.RawMes
 	// Evidence/order control tools remain serial even if their schema is
 	// nominally read-only.
 	switch target.Name() {
-	case "complete_step", "todo_write", "wait", "bash_output", "compress":
+	case "todo_write", "wait", "bash_output", "compress":
 		return tool.CallClass{Known: true, ReadOnly: true}
 	}
 	_ = args // Reserved for target-specific classifiers.

@@ -41,7 +41,6 @@ import (
 	"reasonix/internal/extension"
 	"reasonix/internal/extension/dispatch"
 	"reasonix/internal/extension/uihub"
-	"reasonix/internal/goaleval"
 	"reasonix/internal/guardian"
 	"reasonix/internal/hook"
 	"reasonix/internal/i18n"
@@ -50,9 +49,9 @@ import (
 	"reasonix/internal/memory"
 	"reasonix/internal/nilutil"
 	"reasonix/internal/permission"
+	"reasonix/internal/permissionpreset"
 	"reasonix/internal/plugin"
 	"reasonix/internal/provider"
-	"reasonix/internal/recovery"
 	"reasonix/internal/sandbox"
 	"reasonix/internal/sessioncontext"
 	"reasonix/internal/sessioninbox"
@@ -69,10 +68,8 @@ import (
 // while one is already active in the same Controller.
 var ErrTurnRunning = errors.New("turn already running")
 
-// ErrNoFinalReadinessRecovery means an explicit continuation did not match the
-// immediately preceding paused readiness check (for example, an old card after
-// a newer user turn). It must not silently become an ordinary turn.
-var ErrNoFinalReadinessRecovery = errors.New("no pending final-readiness check to continue")
+// ErrNoFinalReadinessRecovery is retained for old recovery-action clients.
+var ErrNoFinalReadinessRecovery = errors.New("final_readiness_recovery_retired: readiness recovery actions can no longer restore evidence or replay checks")
 
 // ErrRuntimeDraining reports that a caller targeted a controller generation
 // superseded by a successful rebuild.
@@ -105,18 +102,11 @@ type Controller struct {
 	executor           *agent.Agent
 	guardianSess       *guardian.Session // nil when guardian is disabled
 	guardianPath       string            // persisted guardian session file ("" when disabled)
-	// recoveryGate is the shared Auto Guard state for this controller.
-	// nil when the feature is not wired for this controller.
-	recoveryGate *recovery.Gate
-
 	// taskBudget is the configured spend gate, as passed at construction.
 	taskBudget agent.TaskBudget
 	// goalTokenBudget bounds an unattended Goal loop; 0 leaves it unbounded.
 	goalTokenBudget int
-	// evaluator is the bounded Goal completion evaluator consulted when the
-	// working model submits no update_goal report. nil fails closed: the goal
-	// pauses instead of defaulting to continue.
-	evaluator goaleval.Evaluator
+
 	// goalUsageTee accounts billable usage events into the active goal turn's
 	// observational token total. It wraps the public sink when the caller didn't provide one.
 	goalUsageTee *goalUsageTee
@@ -201,6 +191,9 @@ type Controller struct {
 	capabilityRuntime     *agent.MCPCapabilityRuntime
 
 	runtimeGeneration  uint64 // PublishGate gen; 0 disables
+	permissionMu       sync.Mutex
+	permissionStateMu  sync.RWMutex
+	permissionRevision atomic.Uint64
 	runtimeOwner       *extension.RuntimeOwner
 	lastResumeDecision extension.ResumeDecision
 	// extensions is the frozen extension dispatcher for this controller
@@ -390,10 +383,16 @@ type RuntimeStatus struct {
 }
 
 const (
-	ToolApprovalAsk     = "ask"
-	ToolApprovalAuto    = "auto"
-	ToolApprovalDontAsk = "dontAsk"
-	ToolApprovalYolo    = "yolo"
+	ToolApprovalReadOnly         = string(permissionpreset.ReadOnly)
+	ToolApprovalWorkspaceWrite   = string(permissionpreset.WorkspaceWrite)
+	ToolApprovalDangerFullAccess = string(permissionpreset.DangerFullAccess)
+	ToolApprovalDontAsk          = "dontAsk"
+
+	// Deprecated source aliases. Persisted legacy strings are migrated by
+	// normalizeToolApprovalMode; these names keep older integrations building.
+	ToolApprovalAsk  = ToolApprovalReadOnly
+	ToolApprovalAuto = ToolApprovalWorkspaceWrite
+	ToolApprovalYolo = ToolApprovalDangerFullAccess
 )
 
 const (
@@ -475,20 +474,17 @@ type Options struct {
 	Runner   agent.Runner
 	Executor *agent.Agent
 	Guardian *guardian.Session
-	// RecoveryReviewer is the optional independent recovery reviewer (nil =
-	// rule-only path with fail-closed human confirmation for ambiguous cases).
-	RecoveryReviewer recovery.Reviewer
-	// RecoveryHeadless blocks mutations that need confirmation instead of
-	// waiting forever when no human decision channel exists.
+	// RecoveryHeadless is decoded for source compatibility and ignored. Auto
+	// Guard cannot be re-enabled through Controller options.
 	RecoveryHeadless bool
 	// TaskBudget is the configured spend gate; unset leaves a turn unbounded.
 	TaskBudget agent.TaskBudget
 	// GoalTokenBudget bounds an unattended Goal loop by cumulative tokens.
 	GoalTokenBudget int
-	// GoalEvaluator is the optional bounded Goal completion evaluator consulted
+	// GoalEvaluator is accepted only for source compatibility.
 	// when the working model submits no update_goal report. nil fails closed:
 	// the goal pauses instead of defaulting to continue.
-	GoalEvaluator goaleval.Evaluator
+	GoalEvaluator any // deprecated: accepted but never invoked
 	Sink          event.Sink
 	Policy        permission.Policy
 	// SubagentGate is the shared, mutable gate every headless-only sub-agent
@@ -598,8 +594,8 @@ type Options struct {
 	// Environment and Workspace are consumed; memory and skills stay live.
 	SessionContextStatic sessioncontext.Sections
 	// FileBranchesOnly keeps fork, branch, switch, and conversation rewind on
-	// separate session files even for schema-2 logs. The desktop sets it until
-	// its tabs bind to heads; every other frontend branches inside the log.
+	// separate session files even for schema-2 logs. Hosts that expose forks as
+	// independent conversations (desktop tabs and multi-session Serve) set it.
 	FileBranchesOnly bool
 	// DisableColdResumePrune suppresses the cold-resume cache-state notice.
 	// Resume never rewrites history regardless of this flag.
@@ -698,7 +694,6 @@ func New(opts Options) *Controller {
 		executor:                          opts.Executor,
 		guardianSess:                      opts.Guardian,
 		guardianPath:                      guardian.PathFor(opts.SessionPath),
-		evaluator:                         opts.GoalEvaluator,
 		goalUsageTee:                      usageTee,
 		sink:                              sink,
 		policy:                            opts.Policy,
@@ -755,6 +750,7 @@ func New(opts Options) *Controller {
 		runtimeOwner:                      runtimeOwner,
 		approval:                          newApprovalManager(opts.Policy, ToolApprovalAsk, opts.ApprovalTimeout),
 	}
+	c.permissionRevision.Store(1)
 	// Session-private temporary directory: reuse a shared Manager on hot
 	// rebuild, otherwise create one. Retain so ReleaseResources/Close drop the
 	// owner reference without racing a replacement Controller.
@@ -790,9 +786,6 @@ func New(opts Options) *Controller {
 		c.wireMutationObserver()
 		c.executor.SetMemoryQueue(c)
 	}
-	// Auto Guard is built into Auto. Ask and YOLO bypass it through the mode
-	// provider, so no separate enablement state is needed.
-	c.initRecoveryGate(opts.RecoveryReviewer, opts.RecoveryHeadless)
 	// Task monitoring: record background-job lifecycle into the project-local
 	// task store so CLI, Desktop, scripts, and future clients observe the same
 	// state/event evidence. The recorder swallows its own failures — monitoring
@@ -1140,7 +1133,7 @@ func (c *Controller) finishGuardedTurn(err error, completion *guardedTurnComplet
 	if done.CheckpointTurn != nil {
 		changes := completion.checkpoint.store.FreezeTurnChanges(*done.CheckpointTurn)
 		if done.Receipt == nil && (len(changes.Files) > 0 || len(changes.Reasons) > 0) {
-			done.Receipt = &event.CompletionReceipt{Verdict: "unknown"}
+			done.Receipt = &event.CompletionReceipt{AssessmentKind: "facts", Verdict: "unknown"}
 		}
 		if done.Receipt != nil {
 			// Detach the executor's receipt before adding host-owned file facts.
@@ -1213,7 +1206,7 @@ const ManagedConfigWriteApprovalTool = "config_write"
 
 // planApprovedMessage is the follow-up turn sent once the user approves a plan —
 // the in-context nudge to execute and keep the (already-seeded) task list honest.
-const planApprovedMessage = "Plan approved — plan mode is off. Implement the plan now. The ordinary writer fallback is approved for this execution turn; explicit ask/deny rules and forced fresh reviews still apply. Use this workflow: 1) mark the first sub-step in_progress with todo_write (this establishes the task list); 2) execute the sub-step; 3) call complete_step with evidence — the host then marks that sub-step completed and moves the next one to in_progress for you. You may call complete_step for multiple sub-steps in one tool-call round when their work and evidence already exist, but keep calls in Todo order; the host processes them sequentially and rejects skipped or out-of-order sign-offs. You don’t need another todo_write to mark steps completed; each complete_step advances the list."
+const planApprovedMessage = "Plan approved — plan mode is off. Implement the approved plan and user feedback. Explicit scope, permission and sandbox restrictions still apply. Update todos to reflect actual progress. Use the plan’s checks and acceptance notes as task instructions, and report what you changed and verified."
 
 // runTurn runs one model turn, then applies the plan-approval gate. This is the
 // single, frontend-agnostic plan flow: in Plan the model is instructed to
@@ -2290,6 +2283,7 @@ func (c *Controller) EnableInteractiveApproval() {
 		c.executor.SetConfigWriteApprover(configApprover)
 		c.executor.SetWriteAccessGate(c)
 		c.executor.SetWriteRoots(c.writeAccess.roots)
+		c.executor.SetPermissionPresetProvider(c.ToolApprovalMode)
 		c.executor.SetAsker(c)
 		c.executor.SetInteractionBroker(c)
 	}
@@ -2312,6 +2306,9 @@ func (c *Controller) EnableInteractiveApproval() {
 		SetWriteAccessGate(agent.WriteAccessGate)
 	}); ok {
 		setter.SetWriteAccessGate(c)
+	}
+	if setter, ok := c.runner.(interface{ SetPermissionPresetProvider(func() string) }); ok {
+		setter.SetPermissionPresetProvider(c.ToolApprovalMode)
 	}
 	if setter, ok := c.runner.(interface {
 		SetWriteRoots(*sandbox.WritableRootSet)
@@ -2346,15 +2343,11 @@ func (p plannerPlanApprover) RunWithPlannerApproval(ctx context.Context, plan st
 	if !allow {
 		return nil
 	}
-	todoArgs := c.seedPlanTodos(plan)
-	execStart := c.sessionMessageCount()
+	c.seedPlanTodos(plan)
 	c.approval.setPlanAutoApprove(true)
 	defer c.approval.setPlanAutoApprove(false)
 	if err := run(ctx); err != nil {
 		return err
-	}
-	if todoArgs != "" && !c.hasTodoUpdateSince(execStart) {
-		c.completePlanTodos(todoArgs)
 	}
 	return nil
 }
@@ -2363,7 +2356,7 @@ func (c *Controller) newInteractiveGate() *permission.Gate {
 	policy := c.policy
 	mode := c.approval.mode()
 	switch mode {
-	case ToolApprovalAuto, ToolApprovalYolo:
+	case ToolApprovalWorkspaceWrite, ToolApprovalDangerFullAccess:
 		policy.Mode = permission.Allow
 	case ToolApprovalDontAsk:
 		policy.Mode = permission.Deny
@@ -2375,12 +2368,14 @@ func (c *Controller) newInteractiveGate() *permission.Gate {
 	// YOLO treat remember/forget as ordinary policy decisions; Auto still
 	// preserves an explicit configured Ask rule, while YOLO bypasses it.
 	policy.SessionAllow = rulesWithoutFreshHumanApproval(policy.SessionAllow)
-	if mode != ToolApprovalAuto && mode != ToolApprovalYolo {
+	if mode != ToolApprovalWorkspaceWrite && mode != ToolApprovalDangerFullAccess {
 		policy.Ask = append(policy.Ask,
 			permission.Rule{Tool: memoryRememberTool},
 			permission.Rule{Tool: memoryForgetTool},
 		)
 	}
+	// The OS sandbox, rather than shell syntax heuristics, owns the write
+	// boundary for all three presets. Explicit ask and deny rules still win.
 	var approver permission.Approver = gateApprover{c}
 	if mode == ToolApprovalDontAsk {
 		approver = denyPermissionApprover{}
@@ -2459,6 +2454,8 @@ func rulesWithoutFreshHumanApproval(rules []permission.Rule) []permission.Rule {
 // create-only project/reference memory; every other memory write remains denied.
 func (c *Controller) ApplyHeadlessApprovalMode(mode string) {
 	mode = normalizeToolApprovalMode(mode)
+	c.permissionStateMu.Lock()
+	defer c.permissionStateMu.Unlock()
 	c.approval.setMode(mode)
 	if c.subagentGate != nil {
 		c.subagentGate.Update(mode)
@@ -2468,6 +2465,7 @@ func (c *Controller) ApplyHeadlessApprovalMode(mode string) {
 		c.executor.SetGate(c.newHeadlessGate(mode))
 		c.executor.SetWriteAccessGate(c)
 		c.executor.SetWriteRoots(c.writeAccess.roots)
+		c.executor.SetPermissionPresetProvider(c.ToolApprovalMode)
 	}
 }
 
@@ -2773,10 +2771,8 @@ func (c *Controller) SetPlanMode(v bool) {
 	c.applyPlanMode(v)
 }
 
-// SetAgentPreset writes the role through to the session quality floor:
-// delivery/deliver/quality set the delivery floor, everything valid folds to
-// standard, unknown values are ignored for compat. It never rebuilds the
-// agent and never changes tool schemas.
+// SetAgentPreset accepts retired role inputs for compatibility. Recognized
+// values no longer change runtime behavior.
 func (c *Controller) SetAgentPreset(preset string) {
 	if c == nil {
 		return
@@ -2786,11 +2782,8 @@ func (c *Controller) SetAgentPreset(preset string) {
 	}
 }
 
-// AgentPreset returns the session role label derived from the quality floor.
+// AgentPreset returns the fixed compatibility label.
 func (c *Controller) AgentPreset() string {
-	if c.QualityFloor() == QualityFloorDelivery {
-		return string(agentpreset.Delivery)
-	}
 	return string(agentpreset.Standard)
 }
 
@@ -2857,6 +2850,15 @@ func (c *Controller) GoalStrict(strict bool) {
 // cache-stable prefix.
 func (c *Controller) SetGoal(goal string) {
 	c.SetGoalWithResearchMode(goal, GoalResearchAuto)
+}
+
+// LoadInactiveGoal restores a legacy metadata-only objective without starting
+// execution or writing a sidecar during read-only history access.
+func (c *Controller) LoadInactiveGoal(goal string) {
+	c.goals.mu.Lock()
+	defer c.goals.mu.Unlock()
+	c.goals.installGoalLocked(strings.TrimSpace(goal), ClassifyGoalBudget(goal))
+	c.goals.disarmed = true
 }
 
 // SetGoalDurable updates the Goal only when its sidecar can be replaced
@@ -2975,36 +2977,6 @@ func (c *Controller) PauseGoal() bool {
 // GoalRuntime returns the active Goal's usage/runtime summary for frontends.
 func (c *Controller) GoalRuntime() GoalRuntimeView {
 	return c.goals.runtimeView()
-}
-
-// goalEvaluatorEvidence assembles the bounded evaluator's evidence: the goal
-// contract, the current assistant final, a todo/readiness summary,
-// turn/budget state, and the last
-// continuation reason. Every field is treated as untrusted by the evaluator.
-func (c *Controller) goalEvaluatorEvidence() goaleval.GoalEvidence {
-	goal, _ := c.goals.snapshot()
-	ev := goaleval.GoalEvidence{
-		GoalContract:           goal,
-		LastContinuationReason: c.goals.lastContinuationReasonText(),
-	}
-	if c.executor != nil {
-		ev.AssistantFinal = lastAssistantText(c.History())
-		todos := c.goalTodos()
-		incomplete := 0
-		for _, t := range todos {
-			if t.Status != "completed" {
-				incomplete++
-			}
-		}
-		rr := c.executor.ReadinessResult()
-		readinessText := "ready"
-		if rr.Reason != "" {
-			readinessText = rr.Reason
-		}
-		ev.TodoSummary = fmt.Sprintf("todos: %d total, %d incomplete; delivery readiness: %s", len(todos), incomplete, readinessText)
-	}
-	ev.TurnStatus = c.goals.budgetStatusText()
-	return ev
 }
 
 func (c *Controller) persistGoalDeliveryCheckpoint() {
@@ -5001,6 +4973,9 @@ func (c *Controller) InheritLifecycleFrom(prev *Controller) {
 	if prev == nil {
 		return
 	}
+	if c.workspaceRoot == prev.workspaceRoot && c.executor != nil {
+		c.executor.InheritFileObservationsFrom(prev.executor)
+	}
 	prev.mu.Lock()
 	started := prev.startedOnce
 	turn := prev.turn
@@ -5027,17 +5002,6 @@ func (c *Controller) SessionAuthorizations() SessionAuthorizations {
 		}
 	}
 	return auth
-}
-
-// RestoreSessionAuthorizations re-applies session authorizations captured
-// from a prior controller in the same session (see SessionAuthorizations). A
-// model/effort/profile switch rebuilds the controller, and without this the
-// replacement forgets every grant the user already made this session.
-func (c *Controller) RestoreSessionAuthorizations(auth SessionAuthorizations) {
-	c.approval.restoreSessionAuthorizations(auth)
-	if c.writeAccess.roots != nil && len(auth.WriteRoots) > 0 {
-		c.writeAccess.roots.GrantVerifiedSession(auth.WriteRoots)
-	}
 }
 
 // ReleaseResources stops plugin subprocesses and releases resources without
@@ -5210,66 +5174,83 @@ func (c *Controller) SetToolApprovalMode(mode string) {
 	c.ApplyToolApprovalMode(mode)
 }
 
-// ApplyToolApprovalMode is SetToolApprovalMode reporting which pending
-// approval prompt ids the new posture auto-allowed. Plan, sandbox escape,
-// and config writes never drain; Auto keeps explicit memory asks but drains
-// fallback ones; YOLO drains both. Frontends must keep the rest (#6432).
+// ApplyToolApprovalMode updates the preset without answering an older prompt.
+// A real mode change invalidates the active turn and its request IDs, so an
+// approval created under an earlier permission revision can never authorize a
+// call under the new revision.
 func (c *Controller) ApplyToolApprovalMode(mode string) []string {
-	defer c.refreshRuntimeState(event.Event{})
+	c.permissionMu.Lock()
+	defer c.permissionMu.Unlock()
+	return c.applyToolApprovalModeLocked(mode)
+}
+
+func (c *Controller) applyToolApprovalModeLocked(mode string) []string {
 	mode = normalizeToolApprovalMode(mode)
-	// Capture mode-change recovery dismissals before approval drain so a
-	// same-value hydrate/reconcile never rotates Episode state, while a real
-	// Auto↔Yolo/Ask switch clears temporary failure/reviewer locks and waiters
-	// without auto-approving the original mutation.
-	var recoveryDismissed []string
-	c.mu.Lock()
-	gate := c.recoveryGate
-	c.mu.Unlock()
-	if gate != nil {
-		if ctrl, ok := any(gate).(agent.RecoveryEpisodeControl); ok {
-			// Do not hold controller/approval locks while rotating the gate.
-			recoveryDismissed = ctrl.OnModeChange(mode)
-		}
+	c.promptResolveMu.Lock()
+	previousMode := c.approval.mode()
+	if previousMode == mode {
+		c.promptResolveMu.Unlock()
+		return nil
 	}
+	c.permissionStateMu.Lock()
 	pending := c.approval.setMode(mode)
 	if c.subagentGate != nil {
 		c.subagentGate.Update(mode)
 	}
 	c.refreshInteractiveGate()
-	// Clear recovery cards dismissed by the mode switch outside the gate lock.
-	for _, id := range recoveryDismissed {
-		p := c.approval.resolve(id)
-		if p.reply != nil {
-			// Do not approve the pending mutation; signal cancel/deny so legacy
-			// paths drop the card.
-			select {
-			case p.reply <- approvalReply{allow: false}:
-			default:
-			}
-		}
-	}
+	// Publish the revision only after every enforcement owner has adopted the
+	// new mode. promptResolveMu makes this one transaction with approval commit.
+	c.permissionRevision.Add(1)
+	c.permissionStateMu.Unlock()
 	drained := make([]string, 0, len(pending))
 	for _, p := range pending {
 		p.reply <- approvalReply{allow: true}
 		drained = append(drained, p.id)
 	}
+	// A permission revision change invalidates the active turn so an older
+	// approval can never authorize work under the new snapshot. Avoid the idle
+	// Cancel path: it intentionally stops an active Goal and permission
+	// selection is an independent composer axis.
+	turnID, cancelled := "", false
+	if c.Running() {
+		turnID, cancelled = c.cancelTurnLocked()
+	}
+	c.promptResolveMu.Unlock()
+	if cancelled {
+		c.finishCancel(turnID, true)
+	}
+	// Processes admitted under a broader preset may outlive their spawning
+	// turn. Only a downgrade must terminate them; an upgrade does not revoke
+	// any capability they already held.
+	if permissionPresetRank(mode) < permissionPresetRank(previousMode) {
+		for _, job := range c.Jobs() {
+			c.CancelJob(job.ID)
+		}
+	}
+	c.refreshRuntimeState(event.Event{})
 	return drained
+}
+
+func permissionPresetRank(mode string) int {
+	switch normalizeToolApprovalMode(mode) {
+	case ToolApprovalDangerFullAccess:
+		return 2
+	case ToolApprovalWorkspaceWrite:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (c *Controller) ToolApprovalMode() string {
 	return c.approval.mode()
 }
 
-// SetAutoApproveTools turns YOLO tool auto-approval on or off for the session:
-// while on, every tool approval request is auto-allowed (writers and bash run
-// without asking). Ask requests and plan approval still reach the user. Deny
-// rules still block. Runtime-only — never written to config.
+// SetAutoApproveTools is the legacy boolean compatibility binding. Both values
+// migrate to the safe workspace preset; full access requires an explicit preset.
 func (c *Controller) SetAutoApproveTools(on bool) {
-	if on {
-		c.SetToolApprovalMode(ToolApprovalYolo)
-		return
-	}
-	c.SetToolApprovalMode(ToolApprovalAsk)
+	_ = on
+	c.SetToolApprovalMode(ToolApprovalWorkspaceWrite)
 }
 
 // SetBypass is the legacy name for SetAutoApproveTools. Keep it for existing
@@ -5278,21 +5259,17 @@ func (c *Controller) SetBypass(on bool) {
 	c.SetAutoApproveTools(on)
 }
 
-// SetMode applies the Plan workflow flag and tool auto-approval together so a turn
-// submitted right after a composer mode switch can't observe a half-applied
-// gate. Turning tool auto-approval on drains any pending tool approval.
+// SetMode is the legacy combined Plan/permission binding. New callers use
+// ApplyComposerProfile with an explicit permission preset.
 func (c *Controller) SetMode(plan, autoApproveTools bool) {
 	c.ApplyMode(plan, autoApproveTools)
 }
 
-// ApplyMode is SetMode reporting which pending approval prompt ids the tool
-// approval switch auto-allowed (see ApplyToolApprovalMode).
+// ApplyMode is the legacy SetMode variant that reports invalidated prompt IDs.
 func (c *Controller) ApplyMode(plan, autoApproveTools bool) []string {
 	c.applyPlanMode(plan)
-	if autoApproveTools {
-		return c.ApplyToolApprovalMode(ToolApprovalYolo)
-	}
-	return c.ApplyToolApprovalMode(ToolApprovalAsk)
+	_ = autoApproveTools
+	return c.ApplyToolApprovalMode(ToolApprovalWorkspaceWrite)
 }
 
 // ApplyComposerProfile publishes the collaboration, approval, and Goal axes as
@@ -5300,12 +5277,29 @@ func (c *Controller) ApplyMode(plan, autoApproveTools bool) []string {
 // commits first, so a persistence failure leaves Plan and approval unchanged.
 // Serve serializes this call with turn admission and controller replacement.
 func (c *Controller) ApplyComposerProfile(plan bool, toolApprovalMode, goal string) ([]string, error) {
-	toolApprovalMode = strings.ToLower(strings.TrimSpace(toolApprovalMode))
-	switch toolApprovalMode {
-	case ToolApprovalAsk, ToolApprovalAuto, ToolApprovalYolo:
-	default:
-		return nil, fmt.Errorf("tool approval mode must be ask, auto, or yolo")
+	c.permissionMu.Lock()
+	defer c.permissionMu.Unlock()
+	return c.applyComposerProfileLocked(plan, toolApprovalMode, goal)
+}
+
+// ApplyComposerProfileAt is the revision-checked protocol entry point used by
+// desktop and remote clients. It keeps Goal, Plan and permission changes under
+// one controller mutation boundary.
+func (c *Controller) ApplyComposerProfileAt(plan bool, toolApprovalMode, goal string, expectedPermissionRevision uint64) ([]string, error) {
+	c.permissionMu.Lock()
+	defer c.permissionMu.Unlock()
+	if current := c.permissionRevision.Load(); current != expectedPermissionRevision {
+		return nil, fmt.Errorf("permission revision changed: have %d, expected %d", current, expectedPermissionRevision)
 	}
+	return c.applyComposerProfileLocked(plan, toolApprovalMode, goal)
+}
+
+func (c *Controller) applyComposerProfileLocked(plan bool, toolApprovalMode, goal string) ([]string, error) {
+	if raw := strings.ToLower(strings.TrimSpace(toolApprovalMode)); raw != "ask" && raw != "auto" && raw != "yolo" &&
+		raw != ToolApprovalReadOnly && raw != ToolApprovalWorkspaceWrite && raw != ToolApprovalDangerFullAccess {
+		return nil, fmt.Errorf("permission preset must be read-only, workspace-write, or danger-full-access")
+	}
+	toolApprovalMode = normalizeToolApprovalMode(toolApprovalMode)
 	goal = strings.TrimSpace(goal)
 	if strings.TrimSpace(c.Goal()) != goal {
 		if err := c.SetGoalDurable(goal); err != nil {
@@ -5316,13 +5310,12 @@ func (c *Controller) ApplyComposerProfile(plan bool, toolApprovalMode, goal stri
 		plan = false
 	}
 	c.applyPlanMode(plan)
-	return c.ApplyToolApprovalMode(toolApprovalMode), nil
+	return c.applyToolApprovalModeLocked(toolApprovalMode), nil
 }
 
-// AutoApproveTools reports whether YOLO tool auto-approval is on,
-// for status indicators and mode persistence.
+// AutoApproveTools is the legacy status query for explicit full access.
 func (c *Controller) AutoApproveTools() bool {
-	return c.ToolApprovalMode() == ToolApprovalYolo
+	return c.ToolApprovalMode() == ToolApprovalDangerFullAccess
 }
 
 // Bypass is the legacy name for AutoApproveTools.
@@ -5404,8 +5397,6 @@ func (c *Controller) Memory() *memory.Set {
 // from the public Approve command (different signature, different direction).
 type gateApprover struct{ c *Controller }
 
-const dynamicBashApprovalReason = "This command uses nested or indirect shell execution. Auto and broad allow rules cannot verify the inner command; approve this exact command or use YOLO."
-
 func (g gateApprover) Approve(ctx context.Context, tool, subject string, args json.RawMessage) (bool, bool, error) {
 	allow, remember, _, err := g.ApproveWithReason(ctx, tool, subject, args)
 	return allow, remember, err
@@ -5419,54 +5410,16 @@ func (g gateApprover) ApproveWithPolicyReason(ctx context.Context, tool, subject
 	return g.approveWithPolicyReason(ctx, tool, subject, args, policyReason)
 }
 
-func combineApprovalReasons(reasons ...string) string {
-	var kept []string
-	for _, reason := range reasons {
-		if reason = strings.TrimSpace(reason); reason != "" {
-			kept = append(kept, reason)
-		}
-	}
-	return strings.Join(kept, "\n")
-}
-
 func (g gateApprover) approveWithPolicyReason(ctx context.Context, tool, subject string, args json.RawMessage, policyReason string) (bool, bool, string, error) {
 	if tool == memoryRememberTool && g.c.allowLowRiskRemember(args) {
 		return true, false, "", nil
 	}
 	subject = approvalDisplaySubject(tool, subject, args)
-	requireHuman := strings.EqualFold(tool, "bash") && permission.BashSubjectRequiresExplicitApproval(subject)
-	// Check pre-approval first, before any prompt or Guardian review. Dynamic
-	// Bash accepts only YOLO or an exact session grant here; ordinary calls also
-	// accept the just-approved-plan window. Deny rules already bit at the policy
-	// level before this point.
-	if requireHuman && g.c.approval.preApprovedForRequiredHuman(tool, subject) {
+	// Check pre-approval before any prompt or Guardian review. OS sandboxing is
+	// the authority for nested shell syntax, so pipes, command substitutions and
+	// inline interpreters follow the same permission decision as other commands.
+	if g.c.approval.preApproved(tool, subject, args) {
 		return true, false, "", nil
-	}
-	if !requireHuman && g.c.approval.preApproved(tool, subject, args) {
-		return true, false, "", nil
-	}
-	if g.c.guardianSess != nil && !requireHuman {
-		allow, reason, reviewErr := g.c.guardianSess.Review(ctx, tool, args, g.c.executor.Session())
-		if reviewErr != nil {
-			return false, false, "", reviewErr
-		}
-		if allow && !requiresFreshApprovalTool(tool) {
-			return true, false, "", nil
-		}
-		reason = combineApprovalReasons(policyReason, reason)
-		humanAllow, remember, err := g.c.requestApprovalWithReason(ctx, tool, subject, args, reason)
-		if err != nil {
-			return false, false, reason, err
-		}
-		if !humanAllow {
-			return false, false, reason, nil
-		}
-		return true, remember, "", nil
-	}
-	if requireHuman {
-		reason := combineApprovalReasons(policyReason, dynamicBashApprovalReason)
-		allow, remember, err := g.c.requestApprovalWithReasonOptions(ctx, tool, subject, args, reason, approvalDecisionOptions{requireHuman: true})
-		return allow, remember, "", err
 	}
 	allow, remember, err := g.c.requestApprovalWithReason(ctx, tool, subject, args, policyReason)
 	return allow, remember, "", err
@@ -5487,7 +5440,9 @@ func (s sandboxEscapeApprover) ApproveSandboxEscape(ctx context.Context, req san
 		return false, i18n.M.SandboxEscapeDeclined, nil
 	}
 	if reply.session {
+		s.c.permissionStateMu.Lock()
 		s.c.approval.grantSession(SandboxEscapeApprovalTool, subject)
+		s.c.permissionStateMu.Unlock()
 	}
 	return true, "", nil
 }
@@ -5530,7 +5485,9 @@ func (m managedConfigWriteApprover) ApproveManagedConfigWrite(ctx context.Contex
 		return false, i18n.M.ConfigWriteDeclined, nil
 	}
 	if reply.session {
+		m.c.permissionStateMu.Lock()
 		m.c.approval.grantSession(ManagedConfigWriteApprovalTool, subject)
+		m.c.permissionStateMu.Unlock()
 	}
 	return true, "", nil
 }
@@ -5569,11 +5526,15 @@ func (p planModeReadOnlyTrustApprover) checkBashReadOnlyCommandTrust(ctx context
 		return false, i18n.M.PlanModeBashTrustDeclined, nil
 	}
 	if reply.session {
+		p.c.permissionStateMu.Lock()
 		p.c.approval.grantPlanModeReadOnlyCommand(prefix)
+		p.c.permissionStateMu.Unlock()
 	}
 	if reply.persist && p.c.onRememberPlanModeReadOnlyCommand != nil {
 		p.c.emitPlanModeReadOnlyCommandTrustResult(p.c.onRememberPlanModeReadOnlyCommand(prefix))
+		p.c.permissionStateMu.Lock()
 		p.c.approval.grantPlanModeReadOnlyCommand(prefix)
+		p.c.permissionStateMu.Unlock()
 	}
 	return true, "", nil
 }
@@ -5760,7 +5721,9 @@ func (c *Controller) requestApprovalWithReasonOptions(ctx context.Context, tool,
 	// Plan approvals are one-shot — never persist a session grant for them, or
 	// every future plan would auto-approve.
 	if r.allow && r.session && !requiresFreshApprovalTool(tool) {
+		c.permissionStateMu.Lock()
 		c.approval.grantSession(tool, subject)
+		c.permissionStateMu.Unlock()
 	}
 	if r.allow && r.persist && !requiresFreshApprovalTool(tool) && c.onRemember != nil {
 		c.emitRememberResult(c.onRemember(permission.RememberRuleForScope(tool, subject)))
@@ -5864,6 +5827,8 @@ func (c *Controller) requestApprovalDecisionWithOptions(ctx context.Context, too
 }
 
 func (c *Controller) approvalRequestEvent(approval event.Approval) event.Event {
+	approval.Generation = c.runtimeGeneration
+	approval.PermissionRevision = c.permissionRevision.Load()
 	if approval.TurnID == "" {
 		approval.TurnID, _, _, _ = c.turnEventRuntimeStatus()
 	}

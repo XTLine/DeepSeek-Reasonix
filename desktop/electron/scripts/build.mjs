@@ -15,7 +15,9 @@ const common = {
   format: "cjs",
   target: "node22",
   external: ["electron"],
-  sourcemap: true,
+  sourcemap: "external",
+  minify: true,
+  keepNames: true,
   logLevel: "info",
 };
 

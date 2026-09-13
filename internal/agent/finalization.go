@@ -31,6 +31,13 @@ func (a *Agent) providerToolSchemas() []provider.ToolSchema {
 		return []provider.ToolSchema{}
 	}
 	schemas := a.svc.tools.Schemas()
+	visible := schemas[:0]
+	for _, schema := range schemas {
+		if !retiredTool(schema.Name) {
+			visible = append(visible, schema)
+		}
+	}
+	schemas = visible
 	if !provider.NativeToolSearchEnabled(a.svc.prov) {
 		return schemas
 	}
@@ -43,6 +50,9 @@ func deferredMCPSchemas(reg *tool.Registry) []provider.ToolSchema {
 	}
 	var extra []provider.ToolSchema
 	for _, name := range reg.AllNames() {
+		if retiredTool(name) {
+			continue
+		}
 		if !strings.HasPrefix(name, "mcp__") {
 			continue
 		}

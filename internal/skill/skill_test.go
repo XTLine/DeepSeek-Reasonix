@@ -923,18 +923,6 @@ func TestApplyIndex(t *testing.T) {
 	}
 }
 
-func TestApplyIndexMandatesInlineButRestrainsSubagent(t *testing.T) {
-	out := ApplyIndex("BASE", []Skill{{Name: "alpha", Description: "the alpha", RunAs: RunInline}})
-
-	if !strings.Contains(out, "inline) skill is even plausibly relevant") ||
-		!strings.Contains(out, "invoke it before continuing") {
-		t.Errorf("inline skills should be mandatory on plausible relevance:\n%s", out)
-	}
-	if !strings.Contains(out, "not on weak relevance") {
-		t.Errorf("subagent skills should stay judgment-based, not mandatory:\n%s", out)
-	}
-}
-
 func TestReadOnlyIndexBlockPointsAtReadOnlySkill(t *testing.T) {
 	out := ReadOnlyIndexBlock([]Skill{{Name: "beta", Description: "the beta", RunAs: RunSubagent}})
 	if !strings.Contains(out, "read_only_skill") {
@@ -1034,17 +1022,6 @@ func TestManualInvocationSkillExcludedFromIndex(t *testing.T) {
 	// as empty, not a header wrapped around nothing.
 	if got := IndexBlock([]Skill{private}); got != "" {
 		t.Fatalf("IndexBlock of only manual-invocation skills = %q, want empty", got)
-	}
-}
-
-func TestApplyIndexTruncates(t *testing.T) {
-	var skills []Skill
-	for range 200 {
-		skills = append(skills, Skill{Name: "skill" + strings.Repeat("x", 20), Description: strings.Repeat("d", 50)})
-	}
-	out := ApplyIndex("BASE", skills)
-	if !strings.Contains(out, "truncated") {
-		t.Error("oversized index should be truncated")
 	}
 }
 

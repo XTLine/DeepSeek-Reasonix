@@ -52,10 +52,13 @@ try {
   await page.waitForFunction(() => document.querySelector('.transcript')?.textContent?.includes('ASYNC LAYOUT EXPANSION COMPLETE'));
   await composer.fill("layout-owned draft");
   // Raw Markdown fallbacks become parsed DOM asynchronously. History preservation
-  // means stable block identity/content revision, not identical transient textContent.
-  const transcriptIdentity = () => [...document.querySelectorAll('[data-transcript-block-key]')].map(node => ({
-    key: node.getAttribute('data-transcript-block-key'), revision: node.getAttribute('data-transcript-content-revision'),
-  }));
+  // means stable node identity, not identical transient textContent.
+  const transcriptIdentity = () => {
+    const nodes = [...document.querySelectorAll('[data-chat-anchor-key]')];
+    window.__modelTranscriptNodes ??= nodes;
+    return nodes.map((node, index) => ({ key: node.dataset.chatAnchorKey, kind: node.dataset.chatKind,
+      sameHost: node === window.__modelTranscriptNodes[index] }));
+  };
   const transcriptBeforeModel = await page.evaluate(transcriptIdentity);
   assert(transcriptBeforeModel.length > 0, 'model replay starts with hydrated transcript blocks');
   await page.locator('.modelsw__trigger:not(.effortsw__trigger)').click();
@@ -69,10 +72,15 @@ try {
   const draftAfterModel = await composer.inputValue();
   assert(draftAfterModel === 'layout-owned draft' && JSON.stringify(transcriptAfterModel) === JSON.stringify(transcriptBeforeModel),
     'real model selection preserves source transcript, Composer draft and writable readiness');
-  // A fresh profile opens the dock with no tab, so the Files view comes from
-  // the tab picker; a restored profile already carries the tab.
+  // A fresh session now seeds Overview in an expanded empty dock. Add Files
+  // from the tab menu so the rest of the browser fixture can exercise the
+  // workspace tree and preview.
+  await page.getByRole('tab', { name: 'Overview', exact: true }).waitFor();
+  assert(await page.getByRole('tab', { name: 'Overview', exact: true }).count() === 1,
+    'fresh expanded workspace dock defaults to Overview');
   if (await page.getByRole('tab', { name: 'Files', exact: true }).count() === 0) {
-    await page.locator('.tab-picker__item', { hasText: 'Files' }).first().click();
+    await page.locator('.workbench-dock__tab-add').click();
+    await page.locator('.tab-add-menu__item', { hasText: 'Files' }).first().click();
   }
   await page.getByRole('tab', { name: 'Files', exact: true }).click();
   await page.locator('[data-workspace-path="README.md"]').click();
@@ -150,7 +158,7 @@ try {
   const sentText = 'App source-bound submission fixture';
   await composer.fill(sentText);
   await composer.press('Enter');
-  await page.locator('[data-row-kind="user"]').filter({ hasText: sentText }).waitFor();
+  await page.locator('[data-chat-kind="user"]').filter({ hasText: sentText }).waitFor();
   await page.locator('.composer__btn--stop').click();
   await page.locator('.composer__btn--stop').waitFor({ state: 'hidden' });
   await page.waitForFunction(() => document.querySelector('textarea.composer__input:not([aria-hidden=true])')?.disabled === false);

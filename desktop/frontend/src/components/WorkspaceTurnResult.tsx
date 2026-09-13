@@ -35,9 +35,8 @@ export const WorkspaceTurnResult = forwardRef<HTMLElement, {
   tabId: string;
   sessionPath: string;
   initialView?: "changes" | "checks";
-  qualityFloor?: "standard" | "delivery";
   onAllChanges(): void;
-}>(function WorkspaceTurnResult({ summary, tabId, sessionPath, initialView = "checks", qualityFloor, onAllChanges }, ref) {
+}>(function WorkspaceTurnResult({ summary, tabId, sessionPath, initialView = "checks", onAllChanges }, ref) {
   const t = useT();
   const recorded = summary.receipt?.diff;
   const resultId = recorded?.id ?? "";
@@ -67,7 +66,7 @@ export const WorkspaceTurnResult = forwardRef<HTMLElement, {
       <button className="btn btn--small" onClick={onAllChanges}>{t("completion.allChanges")}</button>
     </header>
     {turn !== undefined && <p className="workspace-turn-result__label">{t("completion.turnLabel", { count: turn + 1 })}</p>}
-    {view === "checks" ? <WorkspaceTurnVerification summary={summary} qualityFloor={qualityFloor} tabId={tabId} sessionPath={sessionPath} /> : <>
+    {view === "checks" ? <WorkspaceTurnVerification summary={summary} tabId={tabId} sessionPath={sessionPath} /> : <>
       <TurnResultSummary summary={summary} />
       {(!resultId || !sessionPath || current && !available) && <p className="workspace-note">{t("completion.diffUnavailable")}</p>}
       {resultId && sessionPath && !current && <p role="status">{t("completion.loadingResult")}</p>}

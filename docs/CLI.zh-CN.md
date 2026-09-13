@@ -33,7 +33,7 @@ reasonix --dir /path/to/project
 | `--copy` | 复制要恢复的会话，并在可写副本中继续。 |
 | `--allowed-tools RULES` | 增加仅当前会话生效的权限 allow 规则；可重复传入，`--allowedTools` 是别名。 |
 | `--permission-mode MODE` | 以指定的权限姿态启动。 |
-| `--yolo` | 以 YOLO 模式启动；是 `--dangerously-skip-permissions` 的别名。 |
+| `--dangerously-skip-permissions` | 以“完全权限”启动；必须由用户明确选择。 |
 
 适用时，参数可以放在 prompt 前面或后面。
 
@@ -126,7 +126,7 @@ echo "解释这段代码" | reasonix run
 未使用 `-p` 或结构化输出格式时，`reasonix run` 保持正常的终端流式展示。它也接受
 `--model`、`--max-steps`、`--effort`、`--dir`、
 `--add-dir`、`--continue`、`--resume QUERY`、`--copy`、`--allowed-tools` 和
-`--permission-mode`，以及作为 `--permission-mode auto` 别名的 `--auto` / `-y`。
+`--permission-mode`，以及作为 `--permission-mode workspace-write` 兼容别名的 `--auto` / `-y`。
 
 ### 基准对照组
 
@@ -238,7 +238,7 @@ reasonix run "运行测试" --output-format stream-json
 继续进入工具循环；真正的空响应会在 frozen request 边界重试。旧的
 `completion_validation`、`completion_evaluator_model` 和
 `REASONIX_COMPLETION_VALIDATION_MODE` 设置仍可读取，但会被忽略，配置渲染器也不再生成；
-主机侧的就绪检查、预算、工具安全边界和恢复边界仍然有效。
+显式预算、工具安全边界和协议恢复边界仍然有效。Goal 完成是模型声明，不再执行宿主质量门禁或独立 evaluator。详见[迁移说明](EXECUTION_MODEL_SIMPLIFICATION.md)。
 
 ### 脱敏机器接口
 
@@ -320,38 +320,27 @@ machine session ID。Session lease 会阻止桌面端和 CLI 同时写入同一�
 ## 权限
 
 ```sh
-reasonix --permission-mode plan
-reasonix --permission-mode acceptEdits
+reasonix --permission-mode read-only
+reasonix --permission-mode workspace-write
+reasonix --permission-mode danger-full-access
 reasonix -p "运行指定测试" --allowed-tools "Bash(go test ./...)"
-reasonix --allowed-tools "Bash(git *) Edit"
-reasonix --allowed-tools "Bash(go test ./...)" --allowed-tools read_file
 ```
 
-| 模式 | 行为 |
+| 权限模式 | 行为 |
 | --- | --- |
-| `manual`、`ask` | 普通权限决策会弹出审批。 |
-| `auto` | 自动批准普通 fallback 操作，包括交互式 `remember`/`forget`，同时保留显式 ask 和 deny 规则。 |
-| `acceptEdits` | 允许文件编辑工具；不等同于完整 Auto 模式。 |
-| `dontAsk` | 未预先允许的请求直接拒绝，不弹出审批。 |
-| `plan` | 以只读 Plan 模式启动交互式会话。 |
-| `bypassPermissions` | 跳过审批；等同于 YOLO。 |
+| `read-only` | 可读取工作区；写入和外部副作用需要范围明确的授权。 |
+| `workspace-write` | 可写工作区和会话私有临时目录；这是默认模式。 |
+| `danger-full-access` | 以当前系统账户运行，不使用 Reasonix 文件和网络沙箱；宿主仍在启动前执行显式 deny。 |
 
-无人值守执行需要放行普通 writer fallback 时，使用 `reasonix run --auto ...`
-（或 `-y`）。这个别名不能和显式 `--permission-mode` 同时使用。
+内联脚本、管道、命令替换和 shell `-c` 与普通命令使用同一权限及沙箱边界，不能仅因
+语法形式产生审批。
 
 `--allowed-tools` 是会话权限覆盖，不是 provider tool schema 过滤器。规则可以用逗号
 或空格分隔，也可重复传入参数。配置中的 deny 规则始终优先于命令行 allow 规则。
 
-在非交互运行（`reasonix run` / `-p`）下没有可应答的审批，各模式都以非阻塞方式解析。
-默认 `ask` / `manual` 对显式 Ask 决策和普通 writer fallback 失败关闭，只读调用仍会执行；
-`acceptEdits` 放行其列出的文件编辑工具，其他 Ask 决策失败关闭；`auto` 放行普通 writer
-fallback，但仍拒绝显式 ask 规则；`dontAsk` 拒绝未批准的 writer；`bypassPermissions`
-可越过普通 ask 与 writer fallback，但配置的 deny、Sandbox，以及始终需要人工新鲜批准的
-工具（plan、沙箱逃逸、受管配置写入）仍然生效。交互式 Auto 会放行
-`remember`/`forget` 的默认 fallback，但保留显式 ask 和 deny；交互式 YOLO 会绕过记忆 ask
-审批，但仍遵守 deny。
-在所有无头模式下，拥有当前项目 store 的顶层 controller 仍可创建有界、非敏感、
-create-only 的 project/reference 记忆；其他记忆变更在无人确认时仍会被拒绝。
+非交互运行（`reasonix run` / `-p`）没有可应答的审批界面。`read-only` 对未获得窄范围
+授权的写入和副作用失败关闭；`workspace-write` 在操作系统沙箱内直接运行日常构建、测试、
+管道与内联脚本；`danger-full-access` 必须显式选择，并且仍不能绕过 deny 规则。
 
 ## 附加目录
 
@@ -379,8 +368,7 @@ reasonix -p "同时更新两个项目" \
 | `Enter` | 选择当前高亮项。 |
 | `Esc` | 取消当前选择器或审批。 |
 | `y` / `a` / `p` / `n`、数字键 | 执行对应的审批动作。 |
-| `Shift+Tab` | 按 `Ask → Auto → Plan → Ask` 循环。 |
-| `Ctrl+Y` | 独立切换 YOLO，不进入安全模式循环。 |
+| `Shift+Tab` | 在当前终端支持的协作模式间循环。 |
 
 响应式底栏左侧显示当前交互状态；空间足够时，右侧显示模型和推理强度。第二行按
 可用性显示仓库与会话遥测，例如缓存命中率、上下文占用、压缩余量、后台任务和余额。
@@ -418,7 +406,6 @@ SSH 下远端进程无法读取本机剪贴板，请使用终端粘贴快捷键�
 | `/paste-image` | 读取剪贴板图片并插入可编辑的附件标记。 |
 | `/mouse` | 切换应用内鼠标选区、滚动条和滚轮处理；SSH 会话默认关闭接管，保证终端原生选区可用。 |
 | `/effort` | 查看或切换 reasoning effort。 |
-| `/preset [standard\|delivery]` | 切换会话质量底线；delivery 开启交付级完成门槛，并在状态栏显示 PRESET 标记。 |
 | `/output-style` | 选择回答风格。 |
 | `/verbose` | 切换详细 reasoning 显示。 |
 | `/sandbox` | 查看沙盒状态。 |
@@ -434,8 +421,11 @@ SSH 下远端进程无法读取本机剪贴板，请使用终端粘贴快捷键�
 
 切换模型或 effort 会重建运行时，同时保留当前对话、会话级权限覆盖、附加目录
 访问权限和 session ownership。`/reload` 使用同一套失败原子重建语义。
-普通请求一律进入 executor，没有自动任务模式。唯一的会话角色是质量底线：standard（默认）或 delivery；事实仍可能高于它。
+普通请求一律进入 executor，没有自动任务模式或可选质量底线，统一采用标准执行行为。
 独立 Planner 只响应显式 Plan、批准边界和 Goal 启动。
+
+`/preset`、`/work-mode` 与 `/profile` 仅作为隐藏兼容命令保留。已知旧值会被接受，
+提示该设置已退役，并保持标准执行；未知值仍会报错。
 
 用量统计使用独立的可丢弃 rollup 投影：
 reasonix catalogs reindex usage [--json]

@@ -10,7 +10,7 @@ import (
 
 const ProtocolRecoveryAction = "protocol_recovery"
 const RecoverContextCommand = "/recover-context"
-const protocolRecoveryPrompt = "Continue the interrupted task from valid history. Preserve completed tool results. Do not repeat completed actions or actions with unknown outcomes; inspect unknown effects with permitted read-only tools first."
+const protocolRecoveryPrompt = "Continue the interrupted task from valid history. Preserve completed tool results. For calls with unknown outcomes, inspect workspace or external state before deciding whether a retry is needed; read-only or idempotent calls may be retried when useful."
 
 func ParseProtocolRecoveryCommand(input string) (id, guidance string, ok bool) {
 	parts := strings.Fields(input)

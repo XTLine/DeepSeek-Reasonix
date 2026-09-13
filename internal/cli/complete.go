@@ -243,12 +243,9 @@ func runeOffsetToByte(val string, runeOff int) int {
 	return len(val)
 }
 
-// slashArgItems completes the arguments of a slash command (everything after the
 // command word). It returns the menu items, the byte offset where the current
 // token begins (replaceFrom, so accept replaces just that token), and whether
-// anything applied. Only commands with structured arguments participate —
-// currently /mcp; custom commands and MCP prompts take free-form template args,
-// so they yield nothing.
+// anything applied. Custom commands and MCP prompts yield nothing.
 func (m *chatTUI) slashArgItems(val string) ([]compItem, int, bool) {
 	if items, from, ok := m.branchArgItems(val); ok {
 		m.endSlashArgSnapshot()

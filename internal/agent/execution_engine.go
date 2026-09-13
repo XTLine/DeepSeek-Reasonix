@@ -3,11 +3,9 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"strings"
 
 	"reasonix/internal/evidence"
 	"reasonix/internal/runtimepolicy"
-	"reasonix/internal/taskcontract"
 	"reasonix/internal/tool"
 )
 
@@ -38,12 +36,6 @@ func mergeInheritedConstraints(child, parent runtimepolicy.Constraints) runtimep
 		child.PlanModeReadOnly = true
 		child.ForbidMutation = true
 	}
-	if parent.RequireFullVerification {
-		child.RequireFullVerification = true
-	}
-	if parent.PolicyFloor == taskcontract.PolicyFloorDelivery {
-		child.PolicyFloor = taskcontract.PolicyFloorDelivery
-	}
 	if len(parent.AllowedChecks) > 0 && len(child.AllowedChecks) == 0 {
 		child.AllowedChecks = append([]string(nil), parent.AllowedChecks...)
 	}
@@ -51,44 +43,6 @@ func mergeInheritedConstraints(child, parent runtimepolicy.Constraints) runtimep
 		child.RebuildPaths = append([]string(nil), parent.RebuildPaths...)
 	}
 	return child
-}
-
-func (a *Agent) rebuildTurnContract() {
-	if a == nil || a.turn.engine == nil {
-		return
-	}
-	var plan *taskcontract.PlanFacts
-	if snapshot := a.planContractSnapshot(); snapshot != nil {
-		facts := planFacts(*snapshot)
-		plan = &facts
-	}
-	var todos []evidence.TodoItem
-	if a.task.ledger != nil {
-		if items, ok := a.task.ledger.LatestTodos(); ok {
-			todos = items
-		}
-	}
-	var checks []string
-	for _, check := range a.projectChecks {
-		if command := strings.TrimSpace(check.Command); command != "" {
-			checks = append(checks, command)
-		}
-	}
-	var receipts []evidence.Receipt
-	if a.task.ledger != nil {
-		receipts = a.task.ledger.Receipts()
-	}
-	a.turn.engine.Rebuild(taskcontract.RebuildFacts{
-		Plan:                    plan,
-		Todos:                   todos,
-		ProjectChecks:           checks,
-		Receipts:                receipts,
-		TestsForbidden:          a.turn.constraints.ForbidTests,
-		RequireFullVerification: a.turn.constraints.RequireFullVerification,
-		WorkspaceRoot:           a.writeWorkspaceRoot,
-		HasApprovedPlan:         plan != nil,
-		HasActiveGoal:           a.turn.deliveryScopeActive,
-	})
 }
 
 func (a *Agent) pipelineDecision(plan *toolCallPlan) runtimepolicy.GuardDecision {
@@ -111,23 +65,9 @@ func (a *Agent) pipelineDecision(plan *toolCallPlan) runtimepolicy.GuardDecision
 		Profile:        profile,
 		PlanReadOnly:   a.planMode.Load() || a.turn.constraints.PlanModeReadOnly,
 		Interactive:    a.hasInteractiveAsk(),
-		HasTodo:        a.hasActiveCanonicalTodo() || a.turn.deliveryCriteriaEstablished,
-		HasCriteria:    a.turn.deliveryCriteriaEstablished,
 		Verification:   plan.evidenceName == "bash" && evidence.IsVerificationCommand(bashCommandFromArgs(plan.evidenceArgs)),
 		TestsForbidden: a.turn.constraints.ForbidTests,
 		WorkspaceRoot:  a.writeWorkspaceRoot,
-	})
-}
-
-func (a *Agent) commitToolReceipt(rec evidence.Receipt) {
-	if a == nil || a.turn.engine == nil {
-		return
-	}
-	a.turn.engine.CommitReceipt(runtimepolicy.ResultContext{
-		Receipt:        rec,
-		Profile:        evidence.ClassifyEffect(evidence.EffectInput{ToolName: rec.ToolName, Args: rec.Args, ActualPaths: rec.Paths, StaticReadOnly: rec.Read && !rec.Write, WorkspaceRoot: a.writeWorkspaceRoot}),
-		WorkspaceRoot:  a.writeWorkspaceRoot,
-		TestsForbidden: a.turn.constraints.ForbidTests,
 	})
 }
 
@@ -150,30 +90,6 @@ func effectHintOf(t tool.Tool, args json.RawMessage) evidence.CallHint {
 		hint.Targets = append([]string(nil), h.Targets...)
 	}
 	return hint
-}
-
-func (a *Agent) requiresIndependentReview() bool {
-	if a == nil || a.turn.engine == nil {
-		return false
-	}
-	for _, o := range a.turn.engine.Snapshot().Unsatisfied() {
-		if o.Kind == taskcontract.ObligationIndependentReview || o.Kind == taskcontract.ObligationSecurityReview {
-			return true
-		}
-	}
-	return false
-}
-
-func (a *Agent) requiresSecurityReview() bool {
-	if a == nil || a.turn.engine == nil {
-		return false
-	}
-	for _, o := range a.turn.engine.Snapshot().Unsatisfied() {
-		if o.Kind == taskcontract.ObligationSecurityReview {
-			return true
-		}
-	}
-	return false
 }
 
 func (a *Agent) hasInteractiveAsk() bool {

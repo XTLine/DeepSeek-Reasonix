@@ -135,6 +135,12 @@ export interface WireTool {
   removed?: number; subagentRef?: string; subagentStatus?: string; subagentErrorCode?: string; subagentRetryable?: boolean;
   profile?: WireProfile; // subagent model/effort resolved for this call
   execution?: WireShellExecution; // local shell metadata; never provider-visible
+  presentedFiles?: PresentedFile[]; // trusted host-only deliverables from built-in present
+}
+
+export interface PresentedFile {
+  path: string;
+  description?: string;
 }
 
 export interface WireCacheDiagnostics {
@@ -181,6 +187,16 @@ export interface WireUsage {
   originalTotals?: Money[];
   /** Host-side structured quote; prefer over cost/currency aliases. */
   costQuote?: CostQuote;
+}
+
+/** Display-only aggregate for one completed chat turn. */
+export interface TurnUsage {
+  uncachedInputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheReadTokens?: number;
+  reasoningTokens?: number;
+  routes?: string[];
 }
 
 export interface Money {
@@ -583,9 +599,9 @@ export interface TabMeta extends RemoteTabMetaFields {
   collaborationMode?: CollaborationMode;
   toolApprovalMode?: ToolApprovalMode;
   tokenMode?: TokenMode;
-  agentPreset?: AgentPreset; // canonical role; prefer qualityFloor
-  qualityFloor?: QualityFloor; // absent means standard
-  floorInferred?: boolean; // facts, not user choice, put the session at delivery
+  agentPreset?: AgentPreset; // retired compatibility field; current hosts emit standard
+  qualityFloor?: QualityFloor; // retired compatibility field; current hosts emit standard
+  floorInferred?: boolean; // retired compatibility field; current hosts emit false
   goal?: string;
   goalStatus?: GoalStatus;
   recovered?: boolean;
@@ -846,6 +862,8 @@ export interface HistoryMessage {
   createdAt?: number;
   reasoning?: string;
   workDurationMs?: number;
+  turnDurationMs?: number;
+  turnUsage?: TurnUsage;
   memoryCitations?: MemoryCitation[];
   level?: "info" | "warn";
   toolCalls?: HistoryToolCall[];
@@ -854,6 +872,7 @@ export interface HistoryMessage {
   toolResultArchived?: boolean;
   toolResultError?: string;
   execution?: WireShellExecution;
+  presentedFiles?: PresentedFile[];
   pending?: boolean;
   trigger?: string;
   messages?: number;
@@ -1034,21 +1053,46 @@ export interface Meta extends RemoteSessionMetaFields {
   collaborationMode?: CollaborationMode;
   toolApprovalMode?: ToolApprovalMode;
   tokenMode?: TokenMode;
-  agentPreset?: AgentPreset; // canonical role; prefer qualityFloor
-  qualityFloor?: QualityFloor; // absent means standard
-  floorInferred?: boolean; // facts, not user choice, put the session at delivery
+  agentPreset?: AgentPreset; // retired compatibility field; current hosts emit standard
+  qualityFloor?: QualityFloor; // retired compatibility field; current hosts emit standard
+  floorInferred?: boolean; // retired compatibility field; current hosts emit false
   goal?: string;
   goalStatus?: GoalStatus;
   goalRuntime?: GoalRuntime;
   canonicalTodos?: Todo[]; dismissedTodoBatches?: string[]; pinnedFiles?: PinnedFileInfo[];
 }
 export type CollaborationMode = "normal" | "plan" | "goal";
-export type ToolApprovalMode = "ask" | "auto" | "yolo";
-// TokenMode is the dual-write wire value for the session quality floor.
-// The floor itself is standard|delivery; light and its aliases fold to
-// standard, and full/economy remain one compatibility version of old values.
+export type PermissionPreset = "read-only" | "workspace-write" | "danger-full-access";
+export type LegacyToolApprovalMode = "ask" | "auto" | "yolo";
+// Legacy values remain in the input union for old hosts and persisted fixtures;
+// normalizeToolApprovalMode is the only path into current UI/runtime state.
+export type ToolApprovalMode = PermissionPreset | LegacyToolApprovalMode;
+export interface SessionGrantSummary {
+  scope: "tool" | "directory" | "command-prefix" | string;
+  target: string;
+}
+export interface PermissionCapabilities {
+  backend: string;
+  enforcement: "full" | "partial" | "unavailable" | string;
+  supportedPresets: PermissionPreset[];
+  unavailableReason?: string;
+  writeIsolation?: string;
+  readIsolation?: string;
+  networkIsolation?: string;
+}
+export interface PermissionSnapshot {
+  sessionId: string;
+  generation: number;
+  revision: number;
+  preset: PermissionPreset;
+  workspaceRoot: string;
+  grants: SessionGrantSummary[];
+  capabilities: PermissionCapabilities;
+}
+// Retired wire vocabularies remain accepted so old sessions and remote hosts
+// can be decoded. Current local hosts emit full/balanced/standard.
 export type TokenMode = "full" | "economy" | "delivery" | "light" | "balanced";
-export type AgentPreset = "light" | "balanced" | "delivery";
+export type AgentPreset = "standard" | "light" | "balanced" | "delivery";
 export type QualityFloor = "standard" | "delivery";
 export type GoalStatus = "running" | "complete" | "blocked" | "stopped";
 // Optional Goal runtime summary; absent for old hosts or when no goal is active.
@@ -1079,43 +1123,34 @@ export function normalizeToolApprovalMode(
   legacyMode?: Mode,
   legacyAutoApproveTools?: boolean,
   fallbackMode?: ToolApprovalMode,
-): ToolApprovalMode {
+): PermissionPreset {
   const normalized = typeof mode === "string" ? mode.trim().toLowerCase() : "";
-  if (normalized === "auto" || normalized === "yolo" || normalized === "ask") return normalized as ToolApprovalMode;
-  if (legacyAutoApproveTools || (legacyMode && modeHasAutoApproveTools(legacyMode))) return "yolo";
-  if (fallbackMode === "auto" && normalized === "") return "auto";
-  return "ask";
+  if (normalized === "read-only" || normalized === "workspace-write" || normalized === "danger-full-access") return normalized as PermissionPreset;
+  if (normalized === "ask") return "read-only";
+  if (normalized === "auto" || normalized === "yolo") return "workspace-write";
+  if (legacyAutoApproveTools || (legacyMode && modeHasAutoApproveTools(legacyMode))) return "workspace-write";
+  if (fallbackMode && normalized === "") return normalizeToolApprovalMode(fallbackMode);
+  return "read-only";
 }
 
 export function normalizeTokenMode(mode?: string): TokenMode {
-  const m = (mode ?? "").trim().toLowerCase();
-  if (m === "economy" || m === "light" || m === "lite" || m === "eco") return "economy";
-  if (m === "delivery" || m === "deliver" || m === "quality") return "delivery";
-  // balanced | full | empty | unknown → balanced wire value "full"
+  void mode;
   return "full";
 }
 
-/** Canonical product id for the three Agent role settings. */
+/** Normalize the retired role vocabulary to the fixed compatibility value. */
 export function normalizeAgentPreset(mode?: string): AgentPreset {
-  const wire = normalizeTokenMode(mode);
-  if (wire === "economy" || wire === "light") return "light";
-  if (wire === "delivery") return "delivery";
-  return "balanced";
+  void mode;
+  return "standard";
 }
 
 export function tokenModeFromAgentPreset(preset: AgentPreset): TokenMode {
-  switch (preset) {
-    case "light":
-      return "economy";
-    case "delivery":
-      return "delivery";
-    default:
-      return "full";
-  }
+  void preset;
+  return "full";
 }
 
-// Mode is the compatibility string for two independent composer axes:
-// plan (plan-first workflow) and yolo (tool auto-approval).
+// Mode is a compatibility string from older hosts. New permission state is
+// carried only by PermissionPreset and never derived from this display axis.
 export type Mode = "normal" | "plan" | "yolo" | "plan-yolo";
 
 export function normalizeMode(mode?: string): Mode {
@@ -1180,10 +1215,22 @@ export interface FilePreview {
   size: number;
   truncated: boolean;
   binary: boolean;
-  kind?: "image" | "pdf";
+  version?: string;
+  nextOffset?: number;
+  kind?: "image" | "pdf" | "html" | "audio" | "video";
   mime?: string;
   url?: string;
   err?: string;
+}
+
+export interface PresentedTextPage {
+  path: string;
+  body: string;
+  offset: number;
+  nextOffset: number;
+  size: number;
+  hasMore: boolean;
+  version: string;
 }
 
 export interface WorkspaceChangeView {

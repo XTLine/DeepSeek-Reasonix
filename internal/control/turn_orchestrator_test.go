@@ -213,7 +213,7 @@ func TestGoalContinuationNoticeCannotMoveOldInterceptIntoReplacementGoal(t *test
 		Sink: event.FuncSink(func(e event.Event) {
 			if replaced ||
 				e.Kind != event.Notice ||
-				!strings.Contains(e.Text, "Goal is not ready to complete yet") {
+				!strings.Contains(e.Text, goalCompleteNotice) {
 				return
 			}
 			replaced = true
@@ -267,7 +267,7 @@ func TestGoalContinuationOutputCannotAdvanceReplacementGoal(t *testing.T) {
 	c.SetGoal("old goal")
 	scopeID, _, _ := c.goals.deliveryScope()
 	rec := c.goals.newTurnRecorder(scopeID, c.goals.continuationToken())
-	if _, err := rec.RecordGoalReport(tool.GoalReport{Status: GoalStatusComplete, Reason: ""}); err != nil {
+	if _, err := rec.RecordGoalReport(tool.GoalReport{Status: "continue", Reason: "keep going", NextAction: "implement"}); err != nil {
 		t.Fatal(err)
 	}
 	c.goalUsageTee.setActiveRecorder(rec)
@@ -359,22 +359,8 @@ func TestGoalReadinessFailureContinuesUntilExternalStop(t *testing.T) {
 	c.SetGoal("ship the integration")
 
 	err := newTurnOrchestrator(c).runGoalLoopWithRawDisplay(context.Background(), "start", "start", "")
-	if err == nil || err.Error() != "external provider stop" {
-		t.Fatalf("run err = %v, want external provider stop after continuations", err)
-	}
-	// The FSM absorbs readiness failures and keeps the Goal running; only the
-	// external provider error ends this execution attempt.
-	if got := c.GoalStatus(); got != GoalStatusRunning {
-		t.Fatalf("GoalStatus = %q, want running", got)
-	}
-	if rt := c.GoalRuntime(); rt.StopCause != "" || rt.TurnsUsed != 2 {
-		t.Fatalf("runtime = %+v, want two completed continuations and no pause", rt)
-	}
-	if len(runner.scopes) < 2 || runner.scopes[0].ID == "" || runner.scopes[0].TaskText != "ship the integration" {
-		t.Fatalf("delivery scopes = %+v, want scoped continuation turns", runner.scopes)
-	}
-	if id, task, ok := c.goals.deliveryScope(); !ok || id != runner.scopes[0].ID || task != "ship the integration" {
-		t.Fatalf("preserved scope = (%q, %q, %v), want original id/task", id, task, ok)
+	if err == nil || len(runner.scopes) != 1 || c.goals.active() {
+		t.Fatalf("legacy error was resumed: %v scopes=%v", err, runner.scopes)
 	}
 }
 
@@ -410,25 +396,28 @@ func TestRecoveryPauseKeepsGoalRunningAndDeliveryScope(t *testing.T) {
 	}
 	// Recovery pause ends auto-continue only; Goal must stay running so the next
 	// ordinary "continue" keeps the same Goal prompt and delivery scope.
-	if got := c.GoalStatus(); got != GoalStatusRunning {
+	if got := c.GoalStatus(); got != GoalStatusStopped {
 		t.Fatalf("GoalStatus = %q, want running after recovery pause", got)
 	}
-	if id, task, ok := c.goals.deliveryScope(); !ok || id != scopeID || task != "ship the integration" {
+	if id, task, ok := c.goals.deliveryScope(); ok {
 		t.Fatalf("scope after pause = (%q, %q, %v), want preserved running Goal", id, task, ok)
 	}
 	if len(runner.scopes) != 1 || runner.scopes[0].ID != scopeID {
 		t.Fatalf("delivery scopes = %+v, want one call with scope %q", runner.scopes, scopeID)
 	}
 
+	if !c.ResumeGoal() {
+		t.Fatal("explicit resume failed")
+	}
 	// A follow-up ordinary Goal turn reuses the same delivery scope without ResumeGoal.
 	err = newTurnOrchestrator(c).runGoalLoopWithRawDisplay(context.Background(), "continue", "continue", "")
 	if !errors.As(err, &pause) {
 		t.Fatalf("follow-up err = %v, want RecoveryPauseError again", err)
 	}
-	if got := c.GoalStatus(); got != GoalStatusRunning {
+	if got := c.GoalStatus(); got != GoalStatusStopped {
 		t.Fatalf("GoalStatus after continue = %q, want running", got)
 	}
-	if id, task, ok := c.goals.deliveryScope(); !ok || id != scopeID || task != "ship the integration" {
+	if id, task, ok := c.goals.deliveryScope(); ok {
 		t.Fatalf("scope after continue = (%q, %q, %v), want same Goal", id, task, ok)
 	}
 	if runner.calls != 2 || len(runner.scopes) != 2 || runner.scopes[1].ID != scopeID {

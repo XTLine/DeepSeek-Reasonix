@@ -72,7 +72,7 @@ for name in reasonix-desktop.exe reasonix-cli.exe reasonix-update-helper.exe; do
 done
 
 # The Electron bundle is the app/ tree member of the active version.
-for name in "app/Reasonix.exe" "app/resources/app.asar" "app/resources/build.json" "app/resources/app/index.html"; do
+for name in "app/Reasonix.exe" "app/resources/app.asar" "app/resources/build.json" "app/resources/app/index.html" "app/resources/bin/reasonix-cli-launcher.exe"; do
 	[ -f "$version_path/$name" ] || {
 		echo "Windows portable app tree member is missing: $active_dir/$name" >&2
 		exit 1
@@ -92,6 +92,14 @@ cmp -s "$staging/Reasonix.exe" "$staging/reasonix-launcher.exe" || {
 }
 if cmp -s "$staging/Reasonix.exe" "$staging/reasonix-cli.exe"; then
 	echo "Reasonix.exe was overwritten by the CLI sidecar" >&2
+	exit 1
+fi
+cmp -s "$staging/reasonix-cli.exe" "$version_path/app/resources/bin/reasonix-cli-launcher.exe" || {
+	echo "reasonix-cli.exe is not the packaged CLI forwarding entry" >&2
+	exit 1
+}
+if cmp -s "$staging/reasonix-cli.exe" "$version_path/reasonix-cli.exe"; then
+	echo "Windows portable duplicated the full CLI at InstallRoot" >&2
 	exit 1
 fi
 

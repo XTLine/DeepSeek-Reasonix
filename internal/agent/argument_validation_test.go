@@ -151,7 +151,6 @@ func TestToolArgumentsCorrectedAfterStopWithoutRepeatingSuccess(t *testing.T) {
 	p := &argumentBudgetProvider{MockProvider: testutil.NewMock("test", testutil.Turn{Chunks: []provider.Chunk{{Type: provider.ChunkToolCall, ToolCall: &good}, {Type: provider.ChunkToolCall, ToolCall: &bad}, {Type: provider.ChunkUsage, Usage: &provider.Usage{FinishReason: "stop"}}, {Type: provider.ChunkDone}}}, testutil.Turn{ToolCalls: []provider.ToolCall{fixed}}, testutil.Turn{Text: "done"})}
 	sink := &recordSink{}
 	a := New(p, echoRegistry(), NewSession("system"), Options{ModelRef: t.Name()}, sink)
-	p.before = func() { a.turn.budget.rounds = readonlySoftBudgetRounds }
 	if err := a.Run(withNoClosedLoop(context.Background()), "use echo"); err != nil {
 		t.Fatal(err)
 	}
@@ -167,18 +166,16 @@ func TestToolArgumentsCorrectedAfterStopWithoutRepeatingSuccess(t *testing.T) {
 		results[e.Tool.ID] = e.Tool.Output
 	}
 	recorded := map[string]bool{}
-	budgetGuidance := false
 	for _, m := range a.Session().Snapshot() {
 		if m.Role == provider.RoleTool {
 			if recorded[m.ToolCallID] {
 				t.Fatal("duplicate result")
 			}
 			recorded[m.ToolCallID] = true
-			budgetGuidance = budgetGuidance || strings.Contains(m.Content, "Host budget check:")
 		}
 	}
-	if len(recorded) != 3 || !budgetGuidance {
-		t.Fatalf("recorded=%v budget guidance=%t", recorded, budgetGuidance)
+	if len(recorded) != 3 {
+		t.Fatalf("recorded=%v", recorded)
 	}
 	if results["good"] != "echoed: first" || results["fixed"] != "echoed: second" || !strings.Contains(results["bad"], "text") {
 		t.Fatalf("results=%+v", results)
@@ -192,7 +189,7 @@ type argumentBudgetProvider struct {
 }
 
 func (p *argumentBudgetProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Chunk, error) {
-	if p.CallCount() == 0 {
+	if p.CallCount() == 0 && p.before != nil {
 		p.before()
 	}
 	return p.MockProvider.Stream(ctx, req)

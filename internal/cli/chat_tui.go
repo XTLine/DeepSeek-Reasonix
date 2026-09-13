@@ -26,7 +26,6 @@ import (
 	"reasonix/internal/billing"
 	"reasonix/internal/boot"
 	"reasonix/internal/command"
-	turncomp "reasonix/internal/completion"
 	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/event"
@@ -132,10 +131,6 @@ type chatTUI struct {
 	legacyScrollClear bool
 	// sessionSwitch suppresses that workaround during a transcript rebuild (#5441).
 	sessionSwitch bool
-	// yoloRestoreToolApprovalMode remembers the Ask/Auto base mode that Ctrl+Y
-	// should restore after a desktop-style YOLO toggle.
-	yoloRestoreToolApprovalMode string
-
 	// inboxSelectedID is the currently highlighted durable inbox item while
 	// browsing the queue in tuiRunning. Empty means "not browsing". Full bodies
 	// are never cached here — only the selected ID and the snapshot metadata.
@@ -1537,8 +1532,7 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Shift+Tab encodings are recognized via modeToggleKey so both
 		// "shift+tab" and CSI-Z "backtab" stay covered by one helper (#6660).
 		if modeToggleKey(msg.String()) {
-			// Shift+Tab toggles Plan only. Tool approval stays on its own
-			// axis: Ask/Auto are explicit choices; YOLO is Ctrl+Y.
+			// Shift+Tab cycles the safe read/workspace/plan postures.
 			m.cycleMode()
 			return m, nil
 		}
@@ -1676,9 +1670,6 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.notice(i18n.M.SlashClsDone)
 			}
 			return m, finalize(m, cmds)
-		case "ctrl+y", "super+y", "meta+y":
-			m.toggleYoloMode()
-			return m, nil
 		case "ctrl+o":
 			m.toggleVerboseReasoning(m.state != tuiRunning)
 			return m, finalize(m, cmds)
@@ -3127,35 +3118,30 @@ func flushableMarkdownPrefix(buf string) string {
 const planApprovalTool = "exit_plan_mode"
 
 // handleApprovalKey resolves a pending approval from a keystroke and re-arms the
-// listener. 1/y/Enter allows once, 2/a allows for the rest of the session,
-// 3/p writes an "always allow" rule to the config file for ordinary tool
-// approvals. Fresh two-choice prompts use 2 for deny, while n/Esc and legacy 4
-// still deny. Plan prompts use 1 to execute, 2/n/Esc to keep planning, and 3 to
+// listener. 1/y/Enter allows once and 2/a allows the exact scope for the rest
+// of the session. Fresh two-choice prompts use 2 for deny, while n/Esc and
+// legacy 4 still deny. Plan prompts use 1 to execute, 2/n/Esc to keep planning, and 3 to
 // reject the pending plan and leave plan mode without executing it.
 // Ctrl-C cancels the whole turn via the run context. For a plan approval
 // (planApprovalTool), starting execution or explicitly exiting without execution
 // drops the local [plan] tag and turns plan mode off on the controller.
 func (m chatTUI) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if isRecoveryApprovalEvent(m.pendingApproval) {
+		// Historical recovery requests are display-only. Escape and n dismiss the
+		// compatibility record locally; no recovery RPC or tool replay is issued.
+		if msg.String() == "esc" || strings.EqualFold(msg.String(), "n") {
+			m.pendingApproval = nil
+		}
+		return m, nil
+	}
 	choices := approvalChoices(m.pendingApproval)
 	answer := func(choice approvalChoice) (tea.Model, tea.Cmd) {
-		allow, session, persist := choice.allow, choice.allowForSession, choice.persistToConfig
-		if isRecoveryApprovalEvent(m.pendingApproval) {
-			action := agent.RecoveryActionRevise
-			if allow {
-				action = agent.RecoveryActionContinue
-				if session {
-					action = agent.RecoveryActionContinueTask
-				}
-			}
-			_ = m.ctrl.ResolveRecovery(m.pendingApproval.ID, action, "")
-			m.pendingApproval = nil
-			return m, nil
-		}
+		allow, session := choice.allow, choice.allowForSession
 		if m.pendingApproval.Tool == planApprovalTool && (allow || choice.exitPlan) {
 			m.planMode = false
 			m.ctrl.SetPlanMode(false)
 		}
-		m.ctrl.Approve(m.pendingApproval.ID, allow, session, persist)
+		m.ctrl.Approve(m.pendingApproval.ID, allow, session, false)
 		m.pendingApproval = nil
 		return m, nil
 	}
@@ -3204,13 +3190,7 @@ func (m chatTUI) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "a":
 		for _, choice := range choices {
-			if choice.allowForSession && !choice.persistToConfig {
-				return answer(choice)
-			}
-		}
-	case "p":
-		for _, choice := range choices {
-			if choice.persistToConfig {
+			if choice.allowForSession {
 				return answer(choice)
 			}
 		}
@@ -3688,27 +3668,23 @@ func formatCompletionSummaryLine(c *event.CompletionSummaryInfo) string {
 	return line
 }
 
-func completionSummaryNeedsAttention(c *event.CompletionSummaryInfo, floor string) bool {
+func completionSummaryNeedsAttention(c *event.CompletionSummaryInfo, _ string) bool {
 	if c == nil {
 		return false
 	}
 	if strings.TrimSpace(c.Floor) != "" {
 		return c.Attention
 	}
-	return turncomp.NeedsAttention(turncomp.AttentionInput{
-		Verdict:            c.Verdict,
-		ChecksFailed:       c.ChecksFailed,
-		GapKinds:           c.GapKinds,
-		Floor:              floor,
-		RequiredSuppressed: c.ChecksSuppressed > 0,
-	})
-}
-
-func (m chatTUI) ctrlQualityFloor() string {
-	if m.ctrl == nil {
-		return ""
+	if strings.EqualFold(strings.TrimSpace(c.Verdict), "blocked") || c.ChecksFailed > 0 || c.ChecksSuppressed > 0 {
+		return true
 	}
-	return m.ctrl.QualityFloor()
+	for _, gap := range c.GapKinds {
+		switch strings.ToLower(strings.TrimSpace(gap)) {
+		case "unbacked_claim", "failed_verification":
+			return true
+		}
+	}
+	return false
 }
 
 func completionSummaryWarning(c *event.CompletionSummaryInfo) string {
@@ -3724,6 +3700,9 @@ func (m chatTUI) renderApprovalBanner() string {
 	w := max(m.width, 10)
 	if m.pendingApproval == nil {
 		return ""
+	}
+	if isRecoveryApprovalEvent(m.pendingApproval) {
+		return choicePanelStyle.Width(w).Render("ℹ Historical recovery record (retired). It cannot confirm or replay an operation.\n" + dim("Esc/n dismiss"))
 	}
 	var text string
 	var planDetails []string
@@ -4067,24 +4046,24 @@ func modeToggleKey(s string) bool {
 	}
 }
 
-// cycleMode handles the Shift+Tab gesture using the same three safe modes users
-// see in Claude Code: Ask → Auto → Plan → Ask. YOLO stays outside this cycle and
-// remains an explicit Ctrl+Y choice.
+// cycleMode handles the Shift+Tab gesture using the three safe postures:
+// read-only → workspace-write → Plan → read-only. Full access is selected only
+// through the explicit permission-mode interface.
 func (m *chatTUI) cycleMode() {
-	if m.ctrl == nil || m.ctrl.ToolApprovalMode() == control.ToolApprovalYolo {
+	if m.ctrl == nil || m.ctrl.ToolApprovalMode() == control.ToolApprovalDangerFullAccess {
 		return
 	}
 	switch {
 	case m.planMode:
 		m.planMode = false
-		m.ctrl.SetToolApprovalMode(control.ToolApprovalAsk)
+		m.ctrl.SetToolApprovalMode(control.ToolApprovalReadOnly)
 	case m.ctrl.ToolApprovalMode() == control.ToolApprovalDontAsk:
-		m.ctrl.SetToolApprovalMode(control.ToolApprovalAsk)
-	case m.ctrl.ToolApprovalMode() == control.ToolApprovalAsk:
-		m.ctrl.SetToolApprovalMode(control.ToolApprovalAuto)
-	case m.ctrl.ToolApprovalMode() == control.ToolApprovalAuto:
+		m.ctrl.SetToolApprovalMode(control.ToolApprovalReadOnly)
+	case m.ctrl.ToolApprovalMode() == control.ToolApprovalReadOnly:
+		m.ctrl.SetToolApprovalMode(control.ToolApprovalWorkspaceWrite)
+	case m.ctrl.ToolApprovalMode() == control.ToolApprovalWorkspaceWrite:
 		m.planMode = true
-		m.ctrl.SetToolApprovalMode(control.ToolApprovalAsk)
+		m.ctrl.SetToolApprovalMode(control.ToolApprovalReadOnly)
 		m.ctrl.ClearGoal()
 	}
 	m.ctrl.SetPlanMode(m.planMode)
@@ -4094,73 +4073,52 @@ func (m chatTUI) desktopShortcutLayout() bool {
 	return m.cfg != nil && m.cfg.UIShortcutLayout() == "desktop"
 }
 
-func (m *chatTUI) toggleYoloMode() {
-	if m.ctrl == nil {
-		return
-	}
-	if m.ctrl.ToolApprovalMode() == control.ToolApprovalYolo {
-		restore := m.yoloRestoreToolApprovalMode
-		if restore != control.ToolApprovalAuto {
-			restore = control.ToolApprovalAsk
-		}
-		m.ctrl.SetToolApprovalMode(restore)
-		m.yoloRestoreToolApprovalMode = ""
-		return
-	}
-	restore := m.ctrl.ToolApprovalMode()
-	if restore != control.ToolApprovalAuto {
-		restore = control.ToolApprovalAsk
-	}
-	m.yoloRestoreToolApprovalMode = restore
-	m.ctrl.SetToolApprovalMode(control.ToolApprovalYolo)
-}
-
 func (m chatTUI) modeTagText() string {
 	goalMode := strings.TrimSpace(m.ctrl.Goal()) != "" && m.ctrl.GoalStatus() == control.GoalStatusRunning
 	toolApprovalMode := m.ctrl.ToolApprovalMode()
 	if m.desktopShortcutLayout() {
 		switch {
-		case m.planMode && toolApprovalMode == control.ToolApprovalYolo:
-			return "Plan+YOLO"
-		case goalMode && toolApprovalMode == control.ToolApprovalYolo:
-			return "Goal+YOLO"
-		case toolApprovalMode == control.ToolApprovalYolo:
-			return "YOLO"
+		case m.planMode && toolApprovalMode == control.ToolApprovalDangerFullAccess:
+			return "Plan+Full access"
+		case goalMode && toolApprovalMode == control.ToolApprovalDangerFullAccess:
+			return "Goal+Full access"
+		case toolApprovalMode == control.ToolApprovalDangerFullAccess:
+			return "Full access"
 		case m.planMode:
 			return "Plan"
-		case goalMode && toolApprovalMode == control.ToolApprovalAuto:
-			return "Goal+Auto"
+		case goalMode && toolApprovalMode == control.ToolApprovalWorkspaceWrite:
+			return "Goal+Workspace"
 		case goalMode:
 			return "Goal"
-		case toolApprovalMode == control.ToolApprovalAuto:
-			return "Auto"
+		case toolApprovalMode == control.ToolApprovalWorkspaceWrite:
+			return "Workspace"
 		case toolApprovalMode == control.ToolApprovalDontAsk:
-			return "Don't Ask"
+			return "Read only"
 		default:
-			return "Ask"
+			return "Read only"
 		}
 	}
 	switch {
-	case m.planMode && toolApprovalMode == control.ToolApprovalYolo:
-		return "Plan+YOLO"
-	case m.planMode && toolApprovalMode == control.ToolApprovalAuto:
-		return "Plan+Approve"
-	case goalMode && toolApprovalMode == control.ToolApprovalYolo:
-		return "Goal+YOLO"
-	case goalMode && toolApprovalMode == control.ToolApprovalAuto:
-		return "Goal+Approve"
-	case toolApprovalMode == control.ToolApprovalYolo:
-		return "YOLO"
-	case toolApprovalMode == control.ToolApprovalAuto:
-		return "Auto+Approve"
+	case m.planMode && toolApprovalMode == control.ToolApprovalDangerFullAccess:
+		return "Plan+Full access"
+	case m.planMode && toolApprovalMode == control.ToolApprovalWorkspaceWrite:
+		return "Plan+Workspace"
+	case goalMode && toolApprovalMode == control.ToolApprovalDangerFullAccess:
+		return "Goal+Full access"
+	case goalMode && toolApprovalMode == control.ToolApprovalWorkspaceWrite:
+		return "Goal+Workspace"
+	case toolApprovalMode == control.ToolApprovalDangerFullAccess:
+		return "Full access"
+	case toolApprovalMode == control.ToolApprovalWorkspaceWrite:
+		return "Workspace"
 	case toolApprovalMode == control.ToolApprovalDontAsk:
-		return "Don't Ask"
+		return "Read only"
 	case m.planMode:
 		return "Plan"
 	case goalMode:
 		return "Goal"
 	default:
-		return "Auto"
+		return "Read only"
 	}
 }
 
@@ -4301,8 +4259,8 @@ func (m *chatTUI) runSlashCommand(input string) tea.Cmd {
 		m.notice(i18n.M.SlashNewDone)
 	case "/clear":
 		m.echoLocalCommand(input)
-		if m.ctrl.ToolApprovalMode() == control.ToolApprovalYolo {
-			// YOLO is an explicit commitment to skip confirmations; /clear is
+		if m.ctrl.ToolApprovalMode() == control.ToolApprovalDangerFullAccess {
+			// Full access is an explicit commitment to skip ordinary confirmations; /clear is
 			// rarely mistyped and the damage is recoverable, so clear directly.
 			return m.clearContext()
 		} else {
@@ -4517,7 +4475,7 @@ func (m *chatTUI) runSlashCommand(input string) tea.Cmd {
 func (m *chatTUI) showStatusDetails() {
 	var lines []string
 	lines = append(lines, viewHeader("%s", "Session status"))
-	mode := "Ask"
+	mode := "Workspace"
 	if m.ctrl != nil {
 		mode = m.modeTagText()
 	}

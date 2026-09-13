@@ -6,7 +6,7 @@ import (
 	"reasonix/internal/provider"
 )
 
-func TestInterruptedRecoveryPrefersLedgerBarrierOverPlaceholder(t *testing.T) {
+func TestInterruptedRecoveryPrefersLedgerFactOverPlaceholder(t *testing.T) {
 	recovery := &provider.InterruptedTurnRecovery{Pending: true}
 	msgs := []provider.Message{
 		{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "write-1", Name: "write_file", Arguments: `{}`}}},
@@ -14,8 +14,8 @@ func TestInterruptedRecoveryPrefersLedgerBarrierOverPlaceholder(t *testing.T) {
 	}
 	evidence := &interruptedTailEvidence{turnID: "turn-1", states: map[string]provider.ToolRunState{"write-1": provider.ToolRunUnknown}}
 	recordInterruptedAssistantRecovery(recovery, msgs, 0, evidence)
-	if len(recovery.UnknownTools) != 1 || !recovery.RequiresUserDecision {
-		t.Fatalf("recovery=%+v, want one unknown call requiring user decision", recovery)
+	if len(recovery.UnknownTools) != 1 || recovery.RequiresUserDecision {
+		t.Fatalf("recovery=%+v, want one fact-only unknown call", recovery)
 	}
 	if len(recovery.ToolCalls) != 1 || recovery.ToolCalls[0].State != provider.ToolRunUnknown {
 		t.Fatalf("tool records=%+v, want ledger-proven unknown state", recovery.ToolCalls)

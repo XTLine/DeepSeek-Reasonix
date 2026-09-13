@@ -44,6 +44,8 @@ function desktopManifest(version, base) {
       "linux-amd64": asset("Reasonix-linux-amd64.deb"),
     },
     downloads: {
+      "Reasonix-darwin-arm64.dmg": asset("Reasonix-darwin-arm64.dmg"),
+      "Reasonix-darwin-amd64.dmg": asset("Reasonix-darwin-amd64.dmg"),
       "Reasonix-darwin-universal.dmg": asset("Reasonix-darwin-universal.dmg"),
       "Reasonix-windows-amd64.zip": asset("Reasonix-windows-amd64.zip"),
     },
@@ -60,6 +62,8 @@ function desktopGitHubRelease(version = "v1.17.21") {
     "Reasonix-linux-amd64.tar.gz",
     "Reasonix-linux-amd64.deb",
     "Reasonix-darwin-universal.dmg",
+    "Reasonix-darwin-arm64.dmg",
+    "Reasonix-darwin-amd64.dmg",
     "Reasonix-windows-amd64.zip",
   ];
   return {
@@ -241,6 +245,17 @@ test("Desktop manifests accept only official versions and old or unified asset b
   );
   const unifiedBase = "https://github.com/esengine/DeepSeek-Reasonix/releases/download/v1.18.0/";
   assert.equal(desktopReleaseModel(desktopManifest("v1.18.0", unifiedBase))?.assets["Reasonix-linux-amd64.deb"], `${unifiedBase}Reasonix-linux-amd64.deb`);
+});
+
+test("Desktop manifests accept historical two-download metadata and reject partial architecture DMGs", () => {
+  const historical = desktopManifest("v1.17.21");
+  delete historical.downloads["Reasonix-darwin-arm64.dmg"];
+  delete historical.downloads["Reasonix-darwin-amd64.dmg"];
+  assert.equal(desktopReleaseModel(historical)?.version, "v1.17.21");
+
+  const partial = desktopManifest("v1.39.0");
+  delete partial.downloads["Reasonix-darwin-amd64.dmg"];
+  assert.equal(desktopReleaseModel(partial), null);
 });
 
 test("Desktop manifests reject hostile URLs and incomplete integrity metadata", () => {

@@ -2214,8 +2214,8 @@ func TestRetiredAutoRecoveryCheckpointSettingsAreNoOps(t *testing.T) {
 	if err := app.SetDefaultAutoRecoveryCheckpoint(false); err != nil {
 		t.Fatalf("legacy setter: %v", err)
 	}
-	if !app.RecoveryCheckpointEnabled() || !app.RecoveryCheckpointEnabledTab("legacy") {
-		t.Fatal("retired config or legacy setter disabled built-in Auto Guard")
+	if app.RecoveryCheckpointEnabled() || app.RecoveryCheckpointEnabledTab("legacy") {
+		t.Fatal("retired config or legacy setter re-enabled Auto Guard")
 	}
 }
 

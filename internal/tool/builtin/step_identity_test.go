@@ -46,36 +46,6 @@ func TestCompleteStepResolvesStepIDAcrossAReplan(t *testing.T) {
 	}
 }
 
-func TestCompleteStepPrefersStepIDOverTitleAndIndex(t *testing.T) {
-	// step_index 1 and the title both point elsewhere; the id must win.
-	got := completeStepIdentity("plan_step_02", "Change the DB", 1)
-	if got != "plan_step_02" {
-		t.Fatalf("identity = %q, want the step id", got)
-	}
-	if got := completeStepIdentity("", "Change the DB", 2); got != "2" {
-		t.Fatalf("identity without an id = %q, want the index", got)
-	}
-	if got := completeStepIdentity("", "Change the DB", 0); got != "Change the DB" {
-		t.Fatalf("identity without an id or index = %q, want the title", got)
-	}
-}
-
-func TestCompleteStepCitesAvailableStepIDsWhenUnmatched(t *testing.T) {
-	ctx, _ := ledgerWithTodos([]evidence.TodoItem{
-		{Content: "Change the DB", Status: "in_progress", StepID: "plan_step_01"},
-		{Content: "Change the API", Status: "pending", StepID: "plan_step_02"},
-	})
-	_, _, err := verifyTodoStep(ctx, "plan_step_99")
-	if err == nil {
-		t.Fatal("an unknown step id must not resolve")
-	}
-	for _, want := range []string{"plan_step_01", "plan_step_02"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error should list available id %q: %v", want, err)
-		}
-	}
-}
-
 func TestTodoWriteRejectsDuplicateStepIDs(t *testing.T) {
 	args := todoWriteArgs(t, []evidence.TodoItem{
 		{Content: "one", Status: "in_progress", StepID: "plan_step_01"},

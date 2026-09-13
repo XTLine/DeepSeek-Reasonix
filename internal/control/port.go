@@ -81,8 +81,7 @@ type Approvals interface {
 	ResolveApproval(id string, allow bool, scope sandbox.ApprovalScope) error
 	ResolvePlanDecision(id string, action PlanDecisionAction) error
 	ResolvePlanDecisionWithFeedback(id string, action PlanDecisionAction, feedback string) error
-	// ResolveRecovery answers an Auto Guard card: continue|continue_task|revise. Revise
-	// refuses the mutation and steers feedback.
+	// ResolveRecovery rejects retired Auto Guard actions with recovery_retired.
 	ResolveRecovery(id string, action agent.RecoveryAction, feedback string) error
 	AnswerMCPInteraction(id, action string, content map[string]any)
 	AnswerQuestion(id string, answers []event.AskAnswer)

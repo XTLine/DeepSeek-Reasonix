@@ -132,6 +132,16 @@ func AtomicCreateFile(path string, data []byte, perm os.FileMode) error {
 // (a link must be written through, not replaced by a regular file). defaultPerm
 // applies only when path does not exist yet.
 func AtomicOverwriteFile(path string, data []byte, defaultPerm os.FileMode) error {
+	return atomicOverwriteFile(path, data, defaultPerm, true)
+}
+
+// AtomicOverwriteFileStrict preserves encoding callers' mode and symlink
+// semantics without a non-atomic copy fallback on Windows filter drivers.
+func AtomicOverwriteFileStrict(path string, data []byte, defaultPerm os.FileMode) error {
+	return atomicOverwriteFile(path, data, defaultPerm, false)
+}
+
+func atomicOverwriteFile(path string, data []byte, defaultPerm os.FileMode, allowCopy bool) error {
 	target := path
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		target = resolved
@@ -140,7 +150,7 @@ func AtomicOverwriteFile(path string, data []byte, defaultPerm os.FileMode) erro
 	if info, err := os.Stat(target); err == nil {
 		perm = info.Mode().Perm()
 	}
-	return AtomicWriteFile(target, data, perm)
+	return atomicWriteFile(target, data, perm, allowCopy)
 }
 
 func writeAtomicTemp(path string, data []byte, perm os.FileMode) (string, error) {

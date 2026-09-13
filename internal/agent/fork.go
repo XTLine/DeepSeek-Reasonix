@@ -34,36 +34,8 @@ type ForkBundle struct {
 
 const forkBundleVersion = 1
 
-// armForkCapture marks first EBM eligibility for capture. The bundle is
-// written by the provider wrapper right before the NEXT request — only then
-// does the session hold the eligible round's tool results. Arming refuses
-// under live enforcement: a treated state must never become a bundle.
-func (a *Agent) armForkCapture(sample evidence.OutcomeSample) {
-	if forkCapturePolicy() != "ebm" || ebmEnabled || a.task.ebm.captured || a.task.ebm.captureArmed {
-		return
-	}
-	a.task.ebm.captureArmed = true
-	a.task.ebm.captureRound = sample.Round
-}
-
 // govReasoningThreshold marks a round's thinking as expensive enough that a
 // governor experiment wants the state frozen before the next purchase.
-const govReasoningThreshold = 1500
-
-// armGovernorCapture freezes the exploration-phase state where the reasoning
-// governor would intervene — the same governorTrigger the live policy reads,
-// so experiments fork exactly the states enforcement would treat. Refuses
-// under live enforcement: a treated state must never become a bundle.
-func (a *Agent) armGovernorCapture(sample evidence.OutcomeSample) {
-	if forkCapturePolicy() != "governor" || governorEnabled || a.task.ebm.captured || a.task.ebm.captureArmed {
-		return
-	}
-	if !governorTrigger(sample, a.turn.lastReasoning) {
-		return
-	}
-	a.task.ebm.captureArmed = true
-	a.task.ebm.captureRound = sample.Round
-}
 
 // forkCapturePolicy selects which policy's trigger owns bundle capture;
 // unset defaults to the EBM trigger for compatibility with existing runs.
@@ -282,8 +254,6 @@ func (a *Agent) maybeArmForkFromEnv() {
 	}
 	nudge := ""
 	switch os.Getenv("REASONIX_EXPERIMENT_FORK_ARM") {
-	case "treatment":
-		nudge = ebmNudge
 	case "actfirst":
 		nudge = actFirstNudge
 	}

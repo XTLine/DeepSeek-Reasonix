@@ -306,10 +306,8 @@ func TestSubmitInvocationDisplayRunsInlineSkillWithoutArguments(t *testing.T) {
 }
 
 func TestSubmitInvocationDisplayRunsInlineSkillInsideActiveGoal(t *testing.T) {
-	prov := &scriptedTurns{turns: [][]provider.Chunk{
-		textTurn("Notes listed.\n\n[goal:complete]"),
-	}}
-	ag := agent.New(prov, tool.NewRegistry(), agent.NewSession(""), agent.Options{}, event.Discard)
+	prov := &scriptedTurns{turns: goalToolTurn(GoalStatusComplete, "notes listed", "")}
+	ag := agent.New(prov, goalRegistry(), agent.NewSession(""), agent.Options{}, event.Discard)
 	events := make(chan event.Event, 8)
 	c := New(Options{
 		Runner:   ag,
@@ -330,7 +328,7 @@ func TestSubmitInvocationDisplayRunsInlineSkillInsideActiveGoal(t *testing.T) {
 	)
 	waitForTurnDone(t, events)
 
-	if prov.call != 1 {
+	if prov.call != 2 {
 		t.Fatalf("active Goal structured turns = %d, want 1", prov.call)
 	}
 	input := firstUserMessage(ag.Session().Messages)
@@ -343,11 +341,12 @@ func TestSubmitInvocationDisplayRunsInlineSkillInsideActiveGoal(t *testing.T) {
 
 func TestSubmitInvocationDisplayRunsSubagentSkillInsideActiveGoal(t *testing.T) {
 	sess := agent.NewSession("")
-	exec := agent.New(nil, tool.NewRegistry(), sess, agent.Options{}, event.Discard)
+	prov := &scriptedTurns{turns: goalToolTurn(GoalStatusComplete, "notes reviewed", "")}
+	exec := agent.New(prov, goalRegistry(), sess, agent.Options{}, event.Discard)
 	events := make(chan event.Event, 8)
 	var gotTask string
 	c := New(Options{
-		Executor: exec,
+		Executor: exec, Runner: exec,
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.TurnDone || e.Kind == event.Notice {
 				events <- e
@@ -602,7 +601,7 @@ func TestComposePlanModeMarker(t *testing.T) {
 }
 
 func TestPlanModeMarkerSeparatesWorkflowFromPermissions(t *testing.T) {
-	for _, want := range []string{"planning workflow", "research", "ask", "todo_write", "Do not begin implementation", "not a permission boundary", "Permissions and Sandbox"} {
+	for _, want := range []string{"planning workflow", "research", "ask", "todo_write", "Do not begin implementation", "host blocks state-changing actions", "Permissions and Sandbox"} {
 		if !strings.Contains(PlanModeMarker, want) {
 			t.Fatalf("PlanModeMarker missing %q:\n%s", want, PlanModeMarker)
 		}

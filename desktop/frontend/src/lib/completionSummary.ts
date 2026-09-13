@@ -36,18 +36,18 @@ export function sessionQualityFloor(meta?: { qualityFloor?: string; tokenMode?: 
 
 export function completionSummaryNeedsAttention(
   summary?: WireCompletionSummary,
-  floor: "standard" | "delivery" = "standard",
+  _floor: "standard" | "delivery" = "standard",
 ): boolean {
   if (!summary) return false;
+	if (summary.receipt?.assessmentKind === "facts") {
+		return Boolean(summary.receipt.verifications?.some(check => !check.passed || check.interrupted));
+	}
   const recordedFloor = (summary.floor ?? "").trim().toLowerCase();
   if (recordedFloor === "standard" || recordedFloor === "delivery") return Boolean(summary.attention);
   const verdict = summary.verdict.trim().toLowerCase();
   const kinds = new Set((summary.gap_kinds ?? []).map((gap) => gap.trim().toLowerCase()).filter(Boolean));
   if (verdict === "blocked" || summary.checks_failed > 0 || summary.checks_suppressed > 0) return true;
   if (kinds.has("unbacked_claim") || kinds.has("failed_verification")) return true;
-  if (floor === "delivery") {
-    return kinds.has("unverified_change") || kinds.has("missing_check") || kinds.has("stale_verification") || kinds.has("unproven_criterion");
-  }
   return false;
 }
 

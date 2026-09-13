@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -9,6 +11,11 @@ import (
 	"reasonix/internal/provider"
 	"reasonix/internal/tool"
 )
+
+func readWindowID(callID, resultRef, path string) string {
+	sum := sha256.Sum256([]byte(callID + "\x00" + resultRef + "\x00" + path))
+	return "read-" + hex.EncodeToString(sum[:8])
+}
 
 // readResultEnvelopeFor builds the host-only envelope for one reader result:
 // the reader supplies what it delivered and which store served it, and the host
@@ -51,7 +58,7 @@ func (a *Agent) readResultEnvelopeFor(ctx context.Context, call provider.ToolCal
 	env.ResultRef = toolResultRef(call.ID, raw)
 	env.ReadID = o.readTaskID
 	if env.ReadID == "" {
-		env.ReadID = incompleteReadID(call.ID, env.ResultRef, env.Source.CanonicalPath)
+		env.ReadID = readWindowID(call.ID, env.ResultRef, env.Source.CanonicalPath)
 	}
 	env.Source.WorkspaceID = a.workspaceID
 	if cursor, ok := tool.DecodeReadCursor(env.NextCursor); ok {
@@ -63,9 +70,7 @@ func (a *Agent) readResultEnvelopeFor(ctx context.Context, call provider.ToolCal
 		}
 		env.NextCursor = tool.EncodeReadCursor(cursor)
 	}
-	if !a.readPipelineActive() {
-		a.reads.tasks.remember(env.ReadID, env, readPathArg(json.RawMessage(call.Arguments)))
-	}
+	a.reads.tasks.remember(env.ReadID, env, readPathArg(json.RawMessage(call.Arguments)))
 	return env, true
 }
 

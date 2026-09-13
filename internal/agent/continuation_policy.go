@@ -24,21 +24,3 @@ func WithContinuationPolicy(ctx context.Context, policy ContinuationPolicy) cont
 	}
 	return context.WithValue(ctx, continuationPolicyKey{}, policy)
 }
-
-func continuationPolicyFromContext(ctx context.Context) (ContinuationPolicy, bool) {
-	if ctx == nil {
-		return ContinuationDisabled, false
-	}
-	policy, ok := ctx.Value(continuationPolicyKey{}).(ContinuationPolicy)
-	return policy, ok
-}
-
-func (a *Agent) hostContinuationEnabled(ctx context.Context) bool {
-	if a == nil {
-		return false
-	}
-	if policy, ok := continuationPolicyFromContext(ctx); ok {
-		return policy == ContinuationExplicitFlow
-	}
-	return a.continuationPolicy == ContinuationExplicitFlow
-}

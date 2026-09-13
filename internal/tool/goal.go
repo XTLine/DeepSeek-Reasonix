@@ -4,8 +4,8 @@ import "context"
 
 // GoalReport is the model's structured per-turn goal disposition recorded via
 // the update_goal tool. It only carries candidate state: the host commits the
-// real FSM transition after the turn ends and Delivery readiness and budget
-// checks pass.
+// real FSM transition after the turn ends and cancellation and resource
+// boundaries are checked.
 type GoalReport struct {
 	// Status is one of "continue", "complete", or "blocked".
 	Status string

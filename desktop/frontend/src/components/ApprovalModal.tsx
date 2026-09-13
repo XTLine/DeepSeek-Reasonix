@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useT, type Translator } from "../lib/i18n";
-import type { ComposerInsertRequest, DirEntry, ToolApprovalMode, WireApproval } from "../lib/types";
+import { normalizeToolApprovalMode, type DirEntry } from "../lib/types";
 import {
   DecisionConfirmBar,
   PromptAction,
@@ -18,12 +18,14 @@ import {
   useFileReferenceMenu,
 } from "./FileReferenceMenu";
 import { WriteAccessApprovalDetails, writeAccessDecisionActions, type DecisionAction } from "./WriteAccessApproval";
+import { RetiredRecoveryApproval } from "./RetiredRecoveryApproval";
+import type { ApprovalModalProps } from "./approvalTypes";
 
 function requiresFreshHumanApproval(tool: string): boolean {
   return tool === "remember" || tool === "forget" || tool === "exit_plan_mode" || tool === "sandbox_escape" || tool === "config_write";
 }
 
-const APPROVAL_MODE_RANK: Record<ToolApprovalMode, number> = { ask: 0, auto: 1, yolo: 2 };
+const APPROVAL_MODE_RANK = { "read-only": 0, "workspace-write": 1, "danger-full-access": 2 } as const;
 
 export function approvalToolLabel(tool: string, t: Translator): string {
   switch (tool) {
@@ -107,7 +109,10 @@ function localizeApprovalReason(tool: string, reason: string | undefined, t: Tra
     trimmed = remainingLines.join("\n").trim();
   }
   let localized = trimmed;
-  if (tool === "bash" && trimmed.includes("nested or indirect shell execution")) {
+  if (
+    tool === "bash" &&
+    (trimmed.includes("nested or indirect shell execution") || trimmed.includes("requests access outside the active permission preset"))
+  ) {
     localized = t("approval.dynamicBashReason");
   }
   if (tool === "config_write") {
@@ -209,7 +214,17 @@ function planDelta(beforeRaw: string | undefined, afterRaw: string | undefined):
   return removed.length > 0 || added.length > 0 ? { removed, added } : null;
 }
 
-export function ApprovalModal({
+// Recovery approvals belong to the retired Auto Guard mechanism. Old sessions
+// can still decode them, but they are historical facts rather than decisions.
+// Keep the payload visible without exposing confirmation, retry, or grant
+// controls that could imply the retired gate is still active.
+export function ApprovalModal(props: ApprovalModalProps) {
+  const isHistoricalRecovery = props.approval.kind === "recovery" || Boolean(props.approval.recovery);
+  if (isHistoricalRecovery) return <RetiredRecoveryApproval approval={props.approval} />;
+  return <InteractiveApprovalModal {...props} />;
+}
+
+function InteractiveApprovalModal({
   approval,
   onAnswer,
   onResolveRecovery,
@@ -222,20 +237,7 @@ export function ApprovalModal({
   insertRequest,
   onRevisionActiveChange,
   toolApprovalMode,
-}: {
-  approval: WireApproval;
-  onAnswer: (allow: boolean, session: boolean, persist: boolean) => void;
-  onResolveRecovery?: (action: "continue" | "continue_task" | "revise", feedback?: string) => void;
-  onRevisePlan?: (text: string) => void;
-  onExitPlan?: () => void;
-  onStop: () => void;
-  cwd?: string;
-  tabId?: string;
-  workspaceScopeKey?: string;
-  insertRequest?: ComposerInsertRequest | null;
-  onRevisionActiveChange?: (active: boolean) => void;
-  toolApprovalMode?: ToolApprovalMode;
-}) {
+}: ApprovalModalProps) {
   const t = useT();
   const isPlanApproval = approval.tool === "exit_plan_mode";
   const isWriteAccessApproval = approval.kind === "write_access" || Boolean(approval.write_access);
@@ -256,7 +258,7 @@ export function ApprovalModal({
     !isPlanApproval &&
     toolApprovalMode !== undefined &&
     initialToolApprovalModeRef.current !== undefined &&
-    APPROVAL_MODE_RANK[toolApprovalMode] > APPROVAL_MODE_RANK[initialToolApprovalModeRef.current];
+    APPROVAL_MODE_RANK[normalizeToolApprovalMode(toolApprovalMode)] > APPROVAL_MODE_RANK[normalizeToolApprovalMode(initialToolApprovalModeRef.current)];
   const subject = localizeApprovalSubject(approval.tool, approval.subject, t);
   const reason = localizePlanModeApprovalReason(approval.tool, localizeApprovalReason(approval.tool, approval.reason, t), t);
   const subjectSummary = subject.split(/\r?\n/).find((line) => line.trim())?.trim() ?? "";
@@ -439,13 +441,6 @@ export function ApprovalModal({
               },
               {
                 key: "3",
-                label: t("approval.allowRulePersistent"),
-                desc: t("approval.allowRulePersistentDesc"),
-                kind: "submit" as const,
-                run: () => onAnswer(true, true, true),
-              },
-              {
-                key: "4",
                 label: t("approval.deny"),
                 desc: t("approval.denyDesc"),
                 tone: "danger" as const,
@@ -465,7 +460,10 @@ export function ApprovalModal({
   const descriptionExpanded = selectedDescriptionId !== undefined && expandedDescriptionId === selectedDescriptionId;
 
   useEffect(() => {
-    cardRef.current?.focus();
+    // Ordinary permission cards must not steal focus from the composer or an
+    // active IME composition. Plan and recovery decisions retain focus because
+    // they replace the composer interaction rather than supplement it.
+    if (isPlanApproval || isRecoveryApproval) cardRef.current?.focus();
     setRevisionOpen(false);
     setRevisionText("");
     setRecoveryGuidanceOpen(false);

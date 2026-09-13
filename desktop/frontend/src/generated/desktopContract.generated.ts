@@ -3,7 +3,7 @@
 
 export const DESKTOP_PROTOCOL_VERSION = 1;
 
-export const DESKTOP_CONTRACT_DIGEST = "sha256:cf1ba48af804b67084fc0a8af410b4d1565e099a055fbfad2e7d2a5123c17c75";
+export const DESKTOP_CONTRACT_DIGEST = "sha256:655ebcd55ee477124b814b82c5e9216d778d1b40ab7928e691ba134763627e8d";
 
 export const DESKTOP_COMMANDS = [
   "AIRenameSession",
@@ -104,9 +104,11 @@ export const DESKTOP_COMMANDS = [
   "CreateBlankProject",
   "CreateDeliveryWorktree",
   "CreateIsolatedWorktree",
+  "CreatePresentedBrowserPreviewForTab",
   "CreateSubagentProfile",
   "CreateTerminalForTab",
   "CreateTopic",
+  "CreateWorkspaceBrowserPreviewForTab",
   "CurrentTaskSessionID",
   "DeleteInboxItem",
   "DeleteProvider",
@@ -263,6 +265,7 @@ export const DESKTOP_COMMANDS = [
   "OpenGlobalTab",
   "OpenLocalPath",
   "OpenLocalPathInExternalOpener",
+  "OpenPresentedPathForTab",
   "OpenProjectTab",
   "OpenRemoteProjectTab",
   "OpenRemoteWorkspace",
@@ -275,6 +278,7 @@ export const DESKTOP_COMMANDS = [
   "PauseGoalForTab",
   "PauseRemoteTabGoal",
   "PendingPromptIdentitiesForTab",
+  "PermissionSnapshotForTab",
   "PickBlankProjectParent",
   "PickExportFile",
   "PickPluginFolder",
@@ -298,6 +302,9 @@ export const DESKTOP_COMMANDS = [
   "ReadFile",
   "ReadFileForTab",
   "ReadInboxItem",
+  "ReadPresentedFileForTab",
+  "ReadPresentedFileSourceForTab",
+  "ReadPresentedTextPageForTab",
   "ReadRemoteFile",
   "RebuildHistoryIndex",
   "RebuildSessionCatalog",
@@ -369,11 +376,14 @@ export const DESKTOP_COMMANDS = [
   "ResolvePlanDecision",
   "ResolvePlanDecisionTab",
   "ResolvePlanDecisionTabForTurn",
+  "ResolvePresentedPathForTab",
   "ResolvePromptForTab",
   "ResolveRecovery",
   "ResolveRecoveryTab",
   "ResolveRecoveryTabForTurn",
+  "ResolveRemotePresentedPathForTab",
   "ResolveRemoteTabPlanDecision",
+  "ResolveRemoteWorkspacePathForTab",
   "ResolveToolRecoveryForTab",
   "ResolveWorkspacePathForTab",
   "RestartApplication",
@@ -395,8 +405,12 @@ export const DESKTOP_COMMANDS = [
   "RetrySessionRecovery",
   "RevealBackgroundRuntime",
   "RevealPath",
+  "RevealPresentedPathForTab",
   "RevealWorkspacePathForTab",
   "RevealWorkspaceWriterForTab",
+  "RevokePermissionGrantForTab",
+  "RevokeWorkspaceBrowserPreview",
+  "RevokeWorkspaceMediaPreview",
   "Rewind",
   "RewindForTab",
   "RewindRemoteTab",
@@ -412,14 +426,18 @@ export const DESKTOP_COMMANDS = [
   "SaveLocalPathAs",
   "SavePastedFile",
   "SavePastedImage",
+  "SavePresentedPathAsForTab",
   "SaveProvider",
   "SaveProviderKey",
   "SaveProviderModelCatalogs",
   "SaveProviderWithKey",
+  "SaveRemoteFileAs",
+  "SaveRemotePresentedFileAs",
   "SaveSessionGroups",
   "SaveSessionGroupsVersioned",
   "SaveThemePack",
   "SaveWindowState",
+  "SaveWorkspacePathAsForTab",
   "ScanPromptHistory",
   "ScanRemoteLegacyWorkbenchData",
   "ScanSSHConfig",
@@ -475,6 +493,7 @@ export const DESKTOP_COMMANDS = [
   "SetModelForTab",
   "SetNetwork",
   "SetPermissionMode",
+  "SetPermissionPresetForTab",
   "SetPlanMode",
   "SetPlannerModel",
   "SetPluginEnabled",
@@ -881,6 +900,31 @@ export interface ProviderProtocolEndpoint {
   responsesMode?: string;
 }
 
+export interface PermissionCapabilities {
+  backend: string;
+  enforcement: string;
+  supportedPresets: string[];
+  unavailableReason?: string;
+  writeIsolation?: string;
+  readIsolation?: string;
+  networkIsolation?: string;
+}
+
+export interface PermissionSnapshot {
+  sessionId: string;
+  generation: number;
+  revision: number;
+  preset: string;
+  workspaceRoot: string;
+  grants: SessionGrantSummary[];
+  capabilities: PermissionCapabilities;
+}
+
+export interface SessionGrantSummary {
+  scope: string;
+  target: string;
+}
+
 export interface ToolRecoveryRequest {
   sessionPath: string;
   runtimeEpoch: string;
@@ -898,13 +942,16 @@ export interface ToolRecoverySnapshot {
   revision: string;
   calls: ToolCallRecord[];
   retryEnabled: boolean;
+  retired: boolean;
 }
 
 export interface ToolResultData {
+  name: string;
   args: string;
   output: string;
   execution?: ToolExecution | null;
   mcpApp?: MCPAppPresentation | null;
+  presentedFiles?: PresentedFile[];
 }
 
 export interface TranscriptReplay {
@@ -984,6 +1031,8 @@ export interface Approval {
   recovery?: RecoveryApproval | null;
   write_access?: WriteAccessApproval | null;
   turnId?: string;
+  generation?: number;
+  permissionRevision?: number;
 }
 
 export interface Ask {
@@ -1026,6 +1075,7 @@ export interface Compaction {
 }
 
 export interface CompletionReceipt {
+  assessmentKind?: string;
   diff?: TurnChanges | null;
   interrupted?: boolean;
   verdict: string;
@@ -1350,6 +1400,7 @@ export interface Tool {
   removed?: number;
   profile?: Profile | null;
   execution?: ShellExecution | null;
+  presentedFiles?: PresentedFile[];
 }
 
 export interface Usage {
@@ -1918,6 +1969,8 @@ export interface FilePreview {
   size: number;
   truncated: boolean;
   binary: boolean;
+  version?: string;
+  nextOffset?: number;
   kind?: string;
   mime?: string;
   url?: string;
@@ -2646,6 +2699,16 @@ export interface PluginView {
   error?: string;
 }
 
+export interface PresentedTextPage {
+  path: string;
+  body: string;
+  offset: number;
+  nextOffset: number;
+  size: number;
+  hasMore: boolean;
+  version: string;
+}
+
 export interface ProjectGroupsSnapshot {
   groups: desktopGroup[];
   revision: number;
@@ -2742,6 +2805,8 @@ export interface PromptAnswerView {
   action?: string;
   feedback?: string;
   content?: Record<string, unknown>;
+  generation?: number;
+  permissionRevision?: number;
 }
 
 export interface PromptHistoryEntry {
@@ -4007,6 +4072,11 @@ export interface PausedRead {
   reason: string;
 }
 
+export interface PresentedFile {
+  path: string;
+  description?: string;
+}
+
 export interface ProtocolRecoveryAction {
   id: string;
 }
@@ -4224,6 +4294,8 @@ export interface Message {
   reasoning?: string;
   memoryCitations?: provider_MemoryCitation[];
   workDurationMs?: number;
+  turnDurationMs?: number;
+  turnUsage?: TurnUsage | null;
   level?: string;
   toolCalls?: ToolCall[];
   toolCallId?: string;
@@ -4231,6 +4303,7 @@ export interface Message {
   toolResultArchived?: boolean;
   toolResultError?: string;
   execution?: ToolExecution | null;
+  presentedFiles?: PresentedFile[];
   pending?: boolean;
   trigger?: string;
   messages?: number;
@@ -4267,6 +4340,7 @@ export interface Runtime {
   startedAt?: number;
   pendingEvents: Event[];
   completionSummary?: CompletionSummary | null;
+  turnUsage?: TurnUsage | null;
 }
 
 export interface Snapshot {
@@ -4304,6 +4378,15 @@ export interface ToolCall {
   added?: number;
   removed?: number;
   argumentsArchived?: boolean;
+}
+
+export interface TurnUsage {
+  uncachedInputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheReadTokens?: number | null;
+  reasoningTokens?: number | null;
+  routes?: string[];
 }
 
 export interface Envelope {
@@ -4502,9 +4585,11 @@ export interface GeneratedDesktopCommands {
   CreateBlankProject(arg0: string, arg1: string): Promise<string>;
   CreateDeliveryWorktree(arg0: string): Promise<IsolatedWorktreeOpenResult>;
   CreateIsolatedWorktree(arg0: string): Promise<IsolatedWorktreeOpenResult>;
+  CreatePresentedBrowserPreviewForTab(arg0: string, arg1: string, arg2: string): Promise<string>;
   CreateSubagentProfile(arg0: SubagentProfileInput): Promise<string>;
   CreateTerminalForTab(arg0: string, arg1: string, arg2: string): Promise<TerminalSessionView>;
   CreateTopic(arg0: string, arg1: string, arg2: string): Promise<TopicMeta>;
+  CreateWorkspaceBrowserPreviewForTab(arg0: string, arg1: string): Promise<string>;
   CurrentTaskSessionID(): Promise<string>;
   DeleteInboxItem(arg0: string, arg1: string): Promise<void>;
   DeleteProvider(arg0: string): Promise<void>;
@@ -4661,6 +4746,7 @@ export interface GeneratedDesktopCommands {
   OpenGlobalTab(arg0: string): Promise<TabMeta>;
   OpenLocalPath(arg0: string): Promise<void>;
   OpenLocalPathInExternalOpener(arg0: string, arg1: string): Promise<void>;
+  OpenPresentedPathForTab(arg0: string, arg1: string, arg2: string): Promise<void>;
   OpenProjectTab(arg0: string, arg1: string): Promise<TabMeta>;
   OpenRemoteProjectTab(arg0: string, arg1: string, arg2: RemoteTabOpenOptions): Promise<TabMeta>;
   OpenRemoteWorkspace(arg0: string, arg1: string): Promise<void>;
@@ -4673,6 +4759,7 @@ export interface GeneratedDesktopCommands {
   PauseGoalForTab(arg0: string): Promise<boolean>;
   PauseRemoteTabGoal(arg0: string): Promise<void>;
   PendingPromptIdentitiesForTab(arg0: string): Promise<PromptIdentityView[]>;
+  PermissionSnapshotForTab(arg0: string): Promise<PermissionSnapshot>;
   PickBlankProjectParent(): Promise<string>;
   PickExportFile(arg0: string, arg1: string): Promise<string>;
   PickPluginFolder(): Promise<string>;
@@ -4696,6 +4783,9 @@ export interface GeneratedDesktopCommands {
   ReadFile(arg0: string): Promise<FilePreview>;
   ReadFileForTab(arg0: string, arg1: string): Promise<FilePreview>;
   ReadInboxItem(arg0: string, arg1: string): Promise<InboxEnvelopeView>;
+  ReadPresentedFileForTab(arg0: string, arg1: string, arg2: string): Promise<FilePreview>;
+  ReadPresentedFileSourceForTab(arg0: string, arg1: string, arg2: string): Promise<FilePreview>;
+  ReadPresentedTextPageForTab(arg0: string, arg1: string, arg2: string, arg3: number, arg4: string): Promise<PresentedTextPage>;
   ReadRemoteFile(arg0: string, arg1: string): Promise<RemoteFilePreview>;
   RebuildHistoryIndex(): Promise<void>;
   RebuildSessionCatalog(): Promise<void>;
@@ -4767,11 +4857,14 @@ export interface GeneratedDesktopCommands {
   ResolvePlanDecision(arg0: string, arg1: string): Promise<void>;
   ResolvePlanDecisionTab(arg0: string, arg1: string, arg2: string): Promise<void>;
   ResolvePlanDecisionTabForTurn(arg0: string, arg1: string, arg2: string, arg3: string, arg4: string): Promise<void>;
+  ResolvePresentedPathForTab(arg0: string, arg1: string, arg2: string): Promise<string>;
   ResolvePromptForTab(arg0: string, arg1: string, arg2: string, arg3: string, arg4: string, arg5: PromptAnswerView): Promise<void>;
   ResolveRecovery(arg0: string, arg1: string, arg2: string): Promise<void>;
   ResolveRecoveryTab(arg0: string, arg1: string, arg2: string, arg3: string): Promise<void>;
   ResolveRecoveryTabForTurn(arg0: string, arg1: string, arg2: string, arg3: string, arg4: string, arg5: string): Promise<void>;
+  ResolveRemotePresentedPathForTab(arg0: string, arg1: string, arg2: string, arg3: string): Promise<string>;
   ResolveRemoteTabPlanDecision(arg0: string, arg1: string, arg2: string, arg3: string): Promise<void>;
+  ResolveRemoteWorkspacePathForTab(arg0: string, arg1: string, arg2: string, arg3: string): Promise<string>;
   ResolveToolRecoveryForTab(arg0: string, arg1: ToolRecoveryRequest): Promise<ToolRecoverySnapshot>;
   ResolveWorkspacePathForTab(arg0: string, arg1: string): Promise<string>;
   RestartApplication(): Promise<void>;
@@ -4793,8 +4886,12 @@ export interface GeneratedDesktopCommands {
   RetrySessionRecovery(arg0: RecoveryPreferenceRequest): Promise<void>;
   RevealBackgroundRuntime(arg0: string): Promise<TabMeta>;
   RevealPath(arg0: string): Promise<void>;
+  RevealPresentedPathForTab(arg0: string, arg1: string, arg2: string): Promise<void>;
   RevealWorkspacePathForTab(arg0: string, arg1: string): Promise<void>;
   RevealWorkspaceWriterForTab(arg0: string): Promise<TabMeta>;
+  RevokePermissionGrantForTab(arg0: string, arg1: string, arg2: string, arg3: number): Promise<PermissionSnapshot>;
+  RevokeWorkspaceBrowserPreview(arg0: string): Promise<void>;
+  RevokeWorkspaceMediaPreview(arg0: string): Promise<void>;
   Rewind(arg0: number, arg1: string): Promise<void>;
   RewindForTab(arg0: string, arg1: number, arg2: string): Promise<void>;
   RewindRemoteTab(arg0: string, arg1: string, arg2: string): Promise<void>;
@@ -4810,14 +4907,18 @@ export interface GeneratedDesktopCommands {
   SaveLocalPathAs(arg0: string): Promise<string>;
   SavePastedFile(arg0: string, arg1: string): Promise<string>;
   SavePastedImage(arg0: string): Promise<string>;
+  SavePresentedPathAsForTab(arg0: string, arg1: string, arg2: string): Promise<string>;
   SaveProvider(arg0: ProviderView): Promise<void>;
   SaveProviderKey(arg0: string, arg1: string): Promise<string>;
   SaveProviderModelCatalogs(arg0: ProviderModelCatalogUpdate[]): Promise<string[]>;
   SaveProviderWithKey(arg0: ProviderView, arg1: string): Promise<string>;
+  SaveRemoteFileAs(arg0: string, arg1: string): Promise<string>;
+  SaveRemotePresentedFileAs(arg0: string, arg1: string, arg2: string, arg3: string): Promise<string>;
   SaveSessionGroups(arg0: string, arg1: string, arg2: desktopGroup[]): Promise<void>;
   SaveSessionGroupsVersioned(arg0: string, arg1: string, arg2: number, arg3: desktopGroup[]): Promise<ProjectGroupsSnapshot>;
   SaveThemePack(arg0: ThemeSaveInput): Promise<ThemePackView>;
   SaveWindowState(arg0: DesktopWindowState): Promise<void>;
+  SaveWorkspacePathAsForTab(arg0: string, arg1: string): Promise<string>;
   ScanPromptHistory(arg0: string): Promise<PromptHistoryResult>;
   ScanRemoteLegacyWorkbenchData(): Promise<LegacyWorkbenchDataView>;
   ScanSSHConfig(): Promise<RemoteHostInput[]>;
@@ -4873,6 +4974,7 @@ export interface GeneratedDesktopCommands {
   SetModelForTab(arg0: string, arg1: string): Promise<void>;
   SetNetwork(arg0: NetworkView): Promise<void>;
   SetPermissionMode(arg0: string): Promise<void>;
+  SetPermissionPresetForTab(arg0: string, arg1: string, arg2: number): Promise<PermissionSnapshot>;
   SetPlanMode(arg0: boolean): Promise<void>;
   SetPlannerModel(arg0: string): Promise<void>;
   SetPluginEnabled(arg0: string, arg1: boolean): Promise<void>;

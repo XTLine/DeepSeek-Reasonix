@@ -6,12 +6,10 @@ package control
 import (
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 
 	"reasonix/internal/event"
 	"reasonix/internal/evidence"
-	"reasonix/internal/provider"
 )
 
 type seedTodo struct {
@@ -50,32 +48,6 @@ func (c *Controller) seedAgentTodoState(args string) {
 	c.executor.SeedTodoState(todos)
 }
 
-func (c *Controller) completePlanTodos(args string) {
-	if args == "" {
-		return
-	}
-	done := completedPlanTodosJSON(args)
-	if done == "" {
-		return
-	}
-	t := event.Tool{ID: "plan-seed", Name: "todo_write", Args: done, ReadOnly: true}
-	c.sink.Emit(event.Event{Kind: event.ToolDispatch, Tool: t})
-	t.Output = "approved plan finished"
-	c.sink.Emit(event.Event{Kind: event.ToolResult, Tool: t})
-	c.replaceAgentTodoState(done)
-}
-
-func (c *Controller) replaceAgentTodoState(args string) {
-	if c.executor == nil {
-		return
-	}
-	todos := agentTodoStateFromArgs(args)
-	if len(todos) == 0 {
-		return
-	}
-	c.executor.ReplaceTodoState(todos)
-}
-
 func agentTodoStateFromArgs(args string) []evidence.TodoItem {
 	var payload struct {
 		Todos []evidence.TodoItem `json:"todos"`
@@ -102,23 +74,6 @@ func PlanTodosJSON(plan string) string {
 		return ""
 	}
 	b, err := json.Marshal(map[string]any{"todos": items})
-	if err != nil {
-		return ""
-	}
-	return string(b)
-}
-
-func completedPlanTodosJSON(args string) string {
-	var p struct {
-		Todos []seedTodo `json:"todos"`
-	}
-	if err := json.Unmarshal([]byte(args), &p); err != nil || len(p.Todos) == 0 {
-		return ""
-	}
-	for i := range p.Todos {
-		p.Todos[i].Status = "completed"
-	}
-	b, err := json.Marshal(map[string]any{"todos": p.Todos})
 	if err != nil {
 		return ""
 	}
@@ -180,33 +135,6 @@ func seedTodoEvidenceState(todos []seedTodo) []evidence.TodoItem {
 		}
 	}
 	return state
-}
-
-// hasTodoUpdateSince reports whether the model emitted its own todo_write after
-// index start, so the seeded plan todos aren't auto-completed over the model's
-// own bookkeeping.
-func (c *Controller) hasTodoUpdateSince(start int) bool {
-	if c.executor == nil {
-		return false
-	}
-	msgs := c.executor.Session().Messages
-	if start < 0 || start > len(msgs) {
-		start = len(msgs)
-	}
-	_, ok := latestTodoArgsSince(msgs, start)
-	return ok
-}
-
-func latestTodoArgsSince(msgs []provider.Message, start int) (string, bool) {
-	for i := len(msgs) - 1; i >= start; i-- {
-		for _, v := range slices.Backward(msgs[i].ToolCalls) {
-			tc := v
-			if tc.Name == "todo_write" {
-				return tc.Arguments, true
-			}
-		}
-	}
-	return "", false
 }
 
 // listItem parses a markdown list line ("- x", "* x", "1. x", "2) x") into its

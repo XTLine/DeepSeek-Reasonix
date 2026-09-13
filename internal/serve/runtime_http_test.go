@@ -47,7 +47,7 @@ func TestGoalPauseAndResumeRoutes(t *testing.T) {
 	}
 }
 
-func TestQualityFloorRouteUpdatesStatus(t *testing.T) {
+func TestQualityFloorRouteAcceptsLegacyValueWithoutChangingStatus(t *testing.T) {
 	bc := NewBroadcaster()
 	ctrl := control.New(control.Options{Sink: bc})
 	srv := httptest.NewServer(New(ctrl, bc, config.ServeConfig{}).Handler())
@@ -55,7 +55,7 @@ func TestQualityFloorRouteUpdatesStatus(t *testing.T) {
 
 	resp := postRuntimeJSON(t, srv.URL+"/quality-floor", `{"floor":"delivery"}`)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent || ctrl.QualityFloor() != control.QualityFloorDelivery {
+	if resp.StatusCode != http.StatusNoContent || ctrl.QualityFloor() != control.QualityFloorStandard {
 		t.Fatalf("quality floor status/value = %d/%q", resp.StatusCode, ctrl.QualityFloor())
 	}
 	status, err := http.Get(srv.URL + "/status")
@@ -69,7 +69,7 @@ func TestQualityFloorRouteUpdatesStatus(t *testing.T) {
 	if err := json.NewDecoder(status.Body).Decode(&payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.QualityFloor != control.QualityFloorDelivery {
+	if payload.QualityFloor != control.QualityFloorStandard {
 		t.Fatalf("status qualityFloor = %q", payload.QualityFloor)
 	}
 

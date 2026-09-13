@@ -7,7 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
+	"strings"
 	"testing"
 
 	"reasonix/internal/agent"
@@ -68,42 +68,21 @@ func TestToolRecoveryCrashAfterEffect(t *testing.T) {
 	defer c.Close()
 	c.recoverInterruptedTurn(path)
 	view := c.ToolRecoverySnapshot()
-	if len(view.Calls) != 1 {
+	if !view.Retired || view.RetryEnabled || len(view.Calls) != 1 {
 		t.Fatalf("unresolved crash effects=%+v", view)
 	}
 	call := view.Calls[0]
 	req := ToolRecoveryRequest{SessionPath: view.SessionPath, RuntimeEpoch: view.RuntimeEpoch, Revision: view.Revision, AttemptID: call.Identity.AttemptID, Action: "inspect"}
-	view, err = c.ResolveToolRecovery(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Revision = view.Revision
-	req.InspectionID = view.Calls[0].InspectionID
-	req.Action = "confirm"
-	// Two UI requests with the same snapshot can confirm at most once.
-	var wg sync.WaitGroup
-	errs := make(chan error, 2)
-	for range 2 {
-		wg.Go(func() { _, e := c.ResolveToolRecovery(context.Background(), req); errs <- e })
-	}
-	wg.Wait()
-	close(errs)
-	success := 0
-	for e := range errs {
-		if e == nil {
-			success++
-		}
-	}
-	if success != 1 {
-		t.Fatalf("confirmation successes=%d", success)
+	if _, err = c.ResolveToolRecovery(context.Background(), req); err == nil || !strings.Contains(err.Error(), "tool_recovery_retired") {
+		t.Fatalf("retired recovery action err=%v", err)
 	}
 	reopened, err := agent.LoadSession(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	other := agent.New(nil, tool.NewRegistry(), reopened, agent.Options{}, event.Discard)
-	if len(other.PendingToolRecovery()) != 0 {
-		t.Fatal("confirmation did not survive restart")
+	if len(other.PendingToolRecovery()) != 1 {
+		t.Fatal("retired endpoint rewrote the historical unknown fact")
 	}
 	effects, err := os.ReadFile(filepath.Join(root, "effects"))
 	if err != nil || string(effects) != "effect\n" {

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRuntimeSession } from "./useRuntimeState";
+import { useT } from "./i18n";
+import { createLegacyRemotePolicyNoticeTracker } from "./legacyRemotePolicyNotice";
 import { app, onRemoteTabEvent, onRemoteTabState } from "./bridge";
 import type { CancelOutcome } from "./inboxCancel";
 import { historyMessagesToItems, initialState, reducer, type ControllerLiveStore, type State } from "./useController";
 import { TurnEventProjector } from "./turnEventProjection";
-import { resolveSnapshotItems, StaleCut, TranscriptSnapshotClient } from "./transcriptSnapshotClient";
+import { rebaseSnapshotContentPatches, resolveSnapshotItems, resolveSnapshotTool, StaleCut, TranscriptSnapshotClient } from "./transcriptSnapshotClient";
 import { getTranscriptStore } from "./transcriptStore";
 import { isAuthoritativeRemoteStatus, remoteCheckpoints, remoteComposerState, remoteGoalRuntime, remoteStatusToAction, type RemoteStatus } from "./remoteStatus";
 import type { CollaborationMode, CommandInfo, EffortInfo, GoalRuntime, GoalStatus, HistoryMessage, QualityFloor, RemoteTabStateValue, TabMeta, ToolApprovalMode, WireEvent } from "./types";
@@ -65,7 +67,7 @@ export interface RemoteSessionApi {
 
 export function useRemoteComposer(
   session: RemoteSessionApi,
-  showToast: (message: string, level: "error") => void,
+  showToast: (message: string, level: "warn" | "error") => void,
 ) {
   const onSend = useCallback(async (displayText: string, submitText = displayText) => {
     const text = (submitText || displayText).trim();
@@ -87,13 +89,23 @@ export function useRemoteComposer(
 
 export function useActiveRemoteSession(
   activeTab: TabMeta | undefined,
-  showToast: (message: string, level: "error") => void,
+  showToast: (message: string, level: "warn" | "error") => void,
 ) {
-  const active = Boolean(activeTab?.remote);
-  const session = useRemoteSession(active && activeTab ? activeTab.id : undefined, activeTab?.remoteState, activeTab?.sessionPath);
-  const composer = useRemoteComposer(session, showToast);
-  return { active, session, ready: active && session.state === "ready" && session.hydrated && Boolean(session.composerProfile), ...composer };
+	const t = useT();
+	const active = Boolean(activeTab?.remote);
+	const session = useRemoteSession(active && activeTab ? activeTab.id : undefined, activeTab?.remoteState, activeTab?.sessionPath);
+	const composer = useRemoteComposer(session, showToast);
+	useEffect(() => {
+		if (!activeTab?.remote || !activeTab.id) return;
+    const legacyQuality = session.transcript.items.some(item => item.kind === "notice" && (item.code === "final_readiness" || item.variant === "delivery"));
+		const key = `${activeTab.id}\u0000${activeTab.sessionPath ?? ""}`;
+    const notice = legacyRemotePolicyNotice(key, session.composerProfile?.qualityFloor, session.goalRuntime?.stopCause, legacyQuality);
+    if (notice) showToast(t(notice), "warn");
+	}, [activeTab?.remote, activeTab?.id, activeTab?.sessionPath, session.composerProfile?.qualityFloor, session.transcript.items, session.goalRuntime?.stopCause, showToast, t]);
+	return { active, session, ready: active && session.state === "ready" && session.hydrated && Boolean(session.composerProfile), ...composer };
 }
+
+const legacyRemotePolicyNotice = createLegacyRemotePolicyNoticeTracker();
 
 export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabStateValue, sessionPath?: string): RemoteSessionApi {
   const runtimeState = useRuntimeSession(tabId, sessionPath);
@@ -213,13 +225,14 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
     projector.bindReset(async () => loadModern());
     const offContent = getTranscriptStore().registerContentResolver(tabId, async (entryId, field) => {
       try {
+      if (field === "tool") return await resolveSnapshotTool(snapshots, tabId, entryId, () => cancelled ? undefined : transcriptRef.current);
       const record = await resolveSnapshotItems(snapshots, tabId, entryId, () => cancelled ? undefined : transcriptRef.current, historyMessagesToItems,
-        (patches) => setTranscript((current) => reducer(current, { type: "history_items_patch", patches })));
+        (patches) => setTranscript((current) => reducer(current, { type: "history_items_patch", patches: rebaseSnapshotContentPatches(current, patches, field) })), field);
       return field === "reasoning" ? record?.message.reasoning : record?.message.content;
       } catch (error) {
         if (!(error instanceof StaleCut)) throw error;
         await loadModern();
-        return undefined;
+        throw error;
       }
     }, () => modern);
     olderRef.current = async () => {
@@ -707,9 +720,11 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
 
   const setQualityFloor = useCallback(async (floor: QualityFloor) => {
     if (!tabId) return;
+    // Compatibility only. The new client never asks an old server to change
+    // policy behind the user's back; its next status remains authoritative.
+    if (floor !== "standard" && floor !== "delivery") throw new Error(`Unknown retired execution setting: ${floor}`);
     await app.SetRemoteTabQualityFloor(tabId, floor);
-    await refreshStatus();
-  }, [refreshStatus, tabId]);
+  }, [tabId]);
 
   const pauseGoal = useCallback(async () => {
     if (!tabId) return;

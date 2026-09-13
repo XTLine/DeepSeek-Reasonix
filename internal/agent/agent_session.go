@@ -1,5 +1,15 @@
 package agent
 
+import "reasonix/internal/fileops"
+
+// InheritFileObservationsFrom is for an idle, same-session runtime rebuild.
+// Resume, fork and rewind intentionally use SetSession without this transfer.
+func (a *Agent) InheritFileObservationsFrom(previous *Agent) {
+	if previous != nil && a != previous {
+		a.fileObservations = previous.fileObservations.Clone()
+	}
+}
+
 // Session returns the agent's current conversation, useful for persistence
 // hooks that need to read the message log between turns. sessMu serialises this
 // pointer read against SetSession, so a frontend (serve's concurrent /history and
@@ -17,14 +27,13 @@ func (a *Agent) Session() *Session {
 // running turn (it only fires while idle); sessMu guards the pointer swap itself.
 func (a *Agent) SetSession(s *Session) {
 	a.sess.reset(s)
+	// Observations are live capabilities tied to the exact session instance and
+	// execution environment. Never reconstruct or carry them across resume,
+	// rewind, fork, or a wholesale session replacement.
+	a.fileObservations = fileops.NewStore()
 	a.resetPinnedContextState()
 	// The replaced conversation's task is over, but the ledger and the bill
 	// answer to beginRunTurn's scope check rather than to this seam.
-	a.task.repeatFailures = nil
-	a.task.repeatScope = ""
-	a.pending.preserveEvidence = false
-	a.pending.finalReadinessRecovery = false
-	a.pending.finalReadinessRecoveryPrepared = false
 	if s != nil {
 		a.rebuildTodoState(s.Snapshot())
 	}

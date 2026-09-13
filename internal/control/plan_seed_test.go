@@ -219,35 +219,12 @@ func TestSeedPlanTodosEmptyPlanNoOp(t *testing.T) {
 	}
 }
 
-func TestCompletePlanTodosMirrorsAgentState(t *testing.T) {
-	var events []event.Event
-	sink := event.FuncSink(func(e event.Event) { events = append(events, e) })
+func TestPlanSeedRetainsUnreportedProgress(t *testing.T) {
 	executor := &agent.Agent{}
-	c := &Controller{
-		sink:     sink,
-		executor: executor,
-	}
-
-	args := c.seedPlanTodos("1. Add the parser\n2. Wire it up")
-	c.completePlanTodos(args)
-
+	c := &Controller{sink: event.Discard, executor: executor}
+	c.seedPlanTodos("1. Add the parser\n2. Wire it up")
 	got := executor.CanonicalTodoState()
-	if len(got) != 2 {
-		t.Fatalf("canonical todo count = %d, want 2: %+v", len(got), got)
-	}
-	for i, todo := range got {
-		if todo.Status != "completed" {
-			t.Fatalf("canonical todo %d status = %q, want completed: %+v", i, todo.Status, got)
-		}
-	}
-
-	var completedResults int
-	for _, e := range events {
-		if e.Kind == event.ToolResult && e.Tool.Name == "todo_write" && e.Tool.Output == "approved plan finished" {
-			completedResults++
-		}
-	}
-	if completedResults != 1 {
-		t.Fatalf("completed plan UI events = %d, want 1", completedResults)
+	if len(got) != 2 || got[0].Status != "in_progress" || got[1].Status != "pending" {
+		t.Fatalf("seeded progress changed: %+v", got)
 	}
 }

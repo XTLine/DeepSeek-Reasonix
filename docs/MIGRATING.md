@@ -4,6 +4,9 @@ Reasonix 1.0 is a **ground-up rewrite in Go**. It is a new codebase, not an
 incremental upgrade of the `0.x` TypeScript releases. This guide explains what
 changed and how to move over.
 
+For the current file-observation, scheduling, and interruption behavior, see
+[Harness-style execution migration](DSH_EXECUTION_MIGRATION.md).
+
 ## TL;DR
 
 | | Legacy (v1) | Reasonix 1.0+ (v2) |
@@ -150,7 +153,8 @@ and DeepSeek prefix-cache–oriented design.
   `grep` / `read_file` / `glob` for local understanding. The legacy v1 semantic
   search + tree-sitter symbol index is not bundled in v2 yet, and CodeGraph is no
   longer shipped as an internal MCP server.
-- **Plan mode** + `complete_step` (evidence-backed step sign-off).
+- **Plan mode** retains its approval boundary. `complete_step` is retired; models
+  update task state directly with `todo_write`.
 - **MCP project identity and schema-cache URLs are credential-aware**: userinfo
   and credential query values (token, api_key, password, ...) do not enter the
   project launch identity digest or schema cache key, so credential rotation
@@ -171,11 +175,10 @@ and DeepSeek prefix-cache–oriented design.
 - **stdio MCP connections are persistent.** This fixes stateful servers that
   lost browser/session state when writer calls received a fresh process.
 - **Plan mode and permission policy are now independent**: Plan directs the
-  model to plan first. Ordinary built-in and Bash calls still use the active
-  Ask/Auto/YOLO rules and Sandbox, while installed MCP and proxy-resolved MCP
+  model to plan first. Ordinary built-in and Bash calls use the active Read
+  only, Workspace access, or Full access preset and its OS sandbox, while installed MCP and proxy-resolved MCP
   writer/destructive targets plus readers from unauthorized servers stay hard-blocked for the
-  whole planning phase. Explicit execution-phase tools such as `complete_step` also
-  remain unavailable until plan approval. `plan_mode_read_only_commands` is
+  whole planning phase. `plan_mode_read_only_commands` is
   still parsed and round-tripped for old configs, but it no longer controls
   main Plan availability. Installed or project-configured servers contribute their
   non-destructive `readOnlyHint` tools to planner/read-only registries

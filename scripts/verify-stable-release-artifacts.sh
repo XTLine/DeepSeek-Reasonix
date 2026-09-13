@@ -42,9 +42,11 @@ jq -e '
   .isDraft == false and .isPrerelease == false and
   ([.assets[].name] as $names |
     ($names | index("latest.json")) and
-    (["Reasonix-darwin-universal.dmg", "Reasonix-linux-amd64.deb",
+    (["Reasonix-darwin-arm64.dmg", "Reasonix-darwin-amd64.dmg",
+      "Reasonix-darwin-universal.dmg", "Reasonix-darwin-arm64.zip",
+      "Reasonix-darwin-amd64.zip", "Reasonix-linux-amd64.deb",
       "Reasonix-linux-amd64.tar.gz", "Reasonix-windows-amd64-installer.exe",
-      "Reasonix-windows-arm64-installer.exe"] |
+      "Reasonix-windows-amd64.zip", "Reasonix-windows-arm64-installer.exe"] |
      all(. as $required | ($names | index($required)) and ($names | index($required + ".minisig")))))
 ' "$tmp_dir/desktop.json" >/dev/null
 

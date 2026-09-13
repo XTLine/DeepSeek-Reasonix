@@ -26,6 +26,7 @@ Provider model capability metadata is documented in
 - [Desktop hooks](#desktop-hooks)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Permissions & sandbox](#permissions--sandbox)
+- [File deliverables and the `present` tool](./PRESENT_TOOL.md)
 - [Capability diagnostics](#capability-diagnostics)
 - [Plugins (MCP)](#plugins-mcp)
 - [Slash commands](#slash-commands)
@@ -493,12 +494,11 @@ loading model are documented in [the Chinese desktop hooks guide](./DESKTOP_HOOK
 ## Keyboard shortcuts
 
 Shortcuts are documented by client because users usually look for the keys that
-work in the surface they are using. Desktop keeps its Plan toggle, while the CLI
-cycles Ask, Auto, and Plan with `Shift+Tab`. Desktop uses `Cmd+Y` on macOS or
-`Ctrl+Y` elsewhere for YOLO by default. If YOLO is rebound on Windows/Linux,
-`Ctrl+Y` becomes the standard composer redo fallback. Desktop paste stays on the
-platform paste key; in the CLI, terminal-native text paste and
-application-owned image paste use separate shortcuts.
+work in the surface they are using. `Shift+Tab` toggles the Plan collaboration
+workflow. Permission presets are selected explicitly from the composer menu and
+are never changed by a typing shortcut. Desktop paste stays on the platform
+paste key; in the CLI, terminal-native text paste and application-owned image
+paste use separate shortcuts.
 
 `[ui].shortcut_layout` is still accepted for old configs, but the shortcut
 behavior below is unified across layouts.
@@ -544,10 +544,9 @@ Composer shortcuts:
 | --- | --- | --- |
 | `Enter` | Sends the current message | IME composition confirmation is left alone. |
 | `Shift+Enter` | Inserts a newline | The composer keeps focus. |
-| `Shift+Tab` | Toggles Plan on/off | Plan changes the workflow instruction; built-in writers keep the active Ask/Auto/YOLO and Sandbox boundary, while MCP writer/destructive targets stay hard-blocked for the whole planning phase. |
+| `Shift+Tab` | Toggles Plan on/off | Plan changes the workflow instruction while the selected permission preset remains active. |
 | `Cmd+Z` on macOS, `Ctrl+Z` on Windows/Linux | Undoes the latest composer edit | Native typing stays in the WebView history; Reasonix-managed paste, cut, folded blocks, and structured tokens are restored as complete transactions. |
-| `Cmd+Shift+Z` on macOS, `Ctrl+Shift+Z` on Windows/Linux | Redoes the latest composer edit | On Windows/Linux, `Ctrl+Y` is also accepted after the YOLO shortcut has been rebound. |
-| `Cmd+Y` / `Ctrl+Y` (default) | Toggles YOLO on/off | Turning YOLO off restores the previous Ask/Auto base when known. The current binding is shown in **Settings → Shortcuts**. |
+| `Cmd+Shift+Z` on macOS, `Ctrl+Shift+Z` on Windows/Linux | Redoes the latest composer edit | Uses the platform-native editing history. |
 | `Cmd+V` on macOS, `Ctrl+V` on Windows/Linux | Pastes clipboard content | Clipboard images are attached; images can also be dropped into the composer. On official DeepSeek, `deepseek-flash` and `deepseek-v4-flash` accept images natively; V4 Pro stays text-only. |
 | Plain `Up` / `Down` at the prompt boundary | Recalls older or newer submitted prompts | Modified arrows and native text navigation stay with the textarea. |
 | `Esc` while a turn is running | Cancels the running turn | If the turn has not produced a response yet, the draft is restored. |
@@ -559,8 +558,8 @@ Menus and controls:
 | `Up` / `Down` in slash, `@`, or past-chat menus | Moves the highlighted item | Past-chat search uses the same navigation keys. |
 | `Enter` / `Tab` in those menus | Accepts the highlighted item | Directory-like entries can keep the menu open for the next level. |
 | `Esc` in those menus | Closes the current menu or returns from past-chat search | Regular typing continues after the menu closes. |
-| Ask / Auto / YOLO approval controls | Picks the tool approval posture directly | Clicking these controls is unchanged by keyboard shortcuts. |
-| Tool approval card | `Left` / `Right`, `Enter`, `1`-`4`, `Esc` | Move the highlighted action, confirm it, pick a numbered action, or deny. The default highlighted action is Allow once. |
+| Read only / Workspace write / Full access | Selects the current session permission preset | Settings controls only the default for new sessions. |
+| Tool approval card | `Left` / `Right`, `Enter`, `1`-`3`, `Esc` | Move between Allow once, Allow for this session, and Deny. The default is Allow once. |
 | Plan approval card | `Left` / `Right`, `Enter`, `1`-`3`, `Esc` | Move between Revise plan, Start execution, and Exit plan. The default highlighted action is Start execution. |
 | Plan control | Toggles Plan on/off | Same mode as `Shift+Tab`. |
 | Goal item in the collaboration menu | Starts, views, or clears Goal | Goal is not in any keyboard cycle. |
@@ -574,7 +573,7 @@ cursor, while wheel events in the transcript keep scrolling the conversation.
 Use `/theme auto|light|dark` to select the background mode, or `/theme <style>`
 to select one of the named accent palettes shown by bare `/theme`.
 
-The responsive footer keeps the active Ask/Auto/Plan or YOLO posture and current
+The responsive footer keeps the active permission preset, Plan state, and current
 interaction state on the left. On wider terminals, model and effort
 stay together on the right; a second row shows available Git identity, cache hit
 rate, context use, compaction headroom, jobs, and balance. `ready` is the idle
@@ -616,9 +615,8 @@ Mode and display shortcuts:
 
 | Key or command | What it does | Notes |
 | --- | --- | --- |
-| `Shift+Tab` | Cycles Ask → Auto → Plan → Ask | YOLO remains outside this composer-mode cycle; the footer shows the active mode. |
-| `Ctrl+Y` | Toggles YOLO on/off | Turning YOLO off restores the previous Ask/Auto base when known. Terminals that forward Command/Super may also send `Cmd+Y`, but `Ctrl+Y` is the reliable terminal shortcut. |
-| `--yolo`, `--dangerously-skip-permissions` | Starts chat in YOLO | Same runtime mode as `Ctrl+Y`. |
+| `Shift+Tab` | Toggles Plan on/off | The active permission preset does not change. |
+| `--permission-mode read-only|workspace-write|danger-full-access` | Selects the initial permission preset | New sessions default to `workspace-write`. |
 | `/theme [auto|light|dark|style]` | Shows or switches the CLI theme | Bare `/theme` lists background modes and named accent palettes. The choice is saved to the user config; `REASONIX_THEME` and `REASONIX_THEME_STYLE` can override it for one run. |
 | `Ctrl+O` | Toggles verbose reasoning display | Also available through `/verbose`. |
 | `Ctrl+B` | Expands or collapses long shell output | Long shell-output hint lines can also be clicked in the transcript; text selection is handled in-app while the full-screen TUI has mouse reporting enabled. |
@@ -636,47 +634,32 @@ Picker and approval shortcuts:
 | Model, provider, or resume picker | `Up`/`Down` or `Ctrl+P`/`Ctrl+N`; `j`/`k` while search is empty; type to filter; `Enter`; `Esc` | Search, select an item, or close the picker. Once search input starts, `j`/`k` become query text. `/provider` opens that provider's model list. |
 | MCP import picker | `Up`/`Down` or `j`/`k`, `Space`, `Enter`, `Esc` / `Ctrl+C` | Move, select servers, import selected servers, or cancel. |
 | MCP manager | `Up`/`Down` or `j`/`k`, `Enter`, `Left`/`Right` or `h`/`l`, `r`, number keys, `q` / `Ctrl+C` | Navigate server lists/details, refresh, choose actions, or close. |
-| `/clear` confirmation | Arrow keys or `j`/`k` / `Tab`, `Enter`, `y`, `n`, `Esc` / `Ctrl+C` | Toggle Clear/Cancel, confirm clear, or cancel. In YOLO mode `/clear` clears immediately without asking. |
+| `/clear` confirmation | Arrow keys or `j`/`k` / `Tab`, `Enter`, `y`, `n`, `Esc` / `Ctrl+C` | Toggle Clear/Cancel, confirm clear, or cancel. |
 
 Mode meanings:
 
 | Mode | Meaning |
 | --- | --- |
-| Ask | Prompts for fallback writer approvals. |
-| Auto | Auto-allows fallback approvals, including interactive `remember`/`forget`; explicit `ask` / `deny` rules still apply. |
-| YOLO | Skips ordinary tool approval prompts, including `remember`/`forget`; `deny`, user `ask` questions, and plan approval prompts still wait. |
-| Plan | Directs the model to plan first — a plan-first workflow, not an all-tools read-only mode. Built-in writers still follow the active Ask/Auto/YOLO rules and Sandbox; installed MCP writers, destructive targets, and readers from unauthorized servers are hard-blocked for the whole planning phase (approval cannot release them; they return once Plan exits), and explicit phase-only tools such as `complete_step` wait until approval. |
+| Read only | Reads the workspace; writes and external side effects require a scoped authorization. |
+| Workspace write | Writes inside the workspace and private session temporary directory. This is the default. |
+| Full access | Runs as the current OS user without Reasonix filesystem or network sandboxing. Explicit host deny rules still apply before launch. |
+| Plan | Plans before implementation. State-changing actions are blocked until approval, including Full access, proxy tools, and subagents. After approval, ordinary permissions and sandbox rules still apply. |
 | Goal | Pursues a saved objective until complete, blocked, or cleared. |
 
 ## Permissions & sandbox
 
-Permissions gate each tool call: `deny` > `ask` > `allow` > fallback. Bash and
-file mutation tools require approval by default; read-only tools generally do
-not. Approvals are stored and matched as permission rules, not button labels:
-for example `Bash(npm run build)`, `Bash(npm run test:*)`, and `Edit(docs/**)`.
-`reasonix` can grant Bash as an exact command or as a conservative command
-prefix (for example `Bash(go test:*)`), while file-editing tools share session
-edit grants and persist path-scoped rules such as `Edit(src/app.go)`.
-Parameter/arithmetic expansions, assignments, heredocs, file redirects, and globs cannot reuse a bare
-Bash, prefix, or glob allow; a user-approved reusable choice saves the whole
-command as `Bash=<literal>`. They still follow normal fallback, so Auto executes
-them without an extra prompt. Command/process substitution, a dynamic command
-name, `eval`, `source`, shell `-c`, inline runtime code, and unparseable forms
-require a human in interactive Ask/Auto. Headless Ask/Auto/DontAsk reject that
-nested/indirect class unless an exact literal exists; YOLO may bypass it.
-Advanced users can set `[permissions] allow_dynamic_bash = true` to let an
-Allow fallback, including Auto, cover that class; explicit `ask` and `deny`
-rules still take precedence.
-Because a headless run has no approval UI, the default Ask posture also fails
-closed on ordinary writer fallback and explicit ask rules. Use
-`reasonix run --auto ...`, `-y`, or `--permission-mode auto` when unattended
-automation should allow ordinary writer fallback; configured `ask` and `deny`
-rules always remain authoritative.
+The active permission preset supplies the enforced filesystem boundary for
+Bash, file tools, background processes, and subagents. `workspace-write` runs
+ordinary builds, tests, pipes, command substitutions, and inline scripts without
+syntax-based prompts while confining writes to the workspace and private session
+temporary directory. A write outside that boundary can be allowed once or for
+the displayed directory during the current session. Permanent approval is not
+offered.
 
-Ask is not read-only: after approval, a writer can still run. Permissions decide
-whether to allow or prompt; the Sandbox is the enforced capability boundary.
-The sandbox remains a second boundary after authorization; confinement cannot
-make ambiguous command parsing safe to authorize automatically.
+Configured `deny` rules always win. Installed MCP servers and plugins are trusted
+in `workspace-write`; unknown side-effect capabilities in `read-only` still need
+authorization. If the platform sandbox is unavailable, restricted presets fail
+closed instead of offering an unconfined retry.
 
 Permissions are *policy* (which calls to allow / prompt). The **sandbox** is
 *enforcement*: they are two layers. A permitted call still cannot write outside
@@ -948,9 +931,7 @@ locally — `/help` lists them all. Built-in **skills** such as `/init`,
 at `reasonix doctor capabilities` (see
 [Capability diagnostics](./CAPABILITY_DIAGNOSTICS.md)). `/new` starts a new
 session while saving the previous transcript for history/resume; `/clear`
-discards the current context without saving it — it asks for confirmation,
-except in YOLO mode where it clears immediately (YOLO already opts out of
-confirmations). `/tree`
+discards the current context without saving it and asks for confirmation. `/tree`
 shows saved conversation branches, `/branch [name]` forks the current
 conversation tip, `/branch <turn> [name]` forks from an earlier checkpointed
 turn, and `/switch <id|name>` loads another branch. **Custom commands** are
@@ -1014,13 +995,10 @@ schemas. Use `/memory recall` to see the selected IDs, scores, reasons,
 freshness, budget, and suppression decision.
 
 New, bounded, non-sensitive project/reference facts can be created
-automatically with no setup or approval click. In Ask, global facts, user
-preferences, feedback, updates, duplicates, sensitive/oversized content, and
-every `forget` require explicit confirmation. Interactive Auto treats these
-memory tools as normal fallback operations while preserving explicit `ask` and
-`deny` rules; interactive YOLO bypasses memory ask prompts but still honors
-deny. The storage layer makes the automatic create grant create-only, so it
-cannot overwrite a fact that appears concurrently.
+automatically with no setup or approval click. Other memory changes follow the
+active permission preset and explicit `ask` / `deny` rules. The storage layer
+makes the automatic create grant create-only, so it cannot overwrite a fact
+that appears concurrently.
 A top-level headless controller may use the same one-shot low-risk create path;
 sub-agents and headless surfaces without the owning scoped controller fail closed.
 
@@ -1123,21 +1101,13 @@ The default is `0` (off). Reaching a positive token budget produces one summary
 and a resumable `budget_spend` pause. `/goal resume` grants a fresh configured
 slice while cumulative Goal statistics remain intact. Explicit positive
 `max_steps`, task time, and task cost budgets remain available as well.
-Progress is goal-scoped and novelty based:
-new read/search results, mutations, verification, todo/signoff changes, and
-reviews advance the goal; an exact tool/argument/result repeat does not.
 Cumulative turns, tokens, real provider requests, and active work time are
 tracked and shown as statistics; a token limit appears only when explicitly
-configured. A paused goal keeps its todos, evidence
-checkpoint, and runtime history — use `/goal resume` to continue, or `/goal
+configured. A paused goal keeps its todos and runtime history — use `/goal resume` to continue, or `/goal
 pause` to pause a running goal manually. `/goal status` shows turns, requests,
-tokens, and work time. Repeated host failures, zero-evidence rounds, and Todo
-stall thresholds inject a strategy redirect and reset their intervention epoch;
-they do not pause the Goal. At the end of every goal turn
-the model reports its disposition through the structured `update_goal` tool
-(continue/complete/blocked); when no report arrives, an independent bounded
-evaluator judges the turn once, and any evaluator failure pauses the goal
-instead of continuing silently.
+tokens, and work time. Exact consecutive tool calls receive reminders at the
+third, fifth, and eighth occurrence; the calls still execute. At the end of every goal turn
+the model reports its judgment through `update_goal`: `complete` commits its completion declaration at normal turn end, `blocked` stops continuation, and `continue` or no report keeps the Goal active. No evaluator or host quality check decides completion. Failed checks and unfinished todos remain unchanged. Restoring or forking loads the Goal without activating it; start or resume explicitly.
 
 For complex work, write the objective as a
 [task contract](./TASK_CONTRACT.md): Context, Request, Output format,
@@ -1148,24 +1118,13 @@ information only the user can provide.
 
 Legacy simple/write/research classes are still inferred for sidecar and CLI
 compatibility, but they no longer select an execution quota. There is no
-separate research runtime to configure. Goal state stays in the normal session sidecar, progress
-comes only from novel host receipts, canonical todos, `complete_step`, review
-and the evidence checkpoint, and completion is decided by closed-loop readiness
-plus the bounded Goal evaluator. An `update_goal`
-`completion.unverified` account is honored for checks the model could not run; a second
-identical complete on the same leftover checks finishes the Goal instead of
-looping. Legacy `.reasonix/autoresearch/<task-id>/` archives are
-read-only: an explicit old path can be recovered as an ordinary Goal, but new
-runs never create or update those directories. Deprecated budget flags are
-accepted for compatibility but are hidden from help and completion.
+separate research runtime to configure. Goal state and actual usage stay in the normal session sidecar. Legacy `.reasonix/autoresearch/<task-id>/` archives remain read-only; explicit old paths can be recovered as ordinary Goals. Deprecated budget flags are accepted for compatibility but hidden from help and completion.
 
-### Ordered batch sign-offs
+### Model task progress
 
-The host may process multiple `complete_step` calls from one provider tool-call
-round. They must follow the canonical Todo order, and each step's work and
-evidence must already exist before its sign-off call. The host advances the
-Todo state after each successful call; skipped, pending, or out-of-order steps
-remain rejected. This does not change the provider-visible tool schema.
+`todo_write` updates task progress. The host does not finish todos when a turn
+or Goal ends. `complete_step` is absent from discovery; an old call returns a
+normal `tool_retired` result and never changes task state.
 
 ## @ references
 
@@ -1366,23 +1325,10 @@ non-destructive MCP, while a strict child requires an explicit reader hint and
 never exposes writers at all.
 
 Reasonix uses **fact-driven execution**. Ordinary requests always enter the
-executor. There is no automatic task mode. The one session role is the quality floor: standard (default) or delivery; facts can still raise it. Planner,
+executor. There is no automatic task mode or selectable quality floor. Planner,
 Goal, permission, sandbox, and the task contract are independent states.
 
-Standard and Delivery do not perform general hidden final-readiness retries.
-Delivery returns readiness gaps as recoverable results and exposes the existing
-`Continue checks` action; the user must activate it before another recovery turn
-starts. Standard keeps verification, review and sign-off gaps as completion
-attention. Separately, a Standard execution turn that successfully writes one
-current `in_progress` todo may continue inside the same foreground `Agent.Run`
-when the trusted host knows the user asked for execution. This repair is excluded
-from Plan, Goal, Delivery, read-only, recovery, cancellation, and queued-user-work
-boundaries. It sends one fixed continuation prompt, permits a second only after a
-new host receipt, and never exceeds two prompts. Goal and approved Plan retain
-their own state-machine continuation. Historical canonical todos remain visible
-but idle ones render as Ready to continue rather than In progress; their Continue
-action targets the exact visible session. Provider-level stream/truncation
-recovery remains independent of final-readiness recovery.
+Ordinary turns end when the model ends normally, even with unfinished todos or failed checks. There are no quality retries or todo-driven continuation rounds. Active Goals alone drive automatic continuation; approved Plans execute as ordinary tasks. Historical checkpoints remain available through an explicit `Continue checks` request, without restoring quality gates. Protocol recovery, cancellation, and resource limits remain independent.
 
 Every task shares the same provider-visible core tool surface: direct
 read/bash/edit/write, background-shell lifecycle tools, `ask`/`compress` when
@@ -1392,23 +1338,7 @@ never expands the top-level provider schema, so the prompt-cache tool prefix
 stays stable across every task. The Harness minimal preset is not a task
 complexity mode.
 
-The model decides whether to investigate, write todos, or spawn a sub-agent.
-The host then builds verification obligations from the actual tool call, the
-real target path, and the execution receipt:
-
-- A read-only call creates no obligation.
-- A local docs, i18n, fixture, or style edit is advisory targeted verification.
-- A single production-file edit is recoverable targeted verification plus
-  diff review.
-- Multi-file or unclear local writes require a todo and criteria first.
-- Schema, migration, public-interface, auth, or destructive work becomes
-  strict verification, review, and sign-off after the write is observed.
-- Goal items and approved Plan criteria are always strict.
-- Prompt words such as OAuth or token never create action risk by themselves.
-
-Meta tools such as `task`, `run_skill`, and `review` are not counted as mutations
-by themselves — only real child writes are. Read-only analysis remains available
-without forcing a write.
+The model decides whether to investigate, update todos, verify changes, or request review. User and project instructions stay in task context. File counts, authentication paths, schemas, migrations, and explicit verification language do not create host acceptance obligations. The host retains action permissions, preapproval Plan write restrictions, sandboxing, workspace leases, and structured-file stale-version protection. An ordinary tool failure does not skip later independent calls in the same batch. Results show actual commands, failures, interruptions, and checks made stale by later edits; model completion reports are separate from these facts.
 
 For interactive frontends, Plan Mode is always an explicit user choice. Select
 Plan in the desktop collaboration-mode control or cycle to Plan with

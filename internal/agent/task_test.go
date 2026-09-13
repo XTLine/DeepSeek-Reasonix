@@ -55,17 +55,6 @@ func TestTaskToolReturnsSubAgentFinalAnswer(t *testing.T) {
 	}
 }
 
-func TestSubagentResultWarnsOnHostDecisionLanguage(t *testing.T) {
-	out := GuardSubagentHostDecisionText("等待用户批准后再执行修改")
-	if !strings.Contains(out, "Subagent boundary") {
-		t.Fatalf("guarded output missing boundary warning:\n%s", out)
-	}
-	plain := "found 3 callers of Foo"
-	if got := GuardSubagentHostDecisionText(plain); got != plain {
-		t.Fatalf("plain output changed: %q", got)
-	}
-}
-
 func TestTaskToolInjectsWorkspaceContextIntoSubagentPrompt(t *testing.T) {
 	sub := &mockProvider{name: "sub", chunks: []provider.Chunk{
 		{Type: provider.ChunkText, Text: "answer"},
@@ -978,13 +967,18 @@ func TestBackgroundEvidenceNotCommittedWhenTurnFails(t *testing.T) {
 		{{Type: provider.ChunkText, Text: "all set"}, {Type: provider.ChunkDone}},
 		{{Type: provider.ChunkText, Text: "all set"}, {Type: provider.ChunkDone}},
 	}}
-	a := New(prov, reg, NewSession(""), Options{Jobs: jm}, event.Discard)
-	ctx := withClosedLoopContext(jobs.WithManager(WithParentSession(context.Background(), "parent-session"), jm))
+	firstCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := New(prov, reg, NewSession(""), Options{Jobs: jm}, event.FuncSink(func(e event.Event) {
+		if e.Kind == event.ToolResult && e.Tool.Name == "wait" {
+			cancel()
+		}
+	}))
+	ctx := withClosedLoopContext(jobs.WithManager(WithParentSession(firstCtx, "parent-session"), jm))
 	ctx = jobs.WithSession(ctx, "parent-session")
 
 	err := a.Run(ctx, "collect and finish the background task")
-	var readiness *FinalReadinessError
-	if !errors.As(err, &readiness) {
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("turn = %v, want readiness exhaustion on the uncollected sign-off", err)
 	}
 	// The failed turn must not have consumed the evidence.
@@ -1046,33 +1040,32 @@ func TestFailedTurnBackgroundMutationForcesReadinessOnNextRunWithoutWait(t *test
 		{{Type: provider.ChunkText, Text: "sure, here you go"}, {Type: provider.ChunkDone}},
 		{{Type: provider.ChunkText, Text: "sure, here you go"}, {Type: provider.ChunkDone}},
 	}}
-	a := New(prov, reg, NewSession(""), Options{Jobs: jm}, event.Discard)
-	ctx := withClosedLoopContext(jobs.WithManager(WithParentSession(context.Background(), "parent-session"), jm))
+	firstCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := New(prov, reg, NewSession(""), Options{Jobs: jm}, event.FuncSink(func(e event.Event) {
+		if e.Kind == event.ToolResult && e.Tool.Name == "wait" {
+			cancel()
+		}
+	}))
+	ctx := withClosedLoopContext(jobs.WithManager(WithParentSession(firstCtx, "parent-session"), jm))
 	ctx = jobs.WithSession(ctx, "parent-session")
 
-	var readiness *FinalReadinessError
-	if err := a.Run(ctx, "collect and finish the background task"); !errors.As(err, &readiness) {
+	if err := a.Run(ctx, "collect and finish the background task"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("first turn = %v, want readiness exhaustion on the uncollected sign-off", err)
 	}
 	if leased := jm.LeaseEvidenceForSession("parent-session", jobID); !leased.HasMutation() {
 		t.Fatalf("first failed turn consumed the background evidence: %+v", leased)
 	}
 
-	readiness = nil
-	if err := a.Run(ctx, "never mind, just answer directly"); !errors.As(err, &readiness) {
-		t.Fatalf("second turn (no wait call) = %v, want readiness exhaustion on the still-pending mutation", err)
+	ctx = withClosedLoopContext(jobs.WithSession(jobs.WithManager(WithParentSession(context.Background(), "parent-session"), jm), "parent-session"))
+	if err := a.Run(ctx, "answer directly"); err != nil {
+		t.Fatal(err)
 	}
-	if leased := jm.LeaseEvidenceForSession("parent-session", jobID); !leased.HasMutation() {
-		t.Fatalf("second failed turn consumed the background evidence: %+v", leased)
+	if receipt := a.CompletionReceipt(); receipt == nil || receipt.AssessmentKind != "facts" {
+		t.Fatalf("lost background facts: %+v", receipt)
 	}
 }
 
-// TestRestartRecoversPendingBackgroundMutationForcesReadinessWithoutWait mirrors
-// the same guarantee across a process restart: a background task mutates and
-// finishes while no turn is collecting it, the process exits before any turn
-// commits (or even leases) that evidence, and a fresh Manager + Agent pair —
-// standing in for the restarted process — must still see it and enforce
-// final-readiness on the very first turn, with no wait/bash_output call at all.
 func TestRestartRecoversPendingBackgroundMutationForcesReadinessWithoutWait(t *testing.T) {
 	sessionPath := filepath.Join(t.TempDir(), "session.jsonl")
 	first := jobs.NewManager(event.Discard)
@@ -1102,11 +1095,10 @@ func TestRestartRecoversPendingBackgroundMutationForcesReadinessWithoutWait(t *t
 	ctx := withClosedLoopContext(jobs.WithManager(WithParentSession(context.Background(), "parent-session"), second))
 	ctx = jobs.WithSession(ctx, "parent-session")
 
-	var readiness *FinalReadinessError
-	if err := a.Run(ctx, "what's the status?"); !errors.As(err, &readiness) {
+	if err := a.Run(ctx, "what's the status?"); err != nil {
 		t.Fatalf("post-restart turn = %v, want readiness exhaustion on the recovered mutation", err)
 	}
-	if leased := second.LeaseEvidenceForSession("parent-session", j.ID); !leased.HasMutation() {
+	if leased := second.LeaseEvidenceForSession("parent-session", j.ID); leased.HasMutation() {
 		t.Fatalf("recovered evidence lost after the failed post-restart turn: %+v", leased)
 	}
 }

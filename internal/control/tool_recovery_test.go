@@ -39,12 +39,12 @@ func TestToolRecoverySnapshotStripsArgumentsAndIsStable(t *testing.T) {
 	}
 }
 
-func TestToolRecoveryRejectsStaleSnapshot(t *testing.T) {
+func TestToolRecoveryActionsAreRetired(t *testing.T) {
 	c := New(Options{Sink: event.Discard})
 	v := c.ToolRecoverySnapshot()
 	v.Revision = "stale"
 	_, err := c.ResolveToolRecovery(context.TODO(), ToolRecoveryRequest{SessionPath: v.SessionPath, RuntimeEpoch: v.RuntimeEpoch, Revision: v.Revision, Action: "confirm"})
-	if err == nil || !strings.Contains(err.Error(), "snapshot changed") {
+	if err == nil || !strings.Contains(err.Error(), "tool_recovery_retired") {
 		t.Fatalf("err=%v", err)
 	}
 }

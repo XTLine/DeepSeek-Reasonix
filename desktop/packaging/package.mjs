@@ -7,7 +7,7 @@
 // usage: node desktop/packaging/package.mjs <os/arch> <version> [channel]
 import { defaultSanitizePackageJson, packager } from "@electron/packager";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,7 @@ import {
   versionTag,
   walkFiles,
 } from "./lib.mjs";
+import { verifyFrontendArtifact } from "../frontend/scripts/artifact-identity.mjs";
 
 const desktop = dirname(dirname(fileURLToPath(import.meta.url)));
 const repo = dirname(desktop);
@@ -52,7 +53,20 @@ function require(path, what) {
 }
 
 const frontendDist = join(desktop, "frontend", "dist");
-if (process.env.REASONIX_PACKAGE_REUSE_FRONTEND === "1" && existsSync(join(frontendDist, "index.html"))) {
+if (process.env.REASONIX_PACKAGE_REUSE_FRONTEND === "1") {
+  const pnpmVersion = (process.env.REASONIX_FRONTEND_PNPM_VERSION ?? "").trim();
+  if (!pnpmVersion) throw new Error("REASONIX_FRONTEND_PNPM_VERSION is required when reusing a frontend artifact");
+  verifyFrontendArtifact({
+    root: repo,
+    dist: frontendDist,
+    manifest: process.env.REASONIX_FRONTEND_ARTIFACT_MANIFEST || join(desktop, "frontend", ".reasonix-frontend-artifact.json"),
+    shell: "electron",
+    channel,
+    sourceSHA: process.env.GITHUB_SHA || undefined,
+    runId: process.env.GITHUB_RUN_ID || undefined,
+    attempt: process.env.GITHUB_RUN_ATTEMPT || undefined,
+    pnpmVersion,
+  });
   console.log(`==> reusing ${frontendDist}`);
 } else {
   console.log(`==> frontend build:electron (channel ${channel})`);
@@ -68,13 +82,27 @@ if (!existsSync(join(shellDist, "desktopContract.json")) && process.env.REASONIX
   throw new Error(`desktop contract is missing from ${shellDist}; run: cd desktop && go run . -emit-contract frontend/src/generated`);
 }
 
+const sourceMapDir = join(desktop, "build", "sourcemaps", target.key);
+rmSync(sourceMapDir, { recursive: true, force: true });
+mkdirSync(sourceMapDir, { recursive: true });
+for (const name of readdirSync(shellDist).filter((name) => name.endsWith(".map"))) {
+  cpSync(join(shellDist, name), join(sourceMapDir, name));
+}
+for (const name of walkFiles(frontendDist).filter((name) => name.endsWith(".map"))) {
+  const destination = join(sourceMapDir, "frontend", name);
+  mkdirSync(dirname(destination), { recursive: true });
+  cpSync(join(frontendDist, name), destination);
+}
+
 const staging = mkdtempSync(join(tmpdir(), "reasonix-package-"));
 const outDir = join(desktop, "build", "electron", target.key);
 try {
-  cpSync(frontendDist, join(staging, "app"), { recursive: true });
+  cpSync(frontendDist, join(staging, "app"), {
+    recursive: true,
+    filter: (source) => !source.endsWith(".map"),
+  });
   mkdirSync(join(staging, "icons"), { recursive: true });
   cpSync(join(desktop, "build", "appicon.png"), join(staging, "icons", "appicon.png"));
-  cpSync(join(desktop, "build", "linux", "icons"), join(staging, "icons", "linux", "icons"), { recursive: true });
   // Packaged launches always read this identity, including the full version
   // tag. Environment overrides belong only to the unpackaged development shell.
   writeFileSync(join(staging, "build.json"), JSON.stringify(buildInfo({ version, channel, commit, electronVersion, target, buildTime }), null, 2) + "\n");
@@ -99,6 +127,9 @@ try {
   mkdirSync(outDir, { recursive: true });
   const bundle = target.os === "darwin" ? join(outDir, `${PRODUCT.name}.app`) : join(outDir, "app");
   renameSync(target.os === "darwin" ? join(finalPath, `${PRODUCT.name}.app`) : finalPath, bundle);
+  // The packager stages the app tree in a mkdtemp directory (0700) and renames
+  // it into place; dpkg installs that mode as root:root, hiding app/ from users.
+  if (target.os !== "darwin") chmodSync(bundle, 0o755);
   rmSync(options.out, { recursive: true, force: true });
 
   if (target.os === "windows") {

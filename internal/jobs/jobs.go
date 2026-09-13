@@ -497,7 +497,6 @@ func mutationEvidenceForArtifact(summary evidence.ChildEvidenceSummary) *artifac
 		return nil
 	}
 	return &artifactMutationEvidence{
-		Risk:  string(evidence.ClassifyMutationRiskWithin(summary.Receipts, firstMutation, summary.WorkspaceRoot)),
 		Paths: summary.MutationPaths(),
 	}
 }
@@ -512,9 +511,8 @@ func mutationEvidenceFromArtifact(meta artifactMeta) evidence.ChildEvidenceSumma
 		// opaque mutation. A missing summary only proves the mutation state
 		// was not recorded, not that the task made no changes: a legacy
 		// background writer task collected after upgrade could carry real,
-		// unreviewed edits. Recovering it as opaque RiskHigh forces fresh
-		// inspection and review rather than silently skipping it, and keeps
-		// downgrade coexistence on a shared state directory conservative.
+		// edits. Preserve the existing unknown-mutation compatibility record;
+		// it never implies verification or creates an acceptance requirement.
 		return opaqueRecoveredTaskMutation()
 	}
 	if meta.MutationEvidence == nil {
@@ -525,18 +523,7 @@ func mutationEvidenceFromArtifact(meta artifactMeta) evidence.ChildEvidenceSumma
 	}
 
 	paths := append([]string(nil), meta.MutationEvidence.Paths...)
-	switch evidence.RiskLevel(meta.MutationEvidence.Risk) {
-	case evidence.RiskLow, evidence.RiskMedium:
-		// Known paths preserve the original adaptive risk level while still
-		// requiring fresh inspection and verification after recovery.
-	case evidence.RiskHigh:
-		// The original risk may have come from an opaque or privileged tool,
-		// which the sanitized artifact intentionally does not retain. Recover it
-		// as opaque so restart cannot downgrade the security-review requirement.
-		paths = nil
-	default:
-		return opaqueRecoveredTaskMutation()
-	}
+	// Historical risk labels do not erase observed paths or create obligations.
 	return evidence.ChildEvidenceSummary{Receipts: []evidence.Receipt{{
 		ToolName: recoveredBackgroundTaskToolName,
 		Success:  true,

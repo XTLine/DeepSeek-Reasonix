@@ -35,12 +35,6 @@ func (p pathBoundCapabilityProxy) bindToolResultSession(session func() *Session)
 	}
 }
 
-func (p pathBoundCapabilityProxy) bindReadStrategyState(state func() *incompleteReadState) {
-	if binder, ok := p.inner.(readStrategyStateBinder); ok {
-		binder.bindReadStrategyState(state)
-	}
-}
-
 func (p pathBoundCapabilityProxy) bindMCPListObserver(observer func(mcpListObservation)) {
 	if binder, ok := p.inner.(mcpListObserverBinder); ok {
 		binder.bindMCPListObserver(observer)
@@ -136,14 +130,6 @@ func (w pathBoundWriter) DeclareEvidenceTarget(ctx context.Context, args json.Ra
 		return declarer.DeclareEvidenceTarget(ctx, args)
 	}
 	return tool.EvidenceTargetInfo{}, fmt.Errorf("writer does not declare evidence")
-}
-
-func (w pathBoundWriter) ResolveAnchoredTextTarget(ctx context.Context, args json.RawMessage) (tool.AnchoredTextTargetInfo, error) {
-	resolver, ok := w.inner.(tool.AnchoredTextTarget)
-	if !ok {
-		return tool.AnchoredTextTargetInfo{}, fmt.Errorf("tool %q does not expose an anchored target", w.inner.Name())
-	}
-	return resolver.ResolveAnchoredTextTarget(ctx, args)
 }
 
 func (w pathBoundWriter) Execute(ctx context.Context, args json.RawMessage) (string, error) {

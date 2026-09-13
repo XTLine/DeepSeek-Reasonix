@@ -2,10 +2,12 @@
 
 [English](DESKTOP_SHELL_MIGRATION.md)
 
-本文是把 Wails 桌面壳替换为 Electron、同时保留 Go 内核、Go 桌面业务层和 React 界面的
-架构决策记录与工作计划。在最终阶段关闭之前，它是迁移分支的参考；线路契约见
-[宿主协议](DESKTOP_HOST_PROTOCOL.zh-CN.md)，生成的入口清单见
-`docs/desktop-migration/INVENTORY.md`。
+本文保留 Wails 到 Electron 的架构决策、迁移证据和待完成验收项。当前实现使用
+Electron、Go 桌面服务和 React；Wails 入口及构建依赖已经移除。下文的迁移阶段和
+基线命令描述这次转换，不作为日常开发流程。当前开发请参阅
+[贡献指南](../CONTRIBUTING.md)、[宿主协议](DESKTOP_HOST_PROTOCOL.zh-CN.md)和
+[生成的入口清单](desktop-migration/INVENTORY.md)。移除旧壳并不表示所有平台验收
+均已通过；下文仍明确保留已记录的待验收项。
 
 ## 决策
 

@@ -120,7 +120,7 @@ func interruptedRecoveryBlock(r *provider.InterruptedTurnRecovery) string {
 			b.WriteString(" (assistant text)\n")
 		}
 	}
-	b.WriteString("Before continuing, inspect the current workspace and prior completed tool results. Do not blindly repeat completed writes. For outcome-unknown calls (including legacy interrupted calls without execution evidence), first inspect side effects and external state; never assume they did not run. Only retry after verifying it is safe. Calls marked not_started may be planned again with complete arguments.\n")
+	b.WriteString("Use these facts when deciding the next action. Read-only or idempotent calls may be retried when useful. For outcome-unknown calls, inspect workspace or external state before retrying operations with side effects, and ask the user when the safe action cannot be inferred. Calls marked not_started may be planned again with complete arguments.\n")
 	fmt.Fprintf(&b, "</%s>", interruptedRecoveryTag)
 	return b.String()
 }

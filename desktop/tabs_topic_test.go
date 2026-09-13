@@ -71,47 +71,6 @@ func waitForTopicDirMarker(t *testing.T, dir, marker string) {
 	}
 }
 
-func waitForCatalogTopic(t *testing.T, app *App, scope, workspaceRoot, topicID string) []ProjectNode {
-	t.Helper()
-	app.startSessionCatalog()
-	t.Cleanup(func() { app.stopSessionCatalog(time.Second) })
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		nodes := app.ListProjectTree()
-		for _, folder := range nodes {
-			if scope == "project" && (!sameProjectRoot(folder.Root, workspaceRoot) || folder.Kind != "project") {
-				continue
-			}
-			if scope != "project" && folder.Kind != "global_folder" {
-				continue
-			}
-			for _, topic := range folder.Children {
-				if topic.TopicID == topicID {
-					return nodes
-				}
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("catalog topic %q did not become visible", topicID)
-	return nil
-}
-
-func waitForCatalogTreeCondition(t *testing.T, app *App, description string, matches func([]ProjectNode) bool) []ProjectNode {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	var nodes []ProjectNode
-	for time.Now().Before(deadline) {
-		nodes = app.ListProjectTree()
-		if matches(nodes) {
-			return nodes
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("catalog did not reach %s: %#v", description, nodes)
-	return nil
-}
-
 func writeTopicSession(t *testing.T, dir, name, topicID, topicTitle, workspaceRoot string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -3744,7 +3703,19 @@ func TestProjectTreeMigratesNewCLISessionAfterProjectDirMarker(t *testing.T) {
 	firstTopicID := legacySessionTopicID(first)
 
 	app := NewApp()
-	nodes := waitForCatalogTopic(t, app, "project", projectRoot, firstTopicID)
+	app.startSessionCatalog()
+	_ = waitForSessionCatalogForTest(t, app, nil)
+	t.Cleanup(func() { app.stopSessionCatalog(time.Second) })
+	// Exercise the same explicit reconcile path used after a watcher event. The
+	// catalog starts asynchronously, so wait for its publication before asking
+	// it to scan the project directory.
+	if !app.requestSessionCatalogReconcile(dir) {
+		t.Fatal("request initial project session catalog reconcile")
+	}
+	nodes := waitForCatalogTreeCondition(t, app, "the first project CLI session", func(nodes []ProjectNode) bool {
+		return len(nodes) == 1 && nodes[0].Kind == "project" && len(nodes[0].Children) == 1 &&
+			nodes[0].Children[0].TopicID == firstTopicID
+	})
 	if len(nodes) != 1 || nodes[0].Kind != "project" || len(nodes[0].Children) != 1 || nodes[0].Children[0].TopicID != firstTopicID {
 		t.Fatalf("first project CLI session should appear in project tree, got %#v; want topic %q", nodes, firstTopicID)
 	}
@@ -3754,7 +3725,9 @@ func TestProjectTreeMigratesNewCLISessionAfterProjectDirMarker(t *testing.T) {
 	second := writeLegacySession(t, dir, "second-cli-project.jsonl", "second cli project prompt", time.Now())
 	secondTopicID := legacySessionTopicID(second)
 
-	app.requestSessionCatalogReconcile(dir)
+	if !app.requestSessionCatalogReconcile(dir) {
+		t.Fatal("request updated project session catalog reconcile")
+	}
 	nodes = waitForCatalogTreeCondition(t, app, "a reconciled newest project CLI session", func(nodes []ProjectNode) bool {
 		return len(nodes) == 1 && nodes[0].Kind == "project" && len(nodes[0].Children) == 2 &&
 			nodes[0].Children[0].TopicID == secondTopicID && nodes[0].Children[0].LastActivityAt > 0 &&

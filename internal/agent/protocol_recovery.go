@@ -170,7 +170,7 @@ func (a *Agent) protocolRecord(frozen samplingRequest, state string) provider.Pr
 	if prefix > 0 {
 		anchor = reasoningReplayMessageFingerprint(frozen.req.Messages[prefix-1])
 	}
-	return provider.ProtocolRecoveryRecord{Evidence: protocolEvidenceDigest(a.Session().Snapshot()), Version: 1, ID: rand.Text(), State: state, Scope: a.protocolRecoveryScope(), Fingerprint: protocolDigest(canonical), Count: len(canonical), Prefix: prefix, Anchor: anchor, Run: a.recovery.runSeq.Load()}
+	return provider.ProtocolRecoveryRecord{Evidence: protocolEvidenceDigest(a.Session().Snapshot()), Version: 1, ID: rand.Text(), State: state, Scope: a.protocolRecoveryScope(), Fingerprint: protocolDigest(canonical), Count: len(canonical), Prefix: prefix, Anchor: anchor, Run: a.protocolRunSeq.Load()}
 }
 
 func (a *Agent) offerProtocolRecovery(frozen samplingRequest, err error) error {

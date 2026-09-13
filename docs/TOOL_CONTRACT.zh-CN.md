@@ -1,8 +1,8 @@
 # 工具合约
 
-读取覆盖、源版本观察和操作级写入守卫各自独立。普通 `inspect`/`range` 部分读取
-不阻塞终答；显式 `intent=full` 和 host Stop 仍保留有界完成约束。恢复及兼容说明见
-[读取证据生命周期](READ_EVIDENCE_LIFECYCLE.zh-CN.md)。
+结构化文件修改要求宿主观察过目标的当前版本。读取任意文本窗口即可建立观察；
+读取覆盖率和全文完成度不再构成宿主门禁。详见
+[文件观察生命周期](READ_EVIDENCE_LIFECYCLE.zh-CN.md)。
 
 <a href="./TOOL_CONTRACT.md">English</a>
 
@@ -13,7 +13,6 @@
 | `bash` | false | 执行 shell 命令并返回 stdout/stderr。构建、测试、git、包管理器等使用它；读写查找文件优先使用专用工具。 |
 | `bash_output` | true | 读取后台 `bash` 或 `task` job 自上次读取后的新增输出和状态。 |
 | `code_index` | true | 轻量内置代码符号索引；优先使用 `lsp_*` 或代码图 MCP，缺失时用它兜底。 |
-| `complete_step` | true | 记录已批准计划中一个步骤的完成。优先用回执 ID（`receipt_ids`）引用证据；普通任务下宿主无法确认的内容随签收一并报告而不拒绝，交付底线仍要求证据。 |
 | `compress` | true | 压缩当前模型可见对话中选定的范围，不删除可见历史。仅在用户明确要求压缩上下文时使用；锚点必须是某条真实用户消息中唯一、精确的原文片段。 |
 | `delete_range` | false | 用精确 start/end 文本锚点删除文件中的连续范围。 |
 | `delete_symbol` | false | 用 Go AST 删除 Go 源文件中的命名符号。 |
@@ -25,12 +24,14 @@
 | `move_file` | false | 移动或重命名文件。 |
 | `multi_edit` | false | 对单个文件原子应用多个编辑。 |
 | `notebook_edit` | false | 编辑 Jupyter notebook 的单个 cell。 |
-| `read_file` | true | 按可分页的行号格式读取文本文件。`intent` 声明意图：`inspect`（无范围时的默认，有界预览）、`range`（有 offset/limit 时的默认，指定窗口）、`full`（扫描全文并分页到结尾）。续页时把结果里的 `cursor` 原样传回，由宿主定位到确切的下一位，无需自行计算 offset。无依赖的读取应同轮下发。 |
-| `todo_write` | true | 记录并替换当前工作的结构化任务列表。 |
+| `present` | true | 在写入完成后、最终回答前声明 1 到 8 个现有文件为面向用户的交付物。宿主原子校验路径，只记录路径和可选说明；不会复制、执行、上传文件，也不会把文件字节暴露给模型结果。 |
+| `read_file` | true | 读取一个有界文本窗口，可指定行 offset/limit。成功窗口会观察当前文件版本，供后续结构化修改使用。旧 intent 和 cursor 仅作导航兼容，不会产生全文完成要求。 |
+| `todo_write` | true | 替换由模型维护的任务列表，状态描述实际进度，不要求串行执行或宿主签收。 |
+| `update_goal` | true | 报告活动 Goal 的模型判断：continue、complete 或 blocked。completion 是模型声明；正常结束和身份校验仍生效，真实检查独立保留，无 evaluator 或质量门禁。 |
 | `view_image` | true | 按路径读取本地 PNG、JPEG、GIF 或 WebP，通过结构化图片通道交给视觉模型。最大 3 MiB、4000 万像素，沿用读取权限。 |
 | `wait` | true | 等待后台 job 完成并返回最终输出。 |
 | `web_fetch` | true | 通过 HTTP/HTTPS 获取 URL 文本内容。 |
-| `write_file` | false | 写入文件内容，必要时创建父目录。 |
+| `write_file` | false | 创建或替换文本文件。缺失目标以不可覆盖方式创建；替换现有目标要求 read_file 或上一次成功结构化修改留下当前版本观察。 |
 
 ## Schema 快照
 
@@ -48,12 +49,7 @@ go test ./internal/tool -run TestBuiltinToolContractDocumentation
 
 每个会话都使用这套 Executor 工具面，并额外提供稳定代理 `use_capability`
 （list/inspect/call/decline），用于在不改变 provider 可见 Schema 的前提下发现和调用按需
-MCP（含 `auto_start=false`）。宿主根据真实工具动作建立验证义务：后续相关写入会使旧的
-验证、复查和签收重新变为未满足；Goal 项和已批准 Plan 的验收项为 Strict；在交付底线下
-`complete_step` 必须引用最后一次相关写入之后的证据，普通任务则按真实工具结果结算，
-宿主无法确认的内容随签收一并报告而不拒绝。Skill/MCP 的 require/prefer 路由受门禁约束（只读回答
-同样不能跳过 require 能力）；触及认证、Schema 或破坏性路径后，结构化 review 的
-`reviewed_paths` 必须有宿主观测到的 read/diff 证据。
+MCP（含 `auto_start=false`）。模型根据任务上下文选择验证、审查与完成；宿主保留动作权限、Plan 批准前写入限制、沙箱、租约和结构化文件的过期版本保护，不从路径推导验收义务，也不要求写入前建立待办。普通工具失败不会跳过同批后续的独立调用；审查由模型按需执行，不依赖专用证明工具。
 
 ## 统一 Boot 工具面
 
@@ -63,7 +59,7 @@ MCP（含 `auto_start=false`）。宿主根据真实工具动作建立验证义�
 `mcp__*` schema）。Planner 与普通可写子 Agent 可调用已安装或项目配置 MCP，不要求
 `readOnlyHint`；Planner 将 `destructiveHint` 留给 Executor，普通子 Agent 走可信 MCP 路径
 （实时授权复核 + 仅显式 deny）。writer/destructive 调用仍会串行并按 mutation 记录，继续受
-证据、工作区租约和闭环门禁约束。严格只读子 Agent 共享同一代理 schema 与 Host 连接，但执行仍要求 `readOnlyHint` 且
+权限、工作区租约和执行安全约束。严格只读子 Agent 共享同一代理 schema 与 Host 连接，但执行仍要求 `readOnlyHint` 且
 非 destructive。双模型会给 Planner 与 Executor 分别挂载独立代理 frontend，确保规划阶段
 发现的 capability 在 handoff 后仍可直接调用；两者 ledger/audit 隔离，但共享 Host 连接。
 单模型会话不启用独立 Planner。

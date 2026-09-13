@@ -91,9 +91,14 @@ func (n notebookEdit) Execute(ctx context.Context, raw json.RawMessage) (string,
 	if err := confineWrite(ctx, effectiveWriteRoots(ctx, n.rootSet, n.roots), n.guard, n.managed, a.Path); err != nil {
 		return "", err
 	}
+	unlock := lockMutationPath(a.Path)
+	defer unlock()
 	src, err := readEditSource(ctx, n.overlay, a.Path)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", a.Path, err)
+	}
+	if err := src.requireObserved(ctx, n.overlay, a.Path); err != nil {
+		return "", err
 	}
 	nb, err := parseNotebook([]byte(src.content))
 	if err != nil {

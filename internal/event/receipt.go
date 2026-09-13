@@ -7,13 +7,14 @@ import "reasonix/internal/checkpoint"
 // carries — what it could not. Unlike the shadow audit this holds content,
 // because a receipt naming no file and no command tells the reader nothing.
 type CompletionReceipt struct {
-	Diff          *checkpoint.TurnChanges
-	Interrupted   bool
-	Verdict       string
-	Changes       []ReceiptChange
-	Verifications []ReceiptVerification
-	Gaps          []ReceiptGap
-	Risks         []string
+	AssessmentKind string
+	Diff           *checkpoint.TurnChanges
+	Interrupted    bool
+	Verdict        string
+	Changes        []ReceiptChange
+	Verifications  []ReceiptVerification
+	Gaps           []ReceiptGap
+	Risks          []string
 }
 
 // ReceiptChange is one mutated path and whether anything looked at it again.

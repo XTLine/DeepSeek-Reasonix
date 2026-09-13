@@ -10,7 +10,6 @@ import (
 
 	"reasonix/internal/agent"
 	"reasonix/internal/runtimepolicy"
-	"reasonix/internal/taskcontract"
 )
 
 const (
@@ -59,17 +58,12 @@ func plannerTurnMetadataFromContext(ctx context.Context) (plannerTurnMetadata, b
 func (c *Controller) withPlannerTurnMetadata(ctx context.Context, userText string, synthetic bool, priorMessages int) context.Context {
 	text := strings.TrimSpace(agent.StripTransientUserBlocks(userText))
 	constraints := runtimepolicy.ParseConstraints(runtimepolicy.StripQuotedConstraints(text))
-	constraints.PolicyFloor = c.qualityFloorConstraint()
 	planMode := c.PlanMode()
 	if planMode {
 		constraints.PlanModeReadOnly = true
 		constraints.ForbidMutation = true
 	}
 	ctx = runtimepolicy.WithContext(ctx, constraints)
-	ctx = agent.WithStandardTodoContinuation(ctx, agent.StandardTodoContinuationPolicy{
-		ExecutionExpected: standardTodoExecutionExpected(text, synthetic, priorMessages, planMode, constraints),
-		ShouldYield:       c.hasPendingUserWork,
-	})
 	return withPlannerTurnMetadata(ctx, plannerTurnMetadata{
 		UserText:               userText,
 		Synthetic:              synthetic,
@@ -77,32 +71,6 @@ func (c *Controller) withPlannerTurnMetadata(ctx context.Context, userText strin
 		ExplicitGoalStart:      c.consumeExplicitGoalStart(),
 		HasConversationContext: priorMessages > 1,
 	})
-}
-
-func standardTodoExecutionExpected(text string, synthetic bool, priorMessages int, planMode bool, constraints runtimepolicy.Constraints) bool {
-	if synthetic || planMode || !constraints.AllowsMutation() || constraints.PolicyFloor == taskcontract.PolicyFloorDelivery {
-		return false
-	}
-	lower := normalizePlannerText(text)
-	if requestsPlanOnly(lower) || requestsPlanApproval(lower) {
-		return false
-	}
-	if NeedsMutation(text) {
-		return true
-	}
-	return priorMessages > 1 && (isExecutionContinuationReply(text) || isContextDependentAction(text))
-}
-
-func isExecutionContinuationReply(text string) bool {
-	if !isContextDependentShortReply(text) {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(text)) {
-	case "no", "n":
-		return false
-	default:
-		return true
-	}
 }
 
 // DecidePlannerRoute applies deterministic precedence rules to a pristine user

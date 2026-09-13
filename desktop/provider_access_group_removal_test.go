@@ -85,7 +85,7 @@ func TestRemoveProviderAccessesRemovesGroupedOpenCodeGoRoutesAtomically(t *testi
 		}
 	}
 	wantFallback := "mimo-pro"
-	if got.DefaultModel != wantFallback || got.Agent.PlannerModel != wantFallback || got.Agent.RecoveryModel != wantFallback || got.Agent.SubagentModel != wantFallback || got.Agent.SubagentModels["review"] != wantFallback {
+	if got.DefaultModel != wantFallback || got.Agent.PlannerModel != wantFallback || got.Agent.RecoveryModel != "" || got.Agent.SubagentModel != wantFallback || got.Agent.SubagentModels["review"] != wantFallback {
 		t.Fatalf("provider refs were not retargeted: default=%q planner=%q recovery=%q subagent=%q skills=%+v", got.DefaultModel, got.Agent.PlannerModel, got.Agent.RecoveryModel, got.Agent.SubagentModel, got.Agent.SubagentModels)
 	}
 	if got.Agent.VisionModel != "" {
@@ -114,7 +114,6 @@ func TestProviderRemovalStateFingerprintCoversAuxiliaryModelReferences(t *testin
 	}{
 		{name: "vision", mutate: func(cfg *config.Config) { cfg.Agent.VisionModel = "provider/model" }},
 		{name: "guardian", mutate: func(cfg *config.Config) { cfg.Agent.GuardianModel = "provider/model" }},
-		{name: "recovery", mutate: func(cfg *config.Config) { cfg.Agent.RecoveryModel = "provider/model" }},
 		{name: "bot default", mutate: func(cfg *config.Config) { cfg.Bot.Model = "provider/model" }},
 		{name: "qq", mutate: func(cfg *config.Config) { cfg.Bot.QQ.Model = "provider/model" }},
 		{name: "dingtalk", mutate: func(cfg *config.Config) { cfg.Bot.Dingtalk.Model = "provider/model" }},

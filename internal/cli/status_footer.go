@@ -7,7 +7,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"reasonix/internal/billing"
-	"reasonix/internal/control"
 	"reasonix/internal/event"
 	"reasonix/internal/i18n"
 	"reasonix/internal/provider"
@@ -222,15 +221,10 @@ func (m chatTUI) primaryStatusLine(modeTag string, shellMode, cancelRequested bo
 	return status
 }
 
-// presetTag mirrors the desktop's preset chips in the status line: the default
-// standard posture stays quiet, delivery is always visible so a /preset switch
-// reads back from the UI.
+// presetTag is retained for the stable footer composition contract. Retired
+// role settings have no status-line representation.
 func (m chatTUI) presetTag() string {
-	if m.ctrl == nil || m.ctrl.QualityFloor() != control.QualityFloorDelivery {
-		return ""
-	}
-	value := themeStyle(activeCLITheme.info).Bold(true).Render(control.QualityFloorDelivery)
-	return footerMetric(i18n.M.ChatStatusPresetLabel, value)
+	return ""
 }
 
 // statusModelWorkGroup is the bounded, session-level group placed at the right

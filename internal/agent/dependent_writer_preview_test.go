@@ -35,11 +35,12 @@ func TestLegacyDependentSameBatchEditRefreshesPreviewBeforeExecution(t *testing.
 		t.Fatal(err)
 	}
 	reg := tool.NewRegistry()
-	for _, tl := range (builtin.Workspace{Dir: dir}).Tools("edit_file") {
+	for _, tl := range (builtin.Workspace{Dir: dir}).Tools("read_file", "edit_file") {
 		reg.Add(tl)
 	}
 	prov := &scriptedProvider{name: "p", turns: [][]provider.Chunk{
 		{
+			toolCallChunk("r1", "read_file", `{"path":"task.txt","limit":1}`),
 			toolCallChunk("c1", "edit_file", `{"path":"task.txt","old_string":"draft","new_string":"ready"}`),
 			toolCallChunk("c2", "edit_file", `{"path":"task.txt","old_string":"ready","new_string":"done"}`),
 			{Type: provider.ChunkDone},
@@ -47,9 +48,7 @@ func TestLegacyDependentSameBatchEditRefreshesPreviewBeforeExecution(t *testing.
 		{{Type: provider.ChunkText, Text: "done"}, {Type: provider.ChunkDone}},
 	}}
 	var events []event.Event
-	// Rollback retains historical chained-edit behavior. The default evidence
-	// pipeline requires prior source evidence and uses multi_edit for a chain.
-	a := New(prov, reg, NewSession(""), Options{ReadPipeline: ReadPipelineOptions{LegacyEvidenceGates: true}}, event.FuncSink(func(e event.Event) {
+	a := New(prov, reg, NewSession(""), Options{}, event.FuncSink(func(e event.Event) {
 		events = append(events, e)
 	}))
 	if err := a.Run(withNoClosedLoop(context.Background()), "advance status twice"); err != nil {
@@ -111,11 +110,7 @@ func TestLegacyDependentSameBatchEditRefreshesPreviewBeforeExecution(t *testing.
 	}
 }
 
-func TestDependentMutationSkippedAfterFailedWriterInBatch(t *testing.T) {
-	// Shell execution contract: after any mutating call fails or is blocked,
-	// later mutations (and verifications) in the same provider batch are not
-	// executed. The first tool may still have written to disk; the second must
-	// return not_run/dependency rather than apply a follow-up edit.
+func TestFailedWriterDoesNotSkipLaterReadAndEdit(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "task.txt")
 	if err := os.WriteFile(path, []byte("status=\"draft\"\n"), 0o600); err != nil {
@@ -123,12 +118,13 @@ func TestDependentMutationSkippedAfterFailedWriterInBatch(t *testing.T) {
 	}
 	reg := tool.NewRegistry()
 	reg.Add(mutateThenFailTool{path: path})
-	for _, tl := range (builtin.Workspace{Dir: dir}).Tools("edit_file") {
+	for _, tl := range (builtin.Workspace{Dir: dir}).Tools("read_file", "edit_file") {
 		reg.Add(tl)
 	}
 	prov := &scriptedProvider{name: "p", turns: [][]provider.Chunk{
 		{
 			toolCallChunk("c1", "mutate_then_fail", `{}`),
+			toolCallChunk("r1", "read_file", `{"path":"task.txt","limit":1}`),
 			toolCallChunk("c2", "edit_file", `{"path":"task.txt","old_string":"ready","new_string":"done"}`),
 			{Type: provider.ChunkDone},
 		},
@@ -142,11 +138,10 @@ func TestDependentMutationSkippedAfterFailedWriterInBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// First tool wrote "ready" then failed; second edit must not run.
-	if string(data) != "status=\"ready\"\n" {
-		t.Fatalf("final file = %q, want partial first write preserved", data)
+	if string(data) != "status=\"done\"\n" {
+		t.Fatalf("final file = %q, want later edit applied", data)
 	}
-	if got := toolResultByID(a.sess.conversation, "c2"); !strings.Contains(got, "earlier modification") {
-		t.Fatalf("second edit result = %q, want dependency skip", got)
+	if got := toolResultByID(a.sess.conversation, "c2"); strings.Contains(got, "earlier modification") || !strings.Contains(got, "edited") {
+		t.Fatalf("second edit result = %q, want normal execution", got)
 	}
 }

@@ -22,7 +22,7 @@ func TestVerifyWindowsPortableVersionedLayout(t *testing.T) {
 	// versioned-v1 root entries
 	writePortableFixture(t, good, "reasonix-launcher.exe", "launcher")
 	writePortableFixture(t, good, "Reasonix.exe", "launcher")
-	writePortableFixture(t, good, "reasonix-cli.exe", "cli")
+	writePortableFixture(t, good, "reasonix-cli.exe", "cli-entry")
 	ver := filepath.Join(good, "versions", "v1.20.0")
 	if err := os.MkdirAll(ver, 0o755); err != nil {
 		t.Fatal(err)
@@ -35,10 +35,14 @@ func TestVerifyWindowsPortableVersionedLayout(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(appDir, "resources", "app"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(appDir, "resources", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	writePortableFixture(t, appDir, "Reasonix.exe", "shell")
 	writePortableFixture(t, filepath.Join(appDir, "resources"), "app.asar", "asar")
 	writePortableFixture(t, filepath.Join(appDir, "resources"), "build.json", "{}")
 	writePortableFixture(t, filepath.Join(appDir, "resources", "app"), "index.html", "<html></html>")
+	writePortableFixture(t, filepath.Join(appDir, "resources", "bin"), "reasonix-cli-launcher.exe", "cli-entry")
 	if err := os.WriteFile(filepath.Join(good, "current.json"), []byte(`{
   "schemaVersion": 1,
   "activeVersion": "v1.20.0",
@@ -81,6 +85,7 @@ func TestDesktopPackagesPreserveNativePlatformLaunchers(t *testing.T) {
 		`./cmd/reasonix-legacy-migrator`,
 		`./cmd/reasonix-launcher`,
 		`cp "$cli_out" "$app/Contents/Resources/service/$CLINAME"`,
+		`ln -s "../Resources/service/$BINNAME" "$app/Contents/MacOS/$BINNAME"`,
 		`macOS bundle must not include $GUARDNAME`,
 		`[ "$bundle_executable" = "$APPNAME" ]`,
 		`Print :CFBundleIconFile`,
@@ -121,8 +126,8 @@ func TestDesktopPackagesPreserveNativePlatformLaunchers(t *testing.T) {
 		t.Fatalf("macOS bundle icon must be verified before signing (icon=%d sign=%d)", darwinIconCheck, developerIDSign)
 	}
 	for _, copyCommand := range []string{
-		`cp "$service_out" "$app/Contents/MacOS/$BINNAME"`,
 		`cp "$service_out" "$app/Contents/Resources/service/$BINNAME"`,
+		`ln -s "../Resources/service/$BINNAME" "$app/Contents/MacOS/$BINNAME"`,
 		`cp "$cli_out" "$app/Contents/Resources/service/$CLINAME"`,
 	} {
 		if index := strings.Index(build, copyCommand); index < 0 || index > developerIDSign {

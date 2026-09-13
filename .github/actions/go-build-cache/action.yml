@@ -5,7 +5,8 @@ description: >-
   key, so that snapshot freezes at the last dependency change and every package
   touched since misses. This cache is keyed per run and restored by prefix; a
   main-v2 push saves it from one job per OS and module (actions/cache/save with
-  the outputs below), pull requests only restore.
+  the outputs below), pull requests only restore. Windows jobs do not use it:
+  restoring it there measured slower than setup-go's frozen cache.
 
 inputs:
   module:

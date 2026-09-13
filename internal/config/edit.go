@@ -21,6 +21,7 @@ import (
 	"reasonix/internal/mcpdiag"
 	"reasonix/internal/netclient"
 	"reasonix/internal/permission"
+	"reasonix/internal/permissionpreset"
 )
 
 var validDesktopExternalOpenerID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
@@ -121,18 +122,16 @@ func (c *Config) SetAutoPlan(mode string) error {
 	return fmt.Errorf("automatic plan mode has been retired; use Plan Mode explicitly")
 }
 
-// SetDesktopDefaultToolApprovalMode sets the Ask/Auto/YOLO posture used only
-// for newly-created desktop sessions.
+// SetDesktopDefaultToolApprovalMode sets the execution permission preset used
+// only for newly-created desktop sessions. Legacy names remain accepted at
+// this compatibility boundary.
 func (c *Config) SetDesktopDefaultToolApprovalMode(mode string) error {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "ask":
-		c.Desktop.DefaultToolApprovalMode = "ask"
-	case "auto":
-		c.Desktop.DefaultToolApprovalMode = "auto"
-	case "yolo", "full", "full-access", "bypass":
-		c.Desktop.DefaultToolApprovalMode = "yolo"
+	raw := strings.ToLower(strings.TrimSpace(mode))
+	switch raw {
+	case "ask", "auto", "yolo", "full", "full-access", "danger_full_access", string(permissionpreset.ReadOnly), string(permissionpreset.WorkspaceWrite), string(permissionpreset.DangerFullAccess):
+		c.Desktop.DefaultToolApprovalMode = string(permissionpreset.Normalize(raw))
 	default:
-		return fmt.Errorf("default_tool_approval_mode %q: must be ask|auto|yolo", mode)
+		return fmt.Errorf("default_tool_approval_mode %q: must be read-only|workspace-write|danger-full-access", mode)
 	}
 	return nil
 }
@@ -1626,11 +1625,9 @@ func (c *Config) saveProjectIncrementalResolved(logicalPath, resolvedPath string
 
 	body := string(raw)
 	isNew := body == ""
-
 	if isNew {
 		return writeConfigFileResolved(resolvedPath, RenderTOMLForScope(c, RenderScopeProject), configFilePerm(logicalPath))
 	}
-
 	delta := RenderTOMLProjectDelta(c)
 	if tomlBodyHasTopLevelKey(body, "config_version") && !tomlBodyHasTopLevelKey(delta, "config_version") {
 		delta = fmt.Sprintf("config_version = %d\n", configVersion(c)) + delta
@@ -1640,12 +1637,13 @@ func (c *Config) saveProjectIncrementalResolved(logicalPath, resolvedPath string
 	removeSkills := projectSkillsKeysToRemove(body, c)
 	_, hasLegacyDesktopAutoGuard := tomlSectionKeyValue(body, "desktop", "default_auto_recovery_checkpoint")
 	_, hasRetiredAgentAutoGuard := tomlSectionKeyValue(body, "agent", "auto_recovery_checkpoint")
-	removeRetiredAutoGuard := hasLegacyDesktopAutoGuard || hasRetiredAgentAutoGuard
+	_, hasRetiredRecoveryModel := tomlSectionKeyValue(body, "agent", "recovery_model")
+	_, hasRetiredRecoveryTemperature := tomlSectionKeyValue(body, "agent", "recovery_temperature")
+	removeRetiredAutoGuard := hasLegacyDesktopAutoGuard || hasRetiredAgentAutoGuard || hasRetiredRecoveryModel || hasRetiredRecoveryTemperature
 	writeProviderAccess := c.Desktop.ProviderAccess != nil
 	if strings.TrimSpace(delta) == "" && !removePlugins && !removeSandboxBash && !removeSkills && !removeRetiredAutoGuard && !writeProviderAccess {
 		return nil // no changes to write
 	}
-
 	// Parse delta into section blocks and merge each into body
 	if strings.TrimSpace(delta) != "" {
 		body = mergeTOMLDelta(body, delta)
@@ -1662,6 +1660,7 @@ func (c *Config) saveProjectIncrementalResolved(logicalPath, resolvedPath string
 	if removeRetiredAutoGuard {
 		body = removeTOMLSectionKey(body, "desktop", "default_auto_recovery_checkpoint")
 		body = removeTOMLSectionKey(body, "agent", "auto_recovery_checkpoint")
+		body = removeTOMLSectionKey(removeTOMLSectionKey(body, "agent", "recovery_model"), "agent", "recovery_temperature")
 	}
 	if writeProviderAccess {
 		body = upsertTOMLSectionKey(body, "desktop", "provider_access", "provider_access = "+renderStringArray(c.Desktop.ProviderAccess))

@@ -10,7 +10,6 @@ import (
 
 	"reasonix/internal/agent"
 	"reasonix/internal/event"
-	"reasonix/internal/evidence"
 	"reasonix/internal/jobs"
 	"reasonix/internal/provider"
 	"reasonix/internal/skill"
@@ -109,6 +108,7 @@ func (o *turnOrchestrator) runSubagentSkillTurnsGoalLoop(ctx context.Context, sk
 		}
 		if !goalTurnErrorAbsorbable(err) || !o.c.goals.active() {
 			o.c.goalUsageTee.setActiveRecorder(nil)
+			o.c.goals.disarmAfterError(expectedContinuationEpoch)
 			return err
 		}
 		return o.continueGoal(ctx, expectedContinuationEpoch, err)
@@ -286,7 +286,7 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 		ctx = agent.WithDeliveryExecutionScope(ctx, agent.DeliveryExecutionScope{ID: scopeID, TaskText: task})
 	}
 	// Goal turns bind a scope+epoch recorder for update_goal and observational
-	// usage. It stays active through FSM/evaluator work; error paths clear it.
+	// usage. It stays active through the normal end boundary; error paths clear it.
 	ctx = c.withTurnContext(c.bindTurnScope(ctx, continuation), !turn.synthetic)
 	ctx = c.withPlannerTurnMetadata(ctx, turn.raw, turn.synthetic, startMessages)
 	modelInput := input
@@ -296,12 +296,6 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 	modelInput, ctx, err = c.prepareVisionTurn(ctx, modelInput, imageCandidates)
 	if err != nil {
 		return err
-	}
-	// Real user turns open a fresh Recovery Episode. Goal auto-continues and
-	// other synthetic turns inherit the current Episode so budgets accumulate
-	// only within one host-owned execution round.
-	if !turn.synthetic {
-		c.beginRecoveryEpisode()
 	}
 	err = c.runModelTurn(ctx, modelInput)
 	c.captureGoalRunWorkDuration(startMessages)
@@ -354,11 +348,8 @@ func (o *turnOrchestrator) executeApprovedPlan(ctx context.Context) error {
 		return nil
 	}
 	c.SetPlanMode(false)
-	todoArgs := c.seedPlanTodos(proposal)
+	c.seedPlanTodos(proposal)
 	execStart := c.sessionMessageCount()
-	// Starting plan execution is a real Recovery Episode boundary even though
-	// the follow-up turn is synthetic.
-	c.beginRecoveryEpisode()
 	// The plan is the go-ahead: don't re-prompt for each write of the approved
 	// work. Auto-approve writers for the duration of this execution turn only; a
 	// later turn (even "continue") falls back to the normal per-tool approval.
@@ -374,9 +365,6 @@ func (o *turnOrchestrator) executeApprovedPlan(ctx context.Context) error {
 			c.stripInterruptedSyntheticTurnMessagesAfter(execStart)
 		}
 		return err
-	}
-	if todoArgs != "" && !c.hasTodoUpdateSince(execStart) {
-		c.completePlanTodos(todoArgs)
 	}
 	return nil
 }
@@ -443,19 +431,18 @@ func (o *turnOrchestrator) runGoalLoopWithPreparedTurn(ctx context.Context, turn
 		}
 		if !goalTurnErrorAbsorbable(err) {
 			// Terminal provider/host error: stop auto-continue. With a Goal it
-			// stays running so the next ordinary user message keeps the scope.
+			// requires explicit resume before another automatic run.
+			o.c.goals.disarmAfterError(expectedContinuationEpoch)
 			o.c.goalUsageTee.setActiveRecorder(nil)
 			return err
 		}
 		if !o.c.goals.active() {
-			// Standard and Delivery stop at the readiness boundary. The frontend
-			// owns the explicit recovery action, matching the pre-auto-continuation
-			// contract; only an active Goal may continue through its FSM below.
+			// Ordinary tasks return resource pauses directly. Only an active
+			// Goal records its pause through the state machine below.
 			o.c.goalUsageTee.setActiveRecorder(nil)
 			return err
 		}
-		// FinalReadinessError is absorbed below: the Goal FSM continues with
-		// the missing requirements as the next turn's prompt.
+		// An active Goal records the explicit resource pause below.
 	}
 	return o.continueGoal(ctx, expectedContinuationEpoch, err)
 }
@@ -478,6 +465,7 @@ func (o *turnOrchestrator) runEditedGoalLoopWithImageRefsRawDisplay(ctx context.
 			return err
 		}
 		if !goalTurnErrorAbsorbable(err) {
+			o.c.goals.disarmAfterError(expectedContinuationEpoch)
 			o.c.goalUsageTee.setActiveRecorder(nil)
 			return err
 		}
@@ -489,16 +477,22 @@ func (o *turnOrchestrator) runEditedGoalLoopWithImageRefsRawDisplay(ctx context.
 	return o.continueGoal(ctx, expectedContinuationEpoch, err)
 }
 
-// continueGoal runs the goal auto-continuation loop. A FinalReadinessError
-// from the last turn is absorbed into the FSM decision (the Goal continues
-// with the missing requirements); any other terminal error stops the loop and
-// is returned to the caller.
+// continueGoal drives active Goals after normal turn endings. Explicit resource
+// pauses stop the Goal; execution errors require an explicit resume.
 func (o *turnOrchestrator) continueGoal(ctx context.Context, expectedContinuationEpoch uint64, firstTurnErr error) error {
 	c := o.c
 	turnErr := firstTurnErr
 	for {
+		if err := ctx.Err(); err != nil {
+			c.goals.disarmAfterError(expectedContinuationEpoch)
+			c.goalUsageTee.setActiveRecorder(nil)
+			return err
+		}
 		res := o.advanceGoalAfterTurn(ctx, expectedContinuationEpoch, turnErr)
 		if !res.cont {
+			return nil
+		}
+		if c.hasPendingUserWork() {
 			return nil
 		}
 		if err := ctx.Err(); err != nil {
@@ -524,7 +518,8 @@ func (o *turnOrchestrator) continueGoal(ctx context.Context, expectedContinuatio
 			}
 			if !goalTurnErrorAbsorbable(err) {
 				// Terminal provider/host error: stop auto-continue; the Goal
-				// stays running for the next user turn.
+				// requires explicit resume.
+				c.goals.disarmAfterError(res.continuationEpoch)
 				c.goalUsageTee.setActiveRecorder(nil)
 				return err
 			}
@@ -540,10 +535,6 @@ func (o *turnOrchestrator) continueGoal(ctx context.Context, expectedContinuatio
 }
 
 func goalTurnErrorAbsorbable(err error) bool {
-	var readinessErr *agent.FinalReadinessError
-	if errors.As(err, &readinessErr) {
-		return true
-	}
 	_, _, ok := goalPauseFromRunError(err)
 	return ok
 }
@@ -563,62 +554,28 @@ func goalPauseFromRunError(err error) (cause, reason string, ok bool) {
 	return "", "", false
 }
 
-// advanceGoalAfterTurn gathers every input the FSM needs off the goal lock —
-// the turn's update_goal report, Delivery readiness, budget/usage state, and
-// the evaluator verdict — then lets the FSM exclusively decide complete,
-// continue, blocked, or pause. The usage span bound to this turn stays active
-// until here so evaluator usage also counts against the goal budget.
+// advanceGoalAfterTurn submits the owning model report and actual usage.
 func (o *turnOrchestrator) advanceGoalAfterTurn(ctx context.Context, expectedContinuationEpoch uint64, turnErr error) goalAdvanceResult {
 	c := o.c
 	recorder := c.goalUsageTee.activeRecorder()
 	defer c.goalUsageTee.setActiveRecorder(nil)
 	// Only active Goal turns bind a recorder. Ordinary and edited non-Goal
 	// turns still pass through the shared turn wrapper, but must not enter the
-	// Goal FSM or pay for an isolated completion evaluation.
+	// Goal FSM.
 	if recorder == nil || recorder.epoch != expectedContinuationEpoch ||
 		!c.goals.turnActive(recorder.scopeID, recorder.epoch) {
 		return goalAdvanceResult{cont: false}
 	}
 
-	var readiness agent.ReadinessResult
-	var readinessErr *agent.FinalReadinessError
 	pauseCause, pauseReason, runPaused := goalPauseFromRunError(turnErr)
-	if errors.As(turnErr, &readinessErr) {
-		progressKey := readinessErr.ProgressKey
-		if progressKey == "" {
-			progressKey = readinessErr.Reason
-		}
-		readiness = agent.ReadinessResult{
-			Ready:       false,
-			Missing:     append([]string(nil), readinessErr.Missing...),
-			Reason:      readinessErr.Reason,
-			ProgressKey: progressKey,
-		}
-	} else if turnErr != nil && !runPaused {
-		// Terminal provider/host error: stop auto-continue without an FSM
-		// transition; the goal stays running for the next user turn.
+	if turnErr != nil && !runPaused {
 		return goalAdvanceResult{cont: false}
-	} else if c.executor != nil {
-		readiness = c.executor.ReadinessResult()
 	}
-	// The validated update_goal report for this turn, if any.
-	var report *goalTurnReport
-	if recorder != nil {
-		report = recorder.validReport(expectedContinuationEpoch)
-	}
-
-	// The bounded evaluator runs once, only when the model gave no report and
-	// readiness has no definite missing list. Failures fail closed in the FSM.
-	var evaluator *goalEvaluatorVerdict
-	var evaluatorFailed string
-	if !runPaused && report == nil && len(readiness.Missing) == 0 {
-		if c.evaluator == nil {
-			evaluatorFailed = "goal evaluator unavailable"
-		} else if verdict, err := c.evaluator.Evaluate(ctx, c.goalEvaluatorEvidence()); err != nil {
-			evaluatorFailed = err.Error()
-		} else {
-			evaluator = &goalEvaluatorVerdict{outcome: verdict.Outcome, reason: verdict.Reason}
-		}
+	report := recorder.validReport(expectedContinuationEpoch)
+	// Queued user work owns the next turn. Discard the old disposition, while
+	// retaining this turn's actual usage and progress accounting.
+	if c.hasPendingUserWork() {
+		report = nil
 	}
 
 	var progressEvidence []string
@@ -628,9 +585,6 @@ func (o *turnOrchestrator) advanceGoalAfterTurn(ctx context.Context, expectedCon
 
 	res := c.goals.advance(goalAdvanceInput{
 		report:           report,
-		readiness:        readiness,
-		evaluator:        evaluator,
-		evaluatorFailed:  evaluatorFailed,
 		todos:            c.goalTodos(),
 		progressEvidence: progressEvidence,
 		pauseCause:       pauseCause,
@@ -641,37 +595,5 @@ func (o *turnOrchestrator) advanceGoalAfterTurn(ctx context.Context, expectedCon
 	if res.notice != "" {
 		c.notice(res.notice)
 	}
-	if res.notice == goalCompleteNotice && c.executor != nil {
-		c.completeRemainingGoalTodos()
-	}
 	return res
-}
-
-// completeRemainingGoalTodos force-completes any remaining incomplete canonical
-// todos when the goal FSM transitions to completed and emits a synthetic
-// todo_write event so the frontend panel reflects the final state. Handles the
-// second [goal:complete] override (non-strict) where the model does not mark
-// each todo individually.
-func (c *Controller) completeRemainingGoalTodos() {
-	todos := c.executor.CanonicalTodoState()
-	if len(evidence.IncompleteTodos(todos)) == 0 {
-		return
-	}
-	for i := range todos {
-		todos[i].Status = "completed"
-	}
-	args, err := json.Marshal(map[string]any{"todos": todos})
-	if err != nil {
-		return
-	}
-	t := event.Tool{ID: "goal-final", Name: "todo_write", Args: string(args), ReadOnly: true}
-	c.sink.Emit(event.Event{Kind: event.ToolDispatch, Tool: t})
-	t.Output = "goal completed"
-	c.sink.Emit(event.Event{Kind: event.ToolResult, Tool: t})
-	c.executor.ReplaceTodoState(todos)
-	// Persist the completed todo state so a session reload does not revert
-	// to the old incomplete list — the synthetic todo_write events are not
-	// part of the session transcript and rebuildTodoState would otherwise
-	// reconstruct the stale pre-completion state.
-	c.goals.persistWithTodos(todos)
 }

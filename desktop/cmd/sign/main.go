@@ -38,14 +38,23 @@ import (
 	"reasonix/internal/installlayout"
 )
 
-// platforms are the manifest keys we publish. A built artifact is matched to a key
-// by substring (file names embed the key, e.g. Reasonix-darwin-arm64.zip), so the
-// generator and the updater agree on update.PlatformKey output.
-var platforms = []string{"darwin-arm64", "darwin-amd64", "windows-amd64", "windows-arm64", "linux-amd64"}
-
 var websiteDownloads = map[string]struct{}{
+	"Reasonix-darwin-arm64.dmg":     {},
+	"Reasonix-darwin-amd64.dmg":     {},
 	"Reasonix-darwin-universal.dmg": {},
 	"Reasonix-windows-amd64.zip":    {},
+}
+
+var updaterArtifacts = map[string]struct {
+	key  string
+	kind string
+}{
+	"Reasonix-darwin-arm64.zip":            {key: "darwin-arm64", kind: artifactPortable},
+	"Reasonix-darwin-amd64.zip":            {key: "darwin-amd64", kind: artifactPortable},
+	"Reasonix-windows-amd64-installer.exe": {key: "windows-amd64", kind: artifactPortable},
+	"Reasonix-windows-arm64-installer.exe": {key: "windows-arm64", kind: artifactPortable},
+	"Reasonix-linux-amd64.tar.gz":          {key: "linux-amd64", kind: artifactPortable},
+	"Reasonix-linux-amd64.deb":             {key: "linux-amd64", kind: artifactNative},
 }
 
 func main() {
@@ -337,27 +346,11 @@ const (
 // matchArtifact returns the platform key and channel kind embedded in a file name,
 // or ("", "") if the file is not a publishable updater/download artifact.
 func matchArtifact(name string) (key, kind string) {
-	// .deb is the Linux native package channel. Keep it out of platforms so the
-	// tarball remains the portable linux-amd64 key for older clients.
-	if strings.HasSuffix(name, ".deb") {
-		for _, p := range platforms {
-			if strings.Contains(name, p) {
-				return p, artifactNative
-			}
-		}
+	artifact, ok := updaterArtifacts[name]
+	if !ok {
 		return "", ""
 	}
-	// The Windows updater channel is the per-arch -installer.exe; the portable .zip
-	// is a human download, so skip it or it would shadow the installer's key.
-	if strings.Contains(name, "windows-") && !strings.HasSuffix(name, "-installer.exe") {
-		return "", ""
-	}
-	for _, p := range platforms {
-		if strings.Contains(name, p) {
-			return p, artifactPortable
-		}
-	}
-	return "", ""
+	return artifact.key, artifact.kind
 }
 
 // hashFile returns the size and lowercase-hex SHA-256 of a file, streaming it so

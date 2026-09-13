@@ -8,10 +8,10 @@ branch.
 
 ### Added
 
-- **Durable tool recovery:** fsynced tool-start barriers, persistent attempt
-  identities, restart-safe unknown-effect handling, and a shared Electron/Remote
-  inspection and confirmation panel. Explicit retries remain disabled by default
-  and require read-only execution or a fenced, authoritative absence check.
+- **Live file observations:** structured file tools now protect mutations with
+  a host-owned current-version observation. Any successful text window is
+  sufficient, successful writes refresh the version, and external changes
+  produce `FS_STALE_VERSION` without blocking unrelated tools.
 
 - **MCP 2026-07-28 protocol:** multi-round-trip form/URL elicitation across
   Desktop, CLI TUI, and serve; headless entries stay on the core surface and
@@ -27,6 +27,13 @@ branch.
   capabilities never cross-read.
 
 ### Changed
+
+- **Harness-style scheduling and recovery:** calls take effect in execution
+  order, including same-batch read/edit sequences. Bounded reads create no
+  completion debt. Unknown external effects are durable advisory facts and no
+  longer block tools or trigger replay. Proof/settlement tools, Auto Guard,
+  recovery actions, and repeat-call rejection are retired; identical calls get
+  non-blocking reminders at counts 3, 5, and 8.
 
 - **Fact-driven execution:** Ordinary requests always enter the executor.
   There is no automatic simple / light / full task mode and no per-turn

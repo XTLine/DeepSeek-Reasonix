@@ -61,27 +61,6 @@ var (
 	sha256RE               = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
-type requiredDesktopAsset struct {
-	group    string
-	key      string
-	filename string
-}
-
-var (
-	requiredDesktopUpdaterAssets = []requiredDesktopAsset{
-		{group: "platforms", key: "darwin-arm64", filename: "Reasonix-darwin-arm64.zip"},
-		{group: "platforms", key: "darwin-amd64", filename: "Reasonix-darwin-amd64.zip"},
-		{group: "platforms", key: "windows-amd64", filename: "Reasonix-windows-amd64-installer.exe"},
-		{group: "platforms", key: "windows-arm64", filename: "Reasonix-windows-arm64-installer.exe"},
-		{group: "platforms", key: "linux-amd64", filename: "Reasonix-linux-amd64.tar.gz"},
-		{group: "native_packages", key: "linux-amd64", filename: "Reasonix-linux-amd64.deb"},
-	}
-	requiredDesktopDownloadAssets = []requiredDesktopAsset{
-		{group: "downloads", key: "Reasonix-darwin-universal.dmg", filename: "Reasonix-darwin-universal.dmg"},
-		{group: "downloads", key: "Reasonix-windows-amd64.zip", filename: "Reasonix-windows-amd64.zip"},
-	}
-)
-
 // githubManifestFallback is the stable channel's last-resort manifest source.
 // dl.reasonix.io and crash.reasonix.io share one Cloudflare zone, so bot
 // protection that 403s a user's egress IP takes out both first-party endpoints
@@ -359,14 +338,20 @@ func validateDesktopManifest(selected string, m *update.Manifest) error {
 	if m.DownloadPage != manifestDownloadPageURL {
 		return fmt.Errorf("%s manifest has invalid download page %q", selected, m.DownloadPage)
 	}
-	// Older public manifests predate the two website-only download assets. Keep
-	// accepting their six signed updater artifacts so an upgrade to the first
-	// single-channel release does not strand existing users. Once downloads is
-	// present it is a new-format manifest and all eight assets are mandatory.
+	// Historical manifests either omitted website downloads or carried only the
+	// Universal DMG and Windows portable ZIP. New manifests add both native-arch
+	// DMGs. Seeing either new key switches validation to the complete new set so a
+	// partially published architecture matrix cannot reach the website.
 	legacyManifest := m.Downloads == nil
 	requiredAssets := append([]requiredDesktopAsset(nil), requiredDesktopUpdaterAssets...)
 	if !legacyManifest {
-		requiredAssets = append(requiredAssets, requiredDesktopDownloadAssets...)
+		downloadAssets := legacyDesktopDownloadAssets
+		if _, arm := m.Downloads["Reasonix-darwin-arm64.dmg"]; arm {
+			downloadAssets = requiredDesktopDownloadAssets
+		} else if _, intel := m.Downloads["Reasonix-darwin-amd64.dmg"]; intel {
+			downloadAssets = requiredDesktopDownloadAssets
+		}
+		requiredAssets = append(requiredAssets, downloadAssets...)
 	}
 	base := ""
 	for _, required := range requiredAssets {

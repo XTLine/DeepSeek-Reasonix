@@ -604,7 +604,7 @@ func TestRunRecoveryKeepsCompletedToolPairAndSummarizesChangedFile(t *testing.T)
 		t.Fatalf("completed tool pair was not replayed canonically: %+v", req.Messages)
 	}
 	last := req.Messages[len(req.Messages)-1]
-	for _, want := range []string{"write_file files=config.json diff=+1/-0", "interrupted_tools: bash", "inspect the current workspace", "continue"} {
+	for _, want := range []string{"write_file files=config.json diff=+1/-0", "interrupted_tools: bash", "Use these facts", "continue"} {
 		if !strings.Contains(last.Content, want) {
 			t.Fatalf("recovery user message missing %q: %s", want, last.Content)
 		}

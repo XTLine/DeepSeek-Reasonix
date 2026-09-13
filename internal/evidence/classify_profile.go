@@ -234,7 +234,7 @@ func looksOpaqueName(name string) bool {
 
 func looksPrivilegedName(name string) bool {
 	lower := strings.ToLower(strings.TrimSpace(name))
-	for _, hint := range highRiskToolHints {
+	for _, hint := range []string{"mcp__", "install_source", "install_skill", "plugin"} {
 		if strings.Contains(lower, hint) {
 			return true
 		}

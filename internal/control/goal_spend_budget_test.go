@@ -6,7 +6,6 @@ import (
 
 	"reasonix/internal/agent"
 	"reasonix/internal/event"
-	"reasonix/internal/goaleval"
 	"reasonix/internal/provider"
 	"reasonix/internal/tool"
 )
@@ -24,7 +23,7 @@ func billedGoalTurn() []provider.Chunk {
 // guessed from its own text. What bounds it is what the user configures.
 func TestGoalStartsWithNoTurnQuota(t *testing.T) {
 	prov := &scriptedTurns{turns: [][]provider.Chunk{billedGoalTurn()}}
-	c, _, _ := goalRuntimeController(t, prov, &fakeGoalEvaluator{outcome: goaleval.OutcomeComplete, reason: "done"})
+	c, _, _ := goalRuntimeController(t, prov, &fakeGoalEvaluator{outcome: "complete", reason: "done"})
 	c.SetGoal("research the whole subsystem end to end")
 
 	if rt := c.GoalRuntime(); rt.TurnsLimit != 0 || rt.TokensLimit != 0 {
@@ -37,7 +36,7 @@ func TestGoalStartsWithNoTurnQuota(t *testing.T) {
 func TestGoalTokenBudgetPausesAndResumes(t *testing.T) {
 	prov := &scriptedTurns{turns: [][]provider.Chunk{billedGoalTurn()}}
 	c, _, events := goalRuntimeControllerWithTokenBudget(t, prov,
-		&fakeGoalEvaluator{outcome: goaleval.OutcomeContinue, reason: "ongoing"}, 150)
+		&fakeGoalEvaluator{outcome: "continue", reason: "ongoing"}, 150)
 
 	c.Submit("/goal keep going forever")
 	waitGoalTurnDone(t, events)
@@ -77,13 +76,10 @@ func TestGoalReadinessFailurePausesOnExplicitSpendBudget(t *testing.T) {
 	runner.usage = c.goalUsageTee
 	c.SetGoal("ship the integration")
 
-	if err := newTurnOrchestrator(c).runGoalLoopWithRawDisplay(context.Background(), "start", "start", ""); err != nil {
-		t.Fatalf("run err = %v, want the explicit budget pause absorbed by the Goal FSM", err)
+	if err := newTurnOrchestrator(c).runGoalLoopWithRawDisplay(context.Background(), "start", "start", ""); err == nil {
+		t.Fatal("legacy quality error must not be absorbed as normal completion")
 	}
-	if got := c.GoalStatus(); got != GoalStatusBlocked {
-		t.Fatalf("GoalStatus = %q, want blocked (spend-budget pause)", got)
-	}
-	if rt := c.GoalRuntime(); rt.StopCause != stopCauseBudgetSpend {
-		t.Fatalf("runtime = %+v, want %q", rt, stopCauseBudgetSpend)
+	if c.goals.active() || c.GoalStatus() == GoalStatusComplete {
+		t.Fatal("error restarted or completed goal")
 	}
 }

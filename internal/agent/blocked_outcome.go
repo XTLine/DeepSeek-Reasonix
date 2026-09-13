@@ -6,10 +6,9 @@ import "reasonix/internal/tool"
 // outcome, with the not-run shell metadata a blocked bash card renders.
 func (a *Agent) blockedToolOutcome(plan *toolCallPlan, msg string) toolOutcome {
 	out := toolOutcome{
-		output:             msg,
-		blocked:            true,
-		errMsg:             firstLine(msg),
-		recoveryGeneration: plan.recoveryGen,
+		output:  msg,
+		blocked: true,
+		errMsg:  firstLine(msg),
 	}
 	if plan.evidenceName == "bash" || plan.call.Name == "bash" {
 		out.execution = shellPreflightExecution(plan, plan.verification)

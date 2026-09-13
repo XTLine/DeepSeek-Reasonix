@@ -13,8 +13,9 @@ const (
 
 // RecoveryStatus is a local UI projection, never provider-visible metadata.
 type RecoveryStatus struct {
-	// State is the durable tool-recovery state (for example recovery_required).
-	// It is local UI metadata and never provider-visible.
+	// State is local UI metadata and never provider-visible. Current executions
+	// use fact-only states such as unknown or interrupted; recovery_required is
+	// retained solely for decoding and displaying historical records.
 	State                string `json:"state,omitempty"`
 	CallID               string `json:"call_id,omitempty"`
 	AttemptID            string `json:"attempt_id,omitempty"`

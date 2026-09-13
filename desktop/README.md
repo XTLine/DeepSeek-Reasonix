@@ -1,5 +1,16 @@
 # Reasonix Desktop (Electron shell)
 
+## macOS 1.38.7 update recovery
+
+Desktop 1.38.7 can report `current executable is not inside a macOS .app bundle`
+before it installs a newer build. Quit Reasonix, mount the Apple Silicon, Intel,
+or Universal DMG from the official download page, and replace
+`/Applications/Reasonix.app`. The application bundle is replaced; settings,
+sessions, and other user data remain in their existing user-data directories.
+After this one-time full install, verify automatic update by updating the repaired
+build to the next candidate. Do not treat the manual replacement itself as an
+automatic-update pass.
+
 Model/provider setup: [English guide](../docs/MODEL_SETTINGS.md) · [中文指南](../docs/MODEL_SETTINGS.zh-CN.md).
 
 A native desktop window around the Reasonix Go kernel. The same
@@ -44,6 +55,26 @@ vet / test ./...` skip this directory, while the import path stays under
 - No platform webview dependencies: the shell ships its own Chromium.
 
 ## Develop
+
+For browser-only UI development with the built-in mock bridge:
+
+```sh
+cd desktop
+pnpm install          # first run only
+pnpm dev
+```
+
+For the complete Electron application, including the Go service and Vite dev
+server, use the single development entry point:
+
+```sh
+cd desktop
+pnpm install          # first run only
+pnpm dev:desktop
+```
+
+For a production-style renderer build instead of the Vite development server,
+the equivalent manual sequence remains:
 
 ```sh
 cd desktop
@@ -156,9 +187,9 @@ not depend on homepage badge semantics. Self-update behavior by platform:
   can retry; successful installs are managed by apt/dpkg and are not auto-downgraded.
 - **Windows** — download, verify the minisign signature, then run the per-user
   NSIS installer (no admin rights needed).
-- **macOS** — *not* self-updating yet. The build is unsigned/un-notarized, so an
-  in-place swap would be blocked by Gatekeeper; the banner links to the download
-  page for a manual update instead.
+- **macOS** — Developer ID signed and notarized release builds update in place.
+  Local and fork builds use ad-hoc signing and remain manual-only because
+  Gatekeeper cannot authorize their replacement bundle.
 
 ### Code signing — first launch
 
@@ -167,16 +198,16 @@ not depend on homepage badge semantics. Self-update behavior by platform:
   `scripts/verify-windows-authenticode.ps1` and fails the release otherwise). A
   brand-new version can still show SmartScreen until the signature accumulates
   reputation: *More info → Run anyway*.
-- **macOS** — still unsigned and un-notarized. Open
-  `Reasonix-darwin-universal.dmg`, drag Reasonix into Applications, then clear the
+- **macOS** — official release builds are signed and notarized. Choose the Apple
+  Silicon or Intel DMG for the smallest download, or the Universal DMG when the
+  CPU architecture is unknown. Local ad-hoc builds may still require clearing the
   quarantine attribute when Gatekeeper reports the app "is damaged" or is from an
   unidentified developer:
   ```sh
   xattr -dr com.apple.quarantine /Applications/Reasonix.app
   ```
-  This is also why macOS has no in-place self-update: the swap would be blocked.
-  Adding a Developer ID certificate flips the release workflow's `HAS_APPLE_CERT`
-  gate to the signed path and removes both.
+  The release workflow's `HAS_APPLE_CERT` gate controls the signed, notarized,
+  self-updating path.
 
 ### Verifying a download
 

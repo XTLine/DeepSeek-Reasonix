@@ -69,7 +69,9 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN" "${existing_keychains[@]}"
           printf '%s' "$APPLE_API_KEY_P8" | base64 --decode > "$APPLE_API_KEY_PATH"
           scripts/desktop-build.sh darwin/universal v0.0.0-signing-check stable
-          node desktop/packaging/verify.mjs dist/Reasonix-darwin-arm64.zip
+          node desktop/packaging/verify.mjs desktop/build/candidate/darwin-universal/Reasonix.app --kind darwin-app-dir
+          codesign --verify --deep --strict desktop/build/candidate/darwin-universal/Reasonix.app
+          test -s dist/Reasonix-darwin-universal.dmg
       - name: Upload Apple notarization diagnostics
         if: always()
         uses: actions/upload-artifact@v7

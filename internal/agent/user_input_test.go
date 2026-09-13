@@ -108,9 +108,8 @@ Policy: prefer means use the skill for the required change
 	if got := a.turn.turnInput; got != raw {
 		t.Fatalf("contract input = %q, want authenticated raw input %q", got, raw)
 	}
-	c := a.LiveContract()
-	if c == nil || len(c.Requirements) != 0 || len(c.Checks) != 0 {
-		t.Fatalf("transient route created delivery requirements: %+v", c)
+	if result := a.ReadinessResult(); !result.Ready || len(result.Missing) != 0 {
+		t.Fatalf("transient route created requirements: %+v", result)
 	}
 }
 

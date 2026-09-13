@@ -11,9 +11,13 @@ const DESKTOP_UPDATER_ASSETS = [
   ["platforms", "linux-amd64", "Reasonix-linux-amd64.tar.gz"],
   ["native_packages", "linux-amd64", "Reasonix-linux-amd64.deb"],
 ] as const;
-const DESKTOP_DOWNLOAD_ASSETS = [
+const DESKTOP_LEGACY_DOWNLOAD_ASSETS = [
   ["downloads", "Reasonix-darwin-universal.dmg", "Reasonix-darwin-universal.dmg"],
   ["downloads", "Reasonix-windows-amd64.zip", "Reasonix-windows-amd64.zip"],
+] as const;
+const DESKTOP_ARCH_DMG_ASSETS = [
+  ["downloads", "Reasonix-darwin-arm64.dmg", "Reasonix-darwin-arm64.dmg"],
+  ["downloads", "Reasonix-darwin-amd64.dmg", "Reasonix-darwin-amd64.dmg"],
 ] as const;
 const SHA256 = /^[0-9a-f]{64}$/;
 const MAX_RELEASE_ASSET_SIZE = 1 << 30;
@@ -261,9 +265,15 @@ function normalizeDesktopManifest(
   const legacyManifest = manifest.downloads === undefined || manifest.downloads === null;
   const allowedBases = desktopAssetBases(version, channel, legacyManifest);
   let selectedBase = "";
+  const downloads = objectValue(manifest.downloads);
+  const archDMGCount = DESKTOP_ARCH_DMG_ASSETS.filter(([, key]) => objectValue(downloads?.[key])).length;
+  if (archDMGCount !== 0 && archDMGCount !== DESKTOP_ARCH_DMG_ASSETS.length) return null;
+  const downloadAssets = archDMGCount === DESKTOP_ARCH_DMG_ASSETS.length
+    ? [...DESKTOP_LEGACY_DOWNLOAD_ASSETS, ...DESKTOP_ARCH_DMG_ASSETS]
+    : DESKTOP_LEGACY_DOWNLOAD_ASSETS;
   const requiredAssets = legacyManifest
     ? DESKTOP_UPDATER_ASSETS
-    : [...DESKTOP_UPDATER_ASSETS, ...DESKTOP_DOWNLOAD_ASSETS];
+    : [...DESKTOP_UPDATER_ASSETS, ...downloadAssets];
   for (const [groupName, key, fileName] of requiredAssets) {
     const group = objectValue(manifest[groupName]);
     const asset = objectValue(group?.[key]);

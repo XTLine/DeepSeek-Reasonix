@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"reasonix/internal/agent"
 	"reasonix/internal/event"
 	"reasonix/internal/provider"
 	"strings"
@@ -23,15 +24,9 @@ func historyLocalOnlyRows(m provider.Message) ([]HistoryMessage, bool) {
 		}
 		return nil, true
 	}
-	if recovery := m.FinalReadinessRecovery; recovery != nil && recovery.Pending {
-		return []HistoryMessage{{
-			Role: "notice", Code: event.NoticeCodeFinalReadiness, Level: "info", Pending: true,
-			Content: "Task is not complete; continue the remaining work or checks.",
-			Readiness: &event.FinalReadiness{
-				Attempts: 1,
-				Missing:  append([]string(nil), recovery.Missing...),
-			},
-		}}, true
+	if readiness := agent.HistoricalChecks(m.FinalReadinessRecovery); readiness != nil {
+		return []HistoryMessage{{Role: "notice", Code: agent.HistoricalChecksNoticeCode, Level: "info",
+			Content: agent.HistoricalChecksNoticeText, Readiness: readiness}}, true
 	}
 	return historySteerRows(m.Content, true)
 }

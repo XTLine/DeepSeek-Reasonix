@@ -23,12 +23,8 @@ func (a *Agent) emitToolStarted(c provider.ToolCall) error {
 }
 
 func (a *Agent) finishRunRecovery(err *error) {
-	for _, r := range a.PendingToolRecovery() {
-		if !r.ReadOnly {
-			*err = errors.Join(*err, ErrToolRecoveryRequired)
-			return
-		}
-	}
+	// Uncertain effects are durable facts for the next model turn. They do not
+	// turn an otherwise completed run into a host-level recovery error.
 }
 func (a *Agent) checkToolRecoveryStart(ctx context.Context, p *toolCallPlan) (toolOutcome, bool) {
 	if err := a.beginToolRecovery(ctx, p); err != nil {

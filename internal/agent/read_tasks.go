@@ -15,8 +15,6 @@ import (
 type readState struct {
 	tasks  *readTasks
 	runGen uint64
-	// gates enables the per-operation evidence check for this run.
-	gates bool
 	// deliveries retains metadata only; visible is rebuilt from each frozen request.
 	deliveries map[string]readDelivery
 	visible    map[string]readDelivery

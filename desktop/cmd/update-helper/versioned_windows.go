@@ -21,7 +21,7 @@ import (
 //	InstallRoot/
 //	  reasonix-launcher.exe
 //	  Reasonix.exe              (launcher alias when present or portable)
-//	  reasonix-cli.exe          (CLI entry; full binary for now)
+//	  reasonix-cli.exe          (small CLI entry)
 //	  current.json
 //	  versions/<version>/
 //	    reasonix-desktop.exe
@@ -60,11 +60,20 @@ func activateVersionedWindowsFromStaging(claimed *repair.UpdateTransaction, stag
 	if err != nil {
 		return fmt.Errorf("versioned activate: %w", err)
 	}
-	rootFiles, err := stagedWindowsPayloadMembers(stagingDir, hashes, []string{"reasonix-launcher.exe", "reasonix-cli.exe"})
+	rootFiles, err := stagedWindowsPayloadMembers(stagingDir, hashes, []string{"reasonix-launcher.exe"})
 	if err != nil {
 		return fmt.Errorf("versioned activate: %w", err)
 	}
-	launcherSrc, cliSrc := rootFiles[0].Path, rootFiles[1].Path
+	launcherSrc := rootFiles[0].Path
+	cliSrc := filepath.Join(stagingDir, "reasonix-cli.exe")
+	const cliEntry = "app/resources/bin/reasonix-cli-launcher.exe"
+	if _, ok := hashes[cliEntry]; ok {
+		entry, entryErr := stagedWindowsPayloadMembers(stagingDir, hashes, []string{cliEntry})
+		if entryErr != nil {
+			return fmt.Errorf("versioned activate: %w", entryErr)
+		}
+		cliSrc = entry[0].Path
+	}
 
 	requestID := repair.UpdateTransactionID(claimed)
 	if requestID == "" {

@@ -75,7 +75,7 @@ func ToolResultRunState(m Message) ToolRunState {
 
 // IsInterruptedPlaceholder identifies the synthetic result inserted while a
 // session is loaded. It is not execution evidence and must not override the
-// ledger's durable start barrier.
+// ledger's durable start fact.
 func IsInterruptedPlaceholder(m Message) bool {
 	return m.Role == RoleTool && m.ToolRunState == "" && strings.TrimSpace(m.Content) == interruptedToolResult
 }

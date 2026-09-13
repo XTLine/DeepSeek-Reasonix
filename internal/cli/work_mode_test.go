@@ -35,8 +35,8 @@ func TestParseAgentPresetAcceptsLegacyLabels(t *testing.T) {
 		"balanced": "standard",
 		"full":     "standard",
 		"standard": "standard",
-		"delivery": "delivery",
-		"deliver":  "delivery",
+		"delivery": "standard",
+		"deliver":  "standard",
 	} {
 		got, ok := parseAgentPreset(input)
 		if !ok || got != want {
@@ -48,28 +48,16 @@ func TestParseAgentPresetAcceptsLegacyLabels(t *testing.T) {
 	}
 }
 
-func TestPresetCompletionSurfacesCommandNotAliases(t *testing.T) {
+func TestRetiredPresetCommandsAreHiddenFromCompletion(t *testing.T) {
 	m := newTestChatTUI()
-	if !hasLabel(m.slashItems(), "/preset") {
-		t.Fatal("/preset should appear in slash completion, matching the desktop preset chips")
-	}
-	for _, command := range []string{"/profile", "/work-mode"} {
+	for _, command := range []string{"/preset", "/profile", "/work-mode"} {
 		if hasLabel(m.slashItems(), command) {
-			t.Fatalf("compatibility alias %q should not appear in slash completion", command)
+			t.Fatalf("retired compatibility command %q appeared in slash completion", command)
 		}
 	}
-	for _, input := range []string{"/preset "} {
-		items, _, ok := m.slashArgItems(input)
-		if !ok {
-			t.Fatalf("%q should offer preset argument completion", input)
-		}
-		if !hasLabel(items, "delivery") || !hasLabel(items, "standard") {
-			t.Fatalf("%q should offer standard and delivery, got %v", input, labels(items))
-		}
-	}
-	for _, input := range []string{"/work-mode ", "/profile "} {
+	for _, input := range []string{"/preset ", "/work-mode ", "/profile "} {
 		if _, _, ok := m.slashArgItems(input); ok {
-			t.Fatalf("%q should not offer execution-mode argument completion", input)
+			t.Fatalf("%q offered retired execution-mode argument completion", input)
 		}
 	}
 }
@@ -121,19 +109,15 @@ func TestLegacyModeFlagsAreHiddenFromCommandHelp(t *testing.T) {
 	}
 }
 
-func TestPresetHelpListsCommandNotAliases(t *testing.T) {
-	if !hasLabel(builtinHelpItems(), "/preset") {
-		t.Fatal("/preset should appear in built-in help, matching the desktop preset chips")
-	}
-	if hasLabel(builtinHelpItems(), "/profile") {
-		t.Fatal("built-in help should not list the technical /profile alias")
-	}
-	if hasLabel(builtinHelpItems(), "/work-mode") {
-		t.Fatal("built-in help should not list the legacy /work-mode alias")
+func TestRetiredPresetCommandsAreHiddenFromHelp(t *testing.T) {
+	for _, command := range []string{"/preset", "/profile", "/work-mode"} {
+		if hasLabel(builtinHelpItems(), command) {
+			t.Fatalf("built-in help listed retired command %q", command)
+		}
 	}
 }
 
-func TestPresetTagShowsDeliveryFloorOnly(t *testing.T) {
+func TestPresetTagStaysHiddenForLegacyInputs(t *testing.T) {
 	ctrl := control.New(control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	if tag := m.presetTag(); tag != "" {
@@ -142,12 +126,12 @@ func TestPresetTagShowsDeliveryFloorOnly(t *testing.T) {
 	if err := ctrl.SetQualityFloor(control.QualityFloorDelivery); err != nil {
 		t.Fatal(err)
 	}
-	if tag := m.presetTag(); !strings.Contains(ansi.Strip(tag), "delivery") {
-		t.Fatalf("delivery floor should surface a footer tag, got %q", tag)
+	if tag := m.presetTag(); tag != "" {
+		t.Fatalf("retired delivery setting surfaced a footer tag: %q", tag)
 	}
 }
 
-func TestPresetCommandSwitchesFloorInPlace(t *testing.T) {
+func TestPresetCommandIsInPlaceCompatibilityNoOp(t *testing.T) {
 	resetPresetDeprecationForTest()
 	oldCtrl := control.New(control.Options{Label: "old"})
 	oldCtrl.SetToolApprovalMode(control.ToolApprovalAuto)
@@ -167,14 +151,14 @@ func TestPresetCommandSwitchesFloorInPlace(t *testing.T) {
 	if m.ctrl != oldCtrl {
 		t.Fatal("controller must stay the same instance")
 	}
-	if m.ctrl.AgentPreset() != boot.AgentPresetDelivery {
-		t.Fatalf("controller preset = %q, want delivery", m.ctrl.AgentPreset())
+	if m.ctrl.AgentPreset() != boot.AgentPresetStandard {
+		t.Fatalf("controller preset = %q, want standard", m.ctrl.AgentPreset())
 	}
 	if builds != 0 {
 		t.Fatalf("unexpected rebuilds: %d", builds)
 	}
-	if out := committedNotices(m); !strings.Contains(out, i18n.M.QualityFloorApplied) {
-		t.Fatalf("applied /preset missing floor notice:\n%s", out)
+	if out := committedNotices(m); !strings.Contains(out, i18n.M.WorkModeDeprecatedNotice) {
+		t.Fatalf("legacy /preset missing retirement notice:\n%s", out)
 	}
 
 	if cmd := m.runWorkModeCommand("/preset light"); cmd != nil {
@@ -258,13 +242,13 @@ func TestPresetCommandSwitchesDuringRunningTurn(t *testing.T) {
 	if cmd := m.runWorkModeCommand("/preset delivery"); cmd != nil {
 		t.Fatal("running-turn /preset must not rebuild")
 	}
-	if m.ctrl.AgentPreset() != boot.AgentPresetDelivery {
-		t.Fatalf("running-turn /preset AgentPreset = %q, want delivery", m.ctrl.AgentPreset())
+	if m.ctrl.AgentPreset() != boot.AgentPresetStandard {
+		t.Fatalf("running-turn /preset AgentPreset = %q, want standard", m.ctrl.AgentPreset())
 	}
 	if builds != 0 {
 		t.Fatalf("running-turn /preset triggered %d builds", builds)
 	}
-	if out := committedNotices(m); !strings.Contains(out, i18n.M.QualityFloorApplied) {
-		t.Fatalf("running-turn /preset missing floor notice:\n%s", out)
+	if out := committedNotices(m); !strings.Contains(out, i18n.M.WorkModeDeprecatedNotice) {
+		t.Fatalf("running-turn /preset missing retirement notice:\n%s", out)
 	}
 }

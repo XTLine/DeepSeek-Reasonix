@@ -11,9 +11,7 @@ const packageJSON = JSON.parse(readFileSync(resolve(repoRoot, "desktop/frontend/
 const appSource = readFileSync(resolve(repoRoot, "desktop/frontend/src/App.tsx"), "utf8");
 const bridgeSource = readFileSync(resolve(repoRoot, "desktop/frontend/src/lib/bridge.ts"), "utf8");
 const desktopMainSource = readFileSync(resolve(repoRoot, "desktop/main.go"), "utf8");
-const transcriptScrollBenchSource = readFileSync(resolve(repoRoot, "desktop/frontend/bench/transcript-scroll-stability.mjs"), "utf8");
-const transcriptSelectionBenchSource = readFileSync(resolve(repoRoot, "desktop/frontend/bench/transcript-selection.mjs"), "utf8");
-const transcriptSelectionComponentSource = readFileSync(resolve(repoRoot, "desktop/frontend/src/components/TranscriptSelectionMenu.tsx"), "utf8");
+const transcriptScrollBenchSource = readFileSync(resolve(repoRoot, "desktop/frontend/bench/chat-transcript.mjs"), "utf8");
 
 function jobBody(name) {
   const match = workflow.match(new RegExp(`\\n  ${name}:\\n([\\s\\S]*?)(?=\\n  [a-z][a-z0-9-]*:|$)`));
@@ -23,11 +21,14 @@ function jobBody(name) {
 
 for (const [job, body, command] of [
   ["desktop-frontend", jobBody("desktop-frontend"), "node frontend/scripts/run-ci-tests.mjs"],
-  ["required lint", jobBody("lint", "site"), "pnpm --dir desktop/frontend test:motion"],
+  ["required lint", jobBody("lint"), "FRONTEND_RESULT: ${{ needs.desktop-frontend.result }}"],
 ]) {
   if (!body.includes(command)) {
     throw new Error(`motion-ci-contract: ${job} must run test:motion`);
   }
+}
+if (jobBody("lint-code").includes("test:motion") || jobBody("lint").includes("test:motion")) {
+  throw new Error("motion-ci-contract: test:motion must run only through the deduplicated frontend plan");
 }
 
 const windowsJob = jobBody("desktop-windows", "lint");
@@ -51,26 +52,6 @@ for (const retired of ["WebView2", "webview2", "test-transcript-selection"]) {
 for (const linuxOnly of ["test:motion", "test:transcript-browser", "test:settings-browser"]) {
   if (windowsJob.includes(`pnpm --dir frontend ${linuxOnly}`)) {
     throw new Error(`motion-ci-contract: desktop-windows must not repeat the ubuntu Chromium suite ${linuxOnly}`);
-  }
-}
-
-for (const required of [
-  "bench:selection-table",
-  "SELECTION REPAINT TARGET",
-  "selection endpoint blocks remain resident by stable key",
-  "measurement changes cannot run structural corrections during selection",
-]) {
-  if (!transcriptSelectionBenchSource.includes(required)) {
-    throw new Error(`motion-ci-contract: transcript selection browser gate must retain ${required}`);
-  }
-}
-for (const required of [
-  'data-surface="transcript"',
-  "data-state={actionOverlay.phase}",
-  "actionOverlayStateRef.current.action",
-]) {
-  if (!transcriptSelectionComponentSource.includes(required)) {
-    throw new Error(`motion-ci-contract: stable transcript selection host must retain ${required}`);
   }
 }
 
@@ -133,7 +114,7 @@ if (motionScript.includes("transcript-virtualization.test.tsx")) {
 
 const motionBrowserCommand = "pnpm --dir frontend test:motion-browser";
 const motionBrowserRuns = workflow.match(/pnpm --dir frontend test:motion-browser(?:\s|$)/g)?.length ?? 0;
-if (!jobBody("desktop-browser").includes(motionBrowserCommand) || motionBrowserRuns !== 1) {
+if (!jobBody("desktop-browser-group").includes(motionBrowserCommand) || motionBrowserRuns !== 1) {
   throw new Error("motion-ci-contract: the Linux browser job must run test:motion-browser exactly once");
 }
 if (!packageJSON.scripts?.["test:motion-browser"]?.includes("approval-animation.mjs")) {
@@ -142,23 +123,9 @@ if (!packageJSON.scripts?.["test:motion-browser"]?.includes("approval-animation.
 
 const transcriptScript = packageJSON.scripts?.["test:transcript"] ?? "";
 for (const required of [
-  "transcript-kernel.test.ts",
-  "transcript-kernel-races.test.ts",
-  "transcript-timeline.test.ts",
-  "transcript-viewport.test.tsx",
-  "transcript-question-jump.test.ts",
-  "nested-scroll-handoff.test.ts",
-  "creation-transcript-scrollbar.test.ts",
-  "markdown-table-virtual.test.tsx",
-  "typography-overflow-contract.test.ts",
-  "transcript-selection-retention.test.tsx",
-  "transcript-logical-selection.test.ts",
-  "transcript-selection-overlay.test.tsx",
-  "markdown-pipeline.test.tsx",
-  "message-selection-copy.test.ts",
-  "transcript-selection-menu.test.tsx",
-  "transcript-selection-rendering.test.ts",
-  "transcript-store.test.ts",
+  "chat-view-source.test.ts", "chat-scroll-controller.test.ts", "chat-natural-flow.test.tsx",
+  "chat-content-loader.test.ts", "markdown-natural-flow.test.tsx",
+  "typography-overflow-contract.test.ts", "markdown-pipeline.test.tsx", "transcript-store.test.ts",
 ]) {
   if (!transcriptScript.includes(required)) {
     throw new Error(`motion-ci-contract: test:transcript must include ${required}`);
@@ -166,7 +133,7 @@ for (const required of [
 }
 
 const transcriptBrowserScript = packageJSON.scripts?.["test:transcript-browser"] ?? "";
-for (const required of ["transcript-selection.mjs", "transcript-scroll-stability.mjs"]) {
+for (const required of ["chat-transcript.mjs"]) {
   if (!transcriptBrowserScript.includes(required)) {
     throw new Error(`motion-ci-contract: test:transcript-browser must include ${required}`);
   }
@@ -192,7 +159,7 @@ if (/transition-duration/.test(globalReducedMotion[1])) {
 if (!ciUnitScripts.includes("test:motion") || !ciUnitScripts.includes("test:transcript")) {
   throw new Error("motion-ci-contract: Linux CI must include all dedicated motion and transcript suites");
 }
-const desktopLinuxJob = jobBody("desktop-browser");
+const desktopLinuxJob = jobBody("desktop-browser-group");
 
 const transcriptBrowserCommand = "pnpm --dir frontend test:transcript-browser";
 const transcriptBrowserRuns = desktopLinuxJob.match(/pnpm --dir frontend test:transcript-browser(?:\s|$)/g)?.length ?? 0;
@@ -202,17 +169,15 @@ if (!desktopLinuxJob.includes(transcriptBrowserCommand) || transcriptBrowserRuns
 if (!desktopLinuxJob.includes("PLAYWRIGHT_BROWSERS_PATH=.pw-browsers pnpm --dir frontend exec playwright install")) {
   throw new Error("motion-ci-contract: Chromium must install into the path used by frontend browser tests");
 }
-for (const required of ["transcript-selection.mjs", "transcript-scroll-stability.mjs"]) {
+for (const required of ["chat-transcript.mjs"]) {
   if (!packageJSON.scripts?.["test:transcript-browser"]?.includes(required)) {
     throw new Error(`motion-ci-contract: test:transcript-browser must include ${required}`);
   }
 }
 for (const required of [
-  "bench:windowed-1000t",
-  "data-transcript-mounted-blocks",
-  "history prepend produces zero blank viewport frames",
-  "question jump performs exactly one accepted physical write",
-  "at most 40 completed blocks",
+  "stream anchor drift", "prepend anchor drift", "native selection survives stream settlement",
+  "inputP95 <= 200", "longTaskMax <= 500", "percentile(switches) <= 300",
+  "heapGrowth <= 20 * 1024 * 1024", "settled layout queue converges",
 ]) {
   if (!transcriptScrollBenchSource.includes(required)) {
     throw new Error(`motion-ci-contract: transcript scroll browser gate must retain block-kernel assertion ${required}`);

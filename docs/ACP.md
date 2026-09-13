@@ -144,7 +144,7 @@ one mode selector:
 | Collaboration mode | `normal`, `plan`, `goal` | `modes` and `session/set_mode` |
 | Model | Configured `provider/model` entries | `configOptions` with id `model` |
 | Reasoning effort | Provider-supported levels or `auto` | `configOptions` with id `effort` |
-| Tool approval | `ask`, `auto`, `yolo` | `configOptions` with id `tool_approval` |
+| Permission preset | `read-only`, `workspace-write`, `danger-full-access` | `configOptions` with id `tool_approval` |
 
 Use `session/set_config_option` for model, effort, and tool approval.
 Its parameters are `sessionId`, `configId` and `value`, where `configId` is the
@@ -158,7 +158,7 @@ Its parameters are `sessionId`, `configId` and `value`, where `configId` is the
   "params": {
     "sessionId": "session-id",
     "configId": "tool_approval",
-    "value": "yolo"
+    "value": "danger-full-access"
   }
 }
 ```
@@ -175,11 +175,15 @@ send `session/set_config_option` with `configId` `agent_preset` or `work_mode`
 (including legacy aliases `profile`, `runtime_profile`, `token_mode`) receive a
 successful no-op: nothing switches, nothing rebuilds, and the result carries a
 `deprecatedNotice` explaining the adaptive standard execution.
+The returned `configOptions` list does not advertise these retired selectors or
+`quality_floor`. A known legacy `quality_floor` value is accepted as the same
+no-op, while unknown values still return `InvalidParams`.
 
 For older clients, `session/set_model` remains available. The legacy
-`session/set_mode` values `default` and `auto` are also accepted as Normal + Ask
-and Normal + Yolo respectively; new clients should use the independent
-selectors above.
+`session/set_mode` values `default` and `auto` are also accepted as Normal +
+Read only and Normal + Workspace access respectively; new clients should use
+the independent selectors above. Legacy permission values are accepted only as
+input migration aliases and are never advertised in `configOptions`.
 
 ## Prompts, updates, and approvals
 
@@ -198,10 +202,8 @@ Hosts should keep the `session/prompt` request open until Reasonix returns its
 stop reason, while continuing to process requests and notifications in both
 directions.
 
-Reasonix emits only ACP v1 stop reasons. A completed turn that still needs a
-final-readiness check sends a `[warning]` message chunk and returns `end_turn`;
-its vendor status remains `readiness_paused` so the host can offer recovery.
-An explicit model-round limit (`max_steps`) sends a `[warning]`, returns
+Reasonix emits only ACP v1 stop reasons. Model completion ends the ordinary
+turn without a host readiness check or recovery action. An explicit model-round limit (`max_steps`) sends a `[warning]`, returns
 `max_turn_requests`, and records a paused vendor outcome. A host task-time,
 token, or cost budget also sends a `[warning]` and records a paused outcome,
 but returns `end_turn` because ACP v1 has no task-budget-specific stop reason.

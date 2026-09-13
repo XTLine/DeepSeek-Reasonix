@@ -91,8 +91,6 @@ func SlashArgItemsLazy(line string, resolve func() ArgData) ([]SlashItem, int, b
 		raw = hooksArgItems(prior)
 	case "/effort":
 		raw = effortArgItems(prior, data())
-	case "/preset":
-		raw = presetArgItems(prior)
 	case "/goal":
 		raw = goalArgItems(prior)
 	case "/reasoning-language":
@@ -216,18 +214,6 @@ func themeArgItems(prior []string) []SlashItem {
 		items = append(items, SlashItem{Label: st.name, Insert: st.name, Hint: st.mode + " · " + st.desc})
 	}
 	return items
-}
-
-// presetArgItems offers the two quality-floor postures; the floor labels are
-// protocol tokens, so both stay untranslated.
-func presetArgItems(prior []string) []SlashItem {
-	if len(prior) > 1 {
-		return nil
-	}
-	return []SlashItem{
-		{Label: "standard", Insert: "standard", Hint: i18n.M.ArgPresetStandard},
-		{Label: "delivery", Insert: "delivery", Hint: i18n.M.ArgPresetDelivery},
-	}
 }
 
 func effortArgItems(prior []string, d ArgData) []SlashItem {

@@ -168,14 +168,9 @@ func TestCanceledCompletionCannotStartTools(t *testing.T) {
 	}
 }
 
-func TestUnknownToolsAndPlannerNeverEnterContinuousWait(t *testing.T) {
+func TestPlannerAndNonRetryableFailuresNeverEnterContinuousWait(t *testing.T) {
 	a := New(&transientHeaderProvider{}, echoRegistry(), NewSession(""), Options{}, event.Discard)
 	failure := provider.ClassifyRecovery(&provider.APIError{Status: 503})
-	a.turn.writeRecovery = map[string]provider.ToolCall{"unknown": {ID: "unknown"}}
-	if a.canWaitSampling(context.Background(), &samplingRecoveryState{}, failure) {
-		t.Fatal("unknown tool allowed endless waiting")
-	}
-	a.turn.writeRecovery = nil
 	if a.canWaitSampling(context.Background(), &samplingRecoveryState{}, provider.ClassifyRecovery(&provider.APIError{Status: 409})) {
 		t.Fatal("conflict allowed endless waiting")
 	}

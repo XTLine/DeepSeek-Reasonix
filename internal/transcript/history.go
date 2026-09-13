@@ -89,9 +89,9 @@ func historyRows(m provider.Message, messageIndex int, opts HistoryOptions, todo
 		}
 		return nil
 	case m.LocalOnly && m.FinalReadinessRecovery != nil && m.FinalReadinessRecovery.Pending:
-		return []Message{{Role: "notice", Code: event.NoticeCodeFinalReadiness, Level: "info", Pending: true,
-			Content:   "Task is not complete; continue the remaining work or checks.",
-			Readiness: &event.FinalReadiness{Attempts: 1, Missing: append([]string(nil), m.FinalReadinessRecovery.Missing...)}}}
+		return []Message{{Role: "notice", Code: agent.HistoricalChecksNoticeCode, Level: "info",
+			Content:   agent.HistoricalChecksNoticeText,
+			Readiness: agent.HistoricalChecks(m.FinalReadinessRecovery)}}
 	default:
 		return defaultHistoryRows(m, messageIndex, opts, todoArgs)
 	}
@@ -112,7 +112,8 @@ func defaultHistoryRows(m provider.Message, messageIndex int, opts HistoryOption
 		return nil
 	}
 	row := Message{MessageID: m.ID, Role: string(m.Role), Content: m.Content, CreatedAt: m.CreatedAt,
-		WorkDurationMs: m.WorkDurationMs, MemoryCitations: m.MemoryCitations, Execution: m.ToolExecution}
+		WorkDurationMs: m.WorkDurationMs, MemoryCitations: m.MemoryCitations, Execution: m.ToolExecution,
+		PresentedFiles: provider.PresentedFileList(m.PresentedFiles)}
 	if m.LocalOnly {
 		row.Role = "assistant"
 	}

@@ -162,12 +162,12 @@ const readinessState = reducer(readinessStarted, {
 const readinessNotice = readinessState.items[readinessState.items.length - 1];
 eq(readinessNotice.kind, "notice", "final readiness appends a notice");
 eq(readinessNotice.kind === "notice" && readinessNotice.level, "info", "final readiness uses informational severity");
-eq(readinessNotice.kind === "notice" && readinessNotice.variant, "delivery", "final readiness uses the delivery status treatment");
-eq(readinessNotice.kind === "notice" && readinessNotice.title, "Delivery checks are not complete", "final readiness uses the explicit Delivery recovery title");
+eq(readinessNotice.kind === "notice" && readinessNotice.variant, "delivery", "final readiness keeps the compatibility notice variant");
+eq(readinessNotice.kind === "notice" && readinessNotice.title, "Checks are not complete", "final readiness uses the generic recovery title");
 eq(
   readinessNotice.kind === "notice" && readinessNotice.text,
-  "The response was generated, but verification and review still need to be completed.",
-  "final readiness explains the explicit Delivery recovery boundary",
+  "The response was generated, but required verification or review is still incomplete.",
+  "final readiness explains the recovery boundary",
 );
 eq(readinessNotice.kind === "notice" && readinessNotice.detail, "Still needed: verification, change review", "structured requirements produce localized detail");
 eq(readinessNotice.kind === "notice" && readinessNotice.action, "continue_delivery", "final readiness offers a recovery action");

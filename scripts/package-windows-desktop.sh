@@ -30,6 +30,7 @@ GUARDNAME="reasonix-guard"
 LAUNCHERNAME="reasonix-launcher"
 UPDATE_HELPER="reasonix-update-helper.exe"
 WINDOWS_CLINAME="reasonix-cli"
+WINDOWS_CLI_ENTRY="reasonix-cli-launcher.exe"
 SIGNING_LIST="signing-files.txt"
 PAYLOAD_MANIFEST="reasonix-payload.json"
 PAYLOAD_SIGNATURE="$PAYLOAD_MANIFEST.minisig"
@@ -150,7 +151,9 @@ cp "$PAYLOAD/$WINDOWS_CLINAME.exe" "$portable_staging/versions/$version_label/$W
 cp -R "$PAYLOAD/app" "$portable_staging/versions/$version_label/app"
 cp "$PAYLOAD/$LAUNCHERNAME.exe" "$portable_staging/$LAUNCHERNAME.exe"
 cp "$PAYLOAD/$LAUNCHERNAME.exe" "$portable_staging/$APPNAME.exe"
-cp "$PAYLOAD/$WINDOWS_CLINAME.exe" "$portable_staging/$WINDOWS_CLINAME.exe"
+cli_entry="$PAYLOAD/app/resources/bin/$WINDOWS_CLI_ENTRY"
+[ -s "$cli_entry" ] || { echo "Windows CLI entry is missing: $cli_entry" >&2; exit 1; }
+cp "$cli_entry" "$portable_staging/$WINDOWS_CLINAME.exe"
 cat >"$portable_staging/current.json" <<EOF
 {
   "schemaVersion": 1,
@@ -168,7 +171,7 @@ if command -v powershell.exe >/dev/null 2>&1; then
 		dist_portable_win="$(cygpath -w "$dist_portable")"
 	fi
 	powershell.exe -NoProfile -Command \
-		"Compress-Archive -Force -Path '$portable_staging_win\\*' -DestinationPath '$dist_portable_win'"
+		"Compress-Archive -CompressionLevel Optimal -Force -Path '$portable_staging_win\\*' -DestinationPath '$dist_portable_win'"
 elif command -v zip >/dev/null 2>&1; then
 	# macOS/Linux cross-builds do not ship powershell.exe; the portable layout
 	# is ordinary ZIP data, so use the host zip utility in that case.
@@ -177,7 +180,7 @@ elif command -v zip >/dev/null 2>&1; then
 	rm -f -- "$dist_portable"
 	(
 		cd "$portable_staging"
-		zip -q -r "$dist_portable" .
+		zip -q -9 -r "$dist_portable" .
 	)
 else
 	echo "neither powershell.exe nor zip is available to create the Windows portable archive" >&2

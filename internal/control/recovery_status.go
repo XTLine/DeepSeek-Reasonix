@@ -33,11 +33,14 @@ func (c *Controller) applyToolRecoveryTurnStatus(done *event.Event, completion *
 		return
 	}
 	if len(c.executor.PendingToolRecovery()) > 0 {
-		done.Recovery = &event.RecoveryStatus{State: "recovery_required", Reason: "tool_effect_unconfirmed", RequiresUserDecision: true}
+		// Unknown effects are durable execution facts. They make the cancelled
+		// turn diagnosable, but must not create a separate terminal state or an
+		// admission requirement for the next turn.
+		done.Recovery = &event.RecoveryStatus{State: "unknown", Reason: "tool_effect_unconfirmed"}
 		return
 	}
 	if c.executor.SilentToolRecovery() || c.cancelledTurnWasSilent(completion) {
-		done.Recovery = &event.RecoveryStatus{State: "recovery_required", Reason: "silent_interruption"}
+		done.Recovery = &event.RecoveryStatus{State: "interrupted", Reason: "silent_interruption"}
 	}
 }
 

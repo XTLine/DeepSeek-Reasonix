@@ -1,5 +1,9 @@
 # Tool reliability and explicit protocol recovery
 
+> Historical design. Auto Guard and executable tool-recovery actions described
+> here are retired. See [Tool interruption and recovery](TOOL_RECOVERY.md) for
+> the current fact-only behavior.
+
 Validation date: 2026-09-05. This extends the existing replay projection, recovery budgets, independent search and file-write verification. It does not change the selected model, endpoint, protocol or thinking setting. No release, commit or publication is included.
 
 ## Behavior

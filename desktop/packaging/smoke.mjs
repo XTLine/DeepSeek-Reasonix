@@ -81,6 +81,24 @@ async function cleanupAfterFailure() {
   await waitForProcessesToExit(pids);
 }
 
+// Resolves once any live window's app bridge answers Version. A page that is
+// still on the starting page, mid-navigation, or already destroyed throws
+// from evaluate; every such throw is a reason to scan again, not to fail.
+async function appVersion(application, deadline) {
+  let lastError = "no window has exposed window.reasonixDesktop yet";
+  for (;;) {
+    for (const page of application.windows()) {
+      try {
+        return await page.evaluate(() => window.reasonixDesktop.invoke("Version", []));
+      } catch (error) {
+        lastError = error.message;
+      }
+    }
+    if (Date.now() > deadline) throw new Error(`renderer never invoked the production service: ${lastError}`);
+    await sleep(250);
+  }
+}
+
 try {
   const application = await electron.launch({ executablePath: executable, args: [], env, timeout });
   child = application.process();
@@ -103,9 +121,12 @@ try {
     else await sleep(250);
   }
   console.log(`PASS  handshake ready after ${((Date.now() - started) / 1000).toFixed(1)}s: ${ready.line}`);
-  const page = await application.firstWindow({ timeout });
-  await page.waitForFunction(() => Boolean(window.reasonixDesktop), null, { timeout });
-  const version = await page.evaluate(() => window.reasonixDesktop.invoke("Version", []));
+  // MainWindow.prepareApp replaces the starting-page window with a fresh
+  // BrowserWindow once the service reports its geometry, and onReady calls it
+  // right after logging the line polled above. A handle from firstWindow()
+  // taken in that gap is destroyed under us ("Target page, context or browser
+  // has been closed"). Wait for whichever live window answers instead.
+  const version = await appVersion(application, started + timeout);
   const expected = JSON.parse(readFileSync(join(identity.resourcesPath, "build.json"), "utf8")).version;
   if (version === "dev" || version !== expected) throw new Error(`packaged service version ${version} differs from manifest ${expected}`);
   console.log(`PASS  renderer invokes the production service: Version=${version}`);

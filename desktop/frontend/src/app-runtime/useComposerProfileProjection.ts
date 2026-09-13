@@ -13,7 +13,7 @@ import {
   type ComposerProfileField,
   type UserPlanModeIntents,
 } from "../lib/composerProfile";
-import type { Meta, QualityFloor, TabMeta } from "../lib/types";
+import type { Meta, TabMeta } from "../lib/types";
 import type { RemoteSessionApi } from "../lib/useRemoteSession";
 
 export type ComposerProfileProjectionInput = {
@@ -26,14 +26,12 @@ export type ComposerProfileProjectionInput = {
   remote: boolean;
   remoteSession: RemoteSessionApi;
   planIntentsRef: { current: UserPlanModeIntents };
-  setControllerQualityFloor: (floor: QualityFloor) => Promise<unknown>;
-  showToast: (message: string, level: "error") => void;
 };
 
 /**
  * Owns the active composer profile projection (UI override over the backend
  * profile, remote sync) and the profile patch commands: generic per-tab
- * patches, quality-floor application and goal activation patches. Mode axis
+ * patches and goal activation patches. Mode axis
  * changes stay in useComposerModeActions; this hook owns the profile record.
  */
 export function useComposerProfileProjection(input: ComposerProfileProjectionInput) {
@@ -71,16 +69,6 @@ export function useComposerProfileProjection(input: ComposerProfileProjectionInp
     });
   });
 
-  const applyQualityFloor = useCommittedCommand((floor: QualityFloor) => {
-    if (!activeTabId) return;
-    if (remote) {
-      void remoteSession.setQualityFloor(floor).catch((error) => input.showToast(error instanceof Error ? error.message : String(error), "error"));
-      return;
-    }
-    patchActiveComposerProfile({ qualityFloor: floor }, ["qualityFloor"]);
-    void input.setControllerQualityFloor(floor);
-  });
-
   const patchActivatedGoalForTab = useCommittedCommand((tabId: string, nextGoal: string): void => {
     const trimmed = nextGoal.trim();
     patchComposerProfileForTab(tabId, {
@@ -99,7 +87,6 @@ export function useComposerProfileProjection(input: ComposerProfileProjectionInp
     remoteComposerProfileReady,
     patchActiveComposerProfile,
     patchComposerProfileForTab,
-    applyQualityFloor,
     patchActivatedGoalForTab,
   };
 }

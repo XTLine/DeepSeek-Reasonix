@@ -44,6 +44,7 @@ export function TurnCheckDetails({ summary, tabId = "", sessionPath = "" }: { su
       <div className="turn-check-details__head"><code>{check.command}</code><span>{t("completion.checkRunning")}</span></div>
       <CheckLog tabId={tabId} sessionPath={sessionPath} toolCallId={check.toolCallId} liveOutput={check.output} />
     </div>)}
+    {summary.receipt?.assessmentKind === "facts" && Boolean(summary.receipt.gaps?.length || summary.receipt.risks?.length) && <p>{t("completion.modelDeclarations")}</p>}
     {(summary.receipt?.gaps?.length ?? 0) > 0 && <ul className="turn-check-details__gaps">{summary.receipt!.gaps!.map((gap, index) => <li key={`${index}:${gap.kind}`}>{gap.detail || t("completion.checkUnknown")}</li>)}</ul>}
     {(summary.receipt?.risks?.length ?? 0) > 0 && <ul className="turn-check-details__gaps">{summary.receipt!.risks!.map((risk, index) => <li key={index}>{risk}</li>)}</ul>}
     {checks.length > 0 && <p className="turn-check-details__footnote">{t("completion.checksOnly")}</p>}

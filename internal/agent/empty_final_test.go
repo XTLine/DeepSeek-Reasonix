@@ -12,10 +12,6 @@ import (
 	"reasonix/internal/tool"
 )
 
-func textTurn(text string) []provider.Chunk {
-	return []provider.Chunk{{Type: provider.ChunkText, Text: text}, {Type: provider.ChunkDone}}
-}
-
 func TestRunAcceptsReasoningOnlyFinalAnswer(t *testing.T) {
 	prov := &scriptedProvider{name: "p", turns: [][]provider.Chunk{
 		{

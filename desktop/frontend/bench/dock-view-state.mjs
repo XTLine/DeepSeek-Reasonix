@@ -21,7 +21,15 @@ try {
   await page.goto(url + "/?mock=bench&bench=1&app-lifecycle-probe=1");
   await page.locator("textarea.composer__input:not([aria-hidden=true])").waitFor();
   await page.locator('.project-tree__topic-main:has-text("bench:small-6t")').click();
+  // The benchmark fixture hydrates this session asynchronously. Wait for the
+  // authoritative session snapshot before mutating dock state, otherwise the
+  // late hydrate can replace the empty-state picker while Playwright clicks it.
+  await page.waitForFunction(() => document.querySelector('.transcript')?.textContent?.includes('ASYNC LAYOUT EXPANSION COMPLETE'));
   const tabs = page.locator('.workbench-dock__tabs [role="tab"]');
+  const overview = page.getByRole("tab", { name: "Overview", exact: true });
+  await overview.waitFor();
+  assert.equal(await overview.count(), 1, "fresh expanded workspace dock defaults to Overview");
+  await overview.locator(".workbench-dock__tab-close").click();
   await page.locator(".tab-picker__item").filter({ hasText: /^Files$/ }).click();
   await page.locator('[data-workspace-path="README.md"]').click();
   await page.waitForFunction(() => document.querySelector(".workspace-preview__body")?.textContent?.includes("Browser-dev workspace preview."));
@@ -49,7 +57,7 @@ try {
   assert.equal(await page.getByPlaceholder("Filter files…", { exact: true }).inputValue(), "mod");
   await tabs.nth(1).locator(".workbench-dock__tab-close").click();
   await page.locator(".workbench-dock__tab-overview").click();
-  await page.locator(".tab-overview__row").filter({ hasText: /Closed/ }).click();
+  await page.getByRole("menuitem", { name: /^Files Closed/ }).click();
   assert.equal(await page.evaluate(selected), "go.mod", "reopen restores the original view");
   assert.equal(await page.getByPlaceholder("Filter files…", { exact: true }).inputValue(), "mod", "reopen restores filtering");
   await page.reload();

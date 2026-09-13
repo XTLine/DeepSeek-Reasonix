@@ -30,6 +30,10 @@ type OperationDiagnostic struct {
 }
 
 const (
+	FSNotObserved        = "FS_NOT_OBSERVED"
+	FSStaleVersion       = "FS_STALE_VERSION"
+	FSNotFound           = "FS_NOT_FOUND"
+	FSAlreadyExists      = "FS_ALREADY_EXISTS"
 	ReadPartial          = "READ_PARTIAL"
 	ReadCursorInvalid    = "READ_CURSOR_INVALID"
 	ReadSourceChanged    = "READ_SOURCE_CHANGED"

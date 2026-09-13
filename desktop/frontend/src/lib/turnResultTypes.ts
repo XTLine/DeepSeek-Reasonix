@@ -21,6 +21,7 @@ export interface TurnChanges {
 }
 
 export interface WireCompletionReceipt {
+	assessmentKind?: "facts";
   verdict: string;
   diff?: TurnChanges;
   interrupted?: boolean;

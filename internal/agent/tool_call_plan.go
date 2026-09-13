@@ -11,26 +11,24 @@ import (
 
 // toolCallPlan is the resolved, policy-checked state owned by one executeOne.
 type toolCallPlan struct {
-	call                            provider.ToolCall
-	tool                            tool.Tool
-	canonicalName                   string
-	permName                        string
-	permArgs                        json.RawMessage
-	execTool                        tool.Tool
-	execArgs                        json.RawMessage
-	evidenceName                    string
-	evidenceArgs                    json.RawMessage
-	readOnly                        bool
-	resolved                        tool.ResolvedCall
-	resolvedMeta                    *tool.ResolvedCall
-	effects                         evidence.ToolEffects
-	profile                         evidence.EffectProfile
-	verification, planTransition    bool
-	planBefore, planAfter, planDiff string
-	planReplacementAuthorized       bool
-	recoveryGen                     uint64
-	runTool                         tool.Tool
-	runArgs                         json.RawMessage
+	call                      provider.ToolCall
+	tool                      tool.Tool
+	canonicalName             string
+	permName                  string
+	permArgs                  json.RawMessage
+	execTool                  tool.Tool
+	execArgs                  json.RawMessage
+	evidenceName              string
+	evidenceArgs              json.RawMessage
+	readOnly                  bool
+	resolved                  tool.ResolvedCall
+	resolvedMeta              *tool.ResolvedCall
+	effects                   evidence.ToolEffects
+	profile                   evidence.EffectProfile
+	verification              bool
+	planReplacementAuthorized bool
+	runTool                   tool.Tool
+	runArgs                   json.RawMessage
 	// readTaskID is the logical read a continuation call joined, empty for a
 	// fresh read.
 	readTaskID          string
@@ -41,16 +39,20 @@ type toolCallPlan struct {
 	cctx                context.Context
 	// mcpApp collects the call's Apps presentation from the executing tool.
 	mcpApp                                                 *tool.MCPAppResult
+	presentedFiles                                         func() []tool.PresentedFile
 	releaseParentWrite, releaseMutationWrite, releaseLease func()
 	mutationPath                                           string
 	mutationObserved, mutationAfterDone, executed          bool
 	hooksMayMutateWorkspace                                bool
 	perCallWriteRoots                                      []string
 	skipOrdinaryGate                                       bool
-	// incompleteReadRoot binds an exact host-requested source/result page to
-	// the read chain it advances. Empty means an independent tool call.
-	incompleteReadRoot   string
-	incompleteReadAction incompleteReadAction
+	permissionPreset                                       string
+}
+
+func cloneEvidenceTarget(target tool.EvidenceTargetInfo) tool.EvidenceTargetInfo {
+	target.Ranges = append([]tool.ReadRange(nil), target.Ranges...)
+	target.Hashes = append([]string(nil), target.Hashes...)
+	return target
 }
 
 func (p *toolCallPlan) classifyEffects() {

@@ -140,6 +140,23 @@ reasonix doctor capabilities --json
 `reasonix-guide` 会覆盖内置版；也可用
 `[skills].disabled_skills = ["reasonix-guide"]` 隐藏。
 
+指南首先加载简短入口，Skills、Commands、Hooks、MCP、Plugins 和指令解析
+分别位于二进制内置的引用页中。通过 `read_skill` 按需读取；
+工具未直接暴露时，使用能力代理：
+
+```json
+{"action":"call","capability_id":"tool:read_skill","arguments":{"name":"reasonix-guide","reference":"references/hooks.md"}}
+```
+
+省略 `reference` 保持原有的技能正文读取方式。引用只能来自所选内置技能包的
+`references/*.md`，不会读取任意宿主路径，也不会绕过项目覆盖或技能禁用
+回退到内置版。磁盘技能继续通过其源文件读取引用。没有用户数据格式或迁移变化。
+
+会话技能目录在固定字符预算内先缩短描述，尽量保留全部技能名称。名称本身也超出
+预算时，只显示完整条目，并提供遗漏数量和发现提示。遗漏项仍可通过
+`use_capability` 的 search/inspect/call 发现和调用；预览不是完整能力清单。
+技能选择依据实际任务相关性，不再因弱关键词匹配而强制调用。
+
 ## CLI 参考
 
 ```bash
@@ -253,5 +270,10 @@ MCP 仅列出 env/header 的 **key**。可能携带 HTTP 响应体或 MCP stderr
 
 ## 缓存影响
 
-内置 `reasonix-guide` 仅在 system prompt 的 Skill 索引中增加 **一行稳定索引**；
-正文按需加载。诊断本身不进入 provider 请求。
+内置 `reasonix-guide` 在下次变化的 `session-context` Skills 目录中增加一行；
+正文按需加载。诊断本身不属于 provider 提示词。
+
+修改静态调用策略或工具描述/schema，会改变新组装会话的缓存前缀，可能需要重新
+预热缓存。读取指南或引用页只增加工具结果，不改写当前系统前缀或工具 schema。
+相同目录的渲染是确定性的。提示词效果应在实际使用的 provider 上评估；
+确定性集成测试不能证明模型选择技能的质量。

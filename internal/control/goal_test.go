@@ -13,7 +13,6 @@ import (
 	"reasonix/internal/agent"
 	"reasonix/internal/event"
 	"reasonix/internal/evidence"
-	"reasonix/internal/goaleval"
 	"reasonix/internal/provider"
 	"reasonix/internal/store"
 	"reasonix/internal/tool"
@@ -61,19 +60,24 @@ func goalToolTurn(status, reason, nextAction string) [][]provider.Chunk {
 var goalToolCallSeq atomic.Uint64
 
 // fakeGoalEvaluator is a scripted bounded Goal evaluator for tests.
+type legacyEvaluatorVerdict struct {
+	Outcome string
+	Reason  string
+}
+
 type fakeGoalEvaluator struct {
-	outcome goaleval.Outcome
+	outcome string
 	reason  string
 	err     error
 	calls   int
 }
 
-func (f *fakeGoalEvaluator) Evaluate(_ context.Context, _ goaleval.GoalEvidence) (goaleval.Verdict, error) {
+func (f *fakeGoalEvaluator) Evaluate(_ context.Context, _ struct{}) (legacyEvaluatorVerdict, error) {
 	f.calls++
 	if f.err != nil {
-		return goaleval.Verdict{}, f.err
+		return legacyEvaluatorVerdict{}, f.err
 	}
-	return goaleval.Verdict{Outcome: f.outcome, Reason: f.reason}, nil
+	return legacyEvaluatorVerdict{Outcome: f.outcome, Reason: f.reason}, nil
 }
 
 func TestGoalCommandAutoContinuesUntilComplete(t *testing.T) {
@@ -282,8 +286,8 @@ func TestLegacyGoalSidecarMigratesToContinuousRuntimeWithoutTaskID(t *testing.T)
 	if err := json.Unmarshal(raw, &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.AutoResearchTaskID != "" {
-		t.Fatalf("migrated sidecar retained old task id: %q", state.AutoResearchTaskID)
+	if state.AutoResearchTaskID != "old-task" {
+		t.Fatalf("read-only restore rewrote the original sidecar: %q", state.AutoResearchTaskID)
 	}
 }
 
@@ -571,77 +575,19 @@ func TestGoalRestartClearsBlockedAndCompletesOnRetry(t *testing.T) {
 	}
 }
 
-// TestIncompleteGoalTodos verifies that formatIncompleteTodos detects
-// unfinished tasks and returns a formatted reminder, and returns empty
-// when all todos are complete.
-func TestIncompleteGoalTodos(t *testing.T) {
-	prov := &scriptedTurns{turns: [][]provider.Chunk{textTurn("done")}}
-	ag := agent.New(prov, tool.NewRegistry(), agent.NewSession(""), agent.Options{}, event.Discard)
-	c := New(Options{Runner: ag, Executor: ag, Sink: event.Discard})
-	reminder := func() string { return formatIncompleteTodos(c.goalTodos(), ag.ReadinessResult().Reason) }
-
-	// Seed with incomplete todos.
-	ag.SeedTodoState([]evidence.TodoItem{
-		{Content: "Fix the parser", Status: "in_progress"},
-		{Content: "Add tests", Status: "pending"},
-	})
-	msg := reminder()
-	if msg == "" {
-		t.Fatal("formatIncompleteTodos() returned empty string, expected reminder")
-	}
-	if !strings.Contains(msg, "Fix the parser") {
-		t.Fatalf("reminder should mention 'Fix the parser', got: %q", msg)
-	}
-	if !strings.Contains(msg, "Add tests") {
-		t.Fatalf("reminder should mention 'Add tests', got: %q", msg)
-	}
-	if !strings.Contains(msg, "update_goal") {
-		t.Fatalf("reminder should tell the model how to finish, got: %q", msg)
-	}
-
-	// Mark all complete.
-	ag.ReplaceTodoState([]evidence.TodoItem{
-		{Content: "Fix the parser", Status: "completed"},
-		{Content: "Add tests", Status: "completed"},
-	})
-	if got := reminder(); got != "" {
-		t.Fatalf("formatIncompleteTodos() with all-complete = %q, want empty", got)
-	}
-
-	// Empty todo list.
-	ag.ReplaceTodoState(nil)
-	if got := reminder(); got != "" {
-		t.Fatalf("formatIncompleteTodos() with empty list = %q, want empty", got)
-	}
-}
-
-// TestGoalInterceptsCompleteWithIncompleteTodos verifies that a complete report
-// with unfinished canonical todos is always rejected: the FSM continues with
-// the missing requirements, and completion is accepted only once the todos are
-// actually done (there is no override path anymore).
-func TestGoalInterceptsCompleteWithIncompleteTodos(t *testing.T) {
+// Model completion and incomplete task facts remain independent.
+func TestGoalCompletesWithoutChangingIncompleteTodos(t *testing.T) {
 	todoWrite, ok := tool.LookupBuiltin("todo_write")
 	if !ok {
 		t.Fatal("todo_write builtin not registered")
 	}
-	completeStep, ok := tool.LookupBuiltin("complete_step")
-	if !ok {
-		t.Fatal("complete_step builtin not registered")
-	}
 	reg := goalRegistry()
 	reg.Add(todoWrite)
-	reg.Add(completeStep)
 	completeTurn := [][]provider.Chunk{
 		{toolCallChunk("ug1", "update_goal", `{"status":"complete","reason":""}`), {Type: provider.ChunkDone}},
 		textTurn("All done."),
 	}
-	fixedTurn := [][]provider.Chunk{
-		{toolCallChunk("cs1", "complete_step", `{"step":"Fix the parser","result":"fixed","evidence":[{"kind":"manual","summary":"verified by inspection"}]}`), {Type: provider.ChunkDone}},
-		{toolCallChunk("t1", "todo_write", `{"todos":[{"content":"Fix the parser","status":"completed"}]}`), {Type: provider.ChunkDone}},
-		{toolCallChunk("ug2", "update_goal", `{"status":"complete","reason":""}`), {Type: provider.ChunkDone}},
-		textTurn("All done now."),
-	}
-	prov := &scriptedTurns{turns: flattenTurns(completeTurn, fixedTurn)}
+	prov := &scriptedTurns{turns: flattenTurns(completeTurn)}
 	ag := agent.New(prov, reg, agent.NewSession(""), agent.Options{}, event.Discard)
 	// Seed incomplete todos before starting.
 	ag.SeedTodoState([]evidence.TodoItem{
@@ -680,14 +626,11 @@ func TestGoalInterceptsCompleteWithIncompleteTodos(t *testing.T) {
 			break
 		}
 	}
-	if !found {
-		t.Fatalf("expected a not-ready continuation notice, got %v", allNotices)
+	if found || prov.call != 2 || c.GoalStatus() != GoalStatusComplete {
+		t.Fatalf("model completion was intercepted: calls=%d status=%s notices=%v", prov.call, c.GoalStatus(), allNotices)
 	}
-	if prov.call != 6 {
-		t.Fatalf("provider calls = %d, want intercepted turn + fixed turn (2 and 4 calls)", prov.call)
-	}
-	if c.GoalStatus() != GoalStatusComplete {
-		t.Fatalf("GoalStatus() = %q, want complete after the todos were actually finished", c.GoalStatus())
+	if ag.CanonicalTodoState()[0].Status != "in_progress" {
+		t.Fatal("host completed unreported todo")
 	}
 }
 
@@ -696,7 +639,7 @@ func TestGoalAdvanceResultCannotCrossGoalLifecycle(t *testing.T) {
 		t.Helper()
 		g.set("old goal", "", nil)
 		res := g.advance(goalAdvanceInput{
-			report: &goalTurnReport{status: GoalStatusComplete, reason: ""},
+			report: &goalTurnReport{status: GoalStatusRunning, nextAction: "continue work"},
 			todos: []evidence.TodoItem{{
 				Content: "unfinished work from old goal",
 				Status:  "in_progress",
@@ -747,26 +690,17 @@ func TestGoalAdvanceResultCannotCrossGoalLifecycle(t *testing.T) {
 	})
 }
 
-// TestGoalCompletionRequiresAllTodosDone verifies that a goal with seeded
-// incomplete canonical todos cannot complete until the model marks them done;
-// the completing turn force-completes any stragglers via a synthetic todo_write
-// so the frontend panel reflects the final state.
-func TestGoalCompletionRequiresAllTodosDone(t *testing.T) {
+// TestGoalCompletionPreservesExplicitTodoUpdates verifies that the model may
+// update todo presentation before submitting its independent Goal report.
+func TestGoalCompletionPreservesExplicitTodoUpdates(t *testing.T) {
 	todoWrite, ok := tool.LookupBuiltin("todo_write")
 	if !ok {
 		t.Fatal("todo_write builtin not registered")
 	}
-	completeStep, ok := tool.LookupBuiltin("complete_step")
-	if !ok {
-		t.Fatal("complete_step builtin not registered")
-	}
 	reg := goalRegistry()
 	reg.Add(todoWrite)
-	reg.Add(completeStep)
 	prov := &scriptedTurns{turns: flattenTurns(
 		[][]provider.Chunk{
-			{toolCallChunk("cs1", "complete_step", `{"step":"Step 1","result":"done","evidence":[{"kind":"manual","summary":"verified"}]}`), {Type: provider.ChunkDone}},
-			{toolCallChunk("cs2", "complete_step", `{"step":"Step 2","result":"done","evidence":[{"kind":"manual","summary":"verified"}]}`), {Type: provider.ChunkDone}},
 			{toolCallChunk("t1", "todo_write", `{"todos":[{"content":"Step 1","status":"completed"},{"content":"Step 2","status":"completed"}]}`), {Type: provider.ChunkDone}},
 			{toolCallChunk("ug1", "update_goal", `{"status":"complete","reason":""}`), {Type: provider.ChunkDone}},
 			textTurn("All done."),
@@ -808,98 +742,30 @@ func TestGoalCompletionRequiresAllTodosDone(t *testing.T) {
 	}
 }
 
-// TestCompleteRemainingGoalTodosEdgeCases verifies that the helper is a no-op
-// when there are no incomplete todos or no todos at all.
-func TestCompleteRemainingGoalTodosEdgeCases(t *testing.T) {
-	t.Run("empty todo list does nothing", func(t *testing.T) {
-		ag := agent.New(nil, nil, agent.NewSession(""), agent.Options{}, event.Discard)
-		c := New(Options{Executor: ag, Sink: event.Discard})
-		c.completeRemainingGoalTodos()
-		if len(ag.CanonicalTodoState()) != 0 {
-			t.Fatal("expected no changes to empty todo list")
-		}
-	})
-
-	t.Run("all completed does nothing", func(t *testing.T) {
-		ag := agent.New(nil, nil, agent.NewSession(""), agent.Options{}, event.Discard)
-		ag.SeedTodoState([]evidence.TodoItem{
-			{Content: "A", Status: "completed"},
-			{Content: "B", Status: "completed"},
-		})
-		var events []event.Event
-		c := New(Options{
-			Executor: ag,
-			Sink: event.FuncSink(func(e event.Event) {
-				events = append(events, e)
-			}),
-		})
-		c.completeRemainingGoalTodos()
-		if len(events) > 0 {
-			t.Fatalf("expected no events when all todos already completed, got %d", len(events))
-		}
-	})
-
-	t.Run("force-completes mixed todos", func(t *testing.T) {
-		ag := agent.New(nil, nil, agent.NewSession(""), agent.Options{}, event.Discard)
-		ag.SeedTodoState([]evidence.TodoItem{
-			{Content: "A", Status: "completed"},
-			{Content: "B", Status: "in_progress"},
-			{Content: "C", Status: "pending"},
-		})
-		var captured []event.Event
-		c := New(Options{
-			Executor: ag,
-			Sink: event.FuncSink(func(e event.Event) {
-				if e.Kind == event.ToolDispatch || e.Kind == event.ToolResult {
-					captured = append(captured, e)
-				}
-			}),
-		})
-		c.completeRemainingGoalTodos()
-		// All must be completed.
-		for _, td := range ag.CanonicalTodoState() {
-			if td.Status != "completed" {
-				t.Fatalf("todo %q = %s, want completed", td.Content, td.Status)
+func TestGoalCompletionPreservesTodoStates(t *testing.T) {
+	for _, status := range []string{"", "pending", "in_progress", "completed"} {
+		t.Run(status, func(t *testing.T) {
+			todos := []evidence.TodoItem{{Content: "A", Status: status}}
+			g := &goalMachine{goal: "work", status: GoalStatusRunning}
+			result := g.advance(goalAdvanceInput{report: &goalTurnReport{status: GoalStatusComplete}, todos: todos})
+			if result.cont || g.status != GoalStatusComplete || todos[0].Status != status {
+				t.Fatalf("completion changed task facts: result=%+v todos=%+v", result, todos)
 			}
-		}
-		// Must include a ToolDispatch+ToolResult for the synthetic todo_write.
-		if len(captured) != 2 {
-			t.Fatalf("expected 2 synthetic events (dispatch+result), got %d", len(captured))
-		}
-		if captured[0].Kind != event.ToolDispatch || captured[0].Tool.Name != "todo_write" {
-			t.Fatalf("first event should be ToolDispatch for todo_write, got %+v", captured[0].Kind)
-		}
-		if captured[1].Kind != event.ToolResult || captured[1].Tool.Name != "todo_write" {
-			t.Fatalf("second event should be ToolResult for todo_write, got %+v", captured[1].Kind)
-		}
-	})
-
-	t.Run("empty-string status treated as incomplete", func(t *testing.T) {
-		ag := agent.New(nil, nil, agent.NewSession(""), agent.Options{}, event.Discard)
-		ag.SeedTodoState([]evidence.TodoItem{
-			{Content: "A", Status: ""},
-			{Content: "B", Status: "completed"},
 		})
-		c := New(Options{Executor: ag, Sink: event.Discard})
-		c.completeRemainingGoalTodos()
-		for _, td := range ag.CanonicalTodoState() {
-			if td.Status != "completed" {
-				t.Fatalf("empty-string todo %q should be force-completed, got %q", td.Content, td.Status)
-			}
-		}
-	})
+	}
 }
 
-// TestRepeatedCompleteWithIncompleteTodosKeepsWorking verifies that readiness
-// rejection cannot be converted into a numeric pause.
-func TestRepeatedCompleteWithIncompleteTodosKeepsWorking(t *testing.T) {
-	g := &goalMachine{goal: "fix everything", status: GoalStatusRunning, turnsLimit: unlimitedGoalTurns}
-	todos := []evidence.TodoItem{{Content: "Fix the parser", Status: "in_progress"}}
-	for i := range 101 {
-		res := g.advance(goalAdvanceInput{report: &goalTurnReport{status: GoalStatusComplete}, todos: todos})
-		if !res.cont || g.status != GoalStatusRunning || g.stopCause != "" {
-			t.Fatalf("readiness rejection paused at turn %d: result=%+v runtime=%+v", i+1, res, g.runtimeView())
+// Repeated old reports cannot reactivate a completed Goal or change its todos.
+func TestRepeatedCompleteWithIncompleteTodosIsTerminal(t *testing.T) {
+	g := &goalMachine{goal: "fix", status: GoalStatusRunning}
+	todos := []evidence.TodoItem{{Content: "Fix parser", Status: "in_progress"}}
+	for range 101 {
+		if res := g.advance(goalAdvanceInput{report: &goalTurnReport{status: GoalStatusComplete}, todos: todos}); res.cont {
+			t.Fatal("completed goal restarted")
 		}
+	}
+	if g.turnsUsed != 1 || todos[0].Status != "in_progress" {
+		t.Fatalf("terminal goal changed: %+v %+v", g, todos)
 	}
 }
 
@@ -1010,6 +876,12 @@ func TestLegacyRunningGoalSidecarAllocatesScope(t *testing.T) {
 	exec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard)
 	c := New(Options{Executor: exec, SessionDir: dir, Label: "test"})
 	c.Resume(agent.NewSession("sys"), path)
+	if c.goals.active() {
+		t.Fatal("restored goal automatically active")
+	}
+	if !c.ResumeGoal() {
+		t.Fatal("explicit resume failed")
+	}
 	id, task, ok := c.goals.deliveryScope()
 	if !ok || id == "" || task != "legacy goal" {
 		t.Fatalf("legacy delivery scope = (%q, %q, %v)", id, task, ok)

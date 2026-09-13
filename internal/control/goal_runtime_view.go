@@ -34,26 +34,6 @@ func (g *goalMachine) runtimeView() GoalRuntimeView {
 	}
 }
 
-func (g *goalMachine) lastContinuationReasonText() string {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.lastEvaluatorReason != "" {
-		return g.lastEvaluatorReason
-	}
-	return g.lastContinuationReason
-}
-
-func (g *goalMachine) budgetStatusText() string {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.tokensLimit > 0 {
-		return fmt.Sprintf("turns: %d, requests: %d, tokens: %d/%d, work time: %s",
-			g.turnsUsed, g.requestsUsed, g.tokensUsed, g.tokensLimit, GoalWorkDurationText(g.workDurationMs))
-	}
-	return fmt.Sprintf("turns: %d, requests: %d, tokens: %d, work time: %s (observational)",
-		g.turnsUsed, g.requestsUsed, g.tokensUsed, GoalWorkDurationText(g.workDurationMs))
-}
-
 // GoalWorkDurationText renders cumulative active Goal work time without
 // including pauses between Runs.
 func GoalWorkDurationText(durationMs int64) string {

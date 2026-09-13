@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -21,7 +22,7 @@ jobs:
   changes:
     runs-on: ubuntu-22.04
     outputs:
-      run: ${{ steps.paths.outputs.run }}
+      memory: ${{ steps.paths.outputs.memory }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -33,17 +34,21 @@ jobs:
       - id: paths
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
-            echo 'run=true' >> "$GITHUB_OUTPUT"
+          args=(--head "$EXPECTED_SOURCE_SHA" --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY")
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            args+=(--full)
+          elif [ "$EVENT_NAME" = pull_request ]; then
+            args+=(--base "$BASE_SHA" --mode pull_request)
           else
-            git diff --name-only -z "$BASE_SHA...$EXPECTED_SOURCE_SHA" > "$RUNNER_TEMP/memory-paths"
-            node desktop/frontend/bench/app-memory-paths.mjs "$RUNNER_TEMP/memory-paths" >> "$GITHUB_OUTPUT"
+            args+=(--base "$BASE_SHA" --mode push)
           fi
+          node scripts/ci-paths.mjs "${args[@]}"
 
   prepare:
     needs: changes
-    if: needs.changes.outputs.run == 'true'
+    if: needs.changes.outputs.memory == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     defaults:
@@ -62,9 +67,11 @@ jobs:
           node-version: "24"
           cache: pnpm
           cache-dependency-path: desktop/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
+      - name: Install memory dependencies
+        run: pnpm install --frozen-lockfile
       - run: node --test bench/app-memory-shards.test.mjs bench/app-memory-paths.test.mjs bench/app-memory-timing.test.mjs
-      - run: pnpm build
+      - name: Build memory frontend
+        run: pnpm build
       - run: node bench/app-memory-prepare.mjs "$RUNNER_TEMP/app-memory-build"
       - uses: actions/upload-artifact@v7
         with:
@@ -98,8 +105,10 @@ jobs:
           node-version: "24"
           cache: pnpm
           cache-dependency-path: desktop/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium
+      - name: Install memory dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install browser runtimes
+        run: pnpm exec playwright install --with-deps chromium
       - uses: actions/download-artifact@v8
         with:
           name: app-memory-build-${{ github.run_id }}-${{ github.run_attempt }}
@@ -128,7 +137,7 @@ jobs:
       - name: Verify all prerequisite jobs
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
-          SHOULD_RUN: ${{ needs.changes.outputs.run }}
+          SHOULD_RUN: ${{ needs.changes.outputs.memory }}
           PREPARE_RESULT: ${{ needs.prepare.result }}
           SHARD_RESULT: ${{ needs.shard.result }}
         run: |
@@ -142,33 +151,50 @@ jobs:
             test "$SHARD_RESULT" = skipped
           fi
       - uses: actions/checkout@v7
-        if: needs.changes.outputs.run == 'true'
+        if: needs.changes.outputs.memory == 'true'
         with:
           ref: ${{ env.EXPECTED_SOURCE_SHA }}
       - uses: actions/setup-node@v7
-        if: needs.changes.outputs.run == 'true'
+        if: needs.changes.outputs.memory == 'true'
         with:
           node-version: "24"
       - uses: actions/download-artifact@v8
-        if: needs.changes.outputs.run == 'true'
+        if: needs.changes.outputs.memory == 'true'
         with:
           pattern: app-memory-shard-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/app-memory-reports
       - uses: actions/download-artifact@v8
-        if: needs.changes.outputs.run == 'true'
+        if: needs.changes.outputs.memory == 'true'
         with:
           name: app-memory-build-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/app-memory-build
       - name: Verify same-build complete protocol
-        if: needs.changes.outputs.run == 'true'
+        if: needs.changes.outputs.memory == 'true'
         run: |
           node desktop/frontend/bench/app-memory-aggregate.mjs \
             "$RUNNER_TEMP/app-memory-reports" "$RUNNER_TEMP/app-memory-build/identity.json" \
             "$RUNNER_TEMP/app-memory-report.json" "$EXPECTED_SOURCE_SHA"
       - uses: actions/upload-artifact@v7
-        if: success() && needs.changes.outputs.run == 'true'
+        if: success() && needs.changes.outputs.memory == 'true'
         with:
           name: app-memory-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/app-memory-report.json
           if-no-files-found: error
           retention-days: 7
+      - uses: actions/checkout@v7
+        if: always() && needs.changes.outputs.memory == 'true'
+        with:
+          ref: ${{ env.EXPECTED_SOURCE_SHA }}
+          path: .ci-metrics-source
+      - name: Summarize memory timing
+        if: always() && needs.changes.outputs.memory == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/memory-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" > "$RUNNER_TEMP/memory-jobs.json"
+          node .ci-metrics-source/scripts/ci-timings.mjs \
+            --run "$RUNNER_TEMP/memory-run.json" \
+            --jobs "$RUNNER_TEMP/memory-jobs.json" \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --title "App memory timing"

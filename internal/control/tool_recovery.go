@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"reasonix/internal/agent"
 
 	"reasonix/internal/provider"
@@ -20,6 +19,7 @@ type ToolRecoverySnapshot struct {
 	Revision     string                       `json:"revision"`
 	Calls        []provider.ToolCallRecord    `json:"calls"`
 	RetryEnabled bool                         `json:"retryEnabled"`
+	Retired      bool                         `json:"retired"`
 }
 
 type ToolRecoveryRequest struct {
@@ -32,7 +32,7 @@ type ToolRecoveryRequest struct {
 }
 
 func (c *Controller) ToolRecoverySnapshot() ToolRecoverySnapshot {
-	view := ToolRecoverySnapshot{SessionPath: c.SessionPath(), RuntimeEpoch: c.RuntimeStateSnapshot().RuntimeEpoch, Calls: []provider.ToolCallRecord{}, RetryEnabled: os.Getenv("REASONIX_TOOL_RECOVERY_RETRY") == "1"}
+	view := ToolRecoverySnapshot{SessionPath: c.SessionPath(), RuntimeEpoch: c.RuntimeStateSnapshot().RuntimeEpoch, Calls: []provider.ToolCallRecord{}, Retired: true}
 	if c.executor != nil {
 		view.Calls = c.executor.PendingToolRecovery()
 		view.Statistics = c.executor.ToolRecoveryStatistics()
@@ -49,52 +49,10 @@ func (c *Controller) ToolRecoverySnapshot() ToolRecoverySnapshot {
 	return view
 }
 
-// ResolveToolRecovery uses the same admission exclusion and session write
-// authority as model turns. No stale tab may resolve a replacement session.
-func (c *Controller) ResolveToolRecovery(ctx context.Context, req ToolRecoveryRequest) (ToolRecoverySnapshot, error) {
-	if err := c.ensureWriteAuthorityReady(); err != nil {
-		return ToolRecoverySnapshot{}, err
-	}
-	c.mu.Lock()
-	if c.running || c.finishing || c.rotating || c.closed {
-		c.mu.Unlock()
-		return ToolRecoverySnapshot{}, ErrTurnRunning
-	}
-	c.rotating = true
-	c.mu.Unlock()
-	defer func() { c.mu.Lock(); c.rotating = false; c.mu.Unlock() }()
+// ResolveToolRecovery is a wire-compatible retired endpoint. Historical facts
+// remain queryable, but no UI or client can confirm, reject, inspect, or replay
+// an operation through the host.
+func (c *Controller) ResolveToolRecovery(_ context.Context, _ ToolRecoveryRequest) (ToolRecoverySnapshot, error) {
 	view := c.ToolRecoverySnapshot()
-	if req.SessionPath != view.SessionPath || req.RuntimeEpoch == "" || req.RuntimeEpoch != view.RuntimeEpoch || req.Revision == "" || req.Revision != view.Revision {
-		return view, fmt.Errorf("recovery snapshot changed; refresh before resolving")
-	}
-	if c.executor == nil {
-		return view, fmt.Errorf("tool recovery unavailable")
-	}
-	var err error
-	switch req.Action {
-	case "inspect":
-		_, err = c.executor.InspectToolRecovery(ctx, req.AttemptID)
-	case "confirm", "reject":
-		err = c.executor.ResolveToolRecovery(req.AttemptID, req.InspectionID, req.Action)
-	case "retry":
-		if !view.RetryEnabled {
-			return view, fmt.Errorf("tool recovery retry is disabled")
-		}
-		err = c.executor.RetryToolRecovery(ctx, req.AttemptID, req.InspectionID)
-	default:
-		err = fmt.Errorf("unsupported recovery action")
-	}
-	result := c.ToolRecoverySnapshot()
-	if err == nil && req.Action == "inspect" {
-		for _, r := range c.executor.PendingToolRecovery() {
-			if r.Identity.AttemptID == req.AttemptID {
-				for i := range result.Calls {
-					if result.Calls[i].Identity.AttemptID == req.AttemptID {
-						result.Calls[i].Arguments = r.Arguments
-					}
-				}
-			}
-		}
-	}
-	return result, err
+	return view, fmt.Errorf("tool_recovery_retired: historical execution facts are read-only; inspect external state and invoke tools normally if further work is needed")
 }

@@ -78,9 +78,11 @@ func toolFailed(content string) bool {
 
 func completedTodoArguments(messages []provider.Message) map[string]string {
 	successful := make(map[string]bool)
+	outputs := make(map[string]string)
 	for _, message := range messages {
 		if message.Role == provider.RoleTool && message.ToolCallID != "" && !toolFailed(message.Content) {
 			successful[message.ToolCallID] = true
+			outputs[message.ToolCallID] = message.Content
 		}
 	}
 	out := make(map[string]string)
@@ -97,14 +99,14 @@ func completedTodoArguments(messages []provider.Message) map[string]string {
 				if len(receipt.Todos) == 0 {
 					continue
 				}
-				todos, latest = evidence.NormalizeSerialTodos(receipt.Todos), call.ID
+				todos, latest = evidence.ReplayTodoList(receipt.Todos, outputs[call.ID]), call.ID
 			case "complete_step":
 				if latest == "" || len(todos) == 0 {
 					continue
 				}
 				receipt := evidence.ReceiptFromToolCall(call.Name, json.RawMessage(call.Arguments), true, true)
 				match, ok := evidence.MatchStep(receipt.Step, todos)
-				if !ok || !evidence.AdvanceSerialTodo(todos, match.Index-1) {
+				if !ok || !evidence.ReplayTodoCompletion(todos, match.Index-1, outputs[call.ID]) {
 					continue
 				}
 			default:

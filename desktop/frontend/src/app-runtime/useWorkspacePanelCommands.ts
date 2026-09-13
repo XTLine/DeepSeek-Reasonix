@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useCommittedCommand } from "../lib/useCommittedCommand";
 import { DOCK_ENTRIES } from "../lib/dockEntries";
 import { resolveLauncherCardState, type SpaceMode } from "../lib/launcherCardState";
@@ -8,6 +8,7 @@ import { useActivityBarStore, type TabType } from "../store/activityBar";
 import { useRemoteStore } from "../store/remote";
 
 type Input = {
+  sessionId: string;
   workspaceRoot: string;
   creation: boolean;
   visible: boolean;
@@ -56,6 +57,7 @@ function labelKeyForTab(type: TabType): string {
 /** One project-scoped preference owner, with no mirrored layout state. */
 export function useWorkspacePanelCommands(input: Input) {
   const t = input.t;
+  const defaultTabSessionRef = useRef("");
   const mode = useLayoutStore(state => state.rightDockMode);
   const explorerOpen = useRemoteStore(state => state.explorerOpen);
   const hostCount = useRemoteStore(state => state.hosts.length);
@@ -125,9 +127,8 @@ export function useWorkspacePanelCommands(input: Input) {
     if (!entry) return;
     openRightDockMode(dockModeForTab(entry.defaultTab));
   });
-  // Plain open/close: expanding restores whatever tabs the project had and
-  // leaves an empty dock to the tab picker instead of seeding a view the user
-  // did not ask for. openRightDockMode stays the "open this view" command.
+  // Plain open/close restores the project's tabs. The session initialization
+  // effect below fills an expanded empty dock with Overview once per session.
   const toggleWorkspacePanel = useCommittedCommand(() => {
     const layout = useLayoutStore.getState();
     if (layout.workspacePanelOpen) { closeWorkspacePanel(); return; }
@@ -178,6 +179,19 @@ export function useWorkspacePanelCommands(input: Input) {
   useLayoutEffect(() => {
     useActivityBarStore.getState().setWorkspaceRoot(input.workspaceRoot);
   }, [input.workspaceRoot]);
+  // A restored, expanded dock should show useful session context immediately.
+  // Remember the session after its first open-state decision so closing the
+  // final tab remains a deliberate action until the user changes sessions.
+  useLayoutEffect(() => {
+    if (!input.visible || !input.sessionId || input.creation) return;
+    const sessionKey = `${input.workspaceRoot}\u0000${input.sessionId}`;
+    if (defaultTabSessionRef.current === sessionKey) return;
+    if (!useLayoutStore.getState().workspacePanelOpen) return;
+    defaultTabSessionRef.current = sessionKey;
+    const activity = useActivityBarStore.getState();
+    if (activity.activeTabId) return;
+    activity.openEntry("context", t(labelKeyForTab("context") as never));
+  }, [input.creation, input.sessionId, input.visible, input.workspaceRoot, t]);
   useEffect(() => {
     if (!explorerOpen) return;
     openRightDockMode("remote");

@@ -181,15 +181,11 @@ func TestApprovedPlanSeedClearsAfterExecutionWithoutModelTodoWrite(t *testing.T)
 		t.Fatalf("runTurnWithRaw: %v", err)
 	}
 
-	if len(planSeedResults) != 2 {
-		t.Fatalf("plan-seed todo results = %d, want seed then completion: %#v", len(planSeedResults), planSeedResults)
+	if len(planSeedResults) != 1 {
+		t.Fatalf("plan seed was rewritten without a model update: %#v", planSeedResults)
 	}
-	last := planSeedResults[len(planSeedResults)-1]
-	if strings.Contains(last, `"in_progress"`) || strings.Contains(last, `"pending"`) {
-		t.Fatalf("final plan-seed todos should be completed so the panel hides: %s", last)
-	}
-	if !strings.Contains(last, `"completed"`) {
-		t.Fatalf("final plan-seed todos should contain completed items: %s", last)
+	if !strings.Contains(planSeedResults[0], `"pending"`) || strings.Contains(planSeedResults[0], `"completed"`) {
+		t.Fatalf("host changed pending tasks: %s", planSeedResults[0])
 	}
 }
 

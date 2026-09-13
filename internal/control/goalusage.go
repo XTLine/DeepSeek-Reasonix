@@ -11,7 +11,7 @@ import (
 // goalUsageTee wraps the controller's event sink and attributes billable usage
 // events to the active goal turn's recorder, so every model request under the
 // same Goal scope — executor, planner, subagent, compaction, classifier,
-// capability router, recovery reviewer, and goal evaluator — accumulates into
+// capability router and other bounded helper sessions — accumulates into
 // the goal's observational token total. There is no token hard limit; the
 // total is for display and diagnostics only. Title generation and unrelated
 // background calls are excluded. The tee forwards every event unchanged.

@@ -12,9 +12,9 @@ import (
 func init() { tool.RegisterBuiltin(updateGoal{}) }
 
 // updateGoal records the model's structured per-turn goal disposition for the
-// active goal turn. Like complete_step it has no host side effects: the call
+// active goal turn. It has no host side effects: the call
 // only records candidate state, and the real FSM transition happens after the
-// turn ends, once Delivery readiness and budget checks pass. It is a host
+// turn ends, once cancellation and resource boundaries are checked. It is a host
 // workflow operation — it never requires write approval and grants no
 // permissions. Outside an active goal turn it fails closed without changing
 // any state, so plain chat cannot be hijacked into goal machinery.
@@ -23,14 +23,14 @@ type updateGoal struct{}
 func (updateGoal) Name() string { return "update_goal" }
 
 func (updateGoal) Description() string {
-	return "Report this turn's disposition for the active goal. Call it at the end of every goal turn instead of using prose markers: `continue` (work is ongoing — give a concrete next_action), `complete` (the request is fully done, output format and constraints satisfied, and verification was attempted or reported unavailable), or `blocked` (only the user can unblock: missing user-only information, an irreversible/externally visible operation, or changed scope). The host validates your claim against Delivery acceptance criteria and decides whether to continue automatically. Fields: `status` (required, one of continue|complete|blocked), `reason` (required for continue and blocked, optional for complete), `next_action` (optional concrete next step; recommended for continue), `completion` (recommended with complete: `verified` is checked against real receipts, while `unverified` and `risks` are yours to declare and never count against you)."
+	return "Report the active goal status: continue (work remains), complete (you judge the goal complete), or blocked (explain why work cannot continue). The host commits this model declaration at normal turn end, subject to cancellation and resource limits. A missing report keeps the goal active. completion is your account of verified commands, unverified work, and risks; it does not change actual execution records or certify success."
 }
 
 func (updateGoal) Schema() json.RawMessage {
 	return json.RawMessage(`{
 "type":"object",
 "properties":{
-  "status":{"type":"string","enum":["continue","complete","blocked"],"description":"continue = keep working autonomously; complete = the goal is fully done and verified; blocked = only the user can unblock."},
+  "status":{"type":"string","enum":["continue","complete","blocked"],"description":"continue = keep working autonomously; complete = you judge the goal complete; blocked = work cannot continue."},
   "reason":{"type":"string","description":"Short explanation. REQUIRED for continue and blocked; optional for complete."},
   "next_action":{"type":"string","description":"Optional concrete next step. Recommended for continue so the host can guide the next turn."},
   "completion":{

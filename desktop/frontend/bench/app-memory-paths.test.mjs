@@ -6,10 +6,10 @@ test("all frontend consumers, configuration and tests trigger the soak", () => {
     assert.equal(memoryAffected([path]), true, path);
 });
 test("known independent backend and documentation changes skip only this mock frontend soak", () => {
-  assert.equal(memoryAffected(["internal/control/turn.go", "desktop/app.go", "sdk/types.ts", "docs/guide.md", "README.md"]), false);
+  assert.equal(memoryAffected(["internal/control/turn.go", "desktop/app.go", "sdk/types.ts", "docs/guide.md", "README.md", "desktop/AGENTS.md"]), false);
 });
 test("repository tooling, workflows and the Electron shell do not reach the browser-mocked bundle", () => {
-  for (const path of [".github/workflows/ci.yml", ".github/actions/go-build-cache/action.yml", "scripts/release-stable.sh", "tools/desktopinventory/sources.go",
+  for (const path of [".github/actions/go-build-cache/action.yml", "scripts/release-stable.sh", "tools/desktopinventory/sources.go",
     "workers/crash-report/src/index.ts", "docs/desktop-migration/inventory.json", "desktop/electron/src/main/dialogs.ts", "desktop/packaging/smoke.mjs",
     "desktop/build/windows/installer/project.nsi", "desktop/go.sum", "go.mod", ".golangci.yml", "Makefile"])
     assert.equal(memoryAffected([path]), false, path);

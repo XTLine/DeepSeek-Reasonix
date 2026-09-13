@@ -138,6 +138,27 @@ func TestActivateVersionedWindowsFromStagingPublishesShellTree(t *testing.T) {
 	}
 }
 
+func TestActivateVersionedWindowsUsesVerifiedThinCLIEntry(t *testing.T) {
+	acceptWindowsPayloadManifestForTest(t)
+	installDir := t.TempDir()
+	staging := t.TempDir()
+	const entry = "app/resources/bin/reasonix-cli-launcher.exe"
+	writeVersionedWindowsStaging(t, staging, "payload:", "v1.39.0",
+		"reasonix-desktop.exe", "reasonix-cli.exe", "reasonix-update-helper.exe",
+		"reasonix-launcher.exe", "app/Reasonix.exe", entry)
+	if err := activateVersionedWindowsFromStaging(versionedWindowsTransaction(installDir, "v1.39.0", "2026-01-01T00:00:00Z"), staging); err != nil {
+		t.Fatal(err)
+	}
+	rootCLI, err := os.ReadFile(filepath.Join(installDir, "reasonix-cli.exe"))
+	if err != nil || string(rootCLI) != "payload:"+entry {
+		t.Fatalf("root CLI=%q err=%v, want verified thin entry", rootCLI, err)
+	}
+	fullCLI, err := os.ReadFile(filepath.Join(installDir, "versions", "v1.39.0", "reasonix-cli.exe"))
+	if err != nil || string(fullCLI) != "payload:reasonix-cli.exe" {
+		t.Fatalf("version CLI=%q err=%v, want full CLI", fullCLI, err)
+	}
+}
+
 func TestActivateVersionedWindowsFromStagingRejectsManifestDrift(t *testing.T) {
 	acceptWindowsPayloadManifestForTest(t)
 	installDir := t.TempDir()

@@ -28,6 +28,13 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
       desktop: ${{ steps.filter.outputs.desktop }}
+      desktop_go: ${{ steps.filter.outputs.desktop_go }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      browser: ${{ steps.filter.outputs.browser }}
+      memory: ${{ steps.filter.outputs.memory }}
+      electron: ${{ steps.filter.outputs.electron }}
+      native: ${{ steps.filter.outputs.native }}
+      packaging: ${{ steps.filter.outputs.packaging }}
       site: ${{ steps.filter.outputs.site }}
       sdk: ${{ steps.filter.outputs.sdk }}
       notes_only: ${{ steps.filter.outputs.notes_only }}
@@ -35,37 +42,24 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
       - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          code=true; desktop=true; site=true; sdk=true; notes_only=false
-          base=""
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="${{ github.event.pull_request.base.sha }}"
-          elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            base="${{ github.event.before }}"
+          args=(--head "$HEAD_SHA" --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY")
+          if [ "$EVENT_NAME" = pull_request ]; then
+            args+=(--base "$BASE_SHA" --mode pull_request)
+          else
+            # Main pushes retain the complete qualification matrix after the
+            # existing release-notes-only exception is evaluated.
+            args+=(--base "$BASE_SHA" --mode push --full)
           fi
-          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
-            files=$(git diff --name-only "$base" HEAD)
-            if [ -n "$files" ]; then
-              code=false; desktop=false; site=false; sdk=false
-              # Root-module CI: desktop/ is a separate module, so only the
-              # clearly unrelated paths below can skip it.
-              if echo "$files" | grep -qvE '^(docs/|site/|release-notes/|desktop/|workers/|[^/]+\.md$)'; then code=true; fi
-              # desktop/ imports the root kernel via `replace reasonix => ../`,
-              # so only this clearly-unrelated set is safe to skip.
-              if echo "$files" | grep -qvE '^(docs/|site/|release-notes/|workers/|benchmarks/|npm/|[^/]+\.md$)'; then desktop=true; fi
-              if echo "$files" | grep -q '^site/'; then site=true; fi
-              # sdk/go is a nested module invisible to root `go test ./...`;
-              # its DTOs are generated from internal/extension/protocol, so
-              # both paths must trigger the sdk job.
-              if echo "$files" | grep -qE '^(sdk/|internal/extension/)'; then sdk=true; fi
-              # A push that touches only release-notes/ carries the parent's code
-              # byte for byte. Its heavy jobs skip; scripts/verify-release-push-ci.sh
-              # then requires the nearest ancestor that changed code to be green.
-              if ! echo "$files" | grep -qvE '^release-notes/'; then notes_only=true; fi
-            fi
-          fi
-          { echo "code=$code"; echo "desktop=$desktop"; echo "site=$site"; echo "sdk=$sdk"; echo "notes_only=$notes_only"; } >> "$GITHUB_OUTPUT"
+          node scripts/ci-paths.mjs "${args[@]}"
 
   # The ruleset requires the per-OS check names (test (ubuntu-latest) etc.).
   # A matrix job skipped at job level reports no per-leg checks at all, so
@@ -96,9 +90,12 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: false
+          # Windows keeps setup-go's go.sum-keyed cache: restoring the per-run
+          # cache there measured slower (17m -> 21m, then a 25-minute step
+          # timeout), so the rolling cache serves only the Unix legs.
+          cache: ${{ runner.os == 'Windows' }}
 
-      - if: env.RUN_STEPS == 'true'
+      - if: env.RUN_STEPS == 'true' && runner.os != 'Windows'
         uses: ./.github/actions/go-build-cache
         id: gocache
         with:
@@ -232,7 +229,7 @@ jobs:
       # Only main-v2 pushes save, one job per OS and module, so the cache
       # stays a few pushes deep instead of churning on every pull request.
       - uses: actions/cache/save@v4
-        if: always() && env.RUN_STEPS == 'true' && github.event_name == 'push' && steps.gocache.outputs.key != ''
+        if: always() && env.RUN_STEPS == 'true' && runner.os != 'Windows' && github.event_name == 'push' && steps.gocache.outputs.key != ''
         with:
           path: ${{ steps.gocache.outputs.paths }}
           key: ${{ steps.gocache.outputs.key }}
@@ -251,13 +248,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: false
-
-      - if: env.RUN_STEPS == 'true'
-        uses: ./.github/actions/go-build-cache
-        id: gocache
-        with:
-          module: root
+          cache: true
 
       - if: env.RUN_STEPS == 'true'
         uses: actions/setup-node@v7
@@ -304,12 +295,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: false
-
-      - uses: ./.github/actions/go-build-cache
-        id: gocache
-        with:
-          module: root
+          cache: true
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -481,7 +467,10 @@ jobs:
       - name: Verify desktop validation jobs
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
-          SHOULD_RUN: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false' }}
+          PREPARE_REQUIRED: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false' }}
+          NATIVE_REQUIRED: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.native != 'false' }}
+          FRONTEND_REQUIRED: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.frontend != 'false' || needs.changes.outputs.electron != 'false' }}
+          BROWSER_REQUIRED: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.browser != 'false' }}
           PREPARE_RESULT: ${{ needs.desktop-prepare.result }}
           GO_RESULT: ${{ needs.desktop-go.result }}
           GO_RACE_RESULT: ${{ needs.desktop-go-race.result }}
@@ -489,17 +478,16 @@ jobs:
           BROWSER_RESULT: ${{ needs.desktop-browser.result }}
         run: |
           test "$CHANGES_RESULT" = success
-          expected=skipped
-          if [ "$SHOULD_RUN" = true ]; then expected=success; fi
-          test "$PREPARE_RESULT" = "$expected"
-          test "$GO_RESULT" = "$expected"
-          test "$GO_RACE_RESULT" = "$expected"
-          test "$FRONTEND_RESULT" = "$expected"
-          test "$BROWSER_RESULT" = "$expected"
+          expected() { if [ "$1" = true ]; then echo success; else echo skipped; fi; }
+          test "$PREPARE_RESULT" = "$(expected "$PREPARE_REQUIRED")"
+          test "$GO_RESULT" = "$(expected "$NATIVE_REQUIRED")"
+          test "$GO_RACE_RESULT" = "$(expected "$NATIVE_REQUIRED")"
+          test "$FRONTEND_RESULT" = "$(expected "$FRONTEND_REQUIRED")"
+          test "$BROWSER_RESULT" = "$(expected "$BROWSER_REQUIRED")"
 
   desktop-frontend:
     needs: [changes, desktop-prepare]
-    if: always() && needs.desktop-prepare.result == 'success' && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
+    if: always() && needs.desktop-prepare.result == 'success' && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.frontend != 'false' || needs.changes.outputs.electron != 'false')
     runs-on: ubuntu-22.04
     defaults:
       run:
@@ -515,13 +503,18 @@ jobs:
           node-version: "24"
           cache: pnpm
           cache-dependency-path: desktop/pnpm-lock.yaml
-      - run: pnpm --dir frontend install --frozen-lockfile
+      - name: Install frontend dependencies
+        run: pnpm --dir frontend install --frozen-lockfile
       - uses: actions/download-artifact@v8
         with:
-          name: ${{ needs.desktop-prepare.outputs.artifact_name }}
-          path: desktop/frontend/dist
-      - name: Verify frontend artifact layout
-        run: test -f frontend/dist/index.html
+          name: ${{ needs.desktop-prepare.outputs.stable_artifact_name }}
+          path: desktop/frontend
+      - name: Verify stable frontend artifact
+        run: |
+          node frontend/scripts/artifact-identity.mjs verify \
+            --shell electron --channel stable \
+            --source-sha "$(git rev-parse HEAD)" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --pnpm-version "$(pnpm --version)"
       - name: Verify CI test coverage and runner
         run: node --test frontend/scripts/ci-test-plan.test.mjs
       - name: Check the Electron shell
@@ -535,10 +528,15 @@ jobs:
           REASONIX_TEST_CONCURRENCY: "2"
         run: node frontend/scripts/run-ci-tests.mjs
 
-  desktop-browser:
+  desktop-browser-group:
     needs: [changes, desktop-prepare]
-    if: always() && needs.desktop-prepare.result == 'success' && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
+    if: always() && needs.desktop-prepare.result == 'success' && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.browser != 'false')
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        group: [app-settings-motion, transcript]
     defaults:
       run:
         working-directory: desktop
@@ -553,28 +551,76 @@ jobs:
           node-version: "24"
           cache: pnpm
           cache-dependency-path: desktop/pnpm-lock.yaml
-      - run: pnpm --dir frontend install --frozen-lockfile
+      - name: Install frontend dependencies
+        run: pnpm --dir frontend install --frozen-lockfile
       - uses: actions/download-artifact@v8
         with:
-          name: ${{ needs.desktop-prepare.outputs.artifact_name }}
-          path: desktop/frontend/dist
-      - name: Verify frontend artifact layout
-        run: test -f frontend/dist/index.html
+          name: ${{ needs.desktop-prepare.outputs.stable_artifact_name }}
+          path: desktop/frontend
+      - name: Verify stable frontend artifact
+        run: |
+          node frontend/scripts/artifact-identity.mjs verify \
+            --shell electron --channel stable \
+            --source-sha "$(git rev-parse HEAD)" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --pnpm-version "$(pnpm --version)"
       - name: Install browser runtimes
         run: PLAYWRIGHT_BROWSERS_PATH=.pw-browsers pnpm --dir frontend exec playwright install --with-deps chromium
-      - name: Test desktop browser contracts
+      - name: Test desktop browser group
+        env:
+          BROWSER_GROUP: ${{ matrix.group }}
+          REASONIX_LAYOUT_ARTIFACTS: ${{ runner.temp }}/desktop-browser/${{ matrix.group }}/layout
         run: |
-          pnpm --dir frontend test:motion-browser
-          PLAYWRIGHT_BROWSERS_PATH=.pw-browsers pnpm --dir frontend test:app-browser
-          PLAYWRIGHT_BROWSERS_PATH=.pw-browsers REASONIX_SETTINGS_BROWSERS=chromium pnpm --dir frontend test:settings-browser
-          xvfb-run -a env REASONIX_TRANSCRIPT_NATIVE_THUMB=1 pnpm --dir frontend test:transcript-browser
-          REASONIX_TRANSCRIPT_READER_BROWSERS=chromium PLAYWRIGHT_BROWSERS_PATH=.pw-browsers pnpm --dir frontend test:transcript-reader-browser
+          set -o pipefail
+          evidence="$RUNNER_TEMP/desktop-browser/$BROWSER_GROUP"
+          mkdir -p "$evidence"
+          case "$BROWSER_GROUP" in
+            app-settings-motion)
+              PLAYWRIGHT_BROWSERS_PATH=.pw-browsers pnpm --dir frontend test:app-browser
+              PLAYWRIGHT_BROWSERS_PATH=.pw-browsers REASONIX_SETTINGS_BROWSERS=chromium pnpm --dir frontend test:settings-browser
+              pnpm --dir frontend test:motion-browser
+              ;;
+            transcript)
+              xvfb-run -a env PLAYWRIGHT_BROWSERS_PATH=.pw-browsers REASONIX_TRANSCRIPT_NATIVE_THUMB=1 pnpm --dir frontend test:transcript-browser
+              REASONIX_TRANSCRIPT_READER_BROWSERS=chromium PLAYWRIGHT_BROWSERS_PATH=.pw-browsers pnpm --dir frontend test:transcript-reader-browser
+              ;;
+            *) exit 2 ;;
+          esac 2>&1 | tee "$evidence/run.log"
+
+      - name: Upload browser group evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-browser-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/desktop-browser/${{ matrix.group }}
+          if-no-files-found: ignore
+          retention-days: 7
+
+  desktop-browser:
+    needs: [changes, desktop-prepare, desktop-browser-group]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify desktop browser groups
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          SHOULD_RUN: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.browser != 'false' }}
+          PREPARE_RESULT: ${{ needs.desktop-prepare.result }}
+          GROUP_RESULT: ${{ needs.desktop-browser-group.result }}
+        run: |
+          test "$CHANGES_RESULT" = success
+          if [ "$SHOULD_RUN" = true ]; then
+            test "$PREPARE_RESULT" = success
+            test "$GROUP_RESULT" = success
+          else
+            test "$GROUP_RESULT" = skipped
+          fi
 
   desktop-prepare:
     needs: changes
     if: always() && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
     outputs:
-      artifact_name: desktop-frontend-${{ github.run_id }}-${{ github.run_attempt }}
+      stable_artifact_name: desktop-frontend-stable-${{ github.run_id }}-${{ github.run_attempt }}
+      canary_artifact_name: desktop-frontend-canary-${{ github.run_id }}-${{ github.run_attempt }}
     runs-on: ubuntu-22.04
     defaults:
       run:
@@ -631,22 +677,63 @@ jobs:
             exit 1
           fi
 
-      - name: Build frontend
+      - name: Install frontend dependencies
+        run: pnpm --dir frontend install --frozen-lockfile
+
+      - name: Build stable frontend
+        run: pnpm --dir frontend build:electron
+
+      - name: Record stable frontend artifact identity
         run: |
-          pnpm --dir frontend install --frozen-lockfile
-          pnpm --dir frontend build:electron
+          node frontend/scripts/artifact-identity.mjs create \
+            --shell electron \
+            --channel stable \
+            --source-sha "$(git rev-parse HEAD)" \
+            --run-id "$GITHUB_RUN_ID" \
+            --attempt "$GITHUB_RUN_ATTEMPT" \
+            --pnpm-version "$(pnpm --version)"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: desktop-frontend-${{ github.run_id }}-${{ github.run_attempt }}
+          name: desktop-frontend-stable-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             desktop/frontend/dist
+            desktop/frontend/.reasonix-frontend-artifact.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
+      # Static checks ran in the stable build. The canary variant still gets a
+      # fresh Vite build and bundle-budget validation because its embedded
+      # channel is part of the shipped bytes.
+      - name: Build canary frontend
+        env:
+          REASONIX_CHANNEL: canary
+        run: node frontend/scripts/build-for-shell.mjs electron --bundle-only
+
+      - name: Record canary frontend artifact identity
+        run: |
+          node frontend/scripts/artifact-identity.mjs create \
+            --shell electron \
+            --channel canary \
+            --source-sha "$(git rev-parse HEAD)" \
+            --run-id "$GITHUB_RUN_ID" \
+            --attempt "$GITHUB_RUN_ATTEMPT" \
+            --pnpm-version "$(pnpm --version)"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-frontend-canary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            desktop/frontend/dist
+            desktop/frontend/.reasonix-frontend-artifact.json
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 3
 
   desktop-go:
     needs: [changes, desktop-prepare]
-    if: always() && needs.desktop-prepare.result == 'success' && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
+    if: always() && needs.desktop-prepare.result == 'success' && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.native != 'false')
     runs-on: ubuntu-22.04
     defaults:
       run:
@@ -677,11 +764,16 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: ${{ needs.desktop-prepare.outputs.artifact_name }}
-          path: desktop/frontend/dist
-      - name: Verify frontend artifact layout
-        run: test -f frontend/dist/index.html
-      - run: pnpm --dir frontend install --frozen-lockfile
+          name: ${{ needs.desktop-prepare.outputs.stable_artifact_name }}
+          path: desktop/frontend
+      - name: Verify stable frontend artifact
+        run: |
+          node frontend/scripts/artifact-identity.mjs verify \
+            --shell electron --channel stable \
+            --source-sha "$(git rev-parse HEAD)" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --pnpm-version "$(pnpm --version)"
+      - name: Install frontend dependencies
+        run: pnpm --dir frontend install --frozen-lockfile
 
       - name: vet
         run: go vet ./...
@@ -713,7 +805,7 @@ jobs:
   # changing what is race-checked.
   desktop-go-race:
     needs: [changes, desktop-prepare]
-    if: always() && needs.desktop-prepare.result == 'success' && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
+    if: always() && needs.desktop-prepare.result == 'success' && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.native != 'false')
     runs-on: ubuntu-22.04
     defaults:
       run:
@@ -744,11 +836,16 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: ${{ needs.desktop-prepare.outputs.artifact_name }}
-          path: desktop/frontend/dist
-      - name: Verify frontend artifact layout
-        run: test -f frontend/dist/index.html
-      - run: pnpm --dir frontend install --frozen-lockfile
+          name: ${{ needs.desktop-prepare.outputs.stable_artifact_name }}
+          path: desktop/frontend
+      - name: Verify stable frontend artifact
+        run: |
+          node frontend/scripts/artifact-identity.mjs verify \
+            --shell electron --channel stable \
+            --source-sha "$(git rev-parse HEAD)" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --pnpm-version "$(pnpm --version)"
+      - name: Install frontend dependencies
+        run: pnpm --dir frontend install --frozen-lockfile
 
       # The extension work added new shared-state paths to the desktop
       # runtime (tab/rebuild fences, extension UI). Race-sweep the module so
@@ -767,8 +864,8 @@ jobs:
   # desktop/ is a separate module, so the root macOS matrix above does not
   # compile or exercise the native PTY and FSEvents implementations.
   desktop-macos:
-    needs: changes
-    if: always() && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
+    needs: [changes, desktop-prepare]
+    if: always() && needs.desktop-prepare.result == 'success' && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.native != 'false')
     runs-on: macos-latest
     defaults:
       run:
@@ -797,10 +894,18 @@ jobs:
           cache: pnpm
           cache-dependency-path: desktop/pnpm-lock.yaml
 
-      - name: Build frontend
+      - name: Install frontend dependencies
+        run: pnpm --dir frontend install --frozen-lockfile
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.desktop-prepare.outputs.stable_artifact_name }}
+          path: desktop/frontend
+      - name: Verify stable frontend artifact
         run: |
-          pnpm --dir frontend install --frozen-lockfile
-          pnpm --dir frontend build:electron
+          node frontend/scripts/artifact-identity.mjs verify \
+            --shell electron --channel stable \
+            --source-sha "$(git rev-parse HEAD)" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --pnpm-version "$(pnpm --version)"
 
       - name: Test integrated terminal, PTY, and FSEvents lifecycle
         run: go test -race -run 'Test(DarwinWorkspaceWatcher|WorkspaceChangeHub|ResolveTerminal|Terminal|EmptyTerminal|UnixTerminalProcess)' .
@@ -834,12 +939,33 @@ jobs:
       # release pipeline packages again anyway), and let pull requests stop
       # after the lint step. Ad-hoc signs (no Apple secrets in CI) and skips
       # the DMG.
+      - name: Remove stable frontend before canary packaging
+        if: github.event_name != 'pull_request'
+        run: rm -rf frontend/dist frontend/.reasonix-frontend-artifact.json
+
+      - uses: actions/download-artifact@v8
+        if: github.event_name != 'pull_request'
+        with:
+          name: ${{ needs.desktop-prepare.outputs.canary_artifact_name }}
+          path: desktop/frontend
+
+      - name: Verify canary frontend artifact
+        if: github.event_name != 'pull_request'
+        run: |
+          node frontend/scripts/artifact-identity.mjs verify \
+            --shell electron --channel canary \
+            --source-sha "$(git rev-parse HEAD)" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --pnpm-version "$(pnpm --version)"
+
       - name: Package Electron app and verify bundle members
         if: github.event_name != 'pull_request'
         timeout-minutes: 25
         env:
           DESKTOP_BUILD_SKIP_DMG: "1"
+          REASONIX_PACKAGE_REUSE_FRONTEND: "1"
         run: |
+          REASONIX_FRONTEND_PNPM_VERSION="$(pnpm --version)"
+          export REASONIX_FRONTEND_PNPM_VERSION
           ../scripts/desktop-build.sh darwin/arm64 v0.0.0-ci canary
           node packaging/verify.mjs ../dist/Reasonix-darwin-arm64.zip
 
@@ -866,8 +992,8 @@ jobs:
   # regression tests for that contract are named *OnWindows and can never
   # run on the ubuntu leg above.
   desktop-windows:
-    needs: changes
-    if: always() && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
+    needs: [changes, desktop-prepare]
+    if: always() && needs.desktop-prepare.result == 'success' && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.native != 'false')
     runs-on: windows-latest
     # A hung native step must not hold the workflow's concurrency group for the
     # six-hour default. This bounds hangs, not duration: the leg's own spread on
@@ -884,12 +1010,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: desktop/go.mod
-          cache: false
-
-      - uses: ./.github/actions/go-build-cache
-        id: gocache
-        with:
-          module: desktop
+          cache: true
+          cache-dependency-path: desktop/go.sum
 
       - uses: pnpm/action-setup@v6.1.0
         with:
@@ -921,12 +1043,16 @@ jobs:
             }
           }
 
-      # go:embed of frontend/dist needs a built frontend before the package
-      # compiles, same as the ubuntu desktop leg.
-      - name: Build frontend
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.desktop-prepare.outputs.canary_artifact_name }}
+          path: desktop/frontend
+      - name: Verify canary frontend artifact
         run: |
-          pnpm --dir frontend install --frozen-lockfile
-          pnpm --dir frontend build:electron
+          node frontend/scripts/artifact-identity.mjs verify \
+            --shell electron --channel canary \
+            --source-sha "$(git rev-parse HEAD)" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --pnpm-version "$(pnpm --version)"
 
       # test:motion, test:transcript-browser and test:settings-browser run on
       # ubuntu (desktop-frontend and desktop-browser). They were repeated here
@@ -938,7 +1064,11 @@ jobs:
       # layout. package.mjs builds the frontend itself (build:electron flavor).
       - name: Package Electron shell for native startup smoke
         timeout-minutes: 15
+        env:
+          REASONIX_PACKAGE_REUSE_FRONTEND: "1"
         run: |
+          REASONIX_FRONTEND_PNPM_VERSION="$(pnpm --version)"
+          export REASONIX_FRONTEND_PNPM_VERSION
           pnpm install --frozen-lockfile
           go build -trimpath -ldflags "-s -w -X main.version=v0.0.0-ci -X main.channel=canary" -o build/bin/reasonix-desktop.exe .
           node packaging/package.mjs windows/amd64 v0.0.0-ci canary
@@ -978,8 +1108,8 @@ jobs:
   # the Electron steps makes the leg's wall time the longer half rather than
   # the sum, and a Go flake reruns only this job.
   desktop-windows-go:
-    needs: changes
-    if: always() && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
+    needs: [changes, desktop-prepare]
+    if: always() && needs.desktop-prepare.result == 'success' && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.native != 'false')
     runs-on: windows-latest
     # Measured 17.1-17.3 minutes on three consecutive main-v2 runs; bound
     # hangs, not duration.
@@ -994,12 +1124,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: desktop/go.mod
-          cache: false
-
-      - uses: ./.github/actions/go-build-cache
-        id: gocache
-        with:
-          module: desktop
+          cache: true
+          cache-dependency-path: desktop/go.sum
 
       - uses: pnpm/action-setup@v6.1.0
         with:
@@ -1028,16 +1154,20 @@ jobs:
             }
           }
 
-      # go:embed of frontend/dist needs a built frontend before the package
-      # compiles; the electron flavour is what the shell ships.
-      - name: Build frontend
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.desktop-prepare.outputs.stable_artifact_name }}
+          path: desktop/frontend
+      - name: Verify stable frontend artifact
         run: |
-          pnpm --dir frontend install --frozen-lockfile
-          pnpm --dir frontend build:electron
+          node frontend/scripts/artifact-identity.mjs verify \
+            --shell electron --channel stable \
+            --source-sha "$(git rev-parse HEAD)" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --pnpm-version "$(pnpm --version)"
 
       - name: test (Windows desktop and update helper)
-        # 17 minutes measured, ~11 of them before the first test runs; the
-        # budget stays above that so the job cap, not this step, ends a hang.
+        # Keep native Go output here. JSON mode forces verbose output into the
+        # test cache and spent 8-10 minutes finalizing it on Windows runners.
         timeout-minutes: 25
         run: go test ./...
 
@@ -1045,22 +1175,14 @@ jobs:
         timeout-minutes: 2
         run: go test -timeout=60s fyne.io/systray
 
-      # Only main-v2 pushes save, one job per OS and module, so the cache
-      # stays a few pushes deep instead of churning on every pull request.
-      - uses: actions/cache/save@v4
-        if: always() && github.event_name == 'push' && steps.gocache.outputs.key != ''
-        with:
-          path: ${{ steps.gocache.outputs.paths }}
-          key: ${{ steps.gocache.outputs.key }}
-
   # Installer packaging is packaging validation, not a code gate, and it shares
   # no state with the test steps above. It runs beside them instead of after
   # them so the Windows leg's wall time is the longer half rather than the sum,
   # and so a packaging failure costs a short rerun instead of the whole leg.
   # Pushes to main-v2 only: the release pipeline builds installers again anyway.
   desktop-windows-package:
-    needs: changes
-    if: always() && (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true')
+    needs: [changes, desktop-prepare]
+    if: always() && needs.desktop-prepare.result == 'success' && (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true')
     runs-on: windows-latest
     # Packaging measured 13m55s; the overhead benchmark and its workspace
     # install add about six more. Bound hangs, not duration.
@@ -1075,12 +1197,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: desktop/go.mod
-          cache: false
-
-      - uses: ./.github/actions/go-build-cache
-        id: gocache
-        with:
-          module: desktop
+          cache: true
+          cache-dependency-path: desktop/go.sum
 
       - uses: pnpm/action-setup@v6.1.0
         with:
@@ -1109,19 +1227,28 @@ jobs:
             }
           }
 
-      # go:embed of frontend/dist needs a built frontend before the package
-      # compiles, same as the test leg.
-      - name: Build frontend
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.desktop-prepare.outputs.canary_artifact_name }}
+          path: desktop/frontend
+      - name: Verify canary frontend artifact
         run: |
-          pnpm --dir frontend install --frozen-lockfile
-          pnpm --dir frontend build:electron
+          node frontend/scripts/artifact-identity.mjs verify \
+            --shell electron --channel canary \
+            --source-sha "$(git rev-parse HEAD)" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --pnpm-version "$(pnpm --version)"
 
       - name: Install NSIS
         run: pwsh -NoProfile -File ../scripts/install-nsis.ps1
 
       - name: Build Windows installer and portable archive
         timeout-minutes: 20
-        run: ../scripts/desktop-build.sh windows/amd64 v0.0.0-ci canary
+        env:
+          REASONIX_PACKAGE_REUSE_FRONTEND: "1"
+        run: |
+          REASONIX_FRONTEND_PNPM_VERSION="$(pnpm --version)"
+          export REASONIX_FRONTEND_PNPM_VERSION
+          ../scripts/desktop-build.sh windows/amd64 v0.0.0-ci canary
 
       - name: Verify packaged Windows artifacts
         run: |
@@ -1151,9 +1278,62 @@ jobs:
             desktop/electron/artifacts/performance/overhead.json
             desktop/electron/artifacts/performance/diagnostic-report.png
 
+  ci-metrics:
+    needs: [desktop, desktop-macos, desktop-windows, desktop-windows-go, desktop-windows-package]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Summarize queue, execution and stage timing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/ci-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" > "$RUNNER_TEMP/ci-jobs.json"
+          node scripts/ci-timings.mjs \
+            --run "$RUNNER_TEMP/ci-run.json" \
+            --jobs "$RUNNER_TEMP/ci-jobs.json" \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --title "Frontend CI timing"
+
+  # Every main-v2 push saves one Go cache per Unix OS and module (~2.6 GiB
+  # measured) against a 10 GiB repository limit shared with pnpm, CodeQL and
+  # setup-go caches; two pushes filled it. Keep only the newest cache per
+  # prefix once the savers are done; restore-keys pick the newest anyway.
+  prune-go-cache:
+    needs: [test, race, desktop-go, desktop-go-race, desktop-macos]
+    if: always() && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Keep the newest Go cache per OS and module
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          declare -A seen
+          while read -r id key; do
+            [ -n "$id" ] || continue
+            prefix="${key%-*-*-*}"
+            if [ -n "${seen[$prefix]:-}" ]; then
+              echo "deleting older cache $key"
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/caches/$id" >/dev/null
+            else
+              seen[$prefix]=1
+              echo "keeping newest cache $key"
+            fi
+          done < <(gh api "repos/$GITHUB_REPOSITORY/actions/caches?per_page=100&sort=created_at&direction=desc" --paginate \
+            --jq '.actions_caches[] | select(.key | startswith("go-")) | "\(.id) \(.key)"')
+
   # repolint scans desktop/ and sdk/ too, so this job also runs for diffs the
   # `code` filter would otherwise skip.
-  lint:
+  lint-code:
     needs: changes
     if: always() && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.code != 'false' || needs.changes.outputs.desktop != 'false' || needs.changes.outputs.sdk != 'false')
     runs-on: ubuntu-latest
@@ -1169,25 +1349,6 @@ jobs:
         id: gocache
         with:
           module: root
-
-      - if: github.event_name != 'pull_request' || needs.changes.outputs.desktop != 'false'
-        uses: pnpm/action-setup@v6.1.0
-        with:
-          version: 10
-          run_install: false
-
-      - if: github.event_name != 'pull_request' || needs.changes.outputs.desktop != 'false'
-        uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          cache: pnpm
-          cache-dependency-path: desktop/pnpm-lock.yaml
-
-      - name: required native motion contracts
-        if: github.event_name != 'pull_request' || needs.changes.outputs.desktop != 'false'
-        run: |
-          pnpm --dir desktop/frontend install --frozen-lockfile
-          pnpm --dir desktop/frontend test:motion
 
       - name: repo standards
         run: go run ./tools/repolint
@@ -1223,6 +1384,7 @@ jobs:
         run: |
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 \
             -ignore 'label "windows-11-arm" is unknown' \
+            -ignore 'label "macos-15-intel" is unknown' \
             .github/workflows/release-stable.yml \
             .github/workflows/prepare-release-notes.yml \
             .github/workflows/release-stable-trigger.yml \
@@ -1237,6 +1399,34 @@ jobs:
           node --test scripts/desktop-release-artifacts.test.mjs scripts/ci-workflow.test.mjs scripts/notarize-desktop.test.mjs scripts/windows-go-tests.test.mjs
           bash scripts/release-workflows.test.sh
           node scripts/check-single-release-public-contract.mjs
+
+  # `lint` is a protected check name. Keep it as the fail-closed aggregate so
+  # frontend unit coverage can run once in desktop-frontend without weakening
+  # the branch gate.
+  lint:
+    needs: [changes, lint-code, desktop-prepare, desktop-frontend]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify lint and frontend validation jobs
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          LINT_CODE_RESULT: ${{ needs.lint-code.result }}
+          LINT_CODE_REQUIRED: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.code != 'false' || needs.changes.outputs.desktop != 'false' || needs.changes.outputs.sdk != 'false' }}
+          FRONTEND_RESULT: ${{ needs.desktop-frontend.result }}
+          PREPARE_RESULT: ${{ needs.desktop-prepare.result }}
+          FRONTEND_REQUIRED: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.frontend != 'false' || needs.changes.outputs.electron != 'false' }}
+        run: |
+          test "$CHANGES_RESULT" = success
+          lint_expected=skipped
+          if [ "$LINT_CODE_REQUIRED" = true ]; then lint_expected=success; fi
+          test "$LINT_CODE_RESULT" = "$lint_expected"
+          if [ "$FRONTEND_REQUIRED" = true ]; then
+            test "$PREPARE_RESULT" = success
+            test "$FRONTEND_RESULT" = success
+          else
+            test "$FRONTEND_RESULT" = skipped
+          fi
 
   # The site/ auth client has security-sensitive redirect-validation logic
   # (safeNext) covered by node:test unit tests. Those tests use only Node

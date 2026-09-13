@@ -55,6 +55,8 @@ func TestGenManifest(t *testing.T) {
 	names := []string{
 		"Reasonix-darwin-arm64.zip",
 		"Reasonix-darwin-amd64.zip",
+		"Reasonix-darwin-arm64.dmg",
+		"Reasonix-darwin-amd64.dmg",
 		"Reasonix-darwin-universal.dmg",
 		"Reasonix-windows-amd64-installer.exe",
 		"Reasonix-windows-amd64.zip", // portable download, not the updater channel
@@ -152,10 +154,10 @@ func TestGenManifest(t *testing.T) {
 	if deb.Sig != deb.URL+".minisig" || deb.SHA256 == "" || deb.Size == 0 {
 		t.Fatalf("native linux asset incomplete: %+v", deb)
 	}
-	if len(m.Downloads) != 2 {
-		t.Fatalf("want 2 website downloads, got %d: %+v", len(m.Downloads), m.Downloads)
+	if len(m.Downloads) != 4 {
+		t.Fatalf("want 4 website downloads, got %d: %+v", len(m.Downloads), m.Downloads)
 	}
-	for _, name := range []string{"Reasonix-darwin-universal.dmg", "Reasonix-windows-amd64.zip"} {
+	for _, name := range []string{"Reasonix-darwin-arm64.dmg", "Reasonix-darwin-amd64.dmg", "Reasonix-darwin-universal.dmg", "Reasonix-windows-amd64.zip"} {
 		asset, ok := m.Downloads[name]
 		if !ok {
 			t.Fatalf("website download %q missing", name)
