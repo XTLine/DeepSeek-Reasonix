@@ -12,6 +12,11 @@ func (a *App) UpdateRemoteServer(hostID, workspace string) error {
 		}
 		parked := a.parkRemoteTabsForServer(hostID, workspace, "serve_down", "Remote server updating.")
 		reattach := func() {
+			if !rt.HostConnected(hostID) {
+				// A superseding disconnect or removal owns the final state;
+				// reattaching would reconnect a host the user closed.
+				return
+			}
 			for _, tabID := range parked {
 				a.emitRemoteTabState(tabID, "connecting", "")
 				a.goRemoteTabSafe("remoteTabServe", func() { a.bootstrapRemoteTab(tabID, hostID, workspace) })

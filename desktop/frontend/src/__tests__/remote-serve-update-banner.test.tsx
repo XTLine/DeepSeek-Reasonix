@@ -267,5 +267,61 @@ ok(bannerText() === "", "the session fallback keeps the dismissal across remount
 await act(async () => root.unmount());
 Object.defineProperty(window, "localStorage", { configurable: true, value: realStorage });
 
+// Transient state is scoped per host: ignoring on one remote does not hide
+// the banner on another running the same old version.
+window.localStorage.clear();
+root = createRoot(rootElement);
+await act(async () => {
+  useRemoteStore.getState().setServer(readyView({ hostId: "box-a", serveVersion: "1.8.7" }));
+  root.render(
+    <LocaleProvider>
+      <RemoteServeUpdateBanner hostId="box-a" workspace="/srv/app" />
+    </LocaleProvider>,
+  );
+  await Promise.resolve();
+});
+await act(async () => {
+  findButton("Ignore")?.click();
+  await Promise.resolve();
+});
+await act(async () => root.unmount());
+root = createRoot(rootElement);
+await act(async () => {
+  useRemoteStore.getState().setServer(readyView({ hostId: "box-b", serveVersion: "1.8.7" }));
+  root.render(
+    <LocaleProvider>
+      <RemoteServeUpdateBanner hostId="box-b" workspace="/srv/app" />
+    </LocaleProvider>,
+  );
+  await Promise.resolve();
+});
+ok(bannerText().includes("v1.8.7"), "an ignored version on one host must not hide the banner on another");
+await act(async () => root.unmount());
+
+// A full store keeps the newest dismissal and evicts the oldest entry.
+window.localStorage.clear();
+const filler = Array.from({ length: 200 }, (_, i) => `filler-${i}`);
+window.localStorage.setItem("remote.serveUpdate.dismissed", JSON.stringify(filler));
+root = createRoot(rootElement);
+await act(async () => {
+  useRemoteStore.getState().setServer(readyView({ serveVersion: "1.8.6" }));
+  root.render(
+    <LocaleProvider>
+      <RemoteServeUpdateBanner hostId="box" workspace="/srv/app" />
+    </LocaleProvider>,
+  );
+  await Promise.resolve();
+});
+await act(async () => {
+  findButton("Ignore")?.click();
+  await Promise.resolve();
+});
+const stored = JSON.parse(window.localStorage.getItem("remote.serveUpdate.dismissed") ?? "[]") as string[];
+ok(stored.length === 200, `a full store stays at 200 entries, got ${stored.length}`);
+ok(stored.includes("box|/srv/app|1.8.6"), "the newest dismissal survives the prune");
+ok(!stored.includes("filler-0"), "the oldest stored entry is the one evicted");
+await act(async () => root.unmount());
+window.localStorage.clear();
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

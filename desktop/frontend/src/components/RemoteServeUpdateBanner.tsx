@@ -10,13 +10,13 @@ import { dismissRemoteServeUpdate, isRemoteServeUpdateDismissed } from "../lib/r
 export function RemoteServeUpdateBanner({ hostId, workspace }: { hostId: string; workspace: string }) {
   const t = useT();
   const server = useRemoteStore((s) => s.servers[hostId]?.[workspace]);
-  const [armedVersion, setArmedVersion] = useState<string | null>(null);
-  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
-  const [failure, setFailure] = useState<{ version: string; message: string } | null>(null);
+  const [armedKey, setArmedKey] = useState<string | null>(null);
+  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
+  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
   if (!server?.updateAvailable || !server.serveVersion) return null;
-  if (dismissedVersion === server.serveVersion || isRemoteServeUpdateDismissed(hostId, workspace, server.serveVersion)) return null;
-  const armed = armedVersion === server.serveVersion;
-  const failed = failure?.version === server.serveVersion;
+  if (dismissedKey === scopeKey(hostId, workspace, server.serveVersion) || isRemoteServeUpdateDismissed(hostId, workspace, server.serveVersion)) return null;
+  const armed = armedKey === scopeKey(hostId, workspace, server.serveVersion);
+  const failed = failure?.key === scopeKey(hostId, workspace, server.serveVersion);
   const updating = server.state === "updating";
   return (
     <div className="banner banner--warning banner--actionable" data-testid="remote-serve-update-banner">
@@ -34,14 +34,14 @@ export function RemoteServeUpdateBanner({ hostId, workspace }: { hostId: string;
         onClick={() => {
           if (updating) return;
           if (!armed) {
-            setArmedVersion(server.serveVersion!);
+            setArmedKey(scopeKey(hostId, workspace, server.serveVersion!));
             return;
           }
-          setArmedVersion(null);
+          setArmedKey(null);
           setFailure(null);
           void app.UpdateRemoteServer(hostId, workspace).catch((error: unknown) => {
             const message = error instanceof Error ? error.message : String(error);
-            setFailure({ version: server.serveVersion!, message: message.slice(0, 180) });
+            setFailure({ key: scopeKey(hostId, workspace, server.serveVersion!), message: message.slice(0, 180) });
           });
         }}
       >
@@ -53,11 +53,18 @@ export function RemoteServeUpdateBanner({ hostId, workspace }: { hostId: string;
         disabled={updating}
         onClick={() => {
           dismissRemoteServeUpdate(hostId, workspace, server.serveVersion!);
-          setDismissedVersion(server.serveVersion!);
+          setDismissedKey(scopeKey(hostId, workspace, server.serveVersion!));
         }}
       >
         {t("remote.serveUpdate.ignore")}
       </button>
     </div>
   );
+}
+
+// scopeKey keys the banner's transient state by identity, so switching
+// between remotes running the same old version does not carry an armed
+// confirmation, a dismissal, or a failure across hosts or workspaces.
+function scopeKey(hostId: string, workspace: string, serveVersion: string): string {
+  return `${hostId}|${workspace}|${serveVersion}`;
 }

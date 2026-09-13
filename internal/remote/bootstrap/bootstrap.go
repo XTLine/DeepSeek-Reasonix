@@ -135,8 +135,25 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 		return Result{}, err
 	}
 
+	if opts.ForceUpgrade {
+		// Serialize the whole replacement - install and launch - under the
+		// serve lock, so a concurrent ensure for this workspace cannot launch
+		// between this client's install and its publish.
+		opts.progress("waiting_lock", "")
+		lock, err := acquireServeLock(ctx, fs, paths, opts.clock())
+		if err != nil {
+			return Result{}, err
+		}
+		defer lock.release()
+		bin, version, rollback, err := ensureBinary(ctx, conn, fs, opts, home, goos, goarch, paths)
+		if err != nil {
+			return Result{}, err
+		}
+		return launchServe(ctx, conn, fs, opts, bin, version, workspace, paths, requireLaunchArgs, rollback)
+	}
+
 	// 3. Locate or install a usable reasonix.
-	bin, version, err := ensureBinary(ctx, conn, fs, opts, home, goos, goarch, paths)
+	bin, version, _, err := ensureBinary(ctx, conn, fs, opts, home, goos, goarch, paths)
 	if err != nil {
 		return Result{}, err
 	}
@@ -157,15 +174,15 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 		}
 	}
 
-	return launchServe(ctx, conn, fs, opts, bin, version, workspace, paths, requireLaunchArgs)
+	return launchServe(ctx, conn, fs, opts, bin, version, workspace, paths, requireLaunchArgs, nil)
 }
 
 // launchServe stages and publishes a fresh serve with bin: token staging, the
 // retire/publish handoff, the detached launch, the port-file health poll, and
 // the state write that makes it discoverable for reuse. Callers hold the
-// serve lock; every failure path undoes the launch and restores the managed
-// binary backup.
-func launchServe(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, bin, version, workspace string, paths StatePaths, requireLaunchArgs []string) (Result, error) {
+// serve lock; every failure path undoes the launch, restores the managed
+// binary backup, and runs the package rollback when one was captured.
+func launchServe(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, bin, version, workspace string, paths StatePaths, requireLaunchArgs []string, rollback func(context.Context)) (Result, error) {
 	freshToken, err := generateToken()
 	if err != nil {
 		return Result{}, err
@@ -186,7 +203,7 @@ func launchServe(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, bi
 	opts.progress("launch", "")
 	launchRes, err := conn.Exec(ctx, LaunchCommand(bin, workspace, paths, opts.CredentialProxy, resolveBrowserBroker(ctx, conn, bin, opts)))
 	if err != nil {
-		cleanupFailedLaunch(conn, fs, paths, 0)
+		cleanupFailedLaunch(conn, fs, paths, 0, rollback)
 		return Result{}, fmt.Errorf("bootstrap: launch: %w", err)
 	}
 	pid, _ := strconv.Atoi(strings.TrimSpace(string(launchRes.Stdout)))
@@ -196,14 +213,14 @@ func launchServe(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, bi
 	opts.progress("health_check", "")
 	addr, err := pollPortFile(ctx, fs, paths.PortFile, opts.clock())
 	if err != nil {
-		cleanupFailedLaunch(conn, fs, paths, pid)
+		cleanupFailedLaunch(conn, fs, paths, pid, rollback)
 		return Result{}, err
 	}
 	if filePID, perr := readPIDFile(ctx, fs, paths.PidFile); perr == nil {
 		pid = filePID // --pid-file is authoritative when available.
 	}
 	if pid <= 0 || !pidIsServe(ctx, conn, pid, paths) {
-		cleanupFailedLaunch(conn, fs, paths, pid)
+		cleanupFailedLaunch(conn, fs, paths, pid, rollback)
 		return Result{}, errors.New("bootstrap: launched process did not become the expected reasonix serve")
 	}
 
@@ -219,11 +236,11 @@ func launchServe(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, bi
 	}
 	data, err := MarshalState(st)
 	if err != nil {
-		cleanupFailedLaunch(conn, fs, paths, pid)
+		cleanupFailedLaunch(conn, fs, paths, pid, rollback)
 		return Result{}, err
 	}
 	if err := fs.WriteFileAtomic(ctx, paths.StateJSON, data, 0o600); err != nil {
-		cleanupFailedLaunch(conn, fs, paths, pid)
+		cleanupFailedLaunch(conn, fs, paths, pid, rollback)
 		return Result{}, fmt.Errorf("bootstrap: write state: %w", err)
 	}
 	dropManagedBinaryBackup(ctx, fs, paths)
@@ -490,7 +507,7 @@ func readPIDFile(ctx context.Context, fs *sftpfs.FS, pidFile string) (int, error
 	return pid, nil
 }
 
-func cleanupFailedLaunch(conn Conn, fs *sftpfs.FS, paths StatePaths, pid int) {
+func cleanupFailedLaunch(conn Conn, fs *sftpfs.FS, paths StatePaths, pid int, rollback func(context.Context)) {
 	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
 	defer cancel()
 	if pid <= 0 {
@@ -504,6 +521,9 @@ func cleanupFailedLaunch(conn Conn, fs *sftpfs.FS, paths StatePaths, pid int) {
 	_ = fs.Remove(ctx, paths.PortFile, false)
 	_ = fs.Remove(ctx, paths.PidFile, false)
 	restoreManagedBinary(ctx, fs, paths)
+	if rollback != nil {
+		runRollback(rollback)
+	}
 }
 
 // managedBinaryPath derives the managed CLI location from the state paths; the
@@ -517,12 +537,18 @@ func managedBinaryPath(paths StatePaths) string {
 // without it the recovery ensure would locate and relaunch the broken
 // replacement. A missing backup leaves the installed binary untouched.
 func restoreManagedBinary(ctx context.Context, fs *sftpfs.FS, paths StatePaths) {
-	prev := managedBinaryPath(paths) + ".prev"
+	restoreManagedBackupAt(ctx, fs, managedBinaryPath(paths))
+}
+
+// restoreManagedBackupAt is the path-based form of restoreManagedBinary,
+// shared with the install ladder's error and npm-fallback paths.
+func restoreManagedBackupAt(ctx context.Context, fs *sftpfs.FS, uploaded string) {
+	prev := uploaded + ".prev"
 	if _, _, _, err := fs.ReadFile(ctx, prev, 1); err != nil {
 		return
 	}
-	_ = fs.Remove(ctx, managedBinaryPath(paths), false)
-	_ = fs.Rename(ctx, prev, managedBinaryPath(paths))
+	_ = fs.Remove(ctx, uploaded, false)
+	_ = fs.Rename(ctx, prev, uploaded)
 }
 
 // dropManagedBinaryBackup removes the pre-upgrade backup once the replacement

@@ -22,6 +22,14 @@ func remoteServeUpdateAvailable(serveVersion string) bool {
 	return bootstrap.CompareVersions(remote, desktop) < 0
 }
 
+// HostConnected reports whether the host still has a live managed
+// connection; updates use it to keep a superseding disconnect from being
+// undone by tab reattachment.
+func (m *desktopRemoteManager) HostConnected(hostID string) bool {
+	mh := m.managed(hostID)
+	return mh != nil && mh.client != nil
+}
+
 // UpdateServer stops the workspace's serve and re-ensures it with
 // ForceUpgrade so the remote lands on this desktop's exact release. The App
 // layer warns first: in-flight turns on that serve are interrupted.
@@ -51,7 +59,10 @@ func (m *desktopRemoteManager) UpdateServer(ctx context.Context, hostID, workspa
 	opCtx, cancel := managedOperationContext(ctx, mh)
 	defer cancel()
 	c := mh.client
-	updating := RemoteServerView{HostID: hostID, Workspace: workspace, State: "updating", Message: "stopping serve"}
+	updating := RemoteServerView{
+		HostID: hostID, Workspace: workspace, State: "updating", Message: "stopping serve",
+		ServeVersion: previous.view.ServeVersion, UpdateAvailable: previous.view.UpdateAvailable,
+	}
 	if !m.publishServerIfCurrent(hostID, mh, updating, previous.token, previous.addr) {
 		return RemoteServerView{}, "", fmt.Errorf("host %q connection was replaced", hostID)
 	}
@@ -65,7 +76,11 @@ func (m *desktopRemoteManager) UpdateServer(ctx context.Context, hostID, workspa
 	// Drop the loopback forward so the forced ensure rebuilds it against the
 	// replacement serve's address.
 	_ = c.Forwards().Remove(serveForwardName(workspace))
-	m.publishServerIfCurrent(hostID, mh, RemoteServerView{HostID: hostID, Workspace: workspace, State: "updating", Message: "installing release"}, "", "")
+	progress := RemoteServerView{
+		HostID: hostID, Workspace: workspace, State: "updating", Message: "installing release",
+		ServeVersion: previous.view.ServeVersion, UpdateAvailable: previous.view.UpdateAvailable,
+	}
+	m.publishServerIfCurrent(hostID, mh, progress, "", "")
 	view, token, err := m.ensureServerLocked(opCtx, mh, hostID, workspace, true)
 	if err != nil {
 		return view, "", err

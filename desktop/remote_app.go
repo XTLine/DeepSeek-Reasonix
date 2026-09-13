@@ -186,6 +186,8 @@ type remoteKernel interface {
 	// UpdateServer stops the serve and re-ensures it with ForceUpgrade; the
 	// caller must warn that in-flight turns are interrupted.
 	UpdateServer(ctx context.Context, hostID, workspace string) (RemoteServerView, string, error)
+	// HostConnected reports a live managed connection for the host.
+	HostConnected(hostID string) bool
 	SwitchCredentialProxyModel(ctx context.Context, hostID, workspace, currentRef, nextRef, expectedPath string) error
 	StopServer(hostID, workspace string) error
 	ServerStatus(hostID, workspace string) RemoteServerView

@@ -14,7 +14,9 @@ function keyFor(hostId: string, workspace: string, serveVersion: string): string
 }
 
 function readSet(): Set<string> {
-  const merged = new Set(sessionDismissed);
+  // Stored entries first, session entries after: the newest key must sit at
+  // the end so the persisted slice drops the oldest entry, not the new one.
+  const merged = new Set<string>();
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     const list = raw ? (JSON.parse(raw) as unknown) : [];
@@ -23,6 +25,9 @@ function readSet(): Set<string> {
     }
   } catch {
     // Storage unreadable: the session set still applies.
+  }
+  for (const entry of sessionDismissed) {
+    merged.add(entry);
   }
   return merged;
 }
