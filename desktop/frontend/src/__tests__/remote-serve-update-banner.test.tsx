@@ -128,7 +128,7 @@ ok(bannerText() === "", "banner hides once the serve reports no update");
 
 // Ignore persists per serve version.
 await act(async () => {
-  useRemoteStore.getState().setServer(readyView());
+  useRemoteStore.getState().setServer(readyView({ serveVersion: "1.8.9" }));
   root.render(
     <LocaleProvider>
       <RemoteServeUpdateBanner hostId="box" workspace="/srv/app" />
@@ -231,6 +231,41 @@ ok(
 );
 ok(findButton("Update remote Serve") !== undefined, "the banner stays retryable after a failure");
 await act(async () => root.unmount());
+
+// Ignore holds across remounts even when persistent storage is unavailable.
+const realStorage = window.localStorage;
+Object.defineProperty(window, "localStorage", {
+  configurable: true,
+  value: { getItem: () => null, setItem: () => { throw new Error("quota exceeded"); }, removeItem: () => {} } as Storage,
+});
+root = createRoot(rootElement);
+await act(async () => {
+  useRemoteStore.getState().setServer(readyView({ serveVersion: "1.8.8" }));
+  root.render(
+    <LocaleProvider>
+      <RemoteServeUpdateBanner hostId="box" workspace="/srv/app" />
+    </LocaleProvider>,
+  );
+  await Promise.resolve();
+});
+await act(async () => {
+  findButton("Ignore")?.click();
+  await Promise.resolve();
+});
+ok(bannerText() === "", "ignore hides the banner without persistent storage");
+await act(async () => root.unmount());
+root = createRoot(rootElement);
+await act(async () => {
+  root.render(
+    <LocaleProvider>
+      <RemoteServeUpdateBanner hostId="box" workspace="/srv/app" />
+    </LocaleProvider>,
+  );
+  await Promise.resolve();
+});
+ok(bannerText() === "", "the session fallback keeps the dismissal across remounts");
+await act(async () => root.unmount());
+Object.defineProperty(window, "localStorage", { configurable: true, value: realStorage });
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

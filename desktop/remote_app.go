@@ -9,10 +9,8 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1701,36 +1699,6 @@ func hasUsableServeForward(entries []forward.Entry, name, targetAddr, localURL s
 		}
 	}
 	return false
-}
-
-func desktopCLIBinaryPath() string {
-	packagedName, commandName := desktopCLIBinaryNames(runtime.GOOS)
-	candidates := []string{}
-	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		candidates = append(candidates, filepath.Join(dir, packagedName))
-	}
-	if found, err := exec.LookPath(commandName); err == nil {
-		candidates = append(candidates, found)
-	}
-	for _, candidate := range candidates {
-		st, err := os.Stat(candidate)
-		if err != nil || !st.Mode().IsRegular() {
-			continue
-		}
-		if runtime.GOOS != "windows" && st.Mode().Perm()&0o111 == 0 {
-			continue
-		}
-		return candidate
-	}
-	return ""
-}
-
-func desktopCLIBinaryNames(goos string) (packaged, command string) {
-	if goos == "windows" {
-		return "reasonix-cli.exe", "reasonix.exe"
-	}
-	return "reasonix", "reasonix"
 }
 
 func desktopNormalizeBind(bind string) string {

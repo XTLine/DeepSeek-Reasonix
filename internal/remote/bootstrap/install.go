@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"reasonix/internal/remote/sftpfs"
 )
@@ -20,6 +21,8 @@ func ensureBinary(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, h
 		if bin != "" {
 			return bin, version, nil
 		}
+	} else {
+		backupManagedBinary(ctx, fs, uploaded)
 	}
 
 	strategy := opts.Install
@@ -32,7 +35,11 @@ func ensureBinary(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, h
 	case InstallNever:
 		return "", "", fmt.Errorf("bootstrap: reasonix not found on remote and serve_install = never")
 	case InstallNPM:
-		bin, version, err = installViaNPM(ctx, conn, opts.MinVersion)
+		if opts.ForceUpgrade {
+			bin, version, err = installViaNPMAt(ctx, conn, opts.ProductVersion)
+		} else {
+			bin, version, err = installViaNPM(ctx, conn, opts.MinVersion)
+		}
 	case InstallUpload:
 		bin, version, err = installViaUpload(ctx, conn, fs, opts, home, goos, goarch, uploaded)
 	default: // auto: try npm, packaged same-platform upload, then verified release upload
@@ -85,16 +92,35 @@ func installLadder(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, 
 	}
 }
 
+// backupManagedBinary renames the managed binary aside so a failed launch can
+// restore the previous one; nothing happens when no binary exists.
+func backupManagedBinary(ctx context.Context, fs *sftpfs.FS, uploaded string) {
+	bctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = fs.Rename(bctx, uploaded, uploaded+".prev")
+}
+
 // upgradeLadder is the ForceUpgrade auto order: exact-release sources first -
 // same-platform upload of the desktop's binary, then the official download at
-// ProductVersion; npm (latest, possibly lagging) is only a fallback.
+// ProductVersion; npm pinned to that version is the fallback. A rung that
+// lands below the target counts as failed, so later rungs still run.
 func upgradeLadder(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, home, goos, goarch, uploaded string) (bin, version string, err error) {
 	var attempts []error
+	accept := func(b, v string, rungErr error, source string) bool {
+		switch {
+		case rungErr != nil:
+			attempts = append(attempts, rungErr)
+		case !upgradeTargetMet(v, opts.ProductVersion):
+			attempts = append(attempts, fmt.Errorf("bootstrap: %s landed on %q, short of %q", source, v, opts.ProductVersion))
+		default:
+			return true
+		}
+		return false
+	}
 	if opts.LocalBinary != "" && opts.LocalGOOS == goos && opts.LocalGOARCH == goarch {
-		if b, v, uploadErr := installViaUpload(ctx, conn, fs, opts, home, goos, goarch, uploaded); uploadErr == nil {
+		b, v, uploadErr := installViaUpload(ctx, conn, fs, opts, home, goos, goarch, uploaded)
+		if accept(b, v, uploadErr, "upload") {
 			return b, v, nil
-		} else {
-			attempts = append(attempts, uploadErr)
 		}
 	} else if opts.LocalBinary == "" {
 		attempts = append(attempts, errors.New("bootstrap: no local Reasonix CLI is available for upload"))
@@ -104,19 +130,17 @@ func upgradeLadder(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, 
 	if opts.FetchBinary != nil {
 		binary, fetchErr := opts.FetchBinary(ctx, opts.ProductVersion, goos, goarch)
 		if fetchErr == nil {
-			if b, v, uploadErr := installBinaryBytes(ctx, conn, fs, binary, opts.MinVersion, home, uploaded); uploadErr == nil {
+			b, v, uploadErr := installBinaryBytes(ctx, conn, fs, binary, opts.MinVersion, home, uploaded)
+			if accept(b, v, uploadErr, "release download") {
 				return b, v, nil
-			} else {
-				attempts = append(attempts, uploadErr)
 			}
 		} else {
 			attempts = append(attempts, fmt.Errorf("bootstrap: fetch official %s/%s CLI: %w", goos, goarch, fetchErr))
 		}
 	}
-	if b, v, nerr := installViaNPMAt(ctx, conn, opts.ProductVersion); nerr == nil {
+	b, v, nerr := installViaNPMAt(ctx, conn, opts.ProductVersion)
+	if accept(b, v, nerr, "npm") {
 		return b, v, nil
-	} else {
-		attempts = append(attempts, nerr)
 	}
 	return "", "", fmt.Errorf("bootstrap: forced upgrade install failed: %w", errors.Join(attempts...))
 }

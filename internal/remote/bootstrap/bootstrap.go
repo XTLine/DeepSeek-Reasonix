@@ -14,12 +14,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path"
 	"strconv"
 	"strings"
 	"time"
 
 	"reasonix/internal/remote"
 	"reasonix/internal/remote/sftpfs"
+	"reasonix/internal/store"
 )
 
 // Conn is the subset of *remote.Client bootstrap needs. *remote.Client
@@ -113,10 +115,13 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 		return Result{}, err
 	}
 	// 1. Reuse a live process if the recorded pid is still running and exposes
-	// every Serve contract required by this desktop.
-	if st, tok, ok := tryReuse(ctx, conn, fs, paths, workspace, requireLaunchArgs...); ok {
-		opts.progress("reuse", st.Addr)
-		return Result{State: st, Token: tok, Reused: true, CredentialConfigChanged: credentialChanged}, nil
+	// every Serve contract required by this desktop. A forced upgrade replaces
+	// the serve instead, even one another client relaunched mid-update.
+	if !opts.ForceUpgrade {
+		if st, tok, ok := tryReuse(ctx, conn, fs, paths, workspace, requireLaunchArgs...); ok {
+			opts.progress("reuse", st.Addr)
+			return Result{State: st, Token: tok, Reused: true, CredentialConfigChanged: credentialChanged}, nil
+		}
 	}
 
 	// 2. Detect remote platform.
@@ -145,12 +150,22 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 		return Result{}, err
 	}
 	defer lock.release()
-	if st, tok, ok := tryReuse(ctx, conn, fs, paths, workspace, requireLaunchArgs...); ok {
-		opts.progress("reuse", st.Addr)
-		return Result{State: st, Token: tok, Reused: true, CredentialConfigChanged: credentialChanged}, nil
+	if !opts.ForceUpgrade {
+		if st, tok, ok := tryReuse(ctx, conn, fs, paths, workspace, requireLaunchArgs...); ok {
+			opts.progress("reuse", st.Addr)
+			return Result{State: st, Token: tok, Reused: true, CredentialConfigChanged: credentialChanged}, nil
+		}
 	}
 
-	// 5. Stage the replacement token, retire incompatible Serve, then publish.
+	return launchServe(ctx, conn, fs, opts, bin, version, workspace, paths, requireLaunchArgs)
+}
+
+// launchServe stages and publishes a fresh serve with bin: token staging, the
+// retire/publish handoff, the detached launch, the port-file health poll, and
+// the state write that makes it discoverable for reuse. Callers hold the
+// serve lock; every failure path undoes the launch and restores the managed
+// binary backup.
+func launchServe(ctx context.Context, conn Conn, fs *sftpfs.FS, opts Options, bin, version, workspace string, paths StatePaths, requireLaunchArgs []string) (Result, error) {
 	freshToken, err := generateToken()
 	if err != nil {
 		return Result{}, err
@@ -176,8 +191,8 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 	}
 	pid, _ := strconv.Atoi(strings.TrimSpace(string(launchRes.Stdout)))
 
-	// 6. Poll the newly-created port file for the real bound address. The launch
-	// command removes stale port/pid files before forking.
+	// The launch command removes stale port/pid files before forking; poll the
+	// fresh port file for the real bound address.
 	opts.progress("health_check", "")
 	addr, err := pollPortFile(ctx, fs, paths.PortFile, opts.clock())
 	if err != nil {
@@ -211,6 +226,7 @@ func EnsureServe(ctx context.Context, conn Conn, opts Options) (Result, error) {
 		cleanupFailedLaunch(conn, fs, paths, pid)
 		return Result{}, fmt.Errorf("bootstrap: write state: %w", err)
 	}
+	dropManagedBinaryBackup(ctx, fs, paths)
 	opts.progress("ready", addr)
 	return Result{State: st, Token: freshToken}, nil
 }
@@ -487,6 +503,32 @@ func cleanupFailedLaunch(conn Conn, fs *sftpfs.FS, paths StatePaths, pid int) {
 	_ = fs.Remove(ctx, paths.TokenFile, false)
 	_ = fs.Remove(ctx, paths.PortFile, false)
 	_ = fs.Remove(ctx, paths.PidFile, false)
+	restoreManagedBinary(ctx, fs, paths)
+}
+
+// managedBinaryPath derives the managed CLI location from the state paths; the
+// ForceUpgrade flow renames it aside before installing so a failed launch can
+// put the previous binary back.
+func managedBinaryPath(paths StatePaths) string {
+	return path.Join(paths.Dir, store.RemoteBinDirName, "reasonix")
+}
+
+// restoreManagedBinary puts the pre-upgrade binary back after a failed launch;
+// without it the recovery ensure would locate and relaunch the broken
+// replacement. A missing backup leaves the installed binary untouched.
+func restoreManagedBinary(ctx context.Context, fs *sftpfs.FS, paths StatePaths) {
+	prev := managedBinaryPath(paths) + ".prev"
+	if _, _, _, err := fs.ReadFile(ctx, prev, 1); err != nil {
+		return
+	}
+	_ = fs.Remove(ctx, managedBinaryPath(paths), false)
+	_ = fs.Rename(ctx, prev, managedBinaryPath(paths))
+}
+
+// dropManagedBinaryBackup removes the pre-upgrade backup once the replacement
+// serve is healthy and published.
+func dropManagedBinaryBackup(ctx context.Context, fs *sftpfs.FS, paths StatePaths) {
+	_ = fs.Remove(ctx, managedBinaryPath(paths)+".prev", false)
 }
 
 func resolveWorkspace(ctx context.Context, fs *sftpfs.FS, workspace, home string) (string, error) {

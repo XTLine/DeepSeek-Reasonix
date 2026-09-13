@@ -4,18 +4,27 @@
 const STORAGE_KEY = "remote.serveUpdate.dismissed";
 const MAX_ENTRIES = 200;
 
+// In-memory twin of the persisted set: when localStorage is unavailable
+// (private mode, quota), Ignore still holds for the application session
+// instead of resetting on the next banner remount.
+const sessionDismissed = new Set<string>();
+
 function keyFor(hostId: string, workspace: string, serveVersion: string): string {
   return `${hostId}|${workspace}|${serveVersion}`;
 }
 
 function readSet(): Set<string> {
+  const merged = new Set(sessionDismissed);
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     const list = raw ? (JSON.parse(raw) as unknown) : [];
-    return new Set(Array.isArray(list) ? list.map(String) : []);
+    for (const entry of Array.isArray(list) ? list.map(String) : []) {
+      merged.add(entry);
+    }
   } catch {
-    return new Set();
+    // Storage unreadable: the session set still applies.
   }
+  return merged;
 }
 
 export function isRemoteServeUpdateDismissed(hostId: string, workspace: string, serveVersion: string): boolean {
@@ -23,11 +32,16 @@ export function isRemoteServeUpdateDismissed(hostId: string, workspace: string, 
 }
 
 export function dismissRemoteServeUpdate(hostId: string, workspace: string, serveVersion: string): void {
-  const set = readSet();
-  set.add(keyFor(hostId, workspace, serveVersion));
+  const key = keyFor(hostId, workspace, serveVersion);
+  sessionDismissed.add(key);
+  if (sessionDismissed.size > MAX_ENTRIES) {
+    sessionDismissed.delete(sessionDismissed.values().next().value as string);
+  }
   try {
+    const set = readSet();
+    set.add(key);
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify([...set].slice(-MAX_ENTRIES)));
   } catch {
-    // Storage unavailable (private mode): the dismissal lasts this session only.
+    // Storage unavailable (private mode): the session set keeps the dismissal.
   }
 }

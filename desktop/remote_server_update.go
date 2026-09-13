@@ -22,6 +22,9 @@ func (a *App) UpdateRemoteServer(hostID, workspace string) error {
 			return err
 		}
 		if !current() {
+			// A window open or disconnect superseded this update and owns the
+			// final state, but the parked tabs still belong to this call.
+			reattach()
 			return nil
 		}
 		// The replacement serve binds a fresh loopback port; a web window

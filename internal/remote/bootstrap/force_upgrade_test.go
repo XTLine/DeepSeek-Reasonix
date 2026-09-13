@@ -109,8 +109,8 @@ func TestForceUpgradeCrossPlatformFetchesRelease(t *testing.T) {
 	}
 }
 
-// TestForceUpgradeRejectsShortVersion: a ladder result below ProductVersion
-// is an error, not a silent half-upgrade.
+// TestForceUpgradeRejectsShortVersion: every rung landing below the target
+// is an error naming the shortfall, not a silent half-upgrade.
 func TestForceUpgradeRejectsShortVersion(t *testing.T) {
 	skipOnWindows(t)
 	root := t.TempDir()
@@ -133,8 +133,8 @@ func TestForceUpgradeRejectsShortVersion(t *testing.T) {
 		},
 		Clock: time.Now,
 	})
-	if err == nil || !strings.Contains(err.Error(), `desktop requires "1.9.5"`) {
-		t.Fatalf("err = %v, want version-short error", err)
+	if err == nil || !strings.Contains(err.Error(), `short of "1.9.5"`) {
+		t.Fatalf("err = %v, want a short-of-target error", err)
 	}
 }
 
@@ -148,5 +148,235 @@ func TestUpgradeTargetMet(t *testing.T) {
 	}
 	if !upgradeTargetMet("", "dev") || !upgradeTargetMet("1.2.3", "dev") {
 		t.Fatal("a dev target must not gate")
+	}
+}
+
+// TestForceUpgradeSkipsLiveServeReuse: a recorded live serve is not adopted by
+// a forced upgrade, not even at the post-lock re-check another client could
+// satisfy by relaunching the old serve mid-update.
+func TestForceUpgradeSkipsLiveServeReuse(t *testing.T) {
+	skipOnWindows(t)
+	root := t.TempDir()
+	paths := pathsFor(root, root)
+	if err := os.MkdirAll(paths.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := MarshalState(ServeState{PID: 777, Addr: "127.0.0.1:5000", Workspace: root, ServeCaps: ServeCapsToken, TokenFile: paths.TokenFile})
+	if err := os.WriteFile(paths.StateJSON, st, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.TokenFile, []byte("existing-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conn := newFakeConn(t, root, func(cmd string) (remote.ExecResult, error) {
+		switch {
+		case strings.Contains(cmd, "uname"):
+			return ok("Linux x86_64\n")
+		case strings.Contains(cmd, "kill -0"), strings.Contains(cmd, "ps -p"):
+			return ok("1\n")
+		case strings.Contains(cmd, "--version"):
+			return ok(uploadedBinPath(root) + "\nreasonix v1.9.5\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
+		case strings.Contains(cmd, "nohup"):
+			_ = os.WriteFile(paths.PortFile, []byte("127.0.0.1:44321\n"), 0o600)
+			return ok("54321\n")
+		default:
+			return ok("")
+		}
+	})
+	res, err := EnsureServe(context.Background(), conn, Options{
+		Workspace:      "~",
+		ForceUpgrade:   true,
+		ProductVersion: "1.9.5",
+		FetchBinary: func(_ context.Context, _ string, _, _ string) ([]byte, error) {
+			return []byte("fake-release-cli"), nil
+		},
+		Clock: time.Now,
+	})
+	if err != nil {
+		t.Fatalf("EnsureServe: %v", err)
+	}
+	if res.Reused {
+		t.Fatal("a forced upgrade must not report reuse")
+	}
+	if res.State.PID != 54321 {
+		t.Fatalf("state pid = %d, want the relaunched serve", res.State.PID)
+	}
+}
+
+// TestForceUpgradeContinuesPastShortRung: a rung landing below the target
+// falls through to the remaining rungs instead of failing the whole ladder.
+func TestForceUpgradeContinuesPastShortRung(t *testing.T) {
+	skipOnWindows(t)
+	root := t.TempDir()
+	paths := pathsFor(root, root)
+	localBin := filepath.Join(t.TempDir(), "reasonix")
+	if err := os.WriteFile(localBin, []byte("fake-cli"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	locateCalls := 0
+	fetchCalled := false
+	conn := newFakeConn(t, root, func(cmd string) (remote.ExecResult, error) {
+		switch {
+		case strings.Contains(cmd, "uname"):
+			return ok("Linux x86_64\n")
+		case strings.Contains(cmd, "--version"):
+			locateCalls++
+			version := "1.9.0"
+			if locateCalls >= 2 {
+				version = "1.9.5"
+			}
+			return ok(uploadedBinPath(root) + "\nreasonix v" + version + "\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
+		case strings.Contains(cmd, "nohup"):
+			_ = os.WriteFile(paths.PortFile, []byte("127.0.0.1:44321\n"), 0o600)
+			return ok("54321\n")
+		case strings.Contains(cmd, "kill -0"), strings.Contains(cmd, "ps -p"):
+			return ok("1\n")
+		default:
+			return ok("")
+		}
+	})
+	res, err := EnsureServe(context.Background(), conn, Options{
+		Workspace:      "~",
+		ForceUpgrade:   true,
+		LocalBinary:    localBin,
+		LocalGOOS:      runtime.GOOS,
+		LocalGOARCH:    runtime.GOARCH,
+		ProductVersion: "1.9.5",
+		FetchBinary: func(_ context.Context, _ string, _, _ string) ([]byte, error) {
+			fetchCalled = true
+			return []byte("fake-release-cli"), nil
+		},
+		Clock: time.Now,
+	})
+	if err != nil {
+		t.Fatalf("EnsureServe: %v", err)
+	}
+	if res.State.Version != "1.9.5" {
+		t.Fatalf("state version = %q, want the later rung's 1.9.5", res.State.Version)
+	}
+	if !fetchCalled {
+		t.Fatal("a short upload rung must fall through to the release download")
+	}
+}
+
+// TestForceUpgradeNPMStrategyPinsVersion: the explicit npm strategy pins the
+// install to the desktop version instead of installing latest.
+func TestForceUpgradeNPMStrategyPinsVersion(t *testing.T) {
+	skipOnWindows(t)
+	root := t.TempDir()
+	paths := pathsFor(root, root)
+	pinned := false
+	conn := newFakeConn(t, root, func(cmd string) (remote.ExecResult, error) {
+		switch {
+		case strings.Contains(cmd, "uname"):
+			return ok("Linux x86_64\n")
+		case strings.Contains(cmd, "npm i -g reasonix@1.9.5"):
+			pinned = true
+			return ok("")
+		case strings.Contains(cmd, "npm i -g reasonix "):
+			t.Errorf("forced npm upgrade must pin the version; ran: %s", cmd)
+			return ok("")
+		case strings.Contains(cmd, "npm prefix"):
+			return ok("/npm-global/bin/reasonix\nreasonix v1.9.5\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
+		case strings.Contains(cmd, "nohup"):
+			_ = os.WriteFile(paths.PortFile, []byte("127.0.0.1:44321\n"), 0o600)
+			return ok("54321\n")
+		case strings.Contains(cmd, "kill -0"), strings.Contains(cmd, "ps -p"):
+			return ok("1\n")
+		default:
+			return ok("")
+		}
+	})
+	res, err := EnsureServe(context.Background(), conn, Options{
+		Workspace:      "~",
+		Install:        InstallNPM,
+		ForceUpgrade:   true,
+		ProductVersion: "1.9.5",
+		Clock:          time.Now,
+	})
+	if err != nil {
+		t.Fatalf("EnsureServe: %v", err)
+	}
+	if !pinned {
+		t.Fatal("the forced npm strategy must install reasonix@<ProductVersion>")
+	}
+	if res.State.Version != "1.9.5" {
+		t.Fatalf("state version = %q, want 1.9.5", res.State.Version)
+	}
+}
+
+// TestForceUpgradeRestoresBinaryOnFailedLaunch: the pre-upgrade managed
+// binary comes back when the replacement fails to become a healthy serve.
+func TestForceUpgradeRestoresBinaryOnFailedLaunch(t *testing.T) {
+	skipOnWindows(t)
+	root := t.TempDir()
+	managed := uploadedBinPath(root)
+	if err := os.MkdirAll(filepath.Dir(managed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managed, []byte("previous-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A clock that jumps forward on every call fails the port-file poll
+	// immediately, driving the launch into its failure cleanup.
+	step := time.Now()
+	clock := func() time.Time { step = step.Add(30 * time.Second); return step }
+	conn := newFakeConn(t, root, func(cmd string) (remote.ExecResult, error) {
+		switch {
+		case strings.Contains(cmd, "uname"):
+			return ok("Linux x86_64\n")
+		case strings.Contains(cmd, "--version"):
+			return ok(managed + "\nreasonix v1.9.5\nportfile:yes\nsessionevents:yes\ndetachedheal:yes\ncaps:yes\n")
+		case strings.Contains(cmd, "nohup"):
+			return ok("0\n")
+		default:
+			return ok("")
+		}
+	})
+	_, err := EnsureServe(context.Background(), conn, Options{
+		Workspace:      "~",
+		ForceUpgrade:   true,
+		ProductVersion: "1.9.5",
+		FetchBinary: func(_ context.Context, _ string, _, _ string) ([]byte, error) {
+			return []byte("replacement-binary"), nil
+		},
+		Clock: clock,
+	})
+	if err == nil {
+		t.Fatal("a launch that never reports a port must fail")
+	}
+	data, rerr := os.ReadFile(managed)
+	if rerr != nil {
+		t.Fatalf("managed binary missing after failed launch: %v", rerr)
+	}
+	if string(data) != "previous-binary" {
+		t.Fatalf("managed binary = %q, want the pre-upgrade binary restored", string(data))
+	}
+	if _, serr := os.Stat(managed + ".prev"); serr == nil {
+		t.Fatal("the backup must be consumed by the restore")
+	}
+}
+
+// TestCompareVersionsPrerelease is pure and runs on every platform.
+func TestCompareVersionsPrerelease(t *testing.T) {
+	ordered := []string{
+		"1.40.0-preview.9",
+		"1.40.0-preview.10",
+		"1.40.0-preview.41",
+		"1.40.0-preview.42",
+		"1.40.0-rc.1",
+		"1.40.0",
+		"1.40.1",
+	}
+	for i := 0; i+1 < len(ordered); i++ {
+		if CompareVersions(ordered[i], ordered[i+1]) >= 0 {
+			t.Errorf("CompareVersions(%q, %q) must be -1", ordered[i], ordered[i+1])
+		}
+		if CompareVersions(ordered[i+1], ordered[i]) <= 0 {
+			t.Errorf("CompareVersions(%q, %q) must be 1", ordered[i+1], ordered[i])
+		}
+	}
+	if CompareVersions("1.40.0-preview.42", "1.40.0-preview.42") != 0 {
+		t.Error("identical prereleases must compare equal")
 	}
 }
