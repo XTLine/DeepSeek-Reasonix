@@ -988,17 +988,10 @@ func TestTopicMigrationMarkerRescansWhenSessionFileChanges(t *testing.T) {
 	// background path but not under one fsync barrier. Wait for the marker
 	// explicitly so Windows CI does not observe the topic before the stamp.
 	markerPath := filepath.Join(dir, topicMigrationMarker)
-	deadline := time.Now().Add(5 * time.Second)
-	var lastMarkerErr error
-	for {
-		if _, lastMarkerErr = os.Stat(markerPath); lastMarkerErr == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("expected migration marker after a complete pass: %v", lastMarkerErr)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitFor(t, "the migration marker after a complete pass", func() bool {
+		_, err := os.Stat(markerPath)
+		return err == nil
+	})
 
 	// A CLI-created session added after the marker invalidates the lightweight
 	// gate and gets a fresh migration pass.
@@ -1006,13 +999,12 @@ func TestTopicMigrationMarkerRescansWhenSessionFileChanges(t *testing.T) {
 	second := writeLegacySession(t, dir, "second.jsonl", "second legacy prompt", time.Now())
 	app.requestSessionCatalogReconcile(dir)
 	waitForCatalogTopic(t, app, "global", "", legacySessionTopicID(second))
-	meta, ok, err := agent.LoadBranchMeta(second)
-	if err != nil {
-		t.Fatalf("load second meta: %v", err)
-	}
-	if !ok || strings.TrimSpace(meta.TopicID) != legacySessionTopicID(second) {
-		t.Fatalf("new session after marker should be migrated, got ok=%v meta=%+v", ok, meta)
-	}
+	// Publication does not fence the sidecar write, and Windows refuses to open
+	// a .meta the migration still holds. Await the asserted postcondition.
+	waitFor(t, "second.jsonl.meta to carry the migrated topic", func() bool {
+		meta, ok, err := agent.LoadBranchMeta(second)
+		return err == nil && ok && strings.TrimSpace(meta.TopicID) == legacySessionTopicID(second)
+	})
 }
 
 func TestProjectTreeRepairsIndexedGlobalTopicsAfterMigrationMarker(t *testing.T) {

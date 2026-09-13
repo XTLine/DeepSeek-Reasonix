@@ -4,10 +4,12 @@
 package sessioncatalog
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"reasonix/internal/agent"
 	"reasonix/internal/config"
 )
 
@@ -90,6 +92,10 @@ type Options struct {
 	QueueCapacity int
 	Now           func() time.Time
 	OnRevision    func(uint64, []string, string)
+	// repairSession replaces the filesystem repair. Open installs it before
+	// starting repairLoop, so scheduler tests can drive the real wake path
+	// without racing the hook assignment.
+	repairSession func(context.Context, string) (agent.SessionListingRepairResult, error)
 }
 
 type DirectoryTarget struct {

@@ -30,13 +30,14 @@ jobs:
       desktop: ${{ steps.filter.outputs.desktop }}
       site: ${{ steps.filter.outputs.site }}
       sdk: ${{ steps.filter.outputs.sdk }}
+      notes_only: ${{ steps.filter.outputs.notes_only }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: filter
         run: |
-          code=true; desktop=true; site=true; sdk=true
+          code=true; desktop=true; site=true; sdk=true; notes_only=false
           base=""
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="${{ github.event.pull_request.base.sha }}"
@@ -58,9 +59,13 @@ jobs:
               # its DTOs are generated from internal/extension/protocol, so
               # both paths must trigger the sdk job.
               if echo "$files" | grep -qE '^(sdk/|internal/extension/)'; then sdk=true; fi
+              # A push that touches only release-notes/ carries the parent's code
+              # byte for byte. Its heavy jobs skip; scripts/verify-release-push-ci.sh
+              # then requires the nearest ancestor that changed code to be green.
+              if ! echo "$files" | grep -qvE '^release-notes/'; then notes_only=true; fi
             fi
           fi
-          { echo "code=$code"; echo "desktop=$desktop"; echo "site=$site"; echo "sdk=$sdk"; } >> "$GITHUB_OUTPUT"
+          { echo "code=$code"; echo "desktop=$desktop"; echo "site=$site"; echo "sdk=$sdk"; echo "notes_only=$notes_only"; } >> "$GITHUB_OUTPUT"
 
   # The ruleset requires the per-OS check names (test (ubuntu-latest) etc.).
   # A matrix job skipped at job level reports no per-leg checks at all, so
@@ -82,7 +87,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     env:
-      RUN_STEPS: ${{ github.event_name != 'pull_request' || needs.changes.outputs.code != 'false' }}
+      RUN_STEPS: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.code != 'false' }}
     steps:
       - if: env.RUN_STEPS == 'true'
         uses: actions/checkout@v7
@@ -91,7 +96,13 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - if: env.RUN_STEPS == 'true'
+        uses: ./.github/actions/go-build-cache
+        id: gocache
+        with:
+          module: root
 
       - if: env.RUN_STEPS == 'true' && runner.os == 'Windows'
         uses: actions/setup-node@v7
@@ -218,12 +229,20 @@ jobs:
         shell: powershell
         run: .\scripts\test-scoop-desktop-launch.ps1
 
+      # Only main-v2 pushes save, one job per OS and module, so the cache
+      # stays a few pushes deep instead of churning on every pull request.
+      - uses: actions/cache/save@v4
+        if: always() && env.RUN_STEPS == 'true' && github.event_name == 'push' && steps.gocache.outputs.key != ''
+        with:
+          path: ${{ steps.gocache.outputs.paths }}
+          key: ${{ steps.gocache.outputs.key }}
+
   windows-control:
     needs: changes
     if: always()
     runs-on: windows-latest
     env:
-      RUN_STEPS: ${{ github.event_name != 'pull_request' || needs.changes.outputs.code != 'false' }}
+      RUN_STEPS: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.code != 'false' }}
     steps:
       - if: env.RUN_STEPS == 'true'
         uses: actions/checkout@v7
@@ -232,7 +251,13 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - if: env.RUN_STEPS == 'true'
+        uses: ./.github/actions/go-build-cache
+        id: gocache
+        with:
+          module: root
 
       - if: env.RUN_STEPS == 'true'
         uses: actions/setup-node@v7
@@ -268,7 +293,7 @@ jobs:
 
   windows-isolated:
     needs: changes
-    if: always() && (github.event_name != 'pull_request' || needs.changes.outputs.code != 'false')
+    if: always() && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.code != 'false')
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -279,7 +304,12 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - uses: ./.github/actions/go-build-cache
+        id: gocache
+        with:
+          module: root
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -311,7 +341,7 @@ jobs:
 
   race:
     needs: changes
-    if: always() && (github.event_name != 'pull_request' || needs.changes.outputs.code != 'false')
+    if: always() && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.code != 'false')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -319,7 +349,12 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - uses: ./.github/actions/go-build-cache
+        id: gocache
+        with:
+          module: root-race
 
       - name: Install and verify Linux sandbox backend
         run: |
@@ -351,6 +386,14 @@ jobs:
           REASONIX_RELEASE_CACHE_GUARD: "1"
         run: go test -race ./...
 
+      # Only main-v2 pushes save, one job per OS and module, so the cache
+      # stays a few pushes deep instead of churning on every pull request.
+      - uses: actions/cache/save@v4
+        if: always() && github.event_name == 'push' && steps.gocache.outputs.key != ''
+        with:
+          path: ${{ steps.gocache.outputs.paths }}
+          key: ${{ steps.gocache.outputs.key }}
+
   # sdk/go is a nested stdlib-only module invisible to root `go test ./...`.
   # Its DTOs are generated from internal/extension/protocol, and the
   # host-side conformance tests spawn the SDK example, so the job runs the
@@ -364,7 +407,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     env:
-      RUN_STEPS: ${{ github.event_name != 'pull_request' || needs.changes.outputs.sdk != 'false' }}
+      RUN_STEPS: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.sdk != 'false' }}
     defaults:
       run:
         working-directory: sdk/go
@@ -431,16 +474,17 @@ jobs:
         run: go test -race ./...
 
   desktop:
-    needs: [changes, desktop-prepare, desktop-go, desktop-frontend, desktop-browser]
+    needs: [changes, desktop-prepare, desktop-go, desktop-go-race, desktop-frontend, desktop-browser]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Verify desktop validation jobs
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
-          SHOULD_RUN: ${{ github.event_name != 'pull_request' || needs.changes.outputs.desktop != 'false' }}
+          SHOULD_RUN: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false' }}
           PREPARE_RESULT: ${{ needs.desktop-prepare.result }}
           GO_RESULT: ${{ needs.desktop-go.result }}
+          GO_RACE_RESULT: ${{ needs.desktop-go-race.result }}
           FRONTEND_RESULT: ${{ needs.desktop-frontend.result }}
           BROWSER_RESULT: ${{ needs.desktop-browser.result }}
         run: |
@@ -449,12 +493,13 @@ jobs:
           if [ "$SHOULD_RUN" = true ]; then expected=success; fi
           test "$PREPARE_RESULT" = "$expected"
           test "$GO_RESULT" = "$expected"
+          test "$GO_RACE_RESULT" = "$expected"
           test "$FRONTEND_RESULT" = "$expected"
           test "$BROWSER_RESULT" = "$expected"
 
   desktop-frontend:
     needs: [changes, desktop-prepare]
-    if: always() && needs.desktop-prepare.result == 'success' && (github.event_name != 'pull_request' || needs.changes.outputs.desktop != 'false')
+    if: always() && needs.desktop-prepare.result == 'success' && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
     runs-on: ubuntu-22.04
     defaults:
       run:
@@ -492,7 +537,7 @@ jobs:
 
   desktop-browser:
     needs: [changes, desktop-prepare]
-    if: always() && needs.desktop-prepare.result == 'success' && (github.event_name != 'pull_request' || needs.changes.outputs.desktop != 'false')
+    if: always() && needs.desktop-prepare.result == 'success' && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
     runs-on: ubuntu-22.04
     defaults:
       run:
@@ -527,7 +572,7 @@ jobs:
 
   desktop-prepare:
     needs: changes
-    if: always() && (github.event_name != 'pull_request' || needs.changes.outputs.desktop != 'false')
+    if: always() && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
     outputs:
       artifact_name: desktop-frontend-${{ github.run_id }}-${{ github.run_attempt }}
     runs-on: ubuntu-22.04
@@ -540,8 +585,12 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: desktop/go.mod
-          cache: true
-          cache-dependency-path: desktop/go.sum
+          cache: false
+
+      - uses: ./.github/actions/go-build-cache
+        id: gocache
+        with:
+          module: desktop
 
       - uses: pnpm/action-setup@v6.1.0
         with:
@@ -597,7 +646,7 @@ jobs:
 
   desktop-go:
     needs: [changes, desktop-prepare]
-    if: always() && needs.desktop-prepare.result == 'success' && (github.event_name != 'pull_request' || needs.changes.outputs.desktop != 'false')
+    if: always() && needs.desktop-prepare.result == 'success' && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
     runs-on: ubuntu-22.04
     defaults:
       run:
@@ -608,8 +657,12 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: desktop/go.mod
-          cache: true
-          cache-dependency-path: desktop/go.sum
+          cache: false
+
+      - uses: ./.github/actions/go-build-cache
+        id: gocache
+        with:
+          module: desktop
 
       - uses: pnpm/action-setup@v6.1.0
         with:
@@ -646,17 +699,76 @@ jobs:
       - name: test
         run: go test ./...
 
+      # Only main-v2 pushes save, one job per OS and module, so the cache
+      # stays a few pushes deep instead of churning on every pull request.
+      - uses: actions/cache/save@v4
+        if: always() && github.event_name == 'push' && steps.gocache.outputs.key != ''
+        with:
+          path: ${{ steps.gocache.outputs.paths }}
+          key: ${{ steps.gocache.outputs.key }}
+
+  # `go test -race ./...` is ~7 of desktop-go's ~11 minutes and shares nothing
+  # with vet, lint, build and the plain test run beyond the frontend artifact.
+  # Running it beside them makes the job's wall time the longer half without
+  # changing what is race-checked.
+  desktop-go-race:
+    needs: [changes, desktop-prepare]
+    if: always() && needs.desktop-prepare.result == 'success' && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: desktop/go.mod
+          cache: false
+
+      - uses: ./.github/actions/go-build-cache
+        id: gocache
+        with:
+          module: desktop-race
+
+      - uses: pnpm/action-setup@v6.1.0
+        with:
+          version: 10
+          run_install: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.desktop-prepare.outputs.artifact_name }}
+          path: desktop/frontend/dist
+      - name: Verify frontend artifact layout
+        run: test -f frontend/dist/index.html
+      - run: pnpm --dir frontend install --frozen-lockfile
+
       # The extension work added new shared-state paths to the desktop
       # runtime (tab/rebuild fences, extension UI). Race-sweep the module so
       # regressions are CI-blocked, not just author-verified locally.
       - name: test -race
         run: go test -race ./...
 
+      # Only main-v2 pushes save, one job per OS and module, so the cache
+      # stays a few pushes deep instead of churning on every pull request.
+      - uses: actions/cache/save@v4
+        if: always() && github.event_name == 'push' && steps.gocache.outputs.key != ''
+        with:
+          path: ${{ steps.gocache.outputs.paths }}
+          key: ${{ steps.gocache.outputs.key }}
+
   # desktop/ is a separate module, so the root macOS matrix above does not
   # compile or exercise the native PTY and FSEvents implementations.
   desktop-macos:
     needs: changes
-    if: always() && (github.event_name != 'pull_request' || needs.changes.outputs.desktop != 'false')
+    if: always() && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
     runs-on: macos-latest
     defaults:
       run:
@@ -667,8 +779,12 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: desktop/go.mod
-          cache: true
-          cache-dependency-path: desktop/go.sum
+          cache: false
+
+      - uses: ./.github/actions/go-build-cache
+        id: gocache
+        with:
+          module: desktop
 
       - uses: pnpm/action-setup@v6.1.0
         with:
@@ -684,7 +800,7 @@ jobs:
       - name: Build frontend
         run: |
           pnpm --dir frontend install --frozen-lockfile
-          pnpm --dir frontend build
+          pnpm --dir frontend build:electron
 
       - name: Test integrated terminal, PTY, and FSEvents lifecycle
         run: go test -race -run 'Test(DarwinWorkspaceWatcher|WorkspaceChangeHub|ResolveTerminal|Terminal|EmptyTerminal|UnixTerminalProcess)' .
@@ -727,17 +843,37 @@ jobs:
           ../scripts/desktop-build.sh darwin/arm64 v0.0.0-ci canary
           node packaging/verify.mjs ../dist/Reasonix-darwin-arm64.zip
 
+      # Signing and bundle members do not prove the app starts. Until now the
+      # packaged macOS renderer path ran only in the release build, so a
+      # regression there surfaced at publication time instead of on main-v2.
+      - name: Smoke-test the packaged macOS startup
+        if: github.event_name != 'pull_request'
+        timeout-minutes: 5
+        run: |
+          ditto -xk ../dist/Reasonix-darwin-arm64.zip "$RUNNER_TEMP/desktop-startup"
+          node packaging/smoke.mjs "$RUNNER_TEMP/desktop-startup/Reasonix.app"
+
+      # Only main-v2 pushes save, one job per OS and module, so the cache
+      # stays a few pushes deep instead of churning on every pull request.
+      - uses: actions/cache/save@v4
+        if: always() && github.event_name == 'push' && steps.gocache.outputs.key != ''
+        with:
+          path: ${{ steps.gocache.outputs.paths }}
+          key: ${{ steps.gocache.outputs.key }}
+
   # Desktop project-root matching is case-insensitive only on Windows
   # (sameDesktopPath folds case when os.PathSeparator is '\'), so the
   # regression tests for that contract are named *OnWindows and can never
   # run on the ubuntu leg above.
   desktop-windows:
     needs: changes
-    if: always() && (github.event_name != 'pull_request' || needs.changes.outputs.desktop != 'false')
+    if: always() && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
     runs-on: windows-latest
     # A hung native step must not hold the workflow's concurrency group for the
-    # six-hour default. Normal runs finish in ~25 minutes.
-    timeout-minutes: 45
+    # six-hour default. This bounds hangs, not duration: the leg's own spread on
+    # 2026-09-11 was 34-47 minutes, so a cap near the mean cancels healthy runs.
+    # Every step keeps its own tighter budget.
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
@@ -748,8 +884,12 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: desktop/go.mod
-          cache: true
-          cache-dependency-path: desktop/go.sum
+          cache: false
+
+      - uses: ./.github/actions/go-build-cache
+        id: gocache
+        with:
+          module: desktop
 
       - uses: pnpm/action-setup@v6.1.0
         with:
@@ -786,27 +926,12 @@ jobs:
       - name: Build frontend
         run: |
           pnpm --dir frontend install --frozen-lockfile
-          pnpm --dir frontend build
+          pnpm --dir frontend build:electron
 
-      - name: Test native motion contracts
-        run: pnpm --dir frontend test:motion
-
-      # Chromium is the deterministic browser replay on the Windows runner; the
-      # shell-level Electron startup smoke below separately exercises the real
-      # packaged runtime.
-      - name: Test transcript browser replay on Windows
-        timeout-minutes: 10
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/desktop/frontend/.pw-browsers
-        run: |
-          pnpm --dir frontend exec playwright install chromium
-          pnpm --dir frontend test:transcript-browser
-
-      - name: Test settings layout on Windows
-        timeout-minutes: 5
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/desktop/frontend/.pw-browsers
-        run: pnpm --dir frontend test:settings-browser
+      # test:motion, test:transcript-browser and test:settings-browser run on
+      # ubuntu (desktop-frontend and desktop-browser). They were repeated here
+      # when each OS shipped its own engine; Electron ships one Chromium, so the
+      # Windows-specific renderer evidence is the native Electron step below.
 
       # Package the real Electron shell on every desktop PR and exercise the
       # production startup path (shell -> Go service handshake) in the packaged
@@ -845,6 +970,172 @@ jobs:
         timeout-minutes: 3
         run: node electron/scripts/performance-smoke.mjs
 
+  # The desktop Go suite shares nothing with the Electron and browser steps
+  # beyond a built frontend for go:embed, and it is the leg's longest step by
+  # far: the module that tests in 1.8 minutes on ubuntu takes ~17 on Windows,
+  # ~11 of them compiling and linking the cgo-heavy root package before a
+  # single test runs (GOCACHE restored, Defender excluded). Running it beside
+  # the Electron steps makes the leg's wall time the longer half rather than
+  # the sum, and a Go flake reruns only this job.
+  desktop-windows-go:
+    needs: changes
+    if: always() && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false')
+    runs-on: windows-latest
+    # Measured 17.1-17.3 minutes on three consecutive main-v2 runs; bound
+    # hangs, not duration.
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: desktop/go.mod
+          cache: false
+
+      - uses: ./.github/actions/go-build-cache
+        id: gocache
+        with:
+          module: desktop
+
+      - uses: pnpm/action-setup@v6.1.0
+        with:
+          version: 10
+          run_install: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      # Same Defender hazard as the Electron leg: exclusions keep Go test
+      # binaries from crashing mid-syscall and freshly written files readable.
+      - name: Exclude build dirs from Defender scanning
+        shell: pwsh
+        run: |
+          $paths = @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP, $env:TEMP, (go env GOCACHE)) |
+            Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+          foreach ($p in $paths) {
+            try {
+              Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+              Write-Host "Defender exclusion added: $p"
+            } catch {
+              Write-Host "::warning::Defender exclusion failed for ${p}: $($_.Exception.Message)"
+            }
+          }
+
+      # go:embed of frontend/dist needs a built frontend before the package
+      # compiles; the electron flavour is what the shell ships.
+      - name: Build frontend
+        run: |
+          pnpm --dir frontend install --frozen-lockfile
+          pnpm --dir frontend build:electron
+
+      - name: test (Windows desktop and update helper)
+        # 17 minutes measured, ~11 of them before the first test runs; the
+        # budget stays above that so the job cap, not this step, ends a hang.
+        timeout-minutes: 25
+        run: go test ./...
+
+      - name: test (vendored systray identity)
+        timeout-minutes: 2
+        run: go test -timeout=60s fyne.io/systray
+
+      # Only main-v2 pushes save, one job per OS and module, so the cache
+      # stays a few pushes deep instead of churning on every pull request.
+      - uses: actions/cache/save@v4
+        if: always() && github.event_name == 'push' && steps.gocache.outputs.key != ''
+        with:
+          path: ${{ steps.gocache.outputs.paths }}
+          key: ${{ steps.gocache.outputs.key }}
+
+  # Installer packaging is packaging validation, not a code gate, and it shares
+  # no state with the test steps above. It runs beside them instead of after
+  # them so the Windows leg's wall time is the longer half rather than the sum,
+  # and so a packaging failure costs a short rerun instead of the whole leg.
+  # Pushes to main-v2 only: the release pipeline builds installers again anyway.
+  desktop-windows-package:
+    needs: changes
+    if: always() && (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true')
+    runs-on: windows-latest
+    # Packaging measured 13m55s; the overhead benchmark and its workspace
+    # install add about six more. Bound hangs, not duration.
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: desktop/go.mod
+          cache: false
+
+      - uses: ./.github/actions/go-build-cache
+        id: gocache
+        with:
+          module: desktop
+
+      - uses: pnpm/action-setup@v6.1.0
+        with:
+          version: 10
+          run_install: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      # Same Defender hazard as the test leg: exclusions keep packaging from
+      # tripping over freshly written files that are still held open.
+      - name: Exclude build dirs from Defender scanning
+        shell: pwsh
+        run: |
+          $paths = @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP, $env:TEMP, (go env GOCACHE)) |
+            Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+          foreach ($p in $paths) {
+            try {
+              Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+              Write-Host "Defender exclusion added: $p"
+            } catch {
+              Write-Host "::warning::Defender exclusion failed for ${p}: $($_.Exception.Message)"
+            }
+          }
+
+      # go:embed of frontend/dist needs a built frontend before the package
+      # compiles, same as the test leg.
+      - name: Build frontend
+        run: |
+          pnpm --dir frontend install --frozen-lockfile
+          pnpm --dir frontend build:electron
+
+      - name: Install NSIS
+        run: pwsh -NoProfile -File ../scripts/install-nsis.ps1
+
+      - name: Build Windows installer and portable archive
+        timeout-minutes: 20
+        run: ../scripts/desktop-build.sh windows/amd64 v0.0.0-ci canary
+
+      - name: Verify packaged Windows artifacts
+        run: |
+          node packaging/verify.mjs ../dist/Reasonix-windows-amd64.zip
+          node packaging/signing-files.mjs build/windows/signing-payload --check
+
+      # The overhead benchmark asserts no threshold: it only records
+      # overhead.json as 7-day evidence. It ran on the test leg, where its ~5
+      # minutes sat on the critical path and its numbers came from the runner
+      # with the widest spread. Keep it on Windows for comparable history, but
+      # on the push-only leg that has the headroom.
+      - name: Install the Electron workspace
+        run: pnpm install --frozen-lockfile
+
       - name: Measure Electron diagnostic overhead
         timeout-minutes: 10
         run: node electron/scripts/performance-benchmark.mjs
@@ -860,40 +1151,11 @@ jobs:
             desktop/electron/artifacts/performance/overhead.json
             desktop/electron/artifacts/performance/diagnostic-report.png
 
-      - name: test (Windows desktop and update helper)
-        # Normal wall time is 6-7 minutes; a loaded runner has exceeded 15 with
-        # every package still passing. Keep the budget above that load spike so
-        # the job-level timeout, not this step, ends a real hang.
-        timeout-minutes: 25
-        run: go test ./...
-
-      - name: test (vendored systray identity)
-        timeout-minutes: 2
-        run: go test -timeout=60s fyne.io/systray
-
-      # Installer packaging is packaging validation, not a code gate: run it
-      # on pushes to main-v2 (the release pipeline builds installers again
-      # anyway), but let pull requests stop after the test step.
-      - name: Install NSIS
-        if: github.event_name != 'pull_request'
-        run: pwsh -NoProfile -File ../scripts/install-nsis.ps1
-
-      - name: Build Windows installer and portable archive
-        if: github.event_name != 'pull_request'
-        timeout-minutes: 20
-        run: ../scripts/desktop-build.sh windows/amd64 v0.0.0-ci canary
-
-      - name: Verify packaged Windows artifacts
-        if: github.event_name != 'pull_request'
-        run: |
-          node packaging/verify.mjs ../dist/Reasonix-windows-amd64.zip
-          node packaging/signing-files.mjs build/windows/signing-payload --check
-
   # repolint scans desktop/ and sdk/ too, so this job also runs for diffs the
   # `code` filter would otherwise skip.
   lint:
     needs: changes
-    if: always() && (github.event_name != 'pull_request' || needs.changes.outputs.code != 'false' || needs.changes.outputs.desktop != 'false' || needs.changes.outputs.sdk != 'false')
+    if: always() && ((github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.code != 'false' || needs.changes.outputs.desktop != 'false' || needs.changes.outputs.sdk != 'false')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -901,7 +1163,12 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - uses: ./.github/actions/go-build-cache
+        id: gocache
+        with:
+          module: root
 
       - if: github.event_name != 'pull_request' || needs.changes.outputs.desktop != 'false'
         uses: pnpm/action-setup@v6.1.0
@@ -994,7 +1261,7 @@ jobs:
 
   govulncheck:
     needs: changes
-    if: github.event_name != 'pull_request'
+    if: (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true')
     runs-on: ubuntu-latest
     continue-on-error: true # informational — stdlib vulns need a Go patch release
     steps:
@@ -1003,7 +1270,12 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - uses: ./.github/actions/go-build-cache
+        id: gocache
+        with:
+          module: root
 
       - name: install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -1013,7 +1285,7 @@ jobs:
 
   coverage:
     needs: changes
-    if: github.event_name != 'pull_request'
+    if: (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -1021,7 +1293,12 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - uses: ./.github/actions/go-build-cache
+        id: gocache
+        with:
+          module: root
 
       - name: test with coverage
         run: go test -coverprofile=coverage.out -covermode=atomic ./...

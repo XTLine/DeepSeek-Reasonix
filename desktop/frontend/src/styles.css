@@ -10,6 +10,8 @@
  *  - Colors via CSS variables + prefers-color-scheme so the webview follows the OS.
  *  - --reasonix-draggable marks the title region as an OS drag handle (macOS inset
  *    title bar); interactive children opt out with --reasonix-draggable: no-drag.
+ *    Transcript content must not set it: Electron's app-region subtraction
+ *    would punch a hole in the titlebar (#10105).
  */
 
 @font-face {
@@ -2780,6 +2782,7 @@ a[href] {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   background: var(--chat-bg);
 }
 
@@ -3541,7 +3544,6 @@ a[href] {
   contain-intrinsic-size: none;
 }
 .transcript__jump-bottom:not([hidden]) {
-  --reasonix-draggable: no-drag;
   position: absolute;
   left: 50%;
   bottom: 34px;
@@ -4169,7 +4171,6 @@ a[href] {
 
 /* ── messages ────────────────────────────────────────────────────────────── */
 .msg {
-  --reasonix-draggable: no-drag;
   margin: 18px auto;
   user-select: text;
   -webkit-user-select: text;
@@ -4730,7 +4731,6 @@ a[href] {
   font-weight: 560;
   color: var(--fg-faint);
   border-radius: 6px;
-  -webkit-app-region: no-drag;
 }
 .reasoning__head:hover {
   color: var(--fg);
@@ -4782,7 +4782,6 @@ button.reasoning-summary {
   border-radius: 0;
   background: none;
   cursor: pointer;
-  -webkit-app-region: no-drag;
 }
 button.reasoning-summary:hover {
   color: var(--fg);
@@ -4814,7 +4813,6 @@ button.reasoning-summary:focus-visible {
   line-height: 1.4;
   text-align: left;
   cursor: pointer;
-  -webkit-app-region: no-drag;
 }
 .turn-collapse__reasoning-head:hover {
   color: var(--fg);
@@ -4848,7 +4846,6 @@ button.reasoning-summary:focus-visible {
   background: transparent;
   color: var(--fg-faint);
   cursor: pointer;
-  -webkit-app-region: no-drag;
 }
 .msg-search-sources__toggle:hover,
 .msg-search-sources__toggle:focus-visible {
@@ -4921,7 +4918,6 @@ button.reasoning-summary:focus-visible {
   background: transparent;
   color: var(--fg-faint);
   cursor: pointer;
-  -webkit-app-region: no-drag;
 }
 .msg-search-source__copy:hover,
 .msg-search-source__copy:focus-visible {
@@ -4993,7 +4989,6 @@ button.reasoning-summary:focus-visible {
   background: transparent;
   color: var(--fg-faint);
   cursor: pointer;
-  -webkit-app-region: no-drag;
 }
 .msg-memory-citations__toggle:hover {
   color: var(--fg);
@@ -5116,7 +5111,6 @@ button.reasoning-summary:focus-visible {
   text-align: left;
   cursor: pointer;
   border-radius: 4px;
-  -webkit-app-region: no-drag;
 }
 .process-card__head:hover {
   color: var(--fg);
@@ -6315,7 +6309,6 @@ body > .mermaid-diagram--fullscreen {
   text-align: left;
   cursor: pointer;
   border-radius: 4px;
-  -webkit-app-region: no-drag;
   overflow: hidden;
 }
 .tool__head:hover {
@@ -6650,13 +6643,51 @@ body > .mermaid-diagram--fullscreen {
 .notice--warn .notice__body {
   color: color-mix(in srgb, var(--warn) 78%, var(--fg));
 }
-.compaction__summary {
-  margin: 0;
-  padding: 12px 16px;
+/* Compaction card: the visible receipt of a context rewrite. It renders
+   outside the process fold as its own fold line, so it shares the
+   reasoning__head geometry instead of the folded process-card chrome. */
+.compaction {
+  margin: 4px auto;
+}
+.compaction--pending,
+.compaction__head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 2px 7px;
+  font-size: var(--text-md);
+  color: var(--fg-faint);
+}
+.compaction__head {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-weight: 560;
+  border-radius: 6px;
+}
+.compaction__head:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.compaction__head > svg:last-child {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--fg-faint) 76%, transparent);
+  transition: transform 0.2s;
+}
+.compaction__head > .compaction__chevron--open {
+  transform: rotate(90deg);
+}
+.compaction__meta {
+  font-weight: 400;
+}
+.compaction__body {
+  margin: 4px 0 8px;
+  padding: 0 11px 0 30px;
   color: var(--fg-dim);
-  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 12px;
-  line-height: 1.5;
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -31719,7 +31750,6 @@ body > .mermaid-diagram--fullscreen {
   font: inherit;
   text-align: left;
   cursor: pointer;
-  -webkit-app-region: no-drag;
 }
 
 .app--creation .tool-group__title,
@@ -35166,7 +35196,7 @@ body > .mermaid-diagram--fullscreen {
   background: color-mix(in srgb, #000 58%, transparent);
   display: grid; place-items: center; padding: 20px;
   overflow: hidden;
-  -webkit-app-region: no-drag;
+  --reasonix-draggable: no-drag;
 }
 .theme-gallery__editor {
   width: min(1180px, 100%);

@@ -1,0 +1,48 @@
+name: Go build cache
+description: >-
+  Restore the newest Go build and module cache for this runner and module.
+  setup-go keys its cache on go.sum alone and GitHub never rewrites an existing
+  key, so that snapshot freezes at the last dependency change and every package
+  touched since misses. This cache is keyed per run and restored by prefix; a
+  main-v2 push saves it from one job per OS and module (actions/cache/save with
+  the outputs below), pull requests only restore.
+
+inputs:
+  module:
+    description: Cache namespace, e.g. root, root-race, desktop, desktop-race
+    required: true
+
+outputs:
+  key:
+    description: Exact key for this run's save step
+    value: ${{ steps.key.outputs.key }}
+  paths:
+    description: GOCACHE and GOMODCACHE, one per line
+    value: ${{ steps.key.outputs.paths }}
+
+runs:
+  using: composite
+  steps:
+    - id: key
+      shell: bash
+      run: |
+        set -euo pipefail
+        sums="$(git hash-object go.sum desktop/go.sum | git hash-object --stdin)"
+        base="go-${{ runner.os }}-${{ runner.arch }}-${{ inputs.module }}"
+        {
+          echo "key=${base}-${sums:0:16}-${{ github.run_id }}-${{ github.run_attempt }}"
+          echo "sums=${base}-${sums:0:16}-"
+          echo "base=${base}-"
+          echo "paths<<EOF"
+          go env GOCACHE
+          go env GOMODCACHE
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.key.outputs.paths }}
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: |
+          ${{ steps.key.outputs.sums }}
+          ${{ steps.key.outputs.base }}

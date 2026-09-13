@@ -25,7 +25,12 @@ The normal developer path has one version input, one reviewed Notes PR, one
 terminal command, and one environment approval:
 
 1. Open Actions → **Prepare release** and enter `X.Y.Z`.
-2. Review and merge the generated bilingual release-notes PR.
+2. Review and merge the generated bilingual release-notes PR. If its checks
+   show `action_required` with no jobs, the Actions bot opened it and events
+   raised with `GITHUB_TOKEN` never start workflows; run
+   `./scripts/release-notes-pr-kick.sh X.Y.Z` to close and reopen it with
+   your own credentials so CI starts. The script refuses any other
+   zero-check shape.
 3. From an authenticated maintainer checkout, run:
 
    ```sh
@@ -54,7 +59,10 @@ Do not rerun Notes generation merely because PR creation was denied.
 - the version is canonical `MAJOR.MINOR.PATCH`;
 - remote `main-v2` is the commit that introduces or updates the complete,
   reviewed Stable catalog record;
-- exact-commit `main-v2` CI completed successfully;
+- exact-commit `main-v2` CI completed successfully. A commit that changes
+  only `release-notes/` skips the code matrix by design, so for such a
+  candidate the helper also requires green push CI on the nearest
+  first-parent ancestor that changed anything else (at most five hops);
 - `vX.Y.Z`, `npm-vX.Y.Z`, and `desktop-vX.Y.Z` are all absent.
 
 It then pushes a no-op guard for that exact `main-v2` SHA and all three

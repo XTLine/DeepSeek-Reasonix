@@ -48,7 +48,7 @@ export const NO_LIVE: TranscriptLiveFlags = { hasAnswerText: false, hasReasoning
 
 export type TurnDisplayParts = {
   processItems: Item[];
-  outsideItems: Array<NoticeItem | AssistantItem | ExtensionItem>;
+  outsideItems: Array<NoticeItem | AssistantItem | ExtensionItem | CompactionItem>;
 };
 
 function assistantHasVisibleAnswer(item: AssistantItem, live: TranscriptLiveFlags): boolean {
@@ -56,12 +56,14 @@ function assistantHasVisibleAnswer(item: AssistantItem, live: TranscriptLiveFlag
   return live.id === item.id && live.hasAnswerText;
 }
 
-// Splits a turn by channel, not by position: reasoning, tools, phases, info
-// notices, and compaction cards are process material and fold; every assistant
-// message with answer text is model output addressed to the user and stays
-// outside the fold. Warnings must survive the fold auto-closing on completion,
-// and steers are the user's own words — neither belongs to the model's work
-// process.
+// Splits a turn by channel, not by position: reasoning, tools, phases, and info
+// notices are process material and fold; every assistant message with answer
+// text is model output addressed to the user and stays outside the fold.
+// Warnings must survive the fold auto-closing on completion, and steers are the
+// user's own words — neither belongs to the model's work process. Compaction
+// cards mark a session-level context boundary: they stay visible outside the
+// fold (the card owns its own summary disclosure) but, like extension cards,
+// are not a conversational boundary and do not affect fold defaults.
 //
 // The turn is returned as ordered segments so the conversation keeps its real
 // timeline: process that ran after an answer or steer opens a new segment
@@ -104,10 +106,11 @@ export function partitionTurnItems(items: readonly Item[], live: TranscriptLiveF
       }
       continue;
     }
-    if (item.kind === "extension") {
-      // Extension cards carry their own actions and progress — keep them
-      // visible like warnings instead of folding them into the process
-      // collapse, but never treat them as a conversational boundary.
+    if (item.kind === "extension" || item.kind === "compaction") {
+      // Extension cards carry their own actions and progress; compaction cards
+      // are the only visible receipt of a context rewrite. Keep both visible
+      // like warnings instead of folding them into the process collapse, but
+      // never treat them as a conversational boundary.
       current.outsideItems.push(item);
       continue;
     }
@@ -206,7 +209,6 @@ function foldDisplayItems(items: readonly Item[], live: TranscriptLiveFlags, hid
     }
     if (it.kind === "phase") return true;
     if (it.kind === "notice") return true;
-    if (it.kind === "compaction") return true;
     if (it.kind !== "tool") return false;
     if (it.parentId || it.name === "todo_write" || it.name === "exit_plan_mode") return false;
     return true;
@@ -261,7 +263,10 @@ export function buildTurnModels(
     const model = turns[index];
     model.isActive = running && index === turns.length - 1;
     const segments = partitionTurnItems(model.turnItems, live);
-    const turnHasOutsideContent = segments.some((segment) => segment.outsideItems.length > 0);
+    // Compaction cards stay outside the fold but do not count as conversation:
+    // a turn whose only visible material is a compaction receipt keeps its
+    // process fold open by default exactly like a turn with no answer.
+    const turnHasOutsideContent = segments.some((segment) => segment.outsideItems.some((item) => item.kind !== "compaction"));
     const turnIdentity = turnStableIdentity(model);
     model.segments = segments.map((segment, segmentIndex) => {
       const isLastSegment = segmentIndex === segments.length - 1;
@@ -564,7 +569,7 @@ export function userRowKey(itemId: string): string {
 }
 
 /** Body rows of one expanded process fold: read-only batches, creation tool
- *  groups, single tool cards, phases, info notices, compactions, reasoning. */
+ *  groups, single tool cards, phases, info notices, reasoning. */
 function processBodyRows(
   segment: SegmentModel,
   creationMode: boolean,
@@ -647,14 +652,6 @@ function processBodyRows(
       case "notice":
         rows.push({ kind: "process-notice", key: `pn:${it.id}`, item: it as NoticeItem, layoutVariant: "static" });
         break;
-      case "compaction":
-        rows.push({
-          kind: "compaction",
-          key: `c:${it.id}`,
-          item: it as CompactionItem,
-          layoutVariant: (it as CompactionItem).pending ? "static" : "compaction-collapsed",
-        });
-        break;
       case "assistant":
         // Answer text renders outside the fold (partitionTurnItems strips it),
         // so the fold only ever shows the reasoning segment.
@@ -724,6 +721,8 @@ export function buildTranscriptRowBlocks(models: readonly TurnModel[], options: 
       for (const item of segment.outsideItems) {
         if (item.kind === "extension") {
           modelRows.push({ kind: "extension", key: `x:${item.id}`, item, layoutVariant: "text-flow" });
+        } else if (item.kind === "compaction") {
+          modelRows.push({ kind: "compaction", key: `c:${item.id}`, item, layoutVariant: item.pending ? "static" : "compaction-collapsed" });
         } else if (item.kind === "notice") {
           modelRows.push({ kind: "notice", key: `n:${item.id}`, item, layoutVariant: "text-flow" });
         } else {

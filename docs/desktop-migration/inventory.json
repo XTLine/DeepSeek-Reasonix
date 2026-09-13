@@ -5421,6 +5421,13 @@
     },
     {
       "kind": "ci-job",
+      "name": "ci.yml/desktop-go-race",
+      "location": ".github/workflows/ci.yml",
+      "class": "keep-business",
+      "owner": "desktop module race sweep, split from desktop-go"
+    },
+    {
+      "kind": "ci-job",
       "name": "ci.yml/desktop-macos",
       "location": ".github/workflows/ci.yml",
       "class": "keep-business",
@@ -5439,6 +5446,20 @@
       "location": ".github/workflows/ci.yml",
       "class": "keep-business",
       "owner": "Electron packaging smoke"
+    },
+    {
+      "kind": "ci-job",
+      "name": "ci.yml/desktop-windows-go",
+      "location": ".github/workflows/ci.yml",
+      "class": "keep-business",
+      "owner": "desktop Go suite, split from the Electron leg"
+    },
+    {
+      "kind": "ci-job",
+      "name": "ci.yml/desktop-windows-package",
+      "location": ".github/workflows/ci.yml",
+      "class": "keep-business",
+      "owner": "Electron installer build, split from the test leg"
     },
     {
       "kind": "ci-job",

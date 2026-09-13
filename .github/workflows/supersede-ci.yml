@@ -1,0 +1,56 @@
+name: Supersede CI
+
+# ci.yml declares `cancel-in-progress: true`, but when a Windows job is mid
+# step GitHub sometimes never delivers the cancel: the old run keeps the
+# concurrency group and the run for the new head sits `pending` until someone
+# force-cancels by hand. Twice on 2026-09-11 that cost the release candidate
+# 10-20 minutes each. This workflow is not in that group, so it runs anyway
+# and cancels only runs whose head is a strict ancestor of the pushed commit.
+
+on:
+  push:
+    branches: [main-v2]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cancel-superseded:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Cancel CI runs this push supersedes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main-v2&event=push&per_page=30" \
+            --jq '.workflow_runs[] | select(.status != "completed") | "\(.id) \(.head_sha)"')"
+          [ -n "$runs" ] || { echo "no unfinished ci.yml runs on main-v2"; exit 0; }
+          while read -r id sha; do
+            [ -n "$id" ] || continue
+            if [ "$sha" = "$GITHUB_SHA" ]; then
+              continue
+            fi
+            if ! git merge-base --is-ancestor "$sha" "$GITHUB_SHA"; then
+              echo "run $id ($sha) is not an ancestor of $GITHUB_SHA; leaving it alone"
+              continue
+            fi
+            echo "run $id ($sha) is superseded by $GITHUB_SHA; cancelling"
+            gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/cancel" >/dev/null || true
+            status="unknown"
+            for _ in 1 2 3 4 5 6; do
+              sleep 15
+              status="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" --jq .status)"
+              [ "$status" = "completed" ] && break
+            done
+            if [ "$status" != "completed" ]; then
+              echo "run $id still $status after the normal cancel; force-cancelling"
+              gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/force-cancel" >/dev/null
+            fi
+          done <<< "$runs"

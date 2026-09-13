@@ -97,7 +97,7 @@ export function useTranscriptRowRenderer({
       case "tool-group": return <div className="turn-collapse__body"><ToolGroup kind={row.groupKind} items={[...row.items]} subcalls={subcallsByParent} tabId={tabId} /></div>;
       case "phase": return <div className="turn-collapse__body"><PhaseCard id={row.item.id} text={row.item.text} /></div>;
       case "process-notice": return <div className="turn-collapse__body"><NoticeCard item={row.item} /></div>;
-      case "compaction": return <div className="turn-collapse__body"><CompactionCard item={row.item} /></div>;
+      case "compaction": return <CompactionCard item={row.item} />;
       case "answer": return <LiveAssistantMessage item={assistantAnswerOnly(row.item)} creationMode={creationMode} />;
       case "notice": {
         if (isSteerNoticeText(row.item.text)) return <SteerCard id={row.item.id} text={row.item.text} />;

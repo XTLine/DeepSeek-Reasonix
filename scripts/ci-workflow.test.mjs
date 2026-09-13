@@ -42,13 +42,13 @@ test("macOS signing diagnostics require protected main and cannot publish", () =
 
 test("required desktop aggregate rejects every failed, cancelled or unexpectedly skipped child", () => {
   const script = shellStep(job(ci, "desktop"), "Verify desktop validation jobs");
-  const success = { CHANGES_RESULT: "success", SHOULD_RUN: "true", PREPARE_RESULT: "success", GO_RESULT: "success", FRONTEND_RESULT: "success", BROWSER_RESULT: "success" };
+  const success = { CHANGES_RESULT: "success", SHOULD_RUN: "true", PREPARE_RESULT: "success", GO_RESULT: "success", GO_RACE_RESULT: "success", FRONTEND_RESULT: "success", BROWSER_RESULT: "success" };
   const run = env => spawnSync("bash", ["-e", "-c", script], { env: { ...process.env, ...env } }).status;
   assert.equal(run(success), 0);
-  for (const key of ["PREPARE_RESULT", "GO_RESULT", "FRONTEND_RESULT", "BROWSER_RESULT", "CHANGES_RESULT"]) {
+  for (const key of ["PREPARE_RESULT", "GO_RESULT", "GO_RACE_RESULT", "FRONTEND_RESULT", "BROWSER_RESULT", "CHANGES_RESULT"]) {
     for (const value of ["failure", "cancelled", "skipped", ""]) assert.notEqual(run({ ...success, [key]: value }), 0, `${key}=${value}`);
   }
-  assert.equal(run({ ...success, SHOULD_RUN: "false", PREPARE_RESULT: "skipped", GO_RESULT: "skipped", FRONTEND_RESULT: "skipped", BROWSER_RESULT: "skipped" }), 0);
+  assert.equal(run({ ...success, SHOULD_RUN: "false", PREPARE_RESULT: "skipped", GO_RESULT: "skipped", GO_RACE_RESULT: "skipped", FRONTEND_RESULT: "skipped", BROWSER_RESULT: "skipped" }), 0);
   assert.notEqual(run({ ...success, SHOULD_RUN: "false" }), 0);
 });
 

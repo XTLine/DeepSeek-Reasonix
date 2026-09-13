@@ -20,7 +20,7 @@ import {
   type FoldMap,
   type TranscriptRow,
 } from "../lib/transcriptRows";
-import type { Item } from "../lib/useController";
+import { initialState, reducer, type Item } from "../lib/useController";
 
 let passed = 0;
 let failed = 0;
@@ -453,6 +453,54 @@ const keys = (rows: TranscriptRow[]) => rows.map((row) => row.key).join(",");
   const rows = buildTranscriptRows(buildTurnModels(localOnly), rowOptions(EMPTY_FOLDS, "expanded"));
   const rowKeys = rows.map((row) => row.key);
   eq(new Set(rowKeys).size, rowKeys.length, "two local-only recoveries cannot share ph:/t: row keys");
+}
+
+// ── Compaction receipts stay visible ─────────────────────────────────────────
+// A manual /compact is a management submit: the optimistic "/compact" bubble
+// is removed on confirmation, so the compaction card lands after the previous
+// turn's answer. It must render as its own visible row in the default
+// (standard) experience instead of vanishing into a collapsed process fold.
+
+{
+  let s = reducer(initialState, { type: "user", text: "hello", seq: initialState.seq, submissionId: "s1" });
+  s = reducer(s, { type: "event", e: { kind: "turn_started" } });
+  s = reducer(s, { type: "event", e: { kind: "text", text: "answer body" } });
+  s = reducer(s, { type: "event", e: { kind: "turn_done" } });
+  s = reducer(s, { type: "user", text: "/compact", seq: s.seq, submissionId: "s2" });
+  s = reducer(s, { type: "management_confirmed", submissionId: "s2" });
+  s = reducer(s, { type: "event", e: { kind: "compaction_started", compaction: { trigger: "manual" } } });
+  const pendingRows = buildTranscriptRows(buildTurnModels(s.items, undefined, s.running), rowOptions(EMPTY_FOLDS));
+  eq(kinds(pendingRows), "user,answer,compaction", "a pending compaction after a finished turn renders as a visible row");
+  s = reducer(s, { type: "event", e: { kind: "compaction_done", compaction: { trigger: "manual", messages: 6, summary: "kept the task" } } });
+  eq(s.items.map((item) => item.kind).join(","), "user,assistant,compaction", "management confirmation removed the /compact bubble; the card follows the last answer");
+  const models = buildTurnModels(s.items, undefined, s.running);
+  const rows = buildTranscriptRows(models, rowOptions(EMPTY_FOLDS));
+  eq(kinds(rows), "user,answer,compaction", "the finished compaction card is visible in the standard experience without a process fold");
+  const compactionRow = rows.find((row) => row.kind === "compaction");
+  eq(compactionRow?.layoutVariant, "compaction-collapsed", "the visible compaction row keeps its collapsed card geometry");
+  ok(!rows.some((row) => row.kind === "process-header"), "a compaction alone never manufactures a collapsed 'worked for' fold header");
+}
+
+{
+  // Mid-turn automatic compaction. The receipt is visible and does not change
+  // fold defaults; like every outside item it follows its segment's whole fold,
+  // including the tool work that ran after the compaction.
+  const autoCompact: Item[] = [
+    { kind: "user", id: "u1", text: "first" },
+    { kind: "assistant", id: "a1", text: "", reasoning: "thinking", streaming: false },
+    { kind: "tool", id: "t1", name: "bash", args: "{}", readOnly: false, status: "done" },
+    { kind: "compaction", id: "c1", pending: false, trigger: "pressure", messages: 12, summary: "folded", archive: "" },
+    { kind: "tool", id: "t2", name: "bash", args: "{}", readOnly: false, status: "done" },
+    { kind: "assistant", id: "a2", text: "answer", reasoning: "", streaming: false },
+  ];
+  const models = buildTurnModels(autoCompact);
+  const segment = models[0].segments[0];
+  ok(!segment.displayItems.some((item) => item.kind === "compaction"), "compaction receipts are not fold material");
+  const rows = buildTranscriptRows(models, rowOptions(EMPTY_FOLDS));
+  eq(kinds(rows), "user,process-header,compaction,answer,turn-actions", "an automatic compaction renders between the process fold and the answer");
+  const noAnswer = buildTurnModels(autoCompact.slice(0, 4));
+  eq(noAnswer[0].segments[0].hasOutsideContent, false, "a compaction receipt alone does not count as conversation for fold defaults");
+  eq(defaultFoldOpen(noAnswer[0].segments[0], "auto"), true, "a turn whose only visible material is a compaction keeps its fold open");
 }
 
 // ── Size estimates ────────────────────────────────────────────────────────────

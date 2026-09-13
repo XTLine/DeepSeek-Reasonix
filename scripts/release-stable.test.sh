@@ -22,11 +22,19 @@ if [ -n "${FAKE_ADVANCE_WORK:-}" ] && [ ! -e "$FAKE_ADVANCE_WORK/.advanced-by-fa
 	git -C "$FAKE_ADVANCE_WORK" commit -q -m "advance main during CI"
 	git -C "$FAKE_ADVANCE_WORK" push -q origin main-v2
 fi
-if [ "${FAKE_GH_CONCLUSION:-success}" = pending ]; then
-	printf '[{"headSha":"%s","status":"in_progress","conclusion":""}]\n' "$FAKE_CANDIDATE"
+# Answer for the commit the verifier asked about: the candidate itself, or a
+# release-notes-only candidate's code ancestor.
+sha="$FAKE_CANDIDATE"
+for i in "$@"; do
+	if [ "${prev:-}" = "--commit" ]; then sha="$i"; fi
+	prev="$i"
+done
+conclusion="${FAKE_GH_CONCLUSION:-success}"
+if [ -n "${FAKE_GH_FAIL_SHA:-}" ] && [ "$sha" = "$FAKE_GH_FAIL_SHA" ]; then conclusion=failure; fi
+if [ "$conclusion" = pending ]; then
+	printf '[{"headSha":"%s","status":"in_progress","conclusion":""}]\n' "$sha"
 else
-	printf '[{"headSha":"%s","status":"completed","conclusion":"%s"}]\n' \
-		"$FAKE_CANDIDATE" "${FAKE_GH_CONCLUSION:-success}"
+	printf '[{"headSha":"%s","status":"completed","conclusion":"%s"}]\n' "$sha" "$conclusion"
 fi
 EOF
 chmod +x "$test_root/bin/gh"
@@ -154,5 +162,22 @@ if "$release_script" 1.19.2-preview.1 >/dev/null 2>&1; then
 	echo "Preview version unexpectedly passed the Stable tag helper" >&2
 	exit 1
 fi
+
+# The reviewed Notes commit changes only release-notes/, so its own push run
+# skips the code matrix. The candidate's code is its first parent's; if that
+# ancestor's push CI failed, the release must not be tagged.
+ancestor_work="$(make_remote ancestor)"
+ancestor_sha="$(git -C "$ancestor_work" rev-parse HEAD)"
+ancestor_code_sha="$(git -C "$ancestor_work" rev-parse HEAD^)"
+if (
+	cd "$ancestor_work"
+	PATH="$test_root/bin:$PATH" FAKE_CANDIDATE="$ancestor_sha" FAKE_GH_FAIL_SHA="$ancestor_code_sha" \
+		RELEASE_CI_WAIT_SECONDS=0 RELEASE_REMOTE=origin \
+		"$release_script" 1.19.2
+); then
+	echo "release-notes-only candidate with red code ancestor unexpectedly created release tags" >&2
+	exit 1
+fi
+[ -z "$(git ls-remote --tags --refs "$test_root/ancestor.git" 'refs/tags/*')" ]
 
 echo "stable release tag helper tests: PASS"

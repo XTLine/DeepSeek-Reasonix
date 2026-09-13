@@ -163,6 +163,7 @@ func Open(ctx context.Context, opts Options) (*Catalog, error) {
 		}
 		c.refreshCounts(ctx)
 	}
+	c.testRepairSessionHook = opts.repairSession
 	c.workerCtx, c.workerCancel = context.WithCancel(context.Background())
 	c.workers.Add(1)
 	go c.writerLoop()

@@ -23,7 +23,6 @@ function jobBody(name) {
 
 for (const [job, body, command] of [
   ["desktop-frontend", jobBody("desktop-frontend"), "node frontend/scripts/run-ci-tests.mjs"],
-  ["desktop-windows", jobBody("desktop-windows", "lint"), "pnpm --dir frontend test:motion"],
   ["required lint", jobBody("lint", "site"), "pnpm --dir desktop/frontend test:motion"],
 ]) {
   if (!body.includes(command)) {
@@ -44,6 +43,14 @@ for (const required of [
 for (const retired of ["WebView2", "webview2", "test-transcript-selection"]) {
   if (windowsJob.includes(retired)) {
     throw new Error(`motion-ci-contract: desktop-windows must not reference the retired native smoke harness (${retired})`);
+  }
+}
+// Electron ships one Chromium on every OS, so the Playwright replays that
+// desktop-frontend and desktop-browser run on ubuntu are the renderer
+// evidence; the Windows leg keeps only the native Electron steps.
+for (const linuxOnly of ["test:motion", "test:transcript-browser", "test:settings-browser"]) {
+  if (windowsJob.includes(`pnpm --dir frontend ${linuxOnly}`)) {
+    throw new Error(`motion-ci-contract: desktop-windows must not repeat the ubuntu Chromium suite ${linuxOnly}`);
   }
 }
 
@@ -194,9 +201,6 @@ if (!desktopLinuxJob.includes(transcriptBrowserCommand) || transcriptBrowserRuns
 }
 if (!desktopLinuxJob.includes("PLAYWRIGHT_BROWSERS_PATH=.pw-browsers pnpm --dir frontend exec playwright install")) {
   throw new Error("motion-ci-contract: Chromium must install into the path used by frontend browser tests");
-}
-if (!windowsJob.includes(transcriptBrowserCommand)) {
-  throw new Error("motion-ci-contract: desktop-windows must run the transcript browser replay");
 }
 for (const required of ["transcript-selection.mjs", "transcript-scroll-stability.mjs"]) {
   if (!packageJSON.scripts?.["test:transcript-browser"]?.includes(required)) {

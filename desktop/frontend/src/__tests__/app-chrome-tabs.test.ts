@@ -382,6 +382,29 @@ ok(
 );
 
 ok(
+  finalDeclaration(".topicbar", "--reasonix-draggable") === "drag" &&
+    finalDeclaration(".topicbar button", "--reasonix-draggable") === "no-drag" &&
+    finalDeclaration(".topicbar__actions", "--reasonix-draggable") === "no-drag",
+  "the shell bar is the window drag surface and opts its controls out",
+);
+
+ok(
+  finalDeclaration(".msg", "--reasonix-draggable") === undefined &&
+    finalDeclaration(".msg", "-webkit-app-region") === undefined &&
+    finalDeclaration(".reasoning__head", "-webkit-app-region") === undefined &&
+    finalDeclaration(".tool__head", "-webkit-app-region") === undefined &&
+    finalDeclaration(".process-card__head", "-webkit-app-region") === undefined &&
+    finalDeclaration(".compaction", "-webkit-app-region") === undefined,
+  "transcript content does not participate in native app-region subtraction",
+);
+
+ok(
+  finalDeclaration(".chat-pane", "overflow") === "hidden" &&
+    finalDeclaration(".chat-pane", "min-height") === "0",
+  "the chat pane clips overflow so zoomed transcript boxes cannot paint into the shell bar",
+);
+
+ok(
   finalDeclaration(".app--windows.app--creation .topicbar", "position") === "relative" &&
     finalDeclaration(".app--windows.app--creation .topicbar", "z-index") === "var(--z-app-chrome)" &&
     finalDeclaration(".app--windows.app--creation .topicbar", "min-height") === "40px" &&

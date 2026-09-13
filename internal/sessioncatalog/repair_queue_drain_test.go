@@ -5,10 +5,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
+
+	"reasonix/internal/agent"
 )
 
+// The wake channel coalesces on one key and is sized by QueueCapacity, so a
+// capacity far below the pending set must not strand rows: one wake has to
+// drain every due row. Repair itself is stubbed because the filesystem path
+// defers a transient failure by repairBackoff's 30s floor, which would decide
+// this test's outcome for a reason that has nothing to do with queue capacity.
 func TestRepairDrainEventuallyCompletesBeyondQueue(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -34,20 +42,47 @@ func TestRepairDrainEventuallyCompletesBeyondQueue(t *testing.T) {
 	if err := seed.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := Open(ctx, Options{Path: path, QueueCapacity: 2, Now: time.Now})
+
+	var mu sync.Mutex
+	repaired := map[string]struct{}{}
+	drained := make(chan struct{})
+	catalog, err := Open(ctx, Options{
+		Path: path, QueueCapacity: 2, Now: time.Now,
+		repairSession: func(_ context.Context, session string) (agent.SessionListingRepairResult, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			if _, seen := repaired[session]; !seen {
+				repaired[session] = struct{}{}
+				if len(repaired) == total {
+					close(drained)
+				}
+			}
+			return agent.SessionListingRepairResult{Status: agent.SessionListingRepairApplied, Preview: "ok", Turns: 1}, nil
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = catalog.Close(context.Background()) })
-	deadline := time.Now().Add(15 * time.Second)
+
+	select {
+	case <-drained:
+	case <-time.After(30 * time.Second):
+		mu.Lock()
+		seen := len(repaired)
+		mu.Unlock()
+		t.Fatalf("repaired %d of %d sessions; a queue of 2 stranded the rest", seen, total)
+	}
+	// Every row reached repair; the batch commit that clears the pending count
+	// lands just after the last call, so wait for the count the drain owes.
+	deadline := time.Now().Add(10 * time.Second)
 	for {
-		status := catalog.Status()
-		if status.RepairPending == 0 {
+		if catalog.Status().RepairPending == 0 {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("repair pending stuck at %d", status.RepairPending)
+			t.Fatalf("repair pending stuck at %d after every session was repaired", catalog.Status().RepairPending)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 }

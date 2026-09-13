@@ -24,7 +24,6 @@
   background: none;
   text-align: left;
   cursor: pointer;
-  -webkit-app-region: no-drag;
 }
 
 .tool__subagent-preview-label--toggle:hover {

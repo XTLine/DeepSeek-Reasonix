@@ -15,8 +15,8 @@ Every entry carries one class: `keep-business` keeps its Go implementation and c
 | persistence | 11 | 0 | 0 | 11 |
 | shell-file | 1 | 39 | 4 | 44 |
 | artifact | 5 | 0 | 0 | 5 |
-| ci-job | 20 | 0 | 0 | 20 |
-| **all** | | | | **707** |
+| ci-job | 23 | 0 | 0 | 23 |
+| **all** | | | | **710** |
 
 ## Desktop commands (Go `App` methods bound to the UI)
 
@@ -762,9 +762,12 @@ Every entry carries one class: `keep-business` keeps its Go implementation and c
 | `ci.yml/desktop-browser` |  | .github/workflows/ci.yml | keep-business (保留业务实现) | Playwright browser gates unchanged |
 | `ci.yml/desktop-frontend` |  | .github/workflows/ci.yml | keep-business (保留业务实现) | React gates unchanged |
 | `ci.yml/desktop-go` |  | .github/workflows/ci.yml | keep-business (保留业务实现) | hostrpc + module tests; no WebKitGTK toolchain |
+| `ci.yml/desktop-go-race` |  | .github/workflows/ci.yml | keep-business (保留业务实现) | desktop module race sweep, split from desktop-go |
 | `ci.yml/desktop-macos` |  | .github/workflows/ci.yml | keep-business (保留业务实现) | Electron packaging smoke |
 | `ci.yml/desktop-prepare` |  | .github/workflows/ci.yml | keep-business (保留业务实现) | go run . -emit-contract drift gate; pnpm workspace root |
 | `ci.yml/desktop-windows` |  | .github/workflows/ci.yml | keep-business (保留业务实现) | Electron packaging smoke |
+| `ci.yml/desktop-windows-go` |  | .github/workflows/ci.yml | keep-business (保留业务实现) | desktop Go suite, split from the Electron leg |
+| `ci.yml/desktop-windows-package` |  | .github/workflows/ci.yml | keep-business (保留业务实现) | Electron installer build, split from the test leg |
 | `release-desktop.yml/attest-signing-contract` |  | .github/workflows/release-desktop.yml | keep-business (保留业务实现) | attests the extended payload list |
 | `release-desktop.yml/build` |  | .github/workflows/release-desktop.yml | keep-business (保留业务实现) | desktop-build.sh packages the Electron app with the same NSIS/nfpm/signing steps |
 | `release-desktop.yml/cache-guard` |  | .github/workflows/release-desktop.yml | keep-business (保留业务实现) | unchanged |
