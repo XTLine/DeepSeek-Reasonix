@@ -748,6 +748,7 @@ export interface AppBindings extends ToolRecoveryBindings, ModelSettingsBindings
   PickRemoteIdentityFile(): Promise<string>;
   CheckRemotePlatform(hostId: string): Promise<void>;
   StopRemoteServer(hostId: string, workspace: string): Promise<void>;
+  UpdateRemoteServer(hostId: string, workspace: string): Promise<void>;
   RemoteServerStatus(hostId: string, workspace: string): Promise<RemoteServerView>;
   RemoteServerLogs(hostId: string, workspace: string, tailLines: number): Promise<string>;
   RemoteLastWorkspace(hostId: string): Promise<string>;
@@ -5571,6 +5572,10 @@ function makeMockApp(): AppBindings {
     async CheckRemotePlatform() {},
     async StopRemoteServer(hostId, workspace) {
       __emitMockRemote("server", { hostId, workspace, state: "stopped" });
+    },
+    async UpdateRemoteServer(hostId, workspace) {
+      __emitMockRemote("server", { hostId, workspace, state: "updating", message: "stopping serve" });
+      __emitMockRemote("server", { hostId, workspace, state: "ready", serveVersion: "9.9.9" });
     },
     async RemoteServerStatus(hostId, workspace) {
       return { hostId, workspace, state: "stopped" };
