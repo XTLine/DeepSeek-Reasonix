@@ -55,9 +55,13 @@ const (
 	// contact (frames or heartbeats) before Serve is willing to probe whether
 	// the writer is gone and auto-reclaim. Generous against laptop sleeps and
 	// GC pauses; the lease probe is the real authority.
-	mirrorStaleAfter       = 30 * time.Second
-	externalFramesMaxBody  = 8 << 20
-	externalFramesMaxCount = 512
+	mirrorStaleAfter = 30 * time.Second
+	// A mirrored TUI checks reclaimRequested on the same five-second cadence.
+	// Give it at least one full heartbeat before using the emergency process
+	// termination path.
+	reclaimMirrorHeartbeatGrace = 6 * time.Second
+	externalFramesMaxBody       = 8 << 20
+	externalFramesMaxCount      = 512
 )
 
 // leaseHeldByForeignRuntime probes whether a runtime other than this Serve
@@ -285,6 +289,7 @@ type ownershipView struct {
 	HolderPID        int    `json:"holderPid,omitempty"`
 	HolderHost       string `json:"holderHost,omitempty"`
 	HolderKind       string `json:"holderKind,omitempty"`
+	HolderWriterID   string `json:"holderWriterId,omitempty"`
 }
 
 // ownership reports who currently writes a session, whether a remote SSE
@@ -331,7 +336,7 @@ func (s *Server) ownership(w http.ResponseWriter, r *http.Request) {
 		view.TakenOver = true
 		view.Reclaimable = foreignSessionForceReclaimable(realPath, "")
 		if info, err := agent.LoadSessionLeaseInfo(realPath); err == nil && info != nil {
-			view.HolderPID, view.HolderHost = info.PID, info.Hostname
+			view.HolderPID, view.HolderHost, view.HolderWriterID = info.PID, info.Hostname, info.WriterID
 		}
 		view.HolderKind = "process"
 	}
@@ -346,7 +351,7 @@ func (s *Server) appendExternalIdentity(view *ownershipView, path, writerID, kin
 	if err != nil || info == nil || info.WriterID != writerID {
 		return
 	}
-	view.HolderPID, view.HolderHost, view.HolderKind = info.PID, info.Hostname, kind
+	view.HolderPID, view.HolderHost, view.HolderKind, view.HolderWriterID = info.PID, info.Hostname, kind, info.WriterID
 }
 
 func (s *Server) appendServeIdentity(view *ownershipView) {
@@ -364,11 +369,13 @@ func (s *Server) detachedHasActiveWork(path string) bool {
 }
 
 type handoffRequest struct {
-	SessionPath    string `json:"sessionPath"`
-	TargetWriterID string `json:"targetWriterId"`
-	Force          bool   `json:"force"`
-	Mode           string `json:"mode"`
-	TimeoutMs      int    `json:"timeoutMs"`
+	SessionPath            string `json:"sessionPath"`
+	TargetWriterID         string `json:"targetWriterId"`
+	Force                  bool   `json:"force"`
+	Mode                   string `json:"mode"`
+	TimeoutMs              int    `json:"timeoutMs"`
+	ExpectedHolderPID      int    `json:"expectedHolderPid,omitempty"`
+	ExpectedHolderWriterID string `json:"expectedHolderWriterId,omitempty"`
 }
 
 // handoff releases a session Serve holds so a local runtime on this machine
@@ -674,7 +681,11 @@ func (s *Server) reclaim(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "session writer has not connected session sharing; retry with force after confirming the holder", http.StatusConflict)
 				return
 			}
-			if err := terminateForeignSessionWriter(realPath, ""); err != nil {
+			if body.ExpectedHolderPID <= 0 || strings.TrimSpace(body.ExpectedHolderWriterID) == "" {
+				http.Error(w, "force reclaim requires the confirmed holder identity", http.StatusConflict)
+				return
+			}
+			if err := terminateForeignSessionWriterWithIdentity(realPath, body.ExpectedHolderWriterID, body.ExpectedHolderPID); err != nil {
 				http.Error(w, "force reclaim session writer: "+err.Error(), http.StatusConflict)
 				return
 			}
@@ -710,12 +721,16 @@ func (s *Server) reclaim(w http.ResponseWriter, r *http.Request) {
 	deadline := time.Now().Add(timeout)
 	forceAt := deadline
 	if body.Force {
-		forceAt = time.Now().Add(min(3*time.Second, timeout/3))
+		forceAt = time.Now().Add(reclaimMirrorHeartbeatGrace)
 	}
 	forced := false
 	for leaseHeldByForeignRuntime(realPath) {
 		if body.Force && !forced && !time.Now().Before(forceAt) {
-			if err := terminateForeignSessionWriter(realPath, m.targetWriterID); err != nil {
+			expectedWriterID := m.targetWriterID
+			if strings.TrimSpace(body.ExpectedHolderWriterID) != "" {
+				expectedWriterID = body.ExpectedHolderWriterID
+			}
+			if err := terminateForeignSessionWriterWithIdentity(realPath, expectedWriterID, body.ExpectedHolderPID); err != nil {
 				http.Error(w, "force reclaim session writer: "+err.Error(), http.StatusConflict)
 				return
 			}
@@ -1032,8 +1047,23 @@ func terminateForeignSessionWriter(path, expectedWriterID string) error {
 }
 
 func validateAndTerminateSessionWriter(info *agent.SessionLeaseInfo, expectedWriterID string) error {
+	return validateAndTerminateSessionWriterWithIdentity(info, expectedWriterID, 0)
+}
+
+func terminateForeignSessionWriterWithIdentity(path, expectedWriterID string, expectedPID int) error {
+	info, err := agent.LoadSessionLeaseInfo(path)
+	if err != nil || info == nil {
+		return fmt.Errorf("holder identity unavailable")
+	}
+	return validateAndTerminateSessionWriterWithIdentity(info, expectedWriterID, expectedPID)
+}
+
+func validateAndTerminateSessionWriterWithIdentity(info *agent.SessionLeaseInfo, expectedWriterID string, expectedPID int) error {
 	if info.PID <= 0 || info.PID == os.Getpid() {
 		return fmt.Errorf("invalid holder PID %d", info.PID)
+	}
+	if expectedPID > 0 && info.PID != expectedPID {
+		return fmt.Errorf("holder process changed")
 	}
 	if expectedWriterID != "" && info.WriterID != expectedWriterID {
 		return fmt.Errorf("holder generation changed")
@@ -1087,6 +1117,7 @@ func appendExternalStatusIdentity(view map[string]any, path, writerID, kind stri
 		view["holderHost"] = host
 	}
 	view["holderKind"] = kind
+	view["holderWriterId"] = info.WriterID
 }
 
 // mirrorEnd is the local writer's farewell: it has closed its tab and dropped

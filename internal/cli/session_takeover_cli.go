@@ -361,6 +361,39 @@ func (m *cliTakeoverManager) EmitChecked(e event.Event) error {
 	return nil
 }
 
+// RuntimeStateChanged is separate from Emit: adopting a session after the
+// TUI has already started must send the current runtime snapshot even when no
+// new transcript event has occurred since the mirror became valid.
+func (m *cliTakeoverManager) RuntimeStateChanged(snapshot event.RuntimeStateSnapshot) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	inner := m.inner
+	if m.binding != nil && !m.returned.Load() {
+		current := snapshot
+		m.queue.Push(eventwire.Event{RuntimeState: &current})
+	}
+	wake := m.wake
+	m.mu.Unlock()
+	event.PublishRuntimeState(inner, snapshot)
+	if wake != nil {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (m *cliTakeoverManager) seedRuntimeStateLocked(ctrl control.SessionAPI) {
+	reader, ok := ctrl.(control.RuntimeStateReader)
+	if !ok {
+		return
+	}
+	snapshot := reader.RuntimeStateSnapshot()
+	m.queue.Push(eventwire.Event{RuntimeState: &snapshot})
+}
+
 func (m *cliTakeoverManager) AttachController(ctrl control.SessionAPI) {
 	if m == nil {
 		return

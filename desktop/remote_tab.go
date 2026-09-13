@@ -641,6 +641,12 @@ func (a *App) ReclaimRemoteTabSession(tabID string) error {
 		observedGen = observedTab.gen
 		observedSelectionRevision = observedTab.selectionRevision
 	}
+	observedHolderPID, observedHolderWriterID, observedHolderKind := 0, "", ""
+	if observedTab != nil {
+		observedHolderPID = observedTab.session.holderPID
+		observedHolderWriterID = observedTab.session.holderWriterID
+		observedHolderKind = observedTab.session.holderKind
+	}
 	a.remoteTabMu.Unlock()
 	stillCurrent := func(tab *remoteTab) bool {
 		return tab != nil && tab == observedTab && tab.client == client && tab.gen == observedGen &&
@@ -653,12 +659,20 @@ func (a *App) ReclaimRemoteTabSession(tabID string) error {
 	// long client-side timeout only hangs the UI button.
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	body, _ := json.Marshal(map[string]any{
+	requestBody := map[string]any{
 		"sessionPath": expectedPath,
 		"mode":        "interrupt",
 		"force":       true,
 		"timeoutMs":   15000,
-	})
+	}
+	// Fence an unregistered local writer to the holder the user saw when
+	// confirming the reclaim. Serve re-reads the lease and rejects the request
+	// if either the PID or writer generation changed.
+	if observedHolderPID > 0 && strings.TrimSpace(observedHolderWriterID) != "" && strings.TrimSpace(observedHolderKind) != "" {
+		requestBody["expectedHolderPid"] = observedHolderPID
+		requestBody["expectedHolderWriterId"] = observedHolderWriterID
+	}
+	body, _ := json.Marshal(requestBody)
 	resp, err := serveDo(ctx, client, http.MethodPost, serveURL(base, "/reclaim"), body)
 	if err != nil {
 		reconcileOwnership()
@@ -680,16 +694,21 @@ func (a *App) ReclaimRemoteTabSession(tabID string) error {
 	// pin immediately so the composer un-locks without waiting for the next
 	// status poll to observe takenOver=false.
 	a.remoteTabMu.Lock()
+	reclaimed := false
 	if tab := a.remoteTabs[tabID]; stillCurrent(tab) {
+		reclaimed = true
 		tab.session.takenOver = false
 		tab.session.reclaimBlocked = false
-		tab.session.holderPID, tab.session.holderHost, tab.session.holderKind = 0, "", ""
+		tab.session.holderPID, tab.session.holderHost, tab.session.holderKind, tab.session.holderWriterID = 0, "", "", ""
 		tab.runtime.revision++ // Invalidate status reads begun before ownership returned.
 		meta := remoteTabMetaLocked(tab)
 		a.remoteTabMu.Unlock()
 		a.emitRemoteEvent("remote-tab:updated", meta)
 	} else {
 		a.remoteTabMu.Unlock()
+	}
+	if !reclaimed {
+		return nil
 	}
 	// A successful reclaim changes the readable transcript source from the
 	// external writer's file view back to Serve's controller. Republish ready

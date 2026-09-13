@@ -232,11 +232,12 @@ type remoteTabStatusPayload struct {
 	Cancellable     *bool                       `json:"cancellable"`
 	// TakenOver reports Serve's single-writer handoff state: a local runtime
 	// on the serve host owns the session and this tab is read-only.
-	TakenOver   *bool  `json:"takenOver"`
-	Reclaimable *bool  `json:"reclaimable"`
-	HolderPID   int    `json:"holderPid"`
-	HolderHost  string `json:"holderHost"`
-	HolderKind  string `json:"holderKind"`
+	TakenOver      *bool  `json:"takenOver"`
+	Reclaimable    *bool  `json:"reclaimable"`
+	HolderPID      int    `json:"holderPid"`
+	HolderHost     string `json:"holderHost"`
+	HolderKind     string `json:"holderKind"`
+	HolderWriterID string `json:"holderWriterId"`
 }
 
 func (a *App) recordRemoteTabSessionStatus(tabID string, client *http.Client, gen, statusSeq uint64, status json.RawMessage) bool {
@@ -339,8 +340,9 @@ func applyRemoteTabStatusPayload(tab *remoteTab, payload remoteTabStatusPayload)
 			tab.session.holderPID = payload.HolderPID
 			tab.session.holderHost = strings.TrimSpace(payload.HolderHost)
 			tab.session.holderKind = strings.TrimSpace(payload.HolderKind)
+			tab.session.holderWriterID = strings.TrimSpace(payload.HolderWriterID)
 		} else {
-			tab.session.holderPID, tab.session.holderHost, tab.session.holderKind = 0, "", ""
+			tab.session.holderPID, tab.session.holderHost, tab.session.holderKind, tab.session.holderWriterID = 0, "", "", ""
 		}
 	}
 	if payload.PendingPrompt != nil {

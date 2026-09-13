@@ -108,7 +108,17 @@ func TestCLIOrdinaryResumeRegistersMirrorAndReturnsLease(t *testing.T) {
 	if len(adopted) != 2 || len(ended) != 2 || ended[0] != agent.CanonicalSessionPath(a) || ended[1] != agent.CanonicalSessionPath(b) {
 		t.Fatalf("adopted=%v ended=%v", adopted, ended)
 	}
-	if len(frames) != 1 || frames[0].Text != "live TUI output" {
+	live := false
+	runtimeSnapshots := 0
+	for _, frame := range frames {
+		if frame.RuntimeState != nil {
+			runtimeSnapshots++
+		}
+		if frame.Text == "live TUI output" {
+			live = true
+		}
+	}
+	if !live || runtimeSnapshots < 2 {
 		t.Fatalf("mirror frames=%+v", frames)
 	}
 }

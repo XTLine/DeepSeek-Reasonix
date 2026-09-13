@@ -135,6 +135,7 @@ type remoteTabSessionState struct {
 	holderPID      int
 	holderHost     string
 	holderKind     string
+	holderWriterID string
 	// instanceID identifies the Serve process that owns this session. A
 	// changed id requires explicit /new or /resume re-entry before ready.
 	instanceID string

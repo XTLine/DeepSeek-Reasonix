@@ -88,6 +88,7 @@ func (m *cliTakeoverManager) adoptOwnedSessionLocked() {
 			m.binding = binding
 			m.revision++
 			m.failures = 0
+			m.seedRuntimeStateLocked(ctrl)
 		}
 		m.mu.Unlock()
 		if !valid {
