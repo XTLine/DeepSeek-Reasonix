@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"reasonix/internal/agent"
+	"reasonix/internal/servecontract"
 )
 
 const (
@@ -28,6 +28,8 @@ const (
 
 // serveSessionEntry mirrors one GET /sessions row from the Serve.
 type serveSessionEntry struct {
+	HostID     string `json:"hostId"`
+	SessionID  string `json:"sessionId"`
 	Name       string `json:"name"`
 	Path       string `json:"path"`
 	Title      string `json:"title"`
@@ -53,6 +55,8 @@ func (e *serveHTTPStatusError) Error() string {
 
 // RemoteSessionView mirrors one serve /sessions entry on the frontend side.
 type RemoteSessionView struct {
+	HostID         string `json:"hostId,omitempty"`
+	SessionID      string `json:"sessionId,omitempty"`
 	Name           string `json:"name"`
 	Path           string `json:"path,omitempty"`
 	Title          string `json:"title,omitempty"`
@@ -100,7 +104,23 @@ func servePost(ctx context.Context, client *http.Client, url string, body []byte
 }
 
 const expectedSessionPathHeader = "X-Reasonix-Expected-Session-Path"
+const expectedSessionIDHeader = "X-Reasonix-Expected-Session-ID"
 const expectedModelSettingsHeader = "X-Reasonix-Expected-Model-Settings"
+const remoteSessionIDRoutePrefix = "session-id:"
+
+func remoteSessionIdentityRoute(path, sessionID string) string {
+	if path = strings.TrimSpace(path); path != "" {
+		return path
+	}
+	if sessionID = strings.TrimSpace(sessionID); sessionID != "" {
+		return remoteSessionIDRoutePrefix + sessionID
+	}
+	return ""
+}
+
+func remoteSessionRoute(entry serveSessionEntry) string {
+	return remoteSessionIdentityRoute(entry.Path, entry.SessionID)
+}
 
 // servePostForSession fences a foreground mutation to the session the Desktop
 // tab displayed when the command was issued. Older Serve binaries ignore the
@@ -127,23 +147,29 @@ func servePostForSession(ctx context.Context, client *http.Client, url string, b
 // optional path header returned by session-rotation endpoints. Older Serve
 // binaries omit it and keep their legacy untagged single-session behavior.
 func servePostSessionPath(ctx context.Context, client *http.Client, url string, body []byte) (string, error) {
-	return servePostSessionPathForSession(ctx, client, url, body, "")
+	identity, err := servePostSessionIdentityForSession(ctx, client, url, body, "")
+	return identity.Path, err
 }
 
-func servePostSessionPathForSession(ctx context.Context, client *http.Client, url string, body []byte, expectedPath string) (string, error) {
+type serveSessionIdentity struct {
+	Path      string
+	SessionID string
+}
+
+func servePostSessionIdentityForSession(ctx context.Context, client *http.Client, url string, body []byte, expectedPath string) (serveSessionIdentity, error) {
 	if body == nil {
 		body = []byte("{}")
 	}
 	resp, err := serveDoForSession(ctx, client, http.MethodPost, url, body, expectedPath)
 	if err != nil {
-		return "", err
+		return serveSessionIdentity{}, err
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return strings.TrimSpace(resp.Header.Get("X-Reasonix-Session-Path")), nil
+		return serveSessionIdentity{Path: strings.TrimSpace(resp.Header.Get("X-Reasonix-Session-Path")), SessionID: strings.TrimSpace(resp.Header.Get("X-Reasonix-Session-ID"))}, nil
 	}
-	return "", &serveHTTPStatusError{
+	return serveSessionIdentity{}, &serveHTTPStatusError{
 		url: url, statusCode: resp.StatusCode, message: strings.TrimSpace(string(data)),
 	}
 }
@@ -163,7 +189,11 @@ func serveDoForSession(ctx context.Context, client *http.Client, method, url str
 		req.Header.Set(expectedModelSettingsHeader, modelRevision[0])
 	}
 	if expectedPath = strings.TrimSpace(expectedPath); expectedPath != "" {
-		req.Header.Set(expectedSessionPathHeader, expectedPath)
+		if sessionID, ok := strings.CutPrefix(expectedPath, remoteSessionIDRoutePrefix); ok {
+			req.Header.Set(expectedSessionIDHeader, sessionID)
+		} else {
+			req.Header.Set(expectedSessionPathHeader, expectedPath)
+		}
 	}
 	return client.Do(req)
 }
@@ -171,6 +201,12 @@ func serveDoForSession(ctx context.Context, client *http.Client, method, url str
 // serveCapabilitiesHeader carries the comma-joined capability tokens a serve
 // advertises on a successful token handshake (e.g. "browser").
 const serveCapabilitiesHeader = "X-Reasonix-Serve-Capabilities"
+const serveCapabilityExecutionV2 = "execution-v2"
+const serveCapabilitySessions = "session-history-v1"
+const serveCapabilitySessionContentV1 = "session-content-v1"
+const serveCapabilitySessionIdentityV1 = "session-identity-v1"
+const serveCapabilitySessionOwnershipV1 = "session-ownership-v1"
+const serveCapabilityGoalLifecycleV2 = servecontract.GoalLifecycleV2
 
 // serveHandshakeCapabilities exchanges the pre-shared token for the session
 // cookie and returns the serve's advertised capabilities; older serves omit
@@ -371,12 +407,13 @@ func (a *App) remoteProjectSessions(ctx context.Context, client *http.Client, ba
 			title = override
 		}
 		current := e.Current
+		route := remoteSessionRoute(e)
 		if preferLiveCurrent {
-			current = liveCurrentPath != "" && e.Path == liveCurrentPath
+			current = liveCurrentPath != "" && route == liveCurrentPath
 		}
 		view := RemoteSessionView{
-			Name: e.Name, Path: e.Path, Title: title, Turns: e.Turns, Current: current,
-			Running:        remoteSessionRunning(e.Running, liveRunning, e.Path, preferLiveCurrent),
+			HostID: e.HostID, SessionID: e.SessionID, Name: e.Name, Path: e.Path, Title: title, Turns: e.Turns, Current: current,
+			Running:        remoteSessionRunning(e.Running, liveRunning, route, preferLiveCurrent),
 			LastActivityAt: e.MtimeMilli,
 			Pinned:         remoteSessionPinnedLocked(prefs, prefKey),
 		}
@@ -474,14 +511,15 @@ listingAttempt:
 			if authoritativeListing {
 				authoritative := make(map[string]bool, len(entries))
 				for _, entry := range entries {
-					authoritative[entry.Path] = entry.Running
-					if agent.CanonicalSessionPath(entry.Path) == agent.CanonicalSessionPath(tab.routing.currentPath) {
+					route := remoteSessionRoute(entry)
+					authoritative[route] = entry.Running
+					if route == tab.routing.currentPath {
 						tab.session.takenOver = entry.TakenOver
 					}
 				}
 				tab.routing.running = authoritative
 				if authoritativeCurrent != nil {
-					path := strings.TrimSpace(authoritativeCurrent.Path)
+					path := remoteSessionRoute(*authoritativeCurrent)
 					// The listing's "current" is Serve's foreground; it must not
 					// re-route a spectator's explicitly selected session.
 					if path == tab.routing.currentPath || !tab.session.takenOver {
@@ -520,8 +558,9 @@ listingAttempt:
 func remoteSessionRunningConflict(entries []serveSessionEntry, live map[string]bool) bool {
 	listedPaths := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
-		listedPaths[entry.Path] = struct{}{}
-		if running, ok := live[entry.Path]; entry.Running && ok && !running {
+		route := remoteSessionRoute(entry)
+		listedPaths[route] = struct{}{}
+		if running, ok := live[route]; entry.Running && ok && !running {
 			return true
 		}
 	}

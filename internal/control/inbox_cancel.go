@@ -26,25 +26,26 @@ func (c *Controller) CancelWithInboxItemsResult(ids []string, source string) (In
 	result := InboxCancelResult{DiscardedItemIDs: []string{}}
 	c.inbox.admissionMu.Lock()
 	defer c.inbox.admissionMu.Unlock()
+	// Capture and signal the foreground owner before touching the inbox store.
+	// A blocked sidecar or filesystem cannot delay Stop reaching the model/tool
+	// context. Status persistence and Goal pausing run after the inbox mutation.
+	turnID, cancelled := c.cancelTurnLocked()
+	defer c.finishCancel(turnID, cancelled)
 	st, err := c.ensureInbox()
 	if err != nil {
-		c.Cancel()
 		return result, err
 	}
 	wasPaused := st.Snapshot().Paused
 	if err := st.SetPaused(true); err != nil {
-		c.Cancel()
 		return result, err
 	}
 	discarded, err := st.DiscardPendingItemsOwnedResult(ids, strings.TrimSpace(source))
 	if err != nil {
 		// Keep the inbox paused for inspection if an item already crossed the
 		// admission boundary. Cancellation still stops that in-flight turn.
-		c.Cancel()
 		return result, err
 	}
 	result.DiscardedItemIDs = discarded
-	c.Cancel()
 	if !wasPaused {
 		if err := st.SetPaused(false); err != nil {
 			result.Warning = "The turn was stopped, but the message queue remains paused. Review it before resuming."

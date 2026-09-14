@@ -123,18 +123,21 @@ type projectionAckRecord struct {
 }
 
 type checkpointRecord struct {
-	SchemaVersion              int               `json:"schemaVersion"`
-	RecordType                 string            `json:"recordType"`
-	SessionID                  string            `json:"sessionId"`
-	CompactedThroughSequence   uint64            `json:"compactedThroughSeq"`
-	ProjectionCommittedThrough uint64            `json:"projectionCommittedThroughSeq"`
-	LastTurnID                 string            `json:"lastTurnId,omitempty"`
-	LastStatus                 event.TurnStatus  `json:"lastStatus,omitempty"`
-	TranscriptRevision         int64             `json:"transcriptRevision,omitempty"`
-	TranscriptDigest           string            `json:"transcriptDigest,omitempty"`
-	HeadID                     string            `json:"headId,omitempty"`
-	LeafMessageID              string            `json:"leafMessageId,omitempty"`
-	TerminalSummaries          []TerminalSummary `json:"terminalSummaries"`
+	SchemaVersion              int                   `json:"schemaVersion"`
+	RecordType                 string                `json:"recordType"`
+	SessionID                  string                `json:"sessionId"`
+	CompactedThroughSequence   uint64                `json:"compactedThroughSeq"`
+	ProjectionCommittedThrough uint64                `json:"projectionCommittedThroughSeq"`
+	LastTurnID                 string                `json:"lastTurnId,omitempty"`
+	LastStatus                 event.TurnStatus      `json:"lastStatus,omitempty"`
+	TranscriptRevision         int64                 `json:"transcriptRevision,omitempty"`
+	TranscriptDigest           string                `json:"transcriptDigest,omitempty"`
+	HeadID                     string                `json:"headId,omitempty"`
+	LeafMessageID              string                `json:"leafMessageId,omitempty"`
+	TerminalSummaries          []TerminalSummary     `json:"terminalSummaries"`
+	Todos                      []event.Todo          `json:"todos"`
+	TodoWritten                bool                  `json:"todoWritten"`
+	Recovery                   *event.RecoveryStatus `json:"recovery,omitempty"`
 }
 
 type routingMetadata struct {
@@ -152,15 +155,14 @@ type Ledger struct {
 	damaged   string
 	sessionID string
 
-	nextSeq      uint64
-	turnStartSeq uint64
-	turnStarted  int64
-	active       string
-	status       event.TurnStatus
-	terminal     bool
-	routing      routingMetadata
-	nextRouting  routingMetadata
-	transcript   transcriptSnapshot
+	nextSeq uint64
+	ledgerTurnState
+	routing     routingMetadata
+	nextRouting routingMetadata
+	transcript  transcriptSnapshot
+	todos       []event.Todo
+	todoWritten bool
+	recovery    *event.RecoveryStatus
 
 	submissionTurns            map[string]string
 	records                    []Envelope
@@ -180,6 +182,31 @@ type Ledger struct {
 	metrics       MetricsSnapshot
 }
 
+type ledgerTurnState struct {
+	turnStartSeq uint64
+	turnStarted  int64
+	active       string
+	status       event.TurnStatus
+	terminal     bool
+}
+
+// NewMemory creates the compatibility runtime projection used by execution-v2.
+// It allocates turn identities and retains reconnect envelopes for the lifetime
+// of the process, but never opens or writes a sidecar. Durable business facts
+// belong to session; this ledger adapts the existing event.Sink surface while
+// clients move to SessionQuery.
+func NewMemory(sessionID string) *Ledger {
+	return &Ledger{
+		sessionID:       sessionID,
+		nextSeq:         1,
+		writeVersion:    schemaVersion,
+		submissionTurns: make(map[string]string),
+		projectionAcks:  make(map[string]uint64),
+		compactBytes:    defaultCompactBytes,
+		compactEvents:   defaultCompactEvents,
+	}
+}
+
 type parsedLedger struct {
 	records             []Envelope
 	summaries           []TerminalSummary
@@ -187,6 +214,9 @@ type parsedLedger struct {
 	compactedThrough    uint64
 	projectionCommitted uint64
 	checkpoint          transcriptSnapshot
+	todos               []event.Todo
+	todoWritten         bool
+	recovery            *event.RecoveryStatus
 	fileSize            int64
 	sawV1               bool
 }
@@ -213,6 +243,9 @@ func Open(sessionPath, sessionID string) (*Ledger, error) {
 	l.compactedThrough = parsed.compactedThrough
 	l.projectionCommittedThrough = parsed.projectionCommitted
 	l.transcript = parsed.checkpoint
+	l.todos = append([]event.Todo(nil), parsed.todos...)
+	l.todoWritten = parsed.todoWritten
+	l.recovery = cloneRecoveryStatus(parsed.recovery)
 	l.fileSize = parsed.fileSize
 
 	pendingTools := make(map[string]eventwire.Tool)
@@ -247,6 +280,18 @@ func Open(sessionPath, sessionID string) (*Ledger, error) {
 			case "tool_result":
 				delete(pendingTools, rec.Event.Tool.ID)
 			}
+		}
+		if rec.Kind == "turn_started" {
+			l.todos = nil
+			l.todoWritten = false
+			l.recovery = nil
+		}
+		if rec.Kind == "tool_result" && rec.Event.Tool != nil && rec.Event.Tool.TodoWritten {
+			l.todos = append([]event.Todo(nil), rec.Event.Tool.Todos...)
+			l.todoWritten = true
+		}
+		if rec.Status == event.TurnRecoveryRequired && rec.Event.Recovery != nil {
+			l.recovery = cloneRecoveryStatus(rec.Event.Recovery)
 		}
 	}
 	if l.nextSeq <= l.compactedThrough {
@@ -480,10 +525,39 @@ func (l *Ledger) appendLocked(e event.Event, status event.TurnStatus) (event.Eve
 	e.TurnID, e.Sequence, e.Status = l.active, l.nextSeq, status
 	e.SessionID, e.RuntimeEpoch, e.SubmissionID = l.sessionID, l.routing.runtimeEpoch, l.routing.submissionID
 	if l.path == "" {
+		w := eventwire.ToWire(e)
+		attemptID := e.AttemptID
+		if e.Kind == event.StreamAttempt {
+			attemptID = e.StreamAttempt.ID
+		} else if e.Tool.AttemptID != "" {
+			attemptID = e.Tool.AttemptID
+		}
+		kind, _ := eventwire.KindName(e.Kind)
+		rec := Envelope{
+			SchemaVersion: schemaVersion, SessionID: l.sessionID, TurnID: e.TurnID,
+			Sequence: e.Sequence, ItemID: e.ItemID, AttemptID: attemptID,
+			RuntimeEpoch: l.routing.runtimeEpoch, SubmissionID: l.routing.submissionID,
+			Source: e.Source, Kind: kind, Status: status, CreatedAt: time.Now().UnixMilli(), Event: w,
+			TranscriptRevision: l.transcript.revision, TranscriptDigest: l.transcript.digest,
+			HeadID: l.transcript.headID, LeafMessageID: l.transcript.leafID, RewriteEpoch: l.transcript.rewriteEpoch,
+		}
+		l.records = append(l.records, rec)
 		l.nextSeq++
 		l.status = status
+		if status == event.TurnRecoveryRequired && e.Recovery != nil {
+			l.recovery = cloneRecoveryStatus(e.Recovery)
+		}
+		if e.Kind == event.TurnStarted {
+			l.todos = nil
+			l.todoWritten = false
+			l.recovery = nil
+		} else if e.Kind == event.ToolResult && e.Tool.TodoWritten {
+			l.todos = append([]event.Todo(nil), e.Tool.Todos...)
+			l.todoWritten = true
+		}
 		if status.Terminal() {
 			l.terminal = true
+			l.addSummaryLocked(rec, e.Outcome)
 		}
 		return e, true, nil
 	}
@@ -527,6 +601,17 @@ func (l *Ledger) appendLocked(e event.Event, status event.TurnStatus) (event.Eve
 		l.metrics.SyncCount++
 	}
 	l.records = append(l.records, rec)
+	if e.Kind == event.TurnStarted {
+		l.todos = nil
+		l.todoWritten = false
+		l.recovery = nil
+	} else if e.Kind == event.ToolResult && e.Tool.TodoWritten {
+		l.todos = append([]event.Todo(nil), e.Tool.Todos...)
+		l.todoWritten = true
+	}
+	if status == event.TurnRecoveryRequired && e.Recovery != nil {
+		l.recovery = cloneRecoveryStatus(e.Recovery)
+	}
 	if e.Kind == event.Text || e.Kind == event.Reasoning {
 		l.metrics.StreamRecords++
 	}
@@ -619,6 +704,11 @@ func (l *Ledger) AcknowledgeProjection(turnID string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.path == "" {
+		seq := l.terminalSequenceLocked(turnID)
+		if seq == 0 {
+			return fmt.Errorf("turn %s has no terminal event", turnID)
+		}
+		l.projectionAcks[turnID] = seq
 		return nil
 	}
 	if l.poisoned != nil {
@@ -854,9 +944,14 @@ func (l *Ledger) compactLocked(force bool) error {
 		TranscriptRevision: last.TranscriptRevision, TranscriptDigest: last.TranscriptDigest,
 		HeadID: last.HeadID, LeafMessageID: last.LeafMessageID,
 		TerminalSummaries: append([]TerminalSummary(nil), l.summaries...),
+		Todos:             append([]event.Todo(nil), l.todos...), TodoWritten: l.todoWritten,
+		Recovery: cloneRecoveryStatus(l.recovery),
 	}
 	if checkpoint.TerminalSummaries == nil {
 		checkpoint.TerminalSummaries = []TerminalSummary{}
+	}
+	if checkpoint.Todos == nil {
+		checkpoint.Todos = []event.Todo{}
 	}
 	line, err := json.Marshal(checkpoint)
 	if err != nil {
@@ -984,6 +1079,9 @@ func (l *Ledger) readAndRepairLocked() (parsedLedger, error) {
 				result.compactedThrough = checkpoint.CompactedThroughSequence
 				result.projectionCommitted = checkpoint.ProjectionCommittedThrough
 				result.checkpoint = transcriptSnapshot{revision: checkpoint.TranscriptRevision, digest: checkpoint.TranscriptDigest, headID: checkpoint.HeadID, leafID: checkpoint.LeafMessageID}
+				result.todos = append([]event.Todo(nil), checkpoint.Todos...)
+				result.todoWritten = checkpoint.TodoWritten
+				result.recovery = cloneRecoveryStatus(checkpoint.Recovery)
 				result.summaries = append(result.summaries, checkpoint.TerminalSummaries...)
 				expectedSeq = checkpoint.CompactedThroughSequence + 1
 			case "event":

@@ -203,7 +203,7 @@ func TestTakeNextPasteIDSynchronizesAdoptedControllerHistory(t *testing.T) {
 	session := agent.NewSession("system")
 	session.Add(provider.Message{Role: provider.RoleUser, Content: renderFoldedPasteBlock(first)})
 	executor := agent.New(nil, nil, session, agent.Options{}, event.Discard)
-	ctrl := control.New(control.Options{Executor: executor, Label: "review"})
+	ctrl := newOwnedTestController(t, control.Options{Executor: executor, Label: "review"})
 	t.Cleanup(ctrl.Close)
 
 	m := newChatTUI(ctrl, "", make(chan event.Event), 80)

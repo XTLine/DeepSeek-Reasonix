@@ -25,8 +25,9 @@ func remoteRuntimeTestSnapshot(epoch string, revision uint64, phase string) even
 func remoteRuntimeTestApp(client *http.Client) (*App, *remoteTab) {
 	tab := &remoteTab{id: "remote-runtime", state: "ready", gen: 7, selectionRevision: 3,
 		client: client, base: "http://runtime-fixture.invalid", ref: RemoteTabRef{HostID: "fixture-host", Workspace: "/workspace"},
-		session: remoteTabSessionState{name: "current", path: runtimeRemoteTestPath},
-		routing: remoteTabSessionRouting{currentPath: runtimeRemoteTestPath, running: map[string]bool{}},
+		session:      remoteTabSessionState{name: "current", path: runtimeRemoteTestPath},
+		routing:      remoteTabSessionRouting{currentPath: runtimeRemoteTestPath, running: map[string]bool{}},
+		capabilities: map[string]bool{serveCapabilityExecutionV2: true, serveCapabilitySessions: true, serveCapabilitySessionIdentityV1: true, serveCapabilitySessionOwnershipV1: true, "permission-presets-v1": true},
 	}
 	return &App{remoteTabs: map[string]*remoteTab{tab.id: tab}}, tab
 }
@@ -74,7 +75,7 @@ func TestRemoteRuntimeStateReducerOrdersAndFencesInstances(t *testing.T) {
 		if acceptRemoteRuntimeStateLocked(tab, runtimeRemoteTestPath, state, false) {
 			t.Fatalf("accepted duplicate/stale/conflicting/unbound state: %+v", state)
 		}
-		if tab.runtime.snapshot != initial || tab.runtime.revision != hostRevision {
+		if !reflect.DeepEqual(tab.runtime.snapshot, initial) || tab.runtime.revision != hostRevision {
 			t.Fatalf("rejected state mutated projection: %+v", tab.runtime)
 		}
 	}
@@ -86,11 +87,11 @@ func TestRemoteRuntimeStateReducerOrdersAndFencesInstances(t *testing.T) {
 	if !acceptRemoteRuntimeStateLocked(tab, "/sessions/background.jsonl", background, true) {
 		t.Fatal("background instance registration failed")
 	}
-	if tab.runtime.snapshot != newer || !tab.routing.running["/sessions/background.jsonl"] {
+	if !reflect.DeepEqual(tab.runtime.snapshot, newer) || !tab.routing.running["/sessions/background.jsonl"] {
 		t.Fatal("background runtime replaced selected session or failed to aggregate")
 	}
 	replacement := remoteRuntimeTestSnapshot("epoch-b", 1, "idle")
-	if !acceptRemoteRuntimeStateLocked(tab, runtimeRemoteTestPath, replacement, true) || tab.runtime.snapshot != replacement {
+	if !acceptRemoteRuntimeStateLocked(tab, runtimeRemoteTestPath, replacement, true) || !reflect.DeepEqual(tab.runtime.snapshot, replacement) {
 		t.Fatal("authoritative new epoch was rejected")
 	}
 }
@@ -130,7 +131,7 @@ func TestRemoteRuntimeStateGETCannotOverwriteNewerSSE(t *testing.T) {
 			a.acceptRemoteRuntimeFrame(tab.id, tab.gen, runtimeRemoteTestPath, frame)
 			releaseGET()
 			awaitRemoteRuntimeSync(t, result)
-			if got := tab.runtime.snapshot; got != newer {
+			if got := tab.runtime.snapshot; !reflect.DeepEqual(got, newer) {
 				t.Fatalf("late GET overwrote newer SSE: got=%+v want=%+v", got, newer)
 			}
 		})
@@ -174,7 +175,7 @@ func TestRemoteRuntimeStateGETRejectsChangedSelectionAndGeneration(t *testing.T)
 			a.remoteTabMu.Unlock()
 			releaseGET()
 			awaitRemoteRuntimeSync(t, result)
-			if tab.runtime.snapshot != initial {
+			if !reflect.DeepEqual(tab.runtime.snapshot, initial) {
 				t.Fatalf("stale %s request changed runtime: %+v", fence, tab.runtime.snapshot)
 			}
 		})
@@ -196,7 +197,7 @@ func TestRemoteRuntimeStateSSERejectsOldPumpAndDuplicate(t *testing.T) {
 		frame := json.RawMessage(remoteRuntimeTestJSON(t, map[string]any{"runtimeState": fixture.state}))
 		a.acceptRemoteRuntimeFrame(tab.id, fixture.gen, runtimeRemoteTestPath, frame)
 	}
-	if tab.runtime.snapshot != initial || events.Load() != 0 {
+	if !reflect.DeepEqual(tab.runtime.snapshot, initial) || events.Load() != 0 {
 		t.Fatalf("old/duplicate frame mutated state or notified: state=%+v events=%d", tab.runtime.snapshot, events.Load())
 	}
 }
@@ -252,7 +253,7 @@ func TestRemoteRuntimeStateReconnectProbesCapabilityAgain(t *testing.T) {
 	if _, err := a.SyncRuntimeState(); err != nil {
 		t.Fatal(err)
 	}
-	if probes.Load() != 2 || tab.runtime.snapshot != updated {
+	if probes.Load() != 2 || !reflect.DeepEqual(tab.runtime.snapshot, updated) {
 		t.Fatalf("new connection inherited old capability rejection: probes=%d state=%+v", probes.Load(), tab.runtime.snapshot)
 	}
 }
@@ -329,7 +330,7 @@ func TestRemoteRuntimeStateDisconnectPreservesWorkAndReconnectAdoptsEpoch(t *tes
 		t.Fatal("current pump did not enter reconnecting")
 	}
 	disconnected := a.GetRuntimeStateSnapshot()
-	if len(disconnected.Sessions) != 1 || disconnected.Sessions[0].Freshness != "unknown" || disconnected.Sessions[0].State != old {
+	if len(disconnected.Sessions) != 1 || disconnected.Sessions[0].Freshness != "unknown" || !reflect.DeepEqual(disconnected.Sessions[0].State, old) {
 		t.Fatalf("disconnect fabricated completion or trusted stale work: %+v", disconnected)
 	}
 	if _, _, _, err := a.remoteTabCommandTarget(tab.id); err == nil {
@@ -347,7 +348,7 @@ func TestRemoteRuntimeStateDisconnectPreservesWorkAndReconnectAdoptsEpoch(t *tes
 	frame := json.RawMessage(remoteRuntimeTestJSON(t, map[string]any{"runtimeState": stale}))
 	a.acceptRemoteRuntimeFrame(tab.id, oldGen, runtimeRemoteTestPath, frame)
 	current := a.GetRuntimeStateSnapshot()
-	if current.Sessions[0].State != reconnected || current.Sessions[0].Freshness != "synced" {
+	if !reflect.DeepEqual(current.Sessions[0].State, reconnected) || current.Sessions[0].Freshness != "synced" {
 		t.Fatalf("reconnect did not converge to new authority: %+v", current)
 	}
 }
@@ -367,10 +368,10 @@ func TestRemoteRuntimeStateOldSelectionFrameOnlyUpdatesBackground(t *testing.T) 
 	oldCompleted := remoteRuntimeTestSnapshot("old-selection", 3, "idle")
 	frame := json.RawMessage(remoteRuntimeTestJSON(t, map[string]any{"runtimeState": oldCompleted}))
 	a.acceptRemoteRuntimeFrame(tab.id, tab.gen, runtimeRemoteTestPath, frame)
-	if tab.routing.currentPath != nextPath || tab.runtime.snapshot != next {
+	if tab.routing.currentPath != nextPath || !reflect.DeepEqual(tab.runtime.snapshot, next) {
 		t.Fatalf("old selection frame changed foreground: path=%q state=%+v", tab.routing.currentPath, tab.runtime.snapshot)
 	}
-	if tab.runtimeStates[runtimeRemoteTestPath] != oldCompleted || tab.routing.running[runtimeRemoteTestPath] {
+	if !reflect.DeepEqual(tab.runtimeStates[runtimeRemoteTestPath], oldCompleted) || tab.routing.running[runtimeRemoteTestPath] {
 		t.Fatal("old selection completion was lost from background aggregation")
 	}
 }

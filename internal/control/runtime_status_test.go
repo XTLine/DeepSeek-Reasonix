@@ -33,7 +33,7 @@ func (r *askBlockingRunner) Run(ctx context.Context, _ string) error {
 func TestCancelClearsPendingApprovalRuntimeStatus(t *testing.T) {
 	approvals := make(chan event.Approval, 1)
 	done := make(chan event.Event, 1)
-	c := New(Options{Sink: event.FuncSink(func(e event.Event) {
+	c := newOwnedTestController(t, Options{Sink: event.FuncSink(func(e event.Event) {
 		switch e.Kind {
 		case event.ApprovalRequest:
 			approvals <- e.Approval
@@ -72,7 +72,7 @@ func TestCancelClearsPendingApprovalRuntimeStatus(t *testing.T) {
 func TestCancelClearsPendingAskRuntimeStatus(t *testing.T) {
 	asks := make(chan event.Ask, 1)
 	done := make(chan event.Event, 1)
-	c := New(Options{Sink: event.FuncSink(func(e event.Event) {
+	c := newOwnedTestController(t, Options{Sink: event.FuncSink(func(e event.Event) {
 		switch e.Kind {
 		case event.AskRequest:
 			asks <- e.Ask
@@ -108,7 +108,7 @@ func TestCancelClearsPendingAskRuntimeStatus(t *testing.T) {
 func TestCloseCancelsPendingAskRuntimeStatus(t *testing.T) {
 	asks := make(chan event.Ask, 1)
 	done := make(chan event.Event, 1)
-	c := New(Options{Sink: event.FuncSink(func(e event.Event) {
+	c := newOwnedTestController(t, Options{Sink: event.FuncSink(func(e event.Event) {
 		switch e.Kind {
 		case event.AskRequest:
 			asks <- e.Ask
@@ -145,7 +145,7 @@ func TestCloseDoesNotResurrectFinishingState(t *testing.T) {
 	turnStarted := make(chan struct{})
 	turnDoneEntered := make(chan struct{}, 1)
 	releaseTurnDone := make(chan struct{})
-	c := New(Options{Sink: holdFinishingWindow(releaseTurnDone, turnDoneEntered, nil)})
+	c := newOwnedTestController(t, Options{Sink: holdFinishingWindow(releaseTurnDone, turnDoneEntered, nil)})
 
 	c.runGuarded(func(ctx context.Context) error {
 		close(turnStarted)
@@ -171,7 +171,7 @@ func TestCloseDoesNotResurrectFinishingState(t *testing.T) {
 func TestTurnFinishingDoneClosesAfterTurnDoneFanout(t *testing.T) {
 	turnDoneEntered := make(chan struct{}, 1)
 	releaseTurnDone := make(chan struct{})
-	c := New(Options{Sink: holdFinishingWindow(releaseTurnDone, turnDoneEntered, nil)})
+	c := newOwnedTestController(t, Options{Sink: holdFinishingWindow(releaseTurnDone, turnDoneEntered, nil)})
 	t.Cleanup(c.Close)
 
 	c.runGuarded(func(context.Context) error { return nil })

@@ -27,7 +27,7 @@ func TestResumeDispatchOpensPicker(t *testing.T) {
 	exec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard)
 	m := newTestChatTUI()
 	m.width = 80
-	m.ctrl = control.New(control.Options{Executor: exec, SessionDir: dir, Label: "test"})
+	m.ctrl = newOwnedTestController(t, control.Options{Executor: exec, SessionDir: dir, Label: "test"})
 
 	if cmd := m.runSlashCommand("/resume"); cmd != nil {
 		t.Fatal("/resume should not return a tea.Cmd")
@@ -167,7 +167,7 @@ func TestRunResumeKeepsCompletedIndexStableAcrossRecoveryGC(t *testing.T) {
 	active := agent.NewSession("sys")
 	active.Add(provider.Message{Role: provider.RoleUser, Content: "active prompt"})
 	exec := agent.New(nil, nil, active, agent.Options{}, event.Discard)
-	ctrl := control.New(control.Options{Executor: exec, SessionDir: dir, Label: "test"})
+	ctrl := newOwnedTestController(t, control.Options{Executor: exec, SessionDir: dir, Label: "test"})
 	ctrl.SetSessionPath(filepath.Join(dir, "active-unpersisted.jsonl"))
 	m := newTestChatTUI()
 	m.width = 80
@@ -225,7 +225,7 @@ func TestSessionPickerLabelIdentifiesRecoveryParent(t *testing.T) {
 func TestResumePickerNavigateAndSelect(t *testing.T) {
 	dir := t.TempDir()
 	exec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard)
-	ctrl := control.New(control.Options{Executor: exec, SessionDir: dir, Label: "test"})
+	ctrl := newOwnedTestController(t, control.Options{Executor: exec, SessionDir: dir, Label: "test"})
 
 	// Create two saved sessions.
 	aPath := filepath.Join(dir, "a.jsonl")
@@ -280,7 +280,7 @@ func TestResumePickerEscDismisses(t *testing.T) {
 
 	exec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard)
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{Executor: exec, SessionDir: dir, Label: "test"})
+	m.ctrl = newOwnedTestController(t, control.Options{Executor: exec, SessionDir: dir, Label: "test"})
 
 	m.runSlashCommand("/resume")
 	if m.resumePick == nil {
@@ -302,7 +302,7 @@ func TestResumeDispatchSwitchesAndReplays(t *testing.T) {
 	active := agent.NewSession("sys")
 	active.Add(provider.Message{Role: provider.RoleUser, Content: "active prompt"})
 	exec := agent.New(nil, nil, active, agent.Options{}, event.Discard)
-	ctrl := control.New(control.Options{Executor: exec, SessionDir: dir, Label: "test"})
+	ctrl := newOwnedTestController(t, control.Options{Executor: exec, SessionDir: dir, Label: "test"})
 	ctrl.SetSessionPath(filepath.Join(dir, "active.jsonl"))
 	if err := ctrl.Snapshot(); err != nil {
 		t.Fatal(err)
@@ -345,7 +345,7 @@ func TestResumeWhileScrolledUpPinsViewportToBottom(t *testing.T) {
 		active.Add(provider.Message{Role: provider.RoleUser, Content: "active prompt " + strconv.Itoa(i)})
 	}
 	exec := agent.New(nil, nil, active, agent.Options{}, event.Discard)
-	ctrl := control.New(control.Options{Executor: exec, SessionDir: dir, Label: "test"})
+	ctrl := newOwnedTestController(t, control.Options{Executor: exec, SessionDir: dir, Label: "test"})
 	activePath := filepath.Join(dir, "active.jsonl")
 	ctrl.SetSessionPath(activePath)
 	if err := ctrl.Snapshot(); err != nil {
@@ -416,7 +416,7 @@ func TestResumeArgCompletionListsSessions(t *testing.T) {
 
 	exec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard)
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{Executor: exec, SessionDir: dir, Label: "test"})
+	m.ctrl = newOwnedTestController(t, control.Options{Executor: exec, SessionDir: dir, Label: "test"})
 
 	m.input.SetValue("/resume ")
 	m.updateCompletion()
@@ -437,7 +437,7 @@ func TestResumeAcceptChainsIntoSessionMenu(t *testing.T) {
 
 	exec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard)
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{Executor: exec, SessionDir: dir, Label: "test"})
+	m.ctrl = newOwnedTestController(t, control.Options{Executor: exec, SessionDir: dir, Label: "test"})
 
 	m.input.SetValue("/resu")
 	m.updateCompletion()
@@ -458,7 +458,7 @@ func TestRunResumeSwitchesSession(t *testing.T) {
 	active := agent.NewSession("sys")
 	active.Add(provider.Message{Role: provider.RoleUser, Content: "active prompt"})
 	exec := agent.New(nil, nil, active, agent.Options{}, event.Discard)
-	ctrl := control.New(control.Options{Executor: exec, SessionDir: dir, Label: "test"})
+	ctrl := newOwnedTestController(t, control.Options{Executor: exec, SessionDir: dir, Label: "test"})
 	activePath := filepath.Join(dir, "active.jsonl")
 	ctrl.SetSessionPath(activePath)
 	if err := ctrl.Snapshot(); err != nil {

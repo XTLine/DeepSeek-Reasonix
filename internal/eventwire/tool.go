@@ -2,6 +2,7 @@ package eventwire
 
 import (
 	"encoding/json"
+
 	"reasonix/internal/event"
 	"reasonix/internal/provider"
 )
@@ -14,6 +15,8 @@ type Tool struct {
 	ID                string                   `json:"id,omitempty"`
 	Name              string                   `json:"name"`
 	Args              string                   `json:"args,omitempty" externalizable:"true"`
+	Todos             []event.Todo             `json:"todos"`
+	TodoWritten       bool                     `json:"todoWritten,omitempty"`
 	ResolvedName      string                   `json:"resolvedName,omitempty"`
 	CapabilityID      string                   `json:"capabilityId,omitempty"`
 	Output            string                   `json:"output,omitempty" externalizable:"true"`
@@ -41,10 +44,13 @@ type Tool struct {
 }
 
 func toWireTool(in event.Tool) *Tool {
+	todos := make([]event.Todo, len(in.Todos))
+	copy(todos, in.Todos)
 	wt := &Tool{
 		RunState:   in.RunState,
 		Diagnostic: append(json.RawMessage(nil), in.Diagnostic...),
 		ID:         in.ID, Name: in.Name, Args: in.Args,
+		Todos: todos, TodoWritten: in.TodoWritten,
 		ResolvedName: in.ResolvedName, CapabilityID: in.CapabilityID,
 		Output: in.Output, Err: in.Err,
 		ReadOnly: in.ReadOnly, Truncated: in.Truncated,

@@ -131,16 +131,19 @@ func (c landCause) noticeText() string {
 // The grace round it sets — not the wording — is what enforces that: research
 // calls in the next round are paired and refused by stopUnexecutedBoundaryCalls;
 // a host-consumed structured finalizer is the only exception.
-func (a *Agent) armFinalizationRound(ctx context.Context, state *turnRuntime, cause landCause) {
+func (a *Agent) armFinalizationRound(ctx context.Context, state *turnRuntime, cause landCause) error {
 	if state.graceRound {
-		return
+		return nil
 	}
 	state.graceRound = true
 	state.landCause = cause
 	_, canSubmitPlan := planSubmissionFromContext(ctx)
-	a.sess.conversation.Add(HostGeneratedUserMessage(a.withTurnPreferences(cause.nudge(state, canSubmitPlan))))
+	if err := a.appendCommittedMessages(ctx, "finalization-nudge", HostGeneratedUserMessage(a.withTurnPreferences(cause.nudge(state, canSubmitPlan)))); err != nil {
+		return err
+	}
 	a.svc.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Code: event.NoticeCodeToolBudget,
 		Text: cause.noticeText(), Detail: cause.detail})
+	return nil
 }
 
 // gracePause is the resumable stop a finalized turn ends with, chosen by what

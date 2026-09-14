@@ -24,7 +24,7 @@ func TestPermissionPresetChangeWaitsForApprovalCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	roots := sandbox.NewWritableRootSet([]string{workspace})
-	c := New(Options{WriteRoots: roots, WorkspaceRoot: workspace})
+	c := newOwnedTestController(t, Options{WriteRoots: roots, WorkspaceRoot: workspace})
 	c.SetToolApprovalMode(ToolApprovalWorkspaceWrite)
 
 	entered := make(chan struct{})
@@ -96,7 +96,7 @@ func TestPermissionPresetChangeWaitsForApprovalCommit(t *testing.T) {
 }
 
 func TestResolveApprovalAtRejectsStalePermissionRevision(t *testing.T) {
-	c := New(Options{Policy: permission.New("ask", nil, nil, nil)})
+	c := newOwnedTestController(t, Options{Policy: permission.New("ask", nil, nil, nil)})
 	id, reply := c.approval.registerWriteAccess("bash", "outside", "test", json.RawMessage(`{}`), &event.WriteAccessApproval{})
 	revision := c.permissionRevision.Load()
 	if err := c.ResolveApprovalAt(id, true, sandbox.ApprovalScopeOnce, c.runtimeGeneration, revision+1); !errors.Is(err, ErrPromptStaleRuntime) {
@@ -113,7 +113,7 @@ func TestResolveApprovalAtRejectsStalePermissionRevision(t *testing.T) {
 }
 
 func TestPermissionPresetChangePublishesRevisionBeforeOldApprovalCanResolve(t *testing.T) {
-	c := New(Options{Policy: permission.New("ask", nil, nil, nil)})
+	c := newOwnedTestController(t, Options{Policy: permission.New("ask", nil, nil, nil)})
 	id, reply := c.approval.registerWriteAccess("bash", "outside", "test", json.RawMessage(`{}`), &event.WriteAccessApproval{})
 	before := c.PermissionSnapshot()
 	after, _, err := c.SetPermissionPreset(ToolApprovalDangerFullAccess, before.Revision)
@@ -134,7 +134,7 @@ func TestPermissionPresetChangePublishesRevisionBeforeOldApprovalCanResolve(t *t
 }
 
 func TestSettingSamePermissionPresetKeepsRevisionStable(t *testing.T) {
-	c := New(Options{Policy: permission.New("allow", nil, nil, nil)})
+	c := newOwnedTestController(t, Options{Policy: permission.New("allow", nil, nil, nil)})
 	c.SetToolApprovalMode(ToolApprovalDangerFullAccess)
 	before := c.PermissionSnapshot()
 	after, _, err := c.SetPermissionPreset(before.Preset, before.Revision)
@@ -151,7 +151,7 @@ func TestPermissionSnapshotAndExactGrantRevocation(t *testing.T) {
 	extra := t.TempDir()
 	roots := sandbox.NewWritableRootSet([]string{workspace})
 	roots.GrantSession([]string{extra})
-	c := New(Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: roots, WorkspaceRoot: workspace})
+	c := newOwnedTestController(t, Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: roots, WorkspaceRoot: workspace})
 	snapshot := c.PermissionSnapshot()
 	if snapshot.Preset == "" || snapshot.WorkspaceRoot != workspace {
 		t.Fatalf("permission snapshot = %+v", snapshot)

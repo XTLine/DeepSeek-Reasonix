@@ -14,10 +14,12 @@
 | `bash_output` | true | 读取后台 `bash` 或 `task` job 自上次读取后的新增输出和状态。 |
 | `code_index` | true | 轻量内置代码符号索引；优先使用 `lsp_*` 或代码图 MCP，缺失时用它兜底。 |
 | `compress` | true | 压缩当前模型可见对话中选定的范围，不删除可见历史。仅在用户明确要求压缩上下文时使用；锚点必须是某条真实用户消息中唯一、精确的原文片段。 |
+| `create_goal` | false | 在直接授权的人类回合中创建并激活一个长期目标。省略 `max_goal_rounds` 或传 `null` 表示自动轮数不限；不会覆盖未完成目标。 |
 | `delete_range` | false | 用精确 start/end 文本锚点删除文件中的连续范围。 |
 | `delete_symbol` | false | 用 Go AST 删除 Go 源文件中的命名符号。 |
 | `edit_file` | false | 将文件中的唯一精确字符串替换为另一个字符串。 |
 | `glob` | true | 查找匹配 glob pattern 的文件。无依赖的 glob 应同轮下发。 |
+| `get_goal` | true | 读取当前目标及其进程内 activation 和停跑原因；会话没有目标时返回 `goal: null`。 |
 | `grep` | true | 在文件或目录下按正则搜索文本。无依赖的搜索应同轮下发。 |
 | `kill_shell` | false | 终止后台 `bash` 或 `task` job。 |
 | `ls` | true | 列出目录条目，可递归。无依赖的目录读取应同轮下发。 |
@@ -27,7 +29,7 @@
 | `present` | true | 在写入完成后、最终回答前声明 1 到 8 个现有文件为面向用户的交付物。宿主原子校验路径，只记录路径和可选说明；不会复制、执行、上传文件，也不会把文件字节暴露给模型结果。 |
 | `read_file` | true | 读取一个有界文本窗口，可指定行 offset/limit。成功窗口会观察当前文件版本，供后续结构化修改使用。旧 intent 和 cursor 仅作导航兼容，不会产生全文完成要求。 |
 | `todo_write` | true | 替换由模型维护的任务列表，状态描述实际进度，不要求串行执行或宿主签收。 |
-| `update_goal` | true | 报告活动 Goal 的模型判断：continue、complete 或 blocked。completion 是模型声明；正常结束和身份校验仍生效，真实检查独立保留，无 evaluator 或质量门禁。 |
+| `update_goal` | false | 使用精确目标 ID／revision 执行 edit、pause、resume、complete 或 blocked。直接人类回合可使用所有动作；自动目标轮只能结束或阻塞其自己的目标。旧 `continue` 协议会被明确拒绝。 |
 | `view_image` | true | 按路径读取本地 PNG、JPEG、GIF 或 WebP，通过结构化图片通道交给视觉模型。最大 3 MiB、4000 万像素，沿用读取权限。 |
 | `wait` | true | 等待后台 job 完成并返回最终输出。 |
 | `web_fetch` | true | 通过 HTTP/HTTPS 获取 URL 文本内容。 |

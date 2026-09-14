@@ -29,7 +29,11 @@ func (c *Controller) approveChecked(id string, allow, session, persist bool) err
 		return c.ResolveApproval(id, allow, scopeFromApprove(allow, session, persist))
 	}
 	pending, ok, err := c.approval.resolveAfter(id, func(p pendingApproval) error {
-		return c.emitTurnEventChecked(event.Event{Kind: event.PromptAnswered, ItemID: id, Status: event.TurnInProgress})
+		state := PromptRejected
+		if allow {
+			state = PromptAnswered
+		}
+		return c.emitTurnEventChecked(event.Event{Kind: event.PromptAnswered, ItemID: id, InteractionState: string(state), Status: event.TurnInProgress})
 	})
 	if err != nil {
 		return err
@@ -37,7 +41,11 @@ func (c *Controller) approveChecked(id string, allow, session, persist bool) err
 	if !ok || pending.reply == nil {
 		return nil
 	}
-	c.promptOwner.Remove(id)
+	terminal := PromptRejected
+	if allow {
+		terminal = PromptAnswered
+	}
+	c.promptOwner.MarkIDTerminal(id, terminal)
 	outcome := "deny"
 	if pending.tool == planApprovalTool {
 		outcome = string(PlanDecisionRevisePlan)
@@ -98,15 +106,9 @@ type approvalManager struct {
 	// remain authoritative, matching Auto rather than YOLO semantics.
 	planAutoApprove bool
 
-	// promptMu serializes outstanding prompts so at most one user decision is in
-	// flight. Held across the blocking wait, so it must never be taken by the
-	// resolve paths (Approve/AnswerQuestion). sink.Emit also runs under it (Ask,
-	// requestApproval): Sink implementations must not block and must not call
-	// back into Ask or the tool-approval chain, or they deadlock the prompt.
-	promptMu sync.Mutex
-	// promptEmitMu serializes prompt registration and emission with an SSE
-	// attach handoff. It is separate from promptMu because promptMu remains
-	// held while waiting for the user's answer.
+	// promptEmitMu serializes the short registration-and-publication handoff with
+	// an SSE attach. It is never held while waiting for a user's answer: each
+	// interaction owns an independent cancellable reply channel.
 	promptEmitMu sync.Mutex
 
 	// mcpInteractions holds pending MCP elicitations, guarded by mu and
@@ -569,19 +571,6 @@ func (a *approvalManager) markAskEmitted(id string) {
 		p.queued = false
 		a.asks[id] = p
 	}
-}
-
-// queuedAsks reports asks registered but not yet shown.
-func (a *approvalManager) queuedAsks() int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	n := 0
-	for _, p := range a.asks {
-		if p.queued {
-			n++
-		}
-	}
-	return n
 }
 
 // cancelAsk drops a pending ask (timeout/abort path).

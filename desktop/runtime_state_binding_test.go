@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +31,22 @@ func (r *bindingRuntimeReader) RuntimeStateSnapshot() event.RuntimeStateSnapshot
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.state
+}
+
+func TestLocalBindingUsesControllerIdentityNotMutableContents(t *testing.T) {
+	first, second := &bindingRuntimeReader{}, &bindingRuntimeReader{}
+	tab := &WorkspaceTab{ID: "identity"}
+	sampled := localRuntimeBinding{tab: tab, ctrl: first}
+	current := sampled
+	current.ctrl = second
+	if sameLocalRuntimeBinding(current, sampled) {
+		t.Fatal("different controller instances were treated as the same binding")
+	}
+	first.mu.Lock()
+	defer first.mu.Unlock()
+	if !sameLocalRuntimeBinding(sampled, sampled) {
+		t.Fatal("controller's mutable lock state changed its binding identity")
+	}
 }
 
 func TestRuntimeStateProjectionRevalidatesLocalBindingAfterSampling(t *testing.T) {
@@ -94,7 +111,7 @@ func TestRuntimeStateProjectionRevalidatesLocalBindingAfterSampling(t *testing.T
 				t.Fatalf("expected one current binding: %+v", got.Sessions)
 			}
 			view := got.Sessions[0]
-			if view.SessionPath != wantPath || view.SessionGeneration != wantGeneration || view.Scope != wantScope || view.WorkspaceRoot != wantRoot || view.State != nextState || view.Open != (mutation != "detach") {
+			if view.SessionPath != wantPath || view.SessionGeneration != wantGeneration || view.Scope != wantScope || view.WorkspaceRoot != wantRoot || !reflect.DeepEqual(view.State, nextState) || view.Open != (mutation != "detach") {
 				t.Fatalf("projection paired state with stale binding: %+v", view)
 			}
 			if fresh := a.GetRuntimeStateSnapshot(); fresh.Revision != got.Revision {

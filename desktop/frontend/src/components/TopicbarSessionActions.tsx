@@ -10,7 +10,7 @@ const TopicbarExportMenu = lazy(async () => ({ default: (await loadExportMenu())
 export interface TopicbarSessionActionsProps {
   sessionHasContent: boolean;
   getSessionMarkdown: () => string | Promise<string>;
-  exportSession: (format: "markdown" | "json" | "pdf" | "image") => void;
+  exportSession: (format: "markdown" | "json" | "pdf" | "image" | "diagnostic") => void;
   toggleTerminal: () => void;
   terminalEnabled?: boolean;
   terminalOpen: boolean;

@@ -11,7 +11,7 @@ import (
 func TestInboxExpectedSessionCannotSubmitOrConfirmReplacement(t *testing.T) {
 	dir := t.TempDir()
 	first, second := filepath.Join(dir, "first.jsonl"), filepath.Join(dir, "second.jsonl")
-	c := New(Options{SessionDir: dir, SessionPath: first, Sink: event.Discard})
+	c := newOwnedTestController(t, Options{SessionDir: dir, SessionPath: first, Sink: event.Discard})
 	defer c.Close()
 	if err := c.SetInboxPaused(true); err != nil {
 		t.Fatal(err)

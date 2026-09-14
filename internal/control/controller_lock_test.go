@@ -19,7 +19,7 @@ func TestCompactRefusedWhileRunning(t *testing.T) {
 	sess := agent.NewSession("sys")
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "hi"})
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Executor:   exec,
 		SessionDir: t.TempDir(),
 		Label:      "test",

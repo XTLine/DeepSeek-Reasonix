@@ -1986,13 +1986,13 @@ func (a *App) rebuildSettingTurnLockedWithModel(setting string, tab *WorkspaceTa
 		return err
 	}
 	if err := a.runRebindCandidateHook("settings_before_authority"); err != nil {
-		ctrl.Close()
+		discardReplacementController(ctrl, oldCtrl)
 		return err
 	}
 	a.mu.Lock()
 	if err := a.authorizeTabReplacementLocked(tab, ctrl, "rebuilding settings", "rebuilt"); err != nil {
 		a.mu.Unlock()
-		ctrl.Close()
+		discardReplacementController(ctrl, oldCtrl)
 		tab.releaseSessionLease()
 		return err
 	}
@@ -2010,7 +2010,7 @@ func (a *App) rebuildSettingTurnLockedWithModel(setting string, tab *WorkspaceTa
 	a.mu.Unlock()
 	// True subgraph rebuilds reuse the same controller pointer — never Close it.
 	if oldCtrl != nil && oldCtrl != ctrl {
-		oldCtrl.Close()
+		retireReplacedController(oldCtrl, ctrl)
 	}
 	a.persistTabSessionPath(tab, path)
 	a.clearDeferredRebuildVersion(tab.ID, pendingSequence)
@@ -2036,6 +2036,7 @@ func (a *App) buildSettingReplacementController(tab *WorkspaceTab, snap tabRunti
 		Sink:                 snap.sink,
 		WorkspaceRoot:        snap.workspaceRoot,
 		SessionDir:           sessionDirForSnapshot(snap),
+		SessionService:       a.desktopSessionService(sessionDirForSnapshot(snap)),
 		EffortOverride:       cloneStringPtr(snap.effort),
 		SharedHost:           a.lookupSharedHost(snap.sharedHostKey), BrowserExecutor: a.browserExecutorForTab(tab),
 		CleanupPendingReconciler: reconcileDesktopCleanupPending,
@@ -2047,10 +2048,14 @@ func (a *App) buildSettingReplacementController(tab *WorkspaceTab, snap tabRunti
 		BeforeInboxDispatch:      a.beforeInboxDispatch,
 		OnSessionTitleChanged:    a.onSessionTitleChanged,
 	}
-	if reload && oldCtrl != nil {
+	_, _, exclusiveV3 := exclusiveSessionBinding(oldCtrl)
+	if oldCtrl != nil && (reload || exclusiveV3) {
 		old, ok := oldCtrl.(*control.Controller)
 		if !ok {
 			return nil, normalizedTabRuntime{}, "", fmt.Errorf("reload runtime: controller does not support model snapshots")
+		}
+		if opts.SessionTemp == nil {
+			opts.SessionTemp = old.SessionTemp()
 		}
 		res, err := rebuildTabRuntime(a, tab, old, opts)
 		if err != nil {
@@ -2067,40 +2072,22 @@ func (a *App) buildSettingReplacementController(tab *WorkspaceTab, snap tabRunti
 		applyTabModeToController(ctrl, runtime.tabMode())
 		// Same path Rebuild pinned internally (identical inputs), recomputed
 		// for the lease move and the post-swap persistence.
-		path := agent.ContinueSessionPath(prevPath, ctrl.SessionDir(), ctrl.Label())
-		if err := a.ensureTabSessionLeaseForRebuild(tab, path, setting); err != nil {
-			ctrl.Close()
-			return nil, normalizedTabRuntime{}, "", err
+		path := ""
+		if !exclusiveV3 {
+			path = agent.ContinueSessionPath(prevPath, ctrl.SessionDir(), ctrl.Label())
+			if err := a.ensureTabSessionLeaseForRebuild(tab, path, setting); err != nil {
+				ctrl.Close()
+				return nil, normalizedTabRuntime{}, "", err
+			}
 		}
 		restoredRuntime, err := normalizeRestoredControllerRuntime(ctrl, runtime)
 		if err != nil {
-			ctrl.Close()
+			discardReplacementController(ctrl, oldCtrl)
 			return nil, normalizedTabRuntime{}, "", err
 		}
 		return ctrl, restoredRuntime, path, nil
 	}
-	// Same-session rebuild without the full boot.Rebuild path still must keep
-	// the private temporary directory (Issue #7575).
-	if old, ok := oldCtrl.(*control.Controller); ok && old != nil && opts.SessionTemp == nil {
-		opts.SessionTemp = old.SessionTemp()
-	}
-	ctrl, err := boot.Build(a.bootContext(), opts)
-	if err != nil {
-		return nil, normalizedTabRuntime{}, "", err
-	}
-	a.bindControllerDisplayRecorder(ctrl)
-	configureControllerRuntime(ctrl, oldCtrl, runtime)
-	path := agent.ContinueSessionPath(prevPath, ctrl.SessionDir(), ctrl.Label())
-	if err := a.ensureTabSessionLeaseForRebuild(tab, path, setting); err != nil {
-		ctrl.Close()
-		return nil, normalizedTabRuntime{}, "", err
-	}
-	restoredRuntime, err := resumeControllerRuntimeWithMessages(ctrl, carried, path, runtime)
-	if err != nil {
-		ctrl.Close()
-		return nil, normalizedTabRuntime{}, "", err
-	}
-	return ctrl, restoredRuntime, path, nil
+	return a.buildLegacySettingReplacement(tab, runtime, opts, oldCtrl, carried, prevPath, setting)
 }
 
 // runtimeReloadSettingLabel is the settings-style label used in busy/lease

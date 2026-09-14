@@ -208,21 +208,25 @@ func TestRebuildMigratesSessionState(t *testing.T) {
 	t.Chdir(dir)
 	writeRuntimeFixture(t, dir)
 
-	old := buildRuntimeFixture(t)
+	old, err := BuildRuntime(context.Background(), withTestSession(t, Options{}))
+	if err != nil {
+		t.Fatalf("BuildRuntime v3: %v", err)
+	}
+	t.Cleanup(old.Controller.Close)
 	oldCtrl := old.Controller
 
-	// Pin a session file and seed a conversation plus the session axes the
+	// Pin a v3 session and seed a conversation plus the session axes the
 	// rebuild must carry.
 	oldCtrl.EnsureSessionPath()
-	prevPath := oldCtrl.SessionPath()
-	if prevPath == "" {
-		t.Fatal("old controller pinned no session path")
+	prevRef, ok := oldCtrl.SessionRef()
+	if !ok {
+		t.Fatal("old controller pinned no v3 session")
 	}
 	oldCtrl.AdoptHistory([]provider.Message{
 		{Role: provider.RoleSystem, Content: systemMessage(oldCtrl.History())},
 		{Role: provider.RoleUser, Content: "hello"},
 		{Role: provider.RoleAssistant, Content: "hi there"},
-	}, prevPath)
+	}, "")
 	oldCtrl.SetToolApprovalMode(control.ToolApprovalYolo)
 	oldCtrl.SetPlanMode(true)
 	oldCtrl.SetGoal("ship the kernel")
@@ -244,11 +248,15 @@ func TestRebuildMigratesSessionState(t *testing.T) {
 	}
 	defer res.Controller.Close()
 
-	// The conversation continues on the same session file with identical
+	// The conversation continues on the same immutable v3 identity with identical
 	// messages (the fixture rebuild produces the same system prompt, so the
 	// splice is invisible here).
-	if got := res.Controller.SessionPath(); got != prevPath {
-		t.Fatalf("session path = %q, want continued %q", got, prevPath)
+	gotRef, ok := res.Controller.SessionRef()
+	if !ok || gotRef != prevRef {
+		t.Fatalf("session ref = %+v, want continued %+v", gotRef, prevRef)
+	}
+	if got := res.Controller.SessionPath(); got != "" {
+		t.Fatalf("rebuilt v3 controller retained legacy path %q", got)
 	}
 	newHistory := res.Controller.History()
 	if len(newHistory) != len(oldHistory) {

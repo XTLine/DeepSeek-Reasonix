@@ -20,7 +20,7 @@ func TestResolveApprovalWriteAccessOnceDoesNotGrantSession(t *testing.T) {
 	dir := t.TempDir()
 	outside := canonicalWriteTestDir(t)
 	set := sandbox.NewWritableRootSet([]string{dir})
-	c := New(Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
+	c := newOwnedTestController(t, Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
 	id, reply := c.approval.registerWriteAccess("write_file", outside, "test", json.RawMessage(`{}`), &event.WriteAccessApproval{
 		Directories:        []string{outside},
 		DisplayDirectories: []string{"out"},
@@ -41,7 +41,7 @@ func TestResolveApprovalWriteAccessSessionPersistsInSet(t *testing.T) {
 	dir := t.TempDir()
 	extra := canonicalWriteTestDir(t)
 	set := sandbox.NewWritableRootSet([]string{dir})
-	c := New(Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
+	c := newOwnedTestController(t, Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
 	id, reply := c.approval.registerWriteAccess("write_file", extra, "test", json.RawMessage(`{}`), &event.WriteAccessApproval{
 		Directories: []string{extra},
 	})
@@ -61,7 +61,7 @@ func TestResolveApprovalWriteAccessProjectScopeIsRejected(t *testing.T) {
 	dir := t.TempDir()
 	extra := canonicalWriteTestDir(t)
 	set := sandbox.NewWritableRootSet([]string{dir})
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Policy:               permission.New("allow", nil, nil, nil),
 		WriteRoots:           set,
 		OnPersistWriteAccess: func(dirs []string, permRule string) error { return errors.New("must not be called") },
@@ -86,7 +86,7 @@ func TestDangerFullAccessRetryRequiresRealExactDenialAndCanGrantSession(t *testi
 	command := "installer --write-protected-state"
 	denialID := sandbox.IssueDenial(command, "workspace-write")
 	approvals := make(chan event.Approval, 1)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Policy:            permission.New("allow", nil, nil, nil),
 		WriteRoots:        sandbox.NewWritableRootSet([]string{t.TempDir()}),
 		RuntimeGeneration: 1,
@@ -133,14 +133,14 @@ func TestSessionAuthorizationsCarryWriteRoots(t *testing.T) {
 	dir := t.TempDir()
 	extra := t.TempDir()
 	set := sandbox.NewWritableRootSet([]string{dir})
-	c := New(Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
+	c := newOwnedTestController(t, Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
 	set.GrantSession([]string{extra})
 	auth := c.SessionAuthorizations()
 	if len(auth.WriteRoots) != 1 {
 		t.Fatalf("WriteRoots = %v", auth.WriteRoots)
 	}
 	freshSet := sandbox.NewWritableRootSet([]string{dir})
-	fresh := New(Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: freshSet})
+	fresh := newOwnedTestController(t, Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: freshSet})
 	fresh.RestoreSessionAuthorizations(auth)
 	if !freshSet.Covers(extra) {
 		t.Fatal("rebuild must restore session write roots")
@@ -152,7 +152,7 @@ func TestNewSessionClearsWriteRoots(t *testing.T) {
 	extra := t.TempDir()
 	set := sandbox.NewWritableRootSet([]string{dir})
 	exec := agent.New(nil, tool.NewRegistry(), agent.NewSession("sys"), agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
+	c := newOwnedTestController(t, Options{Executor: exec, Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
 	set.GrantSession([]string{extra})
 	if err := c.NewSession(); err != nil {
 		t.Fatal(err)
@@ -165,7 +165,7 @@ func TestNewSessionClearsWriteRoots(t *testing.T) {
 func TestCheckWriteAccessHeadlessMissingDir(t *testing.T) {
 	dir := t.TempDir()
 	set := sandbox.NewWritableRootSet([]string{dir})
-	c := New(Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
+	c := newOwnedTestController(t, Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
 	dec, err := c.CheckWriteAccess(context.Background(), agent.WriteAccessCheck{
 		Tool:       "write_file",
 		Expandable: true,
@@ -187,7 +187,7 @@ func TestCheckWriteAccessHeadlessMissingDir(t *testing.T) {
 func TestCheckWriteAccessSubagentCannotExpand(t *testing.T) {
 	dir := t.TempDir()
 	set := sandbox.NewWritableRootSet([]string{dir})
-	c := New(Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
+	c := newOwnedTestController(t, Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
 	c.writeAccess.interactive = true
 	dec, err := c.CheckWriteAccess(context.Background(), agent.WriteAccessCheck{
 		Tool:       "write_file",
@@ -208,7 +208,7 @@ func TestWriteAccessNotDrainedByAutoOrYolo(t *testing.T) {
 	dir := t.TempDir()
 	extra := t.TempDir()
 	set := sandbox.NewWritableRootSet([]string{dir})
-	c := New(Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
+	c := newOwnedTestController(t, Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
 	id, reply := c.approval.registerWriteAccess("bash", extra, "test", json.RawMessage(`{}`), &event.WriteAccessApproval{
 		Directories: []string{extra},
 	})
@@ -230,7 +230,7 @@ func TestWriteAccessNotDrainedByAutoOrYolo(t *testing.T) {
 func TestCheckWriteAccessDenyBeatsDirectoryPrompt(t *testing.T) {
 	dir := t.TempDir()
 	set := sandbox.NewWritableRootSet([]string{dir})
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Policy:     permission.New("ask", nil, nil, []string{"write_file"}),
 		WriteRoots: set,
 	})
@@ -256,7 +256,7 @@ func TestCheckWriteAccessDenyBeatsDirectoryPrompt(t *testing.T) {
 func TestCheckWriteAccessBashWithoutSandboxSkips(t *testing.T) {
 	dir := t.TempDir()
 	set := sandbox.NewWritableRootSet([]string{dir})
-	c := New(Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
+	c := newOwnedTestController(t, Options{Policy: permission.New("allow", nil, nil, nil), WriteRoots: set})
 	c.writeAccess.interactive = true
 	dec, err := c.CheckWriteAccess(context.Background(), agent.WriteAccessCheck{
 		Tool:       "bash",

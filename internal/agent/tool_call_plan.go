@@ -11,24 +11,23 @@ import (
 
 // toolCallPlan is the resolved, policy-checked state owned by one executeOne.
 type toolCallPlan struct {
-	call                      provider.ToolCall
-	tool                      tool.Tool
-	canonicalName             string
-	permName                  string
-	permArgs                  json.RawMessage
-	execTool                  tool.Tool
-	execArgs                  json.RawMessage
-	evidenceName              string
-	evidenceArgs              json.RawMessage
-	readOnly                  bool
-	resolved                  tool.ResolvedCall
-	resolvedMeta              *tool.ResolvedCall
-	effects                   evidence.ToolEffects
-	profile                   evidence.EffectProfile
-	verification              bool
-	planReplacementAuthorized bool
-	runTool                   tool.Tool
-	runArgs                   json.RawMessage
+	call          provider.ToolCall
+	tool          tool.Tool
+	canonicalName string
+	permName      string
+	permArgs      json.RawMessage
+	execTool      tool.Tool
+	execArgs      json.RawMessage
+	evidenceName  string
+	evidenceArgs  json.RawMessage
+	readOnly      bool
+	resolved      tool.ResolvedCall
+	resolvedMeta  *tool.ResolvedCall
+	effects       evidence.ToolEffects
+	profile       evidence.EffectProfile
+	verification  bool
+	runTool       tool.Tool
+	runArgs       json.RawMessage
 	// readTaskID is the logical read a continuation call joined, empty for a
 	// fresh read.
 	readTaskID          string

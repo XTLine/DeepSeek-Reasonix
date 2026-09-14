@@ -48,7 +48,7 @@ func TestControllerInputImagesResolvesAttachment(t *testing.T) {
 
 func TestControllerInputImagesIgnoresNonAttachmentRefs(t *testing.T) {
 	t.Chdir(t.TempDir())
-	if urls := New(Options{}).inputImages("plain text with @missing.png"); len(urls) != 0 {
+	if urls := newOwnedTestController(t, Options{}).inputImages("plain text with @missing.png"); len(urls) != 0 {
 		t.Errorf("inputImages = %v, want none for a non-existent / non-attachment ref", urls)
 	}
 }
@@ -97,7 +97,7 @@ func TestControllerInputImagesRequiresWorkspaceForFileImageRefs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	urls := New(Options{}).inputImages("look at @" + path)
+	urls := newOwnedTestController(t, Options{}).inputImages("look at @" + path)
 	if len(urls) != 0 {
 		t.Fatalf("inputImages without a workspace = %v, want no file image refs", urls)
 	}
@@ -184,7 +184,7 @@ func TestControllerResolveTurnImagesReusesCandidatesForVisionParent(t *testing.T
 	}
 }
 
-func TestGoalContinuationKeepsCurrentTurnImageCandidatesWithoutCrossTurnLeak(t *testing.T) {
+func TestGoalRoundDoesNotInheritPriorTurnImageCandidates(t *testing.T) {
 	workspace := t.TempDir()
 	writeVisionTestConfig(t, workspace)
 	path := filepath.Join(workspace, "diagram.png")
@@ -202,10 +202,10 @@ func TestGoalContinuationKeepsCurrentTurnImageCandidatesWithoutCrossTurnLeak(t *
 	}
 
 	ctx := agent.WithSubagentImageCandidates(context.Background(), initial.imageCandidates)
-	continuation := orchestratedTurn{goalContinuation: &goalContinuationSnapshot{}, synthetic: true, raw: goalContinueTurn}
+	continuation := orchestratedTurn{goalRound: &goalRoundReservation{}, synthetic: true, raw: "continue the target"}
 	userImages, candidates := c.imagesForOrchestratedTurn(ctx, continuation)
-	if len(userImages) != 0 || len(candidates) != 1 || candidates[0] != initial.imageCandidates[0] {
-		t.Fatalf("Goal continuation images = %v, candidates = %v; want original child candidate only", userImages, candidates)
+	if len(userImages) != 0 || len(candidates) != 0 {
+		t.Fatalf("new Goal round inherited prior images = %v, candidates = %v", userImages, candidates)
 	}
 
 	next := c.prepareOrchestratedTurnImages(orchestratedTurn{raw: "plain next user turn"})

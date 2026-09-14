@@ -12,6 +12,7 @@ import (
 	"reasonix/internal/control"
 	"reasonix/internal/event"
 	"reasonix/internal/provider"
+	"reasonix/internal/session"
 	"reasonix/internal/tool"
 )
 
@@ -70,11 +71,12 @@ func TestEnsureBlankTabReusesExistingBlankTab(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.SessionPath == "" {
-		t.Fatal("EnsureBlankTab should pre-create a session path for immediate deletion")
+	if first.SessionID == "" || first.SessionPath != "" {
+		t.Fatalf("EnsureBlankTab identity = id %q path %q", first.SessionID, first.SessionPath)
 	}
-	if _, err := os.Stat(first.SessionPath); err != nil {
-		t.Fatalf("pre-created blank session should exist: %v", err)
+	service := app.desktopSessionService(app.activeSessionDir())
+	if _, err := service.Query().Snapshot(t.Context(), session.SessionRef{HostID: service.HostID(), SessionID: first.SessionID}); err != nil {
+		t.Fatalf("pre-created blank v3 session should exist: %v", err)
 	}
 	second, err := app.EnsureBlankTab("global", "")
 	if err != nil {
@@ -284,8 +286,12 @@ func TestEnsureBlankTabStartsProjectRuntimeWithCurrentWorkspaceContext(t *testin
 	if !sameDesktopPath(tabB.Ctrl.SessionDir(), desktopSessionDir(projectB)) {
 		t.Fatalf("project B controller session dir = %q, want %q", tabB.Ctrl.SessionDir(), desktopSessionDir(projectB))
 	}
-	if !sameDesktopPath(filepath.Dir(tabB.Ctrl.SessionPath()), desktopSessionDir(projectB)) {
-		t.Fatalf("project B controller session path = %q, want under %q", tabB.Ctrl.SessionPath(), desktopSessionDir(projectB))
+	identity, ok := tabB.Ctrl.(control.IdentityLifecycle)
+	if !ok || !identity.UsesExclusiveSession() {
+		t.Fatalf("project B controller did not use exclusive v3 identity")
+	}
+	if ref, bound := identity.SessionRef(); !bound || strings.TrimSpace(ref.SessionID) == "" || strings.TrimSpace(tabB.Ctrl.SessionPath()) != "" {
+		t.Fatalf("project B controller identity = %+v bound=%v legacyPath=%q", ref, bound, tabB.Ctrl.SessionPath())
 	}
 	sys := systemPromptFrom(tabB.Ctrl.History())
 	if strings.Contains(sys, "Current workspace:") {
@@ -655,6 +661,7 @@ func TestNewSessionNoopsWhenCurrentTabIsBlank(t *testing.T) {
 	dir := t.TempDir()
 	path := agent.NewSessionPath(dir, "model-a")
 	ctrl := carryingController([]provider.Message{{Role: provider.RoleSystem, Content: "sys"}}, path)
+	t.Cleanup(ctrl.Close)
 	app := NewApp()
 	app.setTestCtrl(ctrl, "model-a")
 

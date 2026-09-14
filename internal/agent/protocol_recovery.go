@@ -159,7 +159,13 @@ func (a *Agent) saveProtocolRecord(r provider.ProtocolRecoveryRecord) error {
 	if err != nil {
 		return err
 	}
-	a.Session().storeProtocolRecord(r.ID, raw)
+	message := a.Session().prepareProtocolRecord(r.ID, raw)
+	if recorder, ok := a.svc.sessionCheckpointer.(SessionMessageMutationRecorder); ok {
+		if err := recorder.RecordSessionMessageUpsert(context.Background(), "protocol-recovery", message); err != nil {
+			return fmt.Errorf("record protocol recovery: %w", err)
+		}
+	}
+	a.Session().applyProtocolRecord(message)
 	return event.EmitChecked(a.svc.sink, event.Event{Kind: event.Notice, RecoveryCheckpoint: true})
 }
 
@@ -224,23 +230,48 @@ func (a *Agent) consumeManualProtocolRecovery(ctx context.Context, s *samplingRe
 }
 
 func (s *Session) storeProtocolRecord(id string, raw json.RawMessage) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.applyProtocolRecord(s.prepareProtocolRecord(id, raw))
+}
+
+// prepareProtocolRecord builds the exact stable message that will be committed
+// without mutating the in-memory transcript. The event recorder can therefore
+// accept the authoritative change before the legacy message cache is updated.
+func (s *Session) prepareProtocolRecord(id string, raw json.RawMessage) provider.Message {
+	if s == nil {
+		return provider.Message{}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	for i := range slices.Backward(s.Messages) {
 		if record, ok := provider.DecodeProtocolRecovery(s.Messages[i].ProtocolRecovery); ok && record.ID == id {
+			message := s.Messages[i]
 			var fields map[string]json.RawMessage
-			_ = json.Unmarshal(s.Messages[i].ProtocolRecovery, &fields)
+			_ = json.Unmarshal(message.ProtocolRecovery, &fields)
 			var changes map[string]json.RawMessage
 			_ = json.Unmarshal(raw, &changes)
 			maps.Copy(fields, changes)
-			merged, _ := json.Marshal(fields)
-			s.Messages[i].ProtocolRecovery = merged
+			message.ProtocolRecovery, _ = json.Marshal(fields)
+			return message
+		}
+	}
+	return provider.Message{ID: NewMessageID(), Role: provider.RoleTool, Name: provider.LocalOnlyToolName, ToolCallID: provider.LocalOnlyToolID, LocalOnly: true, ProtocolRecovery: append(json.RawMessage(nil), raw...)}
+}
+
+func (s *Session) applyProtocolRecord(message provider.Message) {
+	if s == nil || message.ID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range slices.Backward(s.Messages) {
+		if s.Messages[i].ID == message.ID {
+			s.Messages[i] = message
 			s.version++
 			s.rewriteVersion++
 			return
 		}
 	}
-	s.Messages = append(s.Messages, provider.Message{Role: provider.RoleTool, Name: provider.LocalOnlyToolName, ToolCallID: provider.LocalOnlyToolID, LocalOnly: true, ProtocolRecovery: append(json.RawMessage(nil), raw...)})
+	s.Messages = append(s.Messages, message)
 	s.version++
 }
 

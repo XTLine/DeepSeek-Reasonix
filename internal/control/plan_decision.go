@@ -1,6 +1,7 @@
 package control
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -17,8 +18,6 @@ func (c *Controller) ResolvePlanDecision(id string, action PlanDecisionAction) e
 // approval is removed. A persistence failure leaves the card pending for retry.
 func (c *Controller) ResolvePlanDecisionWithFeedback(id string, action PlanDecisionAction, feedback string) error {
 	defer c.refreshRuntimeState(event.Event{})
-	c.promptResolveMu.Lock()
-	defer c.promptResolveMu.Unlock()
 	return c.resolvePlanDecisionWithFeedbackLocked(id, action, feedback)
 }
 
@@ -36,6 +35,10 @@ func (c *Controller) resolvePlanDecisionWithFeedbackLocked(id string, action Pla
 		return fmt.Errorf("unknown plan decision %q", action)
 	}
 	feedback = strings.TrimSpace(feedback)
+	planPayload, err := json.Marshal(map[string]any{"requestId": id, "decision": action, "feedback": feedback})
+	if err != nil {
+		return err
+	}
 	var staged sessioninbox.InboxReceipt
 	rollback := func() {
 		if staged.ItemID != "" && !staged.Idempotent {
@@ -50,7 +53,14 @@ func (c *Controller) resolvePlanDecisionWithFeedbackLocked(id string, action Pla
 				return fmt.Errorf("queue plan revision: %w", enqueueErr)
 			}
 		}
-		if emitErr := c.emitTurnEventChecked(event.Event{Kind: event.PromptAnswered, ItemID: id, Status: event.TurnInProgress}); emitErr != nil {
+		state := PromptRejected
+		if action == PlanDecisionStartExecution {
+			state = PromptAnswered
+		}
+		if emitErr := c.emitTurnEventChecked(event.Event{
+			Kind: event.PromptAnswered, ItemID: id, InteractionState: string(state), Status: event.TurnInProgress,
+			DomainKind: "plan/state", DomainPayload: planPayload,
+		}); emitErr != nil {
 			rollback()
 			return emitErr
 		}
@@ -63,7 +73,11 @@ func (c *Controller) resolvePlanDecisionWithFeedbackLocked(id string, action Pla
 		rollback()
 		return nil
 	}
-	c.promptOwner.Remove(id)
+	terminal := PromptRejected
+	if action == PlanDecisionStartExecution {
+		terminal = PromptAnswered
+	}
+	c.promptOwner.MarkIDTerminal(id, terminal)
 	pending.kind = "plan"
 	c.recordDecisionReceipt(pending, string(action))
 	pending.reply <- approvalReply{allow: action == PlanDecisionStartExecution}

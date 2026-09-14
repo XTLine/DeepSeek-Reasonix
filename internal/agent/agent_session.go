@@ -32,9 +32,6 @@ func (a *Agent) SetSession(s *Session) {
 	// rewind, fork, or a wholesale session replacement.
 	a.fileObservations = fileops.NewStore()
 	a.resetPinnedContextState()
-	// The replaced conversation's task is over, but the ledger and the bill
-	// answer to beginRunTurn's scope check rather than to this seam.
-	if s != nil {
-		a.rebuildTodoState(s.Snapshot())
-	}
+	// sessionRuntime.reset clears turn-local Todo state. A resume, fork, rewind
+	// or wholesale replacement never reconstructs it from tool messages.
 }

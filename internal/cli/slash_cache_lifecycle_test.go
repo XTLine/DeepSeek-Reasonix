@@ -11,7 +11,7 @@ import (
 
 func TestSlashArgSnapshotSurvivesNoMatchWithinEditingSession(t *testing.T) {
 	isolateUserConfig(t)
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m.skills = []skill.Skill{{Name: "warm"}}
 
@@ -41,7 +41,7 @@ func TestSlashArgSnapshotSurvivesNoMatchWithinEditingSession(t *testing.T) {
 
 func TestFreeFormSlashSkipsArgDataSnapshot(t *testing.T) {
 	isolateUserConfig(t)
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m.commands = []command.Command{{Name: "custom", Description: "free-form prompt"}}
 

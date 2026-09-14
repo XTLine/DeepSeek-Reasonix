@@ -24,7 +24,7 @@ import (
 func chatTUIWithRunningBackgroundJob(t *testing.T) chatTUI {
 	t.Helper()
 	manager := jobs.NewManager(event.Discard)
-	ctrl := control.New(control.Options{Jobs: manager})
+	ctrl := newOwnedTestController(t, control.Options{Jobs: manager})
 	t.Cleanup(ctrl.Close)
 	manager.Start("task", "running", func(ctx context.Context, _ io.Writer) (string, error) {
 		<-ctx.Done()
@@ -115,7 +115,7 @@ func divergedSessionControllerWithRecovery(t *testing.T, dir, path string, onRec
 	stale.Add(provider.Message{Role: provider.RoleUser, Content: "first"})
 	stale.Add(provider.Message{Role: provider.RoleAssistant, Content: "one"})
 	stale.Add(provider.Message{Role: provider.RoleUser, Content: "local second"})
-	return control.New(control.Options{
+	return newOwnedTestController(t, control.Options{
 		Executor:           agent.New(nil, nil, stale, agent.Options{}, event.Discard),
 		SessionDir:         dir,
 		SessionPath:        path,
@@ -224,7 +224,7 @@ func TestModelSwitchCarriesRecoveryPathAfterSnapshotConflict(t *testing.T) {
 	var gotResumePath string
 	m.buildController = func(_ controllerBuildSpec, _ []provider.Message, resumePath string, _ control.SessionAPI) (*control.Controller, error) {
 		gotResumePath = resumePath
-		return control.New(control.Options{Label: "deepseek-flash"}), nil
+		return newOwnedTestController(t, control.Options{Label: "deepseek-flash"}), nil
 	}
 
 	m.runModelSubcommand("/model deepseek-flash/deepseek-v4-flash")
@@ -255,7 +255,7 @@ func TestEffortSwitchCarriesRecoveryPathAfterSnapshotConflict(t *testing.T) {
 	var gotResumePath string
 	m.buildController = func(_ controllerBuildSpec, _ []provider.Message, resumePath string, _ control.SessionAPI) (*control.Controller, error) {
 		gotResumePath = resumePath
-		return control.New(control.Options{Label: "deepseek-flash"}), nil
+		return newOwnedTestController(t, control.Options{Label: "deepseek-flash"}), nil
 	}
 
 	cmd := m.runEffortCommand("/effort max")
@@ -285,7 +285,7 @@ func TestSkillRefreshCarriesRecoveryPathAfterSnapshotConflict(t *testing.T) {
 	var gotResumePath string
 	m.buildController = func(_ controllerBuildSpec, _ []provider.Message, resumePath string, _ control.SessionAPI) (*control.Controller, error) {
 		gotResumePath = resumePath
-		return control.New(control.Options{Label: "deepseek-flash"}), nil
+		return newOwnedTestController(t, control.Options{Label: "deepseek-flash"}), nil
 	}
 
 	if !m.scheduleSkillSessionRefresh("skill refresh", "") {
@@ -317,7 +317,7 @@ func TestRetiredWorkModeIsNoOpWithoutRebuildOrLeaseMove(t *testing.T) {
 	builds := 0
 	m.buildController = func(_ controllerBuildSpec, _ []provider.Message, resumePath string, _ control.SessionAPI) (*control.Controller, error) {
 		builds++
-		return control.New(control.Options{Label: "deepseek-flash"}), nil
+		return newOwnedTestController(t, control.Options{Label: "deepseek-flash"}), nil
 	}
 
 	cmd := m.runWorkModeCommand("/preset delivery")
@@ -565,7 +565,7 @@ func TestModelSwitchMovesLeaseToRecoveryPathBeforeRebuild(t *testing.T) {
 	var heldAtBuild string
 	m.buildController = func(_ controllerBuildSpec, _ []provider.Message, _ string, _ control.SessionAPI) (*control.Controller, error) {
 		heldAtBuild = m.leases.HeldPath()
-		return control.New(control.Options{Label: "deepseek-flash"}), nil
+		return newOwnedTestController(t, control.Options{Label: "deepseek-flash"}), nil
 	}
 
 	m.runModelSubcommand("/model deepseek-flash/deepseek-v4-flash")
@@ -596,7 +596,7 @@ func TestEffortSwitchMovesLeaseToRecoveryPathBeforeRebuild(t *testing.T) {
 	var heldAtBuild string
 	m.buildController = func(_ controllerBuildSpec, _ []provider.Message, _ string, _ control.SessionAPI) (*control.Controller, error) {
 		heldAtBuild = m.leases.HeldPath()
-		return control.New(control.Options{Label: "deepseek-flash"}), nil
+		return newOwnedTestController(t, control.Options{Label: "deepseek-flash"}), nil
 	}
 
 	cmd := m.runEffortCommand("/effort max")
@@ -626,7 +626,7 @@ func TestSkillRefreshMovesLeaseToRecoveryPathBeforeRebuild(t *testing.T) {
 	var heldAtBuild string
 	m.buildController = func(_ controllerBuildSpec, _ []provider.Message, _ string, _ control.SessionAPI) (*control.Controller, error) {
 		heldAtBuild = m.leases.HeldPath()
-		return control.New(control.Options{Label: "deepseek-flash"}), nil
+		return newOwnedTestController(t, control.Options{Label: "deepseek-flash"}), nil
 	}
 
 	if !m.scheduleSkillSessionRefresh("skill refresh", "") {
@@ -669,7 +669,7 @@ func resumeIndexForPath(t *testing.T, dir, path string) int {
 // AdoptHistory replaces the whole history (including that message) with the
 // carried one unless the caller splices it in first.
 func TestAdoptCarriedHistoryRefreshesLeadingSystemPrompt(t *testing.T) {
-	fresh := control.New(control.Options{
+	fresh := newOwnedTestController(t, control.Options{
 		Executor: agent.New(nil, nil, agent.NewSession("system prompt for profile delivery"), agent.Options{}, event.Discard),
 	})
 	carry := []provider.Message{
@@ -700,13 +700,13 @@ func TestAdoptCarriedHistoryRefreshesLeadingSystemPrompt(t *testing.T) {
 // something already granted this session after every /model, /effort, or
 // /work-mode switch.
 func TestAdoptCarriedHistoryRestoresSessionAuthorizations(t *testing.T) {
-	old := control.New(control.Options{})
+	old := newOwnedTestController(t, control.Options{})
 	old.RestoreSessionAuthorizations(control.SessionAuthorizations{
 		Grants:                   []string{"bash|go test ./..."},
 		PlanModeReadOnlyCommands: []string{"go test ./..."},
 	})
 
-	fresh := control.New(control.Options{
+	fresh := newOwnedTestController(t, control.Options{
 		Executor: agent.New(nil, nil, agent.NewSession(""), agent.Options{}, event.Discard),
 	})
 
@@ -740,7 +740,7 @@ func TestAdoptCarriedHistoryPersistsRefreshedSystemPromptToDisk(t *testing.T) {
 		t.Fatalf("save base session: %v", err)
 	}
 
-	fresh := control.New(control.Options{
+	fresh := newOwnedTestController(t, control.Options{
 		Executor:   agent.New(nil, nil, agent.NewSession("system prompt for profile delivery"), agent.Options{}, event.Discard),
 		SessionDir: dir,
 	})
@@ -772,7 +772,7 @@ func TestAdoptCarriedHistoryReportsSnapshotFailure(t *testing.T) {
 	if err := os.Mkdir(invalidPath, 0o755); err != nil {
 		t.Fatalf("mkdir invalid transcript path: %v", err)
 	}
-	fresh := control.New(control.Options{
+	fresh := newOwnedTestController(t, control.Options{
 		Executor: agent.New(nil, nil, agent.NewSession("system prompt for profile delivery"), agent.Options{}, event.Discard),
 	})
 	carry := []provider.Message{

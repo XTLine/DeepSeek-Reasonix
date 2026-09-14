@@ -253,6 +253,19 @@ func TestToWireToolCarriesResolvedCapabilityMetadata(t *testing.T) {
 	}
 }
 
+func TestToWireTodoResultPreservesExplicitEmptyList(t *testing.T) {
+	w := ToWire(event.Event{Kind: event.ToolResult, Tool: event.Tool{
+		ID: "todo-1", Name: "todo_write", TodoWritten: true, Todos: []event.Todo{},
+	}})
+	b, err := json.Marshal(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"todoWritten":true`) || !strings.Contains(string(b), `"todos":[]`) {
+		t.Fatalf("explicit empty todo state was lost: %s", b)
+	}
+}
+
 func TestToWireToolCarriesSubagentOutcomeMetadata(t *testing.T) {
 	w := ToWire(event.Event{Kind: event.ToolResult, Tool: event.Tool{
 		ID: "skill-1", Name: "run_skill", SubagentRef: "sa_child",

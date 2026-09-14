@@ -102,7 +102,7 @@ func (t *runSkillTool) ValidateArguments(args json.RawMessage) []tool.ArgumentVi
 		return nil // The ordinary JSON Schema/parser owns malformed JSON.
 	}
 	name := cleanSkillName(p.Name)
-	sk, ok := t.store.Read(name)
+	sk, ok := t.store.Candidate(name)
 	if !ok || sk.RunAs != RunSubagent || strings.TrimSpace(p.Arguments) != "" {
 		return nil
 	}
@@ -115,7 +115,7 @@ func (t *runSkillTool) ValidateArguments(args json.RawMessage) []tool.ArgumentVi
 
 func (t *runSkillTool) CapabilityArguments(capabilityID string) (tool.CapabilityArgumentContract, bool) {
 	name := strings.TrimSpace(strings.TrimPrefix(capabilityID, "skill:"))
-	sk, ok := t.store.Read(name)
+	sk, ok := t.store.Candidate(name)
 	if !ok {
 		return tool.CapabilityArgumentContract{}, false
 	}
@@ -148,8 +148,11 @@ func (t *runSkillTool) Execute(ctx context.Context, args json.RawMessage) (strin
 	if name == "" {
 		return "", fmt.Errorf("run_skill requires a 'name' argument (got %q, which is just a marker/tag)", p.Name)
 	}
-	sk, ok := t.store.Read(name)
+	sk, ok := t.store.Load(ctx, name)
 	if !ok {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		return "", fmt.Errorf("unknown skill %q — available: %s", name, availableNames(t.store))
 	}
 	if err := t.store.ValidateInvocation(sk); err != nil {
@@ -258,7 +261,7 @@ func (t *readOnlySkillTool) ValidateArguments(args json.RawMessage) []tool.Argum
 		return nil
 	}
 	name := cleanSkillName(p.Name)
-	sk, ok := t.store.Read(name)
+	sk, ok := t.store.Candidate(name)
 	if !ok || sk.RunAs != RunSubagent || strings.TrimSpace(p.Arguments) != "" {
 		return nil
 	}
@@ -271,7 +274,7 @@ func (t *readOnlySkillTool) ValidateArguments(args json.RawMessage) []tool.Argum
 
 func (t *readOnlySkillTool) CapabilityArguments(capabilityID string) (tool.CapabilityArgumentContract, bool) {
 	name := strings.TrimSpace(strings.TrimPrefix(capabilityID, "skill:"))
-	sk, ok := t.store.Read(name)
+	sk, ok := t.store.Candidate(name)
 	if !ok {
 		return tool.CapabilityArgumentContract{}, false
 	}
@@ -302,8 +305,11 @@ func (t *readOnlySkillTool) Execute(ctx context.Context, args json.RawMessage) (
 	if name == "" {
 		return "", fmt.Errorf("read_only_skill requires a 'name' argument (got %q, which is just a marker/tag)", p.Name)
 	}
-	sk, ok := t.store.Read(name)
+	sk, ok := t.store.Load(ctx, name)
 	if !ok {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		return "", fmt.Errorf("unknown skill %q — available: %s", name, availableNames(t.store))
 	}
 	if err := t.store.ValidateInvocation(sk); err != nil {
@@ -396,8 +402,11 @@ func (t *subagentSkillTool) Execute(ctx context.Context, args json.RawMessage) (
 	if task == "" {
 		return "", fmt.Errorf("%s requires a non-empty 'task' argument — describe the concrete question", t.toolName)
 	}
-	sk, ok := t.store.Read(t.skillName)
+	sk, ok := t.store.Load(ctx, t.skillName)
 	if !ok {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		return "", fmt.Errorf("%s: built-in skill %q is not registered", t.toolName, t.skillName)
 	}
 	if err := t.store.ValidateInvocation(sk); err != nil {

@@ -96,6 +96,7 @@ func (gw *BotGateway) applySessionModelSettings(ctx context.Context, key string,
 		previous.leases = nil
 		previous.retired = true
 		gw.mu.Unlock()
+		result.Controller.ActivateGoalDriverAfterRebuild()
 		old.Close()
 		return next, nil
 	}

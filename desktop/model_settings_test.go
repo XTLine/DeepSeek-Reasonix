@@ -25,22 +25,26 @@ import (
 
 func modelSettingsBootTab(t *testing.T, app *App, id, root, model string) *WorkspaceTab {
 	t.Helper()
-	ctrl, err := boot.Build(app.ctx, boot.Options{Model: model, WorkspaceRoot: root, SessionDir: desktopSessionDir(root), Sink: event.Discard, BeforeInboxDispatch: app.beforeInboxDispatch})
+	sessionDir := desktopSessionDir(root)
+	ctrl, err := boot.Build(app.ctx, boot.Options{Model: model, WorkspaceRoot: root, SessionDir: sessionDir, SessionService: app.desktopSessionService(sessionDir), Sink: event.Discard, BeforeInboxDispatch: app.beforeInboxDispatch})
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(ctrl.SessionDir(), id+".jsonl")
-	history := append(ctrl.History(), provider.Message{Role: provider.RoleUser, Content: "keep history " + id})
-	ctrl.AdoptHistory(history, path)
-	tab := &WorkspaceTab{ID: id, Scope: "project", WorkspaceRoot: root, Ready: true, Ctrl: ctrl, model: model, SessionPath: path, disabledMCP: map[string]ServerView{}, sink: &tabEventSink{tabID: id, app: app}}
+	ref, err := ctrl.BindFreshSession(t.Context(), "model-settings-"+id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, runtime, ok := ctrl.SessionBinding()
+	if !ok {
+		t.Fatal("controller did not publish v3 runtime")
+	}
+	appendSessionTestMessage(t, runtime, "model-settings-history-"+id, provider.Message{ID: "model-settings-user-" + id, Role: provider.RoleUser, Content: "keep history " + id})
+	tab := &WorkspaceTab{ID: id, Scope: "project", WorkspaceRoot: root, Ready: true, Ctrl: ctrl, model: model, SessionID: ref.SessionID, disabledMCP: map[string]ServerView{}, sink: &tabEventSink{tabID: id, app: app}}
 	if app.tabs == nil {
 		app.tabs = map[string]*WorkspaceTab{}
 	}
 	app.tabs[id] = tab
 	app.tabOrder = append(app.tabOrder, id)
-	if err := app.saveTabSessionMeta(tab, path); err != nil {
-		t.Fatal(err)
-	}
 	installNoopRuntimeEvents(app, tab.sink)
 	t.Cleanup(func() {
 		if tab.Ctrl != nil {
@@ -229,59 +233,6 @@ func TestModelSettingsLastProviderRemovalBlocksNewRun(t *testing.T) {
 	}
 	if tab.Ctrl != old || len(tab.Ctrl.History()) < 2 {
 		t.Fatal("blocked admission destroyed current runtime/history")
-	}
-}
-
-func TestModelSettingsStartupPublicationRejectsCandidateBuiltBeforeSave(t *testing.T) {
-	isolateDesktopUserDirs(t)
-	oldRef, newRef := configureSwitchableDefaultModels(t)
-	app := NewApp()
-	app.ctx = context.Background()
-	app.readyHook = func() {}
-	app.stopDeferredRebuildRetry()
-	tab := &WorkspaceTab{ID: "startup", Scope: "project", WorkspaceRoot: t.TempDir(), model: oldRef, disabledMCP: map[string]ServerView{}, sink: &tabEventSink{tabID: "startup", app: app}}
-	app.tabs = map[string]*WorkspaceTab{tab.ID: tab}
-	app.tabOrder = []string{tab.ID}
-	app.activeTabID = tab.ID
-	installNoopRuntimeEvents(app, tab.sink)
-	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	var once sync.Once
-	previousHook := sessionLeaseAcquireHookForTest
-	sessionLeaseAcquireHookForTest = func() { once.Do(func() { close(entered); <-release }) }
-	t.Cleanup(func() {
-		sessionLeaseAcquireHookForTest = previousHook
-		if tab.Ctrl != nil {
-			tab.Ctrl.Close()
-		}
-		tab.releaseSessionLease()
-	})
-	go func() { defer close(done); app.buildTabController(tab) }()
-	select {
-	case <-entered:
-	case <-time.After(10 * time.Second):
-		close(release)
-		t.Fatal("startup never reached lease publication barrier")
-	}
-	if err := app.SetPlannerModel(newRef); err != nil {
-		close(release)
-		t.Fatal(err)
-	}
-	close(release)
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("startup did not settle after save")
-	}
-	if tab.Ctrl != nil || !tab.modelApplication.startupRetry {
-		t.Fatalf("stale candidate published: controller=%T error=%q", tab.Ctrl, tab.StartupErr)
-	}
-	sessionLeaseAcquireHookForTest = previousHook
-	app.buildTabController(tab)
-	if tab.Ctrl == nil {
-		t.Fatalf("latest startup failed: %s", tab.StartupErr)
-	}
-	if stale, err := modelSettingsNeedApply(tab.Ctrl); err != nil || stale {
-		t.Fatalf("replacement did not use latest settings: %v %v", stale, err)
 	}
 }
 

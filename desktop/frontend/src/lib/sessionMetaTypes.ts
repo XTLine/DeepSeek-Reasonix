@@ -1,6 +1,10 @@
 // SessionMeta is one saved session for the history panel.
 export interface SessionMeta {
   path: string;
+  sessionId?: string;
+  hostId?: string;
+  codec?: string;
+  error?: string;
   preview: string;
   title?: string; // user-chosen name; falls back to preview when empty
   turns: number;

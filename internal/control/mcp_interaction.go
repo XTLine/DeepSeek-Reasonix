@@ -129,21 +129,13 @@ func (a *approvalManager) snapshotMCPInteractions() []event.MCPInteraction {
 	return out
 }
 
-// Interact implements mcpinteraction.Broker: it surfaces one server-initiated
-// elicitation to the frontend and blocks for the user's decision, serialized
-// against every other user prompt by promptMu. Form values and URL targets
-// ride the resolve call only — nothing is logged from here.
+// Interact implements mcpinteraction.Broker: it surfaces a server-initiated
+// elicitation and blocks on that request's own cancellable reply channel. Form
+// values and URL targets ride the resolve call only — nothing is logged here.
 func (c *Controller) Interact(ctx context.Context, req mcpinteraction.Request) (mcpinteraction.Result, error) {
+	c.approval.promptEmitMu.Lock()
 	id, reply := c.approval.registerMCPInteraction(req)
 	c.registerOwnedPrompt(id, PromptMCP)
-
-	if !c.lockPromptFor(ctx, "mcp interaction") {
-		c.cancelOwnedPrompt(id)
-		return mcpinteraction.Result{Action: mcpinteraction.ActionCancel}, ctx.Err()
-	}
-	defer c.approval.promptMu.Unlock()
-
-	c.approval.promptEmitMu.Lock()
 	payload := event.MCPInteraction{
 		ID: id, Server: req.Server, Mode: req.Mode, Message: req.Message,
 		RequestedSchema: append([]byte(nil), req.RequestedSchema...),
@@ -184,8 +176,6 @@ func (c *Controller) AnswerMCPInteraction(id, action string, content map[string]
 // the blocked MCP call, so a crashed frontend cannot lose an answered decision.
 func (c *Controller) AnswerMCPInteractionChecked(id, action string, content map[string]any) error {
 	defer c.refreshRuntimeState(event.Event{})
-	c.promptResolveMu.Lock()
-	defer c.promptResolveMu.Unlock()
 	return c.answerMCPInteractionCheckedLocked(id, action, content)
 }
 
@@ -199,13 +189,27 @@ func (c *Controller) answerMCPInteractionCheckedLocked(id, action string, conten
 		content = nil
 	}
 	pending, ok, err := c.approval.resolveMCPInteractionAfter(id, func(p pendingMCPInteraction) error {
-		return c.emitTurnEventChecked(event.Event{Kind: event.PromptAnswered, ItemID: id, Status: event.TurnInProgress})
+		state := PromptAnswered
+		switch action {
+		case mcpinteraction.ActionDecline:
+			state = PromptRejected
+		case mcpinteraction.ActionCancel:
+			state = PromptCancelled
+		}
+		return c.emitTurnEventChecked(event.Event{Kind: event.PromptAnswered, ItemID: id, InteractionState: string(state), Status: event.TurnInProgress})
 	})
 	if err != nil {
 		return err
 	}
 	if ok {
-		c.promptOwner.Remove(id)
+		terminal := PromptAnswered
+		switch action {
+		case mcpinteraction.ActionDecline:
+			terminal = PromptRejected
+		case mcpinteraction.ActionCancel:
+			terminal = PromptCancelled
+		}
+		c.promptOwner.MarkIDTerminal(id, terminal)
 		c.recordMCPInteractionReceipt(id, pending, action)
 		pending.reply <- mcpinteraction.Result{Action: action, Content: content}
 	}

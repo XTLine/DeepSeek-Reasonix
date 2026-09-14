@@ -18,7 +18,7 @@ for (const version of ["v1.38.5", "v1.38.6-rc.1", "v0.0.0-ci"]) {
     const build = { version, channel: "canary", commit: "abc123def456" };
     const dir = resources(t, { schemaVersion: 1, ...build, electron: "44.2.0", platform: "windows/amd64" });
     const identity = loadBuildIdentity(true, dir, { REASONIX_CHANNEL: "wrong", REASONIX_COMMIT: "wrong" });
-    const hello = buildHelloParams({ ...identity, contractDigest: "sha256:fixture", hostVersion: "44.2.0", chromeVersion: "152", platform: "win32", arch: "x64", home: dir, dev: false });
+    const hello = buildHelloParams({ ...identity, protocolVersion: 3, contractDigest: "sha256:fixture", hostVersion: "44.2.0", chromeVersion: "152", platform: "win32", arch: "x64", home: dir, dev: false });
     assert.deepEqual(hello.build, build);
     assert.equal(hello.instance.dev, false);
   });

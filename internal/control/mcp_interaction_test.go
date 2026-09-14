@@ -42,7 +42,7 @@ func sampleInteractionRequest() mcpinteraction.Request {
 
 func TestInteractEmitsEventAndAnswerResolves(t *testing.T) {
 	sink := &interactionProbeSink{}
-	c := New(Options{Sink: sink, SessionDir: t.TempDir()})
+	c := newOwnedTestController(t, Options{Sink: sink, SessionDir: t.TempDir()})
 
 	type reply struct {
 		res mcpinteraction.Result
@@ -96,7 +96,7 @@ func TestInteractEmitsEventAndAnswerResolves(t *testing.T) {
 
 func TestInteractDeclineClearsContent(t *testing.T) {
 	sink := &interactionProbeSink{}
-	c := New(Options{Sink: sink, SessionDir: t.TempDir()})
+	c := newOwnedTestController(t, Options{Sink: sink, SessionDir: t.TempDir()})
 
 	done := make(chan mcpinteraction.Result, 1)
 	go func() {
@@ -132,7 +132,7 @@ func TestInteractDeclineClearsContent(t *testing.T) {
 }
 
 func TestInteractInvalidActionRejected(t *testing.T) {
-	c := New(Options{Sink: &interactionProbeSink{}, SessionDir: t.TempDir()})
+	c := newOwnedTestController(t, Options{Sink: &interactionProbeSink{}, SessionDir: t.TempDir()})
 	if err := c.AnswerMCPInteractionChecked("1", "guess", nil); err == nil {
 		t.Fatal("invalid action accepted")
 	}
@@ -140,7 +140,7 @@ func TestInteractInvalidActionRejected(t *testing.T) {
 
 func TestInteractCancelledContextCancels(t *testing.T) {
 	sink := &interactionProbeSink{}
-	c := New(Options{Sink: sink, SessionDir: t.TempDir()})
+	c := newOwnedTestController(t, Options{Sink: sink, SessionDir: t.TempDir()})
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan mcpinteraction.Result, 1)
 	go func() {
@@ -172,7 +172,7 @@ func TestInteractCancelledContextCancels(t *testing.T) {
 
 func TestInteractReplaysAfterFrontendReconnect(t *testing.T) {
 	sink := &interactionProbeSink{}
-	c := New(Options{Sink: sink, SessionDir: t.TempDir()})
+	c := newOwnedTestController(t, Options{Sink: sink, SessionDir: t.TempDir()})
 	done := make(chan mcpinteraction.Result, 1)
 	go func() {
 		res, _ := c.Interact(t.Context(), sampleInteractionRequest())

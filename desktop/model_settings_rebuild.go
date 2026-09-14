@@ -5,6 +5,9 @@ import "reasonix/internal/control"
 // snapshotSettingsRebuildSource secures the outgoing runtime before migrating
 // it. Callers hold runtimeRebuildMu and the tab's turn admission gate.
 func (a *App) snapshotSettingsRebuildSource(tab *WorkspaceTab, old control.SessionAPI, path, setting string) error {
+	if _, _, exclusive := exclusiveSessionBinding(old); exclusive {
+		return a.snapshotTabForAction(tab, "rebuilding settings")
+	}
 	if err := a.ensureTabSessionLeaseForRebuild(tab, path, setting); err != nil {
 		return err
 	}

@@ -119,10 +119,10 @@ func TestRuntimeStateHTTPIncludesDetachedAndKeepsSnapshotImmutable(t *testing.T)
 	for _, session := range first.Sessions {
 		byPath[session.SessionPath] = session
 	}
-	if got := byPath[agent.CanonicalSessionPath(foreground.SessionPath())]; !got.Current || got.State != foreground.RuntimeStateSnapshot() {
+	if got := byPath[agent.CanonicalSessionPath(foreground.SessionPath())]; !got.Current || !reflect.DeepEqual(got.State, foreground.RuntimeStateSnapshot()) {
 		t.Fatalf("foreground snapshot mismatch: %+v", got)
 	}
-	if got := byPath[detachedPath]; got.Current || got.State != detached.RuntimeStateSnapshot() {
+	if got := byPath[detachedPath]; got.Current || !reflect.DeepEqual(got.State, detached.RuntimeStateSnapshot()) {
 		t.Fatalf("detached snapshot mismatch: %+v", got)
 	}
 	read := server.runtimeStatesSnapshot()
@@ -275,12 +275,12 @@ func TestRuntimeStateSSEFiltersSessionsAndPreservesHostOnlyPayload(t *testing.T)
 	foregroundSink.SetPath(foreground.SessionPath())
 	foregroundSink.RuntimeStateChanged(current)
 	currentFrame := readRuntimeSSEFrame(t, bufio.NewReader(currentResponse.Body))
-	if currentFrame.Kind != "runtime_state" || !currentFrame.SessionCurrent || currentFrame.RuntimeState == nil || *currentFrame.RuntimeState != current {
+	if currentFrame.Kind != "runtime_state" || !currentFrame.SessionCurrent || currentFrame.RuntimeState == nil || !reflect.DeepEqual(*currentFrame.RuntimeState, current) {
 		t.Fatalf("current stream received background or changed payload: %+v", currentFrame)
 	}
 	allReader := bufio.NewReader(allResponse.Body)
 	backgroundFrame := readRuntimeSSEFrame(t, allReader)
-	if backgroundFrame.Kind != "runtime_state" || backgroundFrame.SessionCurrent || backgroundFrame.SessionPath != backgroundPath || backgroundFrame.RuntimeState == nil || *backgroundFrame.RuntimeState != background {
+	if backgroundFrame.Kind != "runtime_state" || backgroundFrame.SessionCurrent || backgroundFrame.SessionPath != backgroundPath || backgroundFrame.RuntimeState == nil || !reflect.DeepEqual(*backgroundFrame.RuntimeState, background) {
 		t.Fatalf("all-session background frame mismatch: %+v", backgroundFrame)
 	}
 	if next := readRuntimeSSEFrame(t, allReader); next.SessionPath != agent.CanonicalSessionPath(foreground.SessionPath()) || !next.SessionCurrent {

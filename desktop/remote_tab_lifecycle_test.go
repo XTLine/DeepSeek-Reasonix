@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -639,7 +640,7 @@ func TestRemoteNewBusyKeepsCurrentSessionReady(t *testing.T) {
 	if state != "ready" || message != "" || title != previousTitle || client == nil {
 		t.Fatalf("busy new-session state/error/title/client = %q/%q/%q/%v, want ready current attachment", state, message, title, client)
 	}
-	if session != previousSession || route != previousRoute || runtime != previousRuntime {
+	if session != previousSession || route != previousRoute || !reflect.DeepEqual(runtime, previousRuntime) {
 		t.Fatalf("busy new-session changed current identity/runtime: session=%+v route=%q runtime=%+v", session, route, runtime)
 	}
 }

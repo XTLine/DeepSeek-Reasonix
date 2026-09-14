@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"reasonix/internal/session"
+	"reasonix/internal/sessioncontent"
 	"reasonix/internal/transcript"
 )
 
@@ -84,5 +87,70 @@ func TestRemoteTabMetadataDoesNotRequestHistory(t *testing.T) {
 	metadata, err := app.RemoteTabMetadata(tab.id)
 	if err != nil || historyReads.Load() != 0 || len(metadata.History) != 0 {
 		t.Fatalf("metadata requested history: count=%d error=%v", historyReads.Load(), err)
+	}
+}
+
+func TestRemoteCanonicalSessionHistoryUsesNegotiatedIdentity(t *testing.T) {
+	ref := sessioncontent.Ref{Digest: strings.Repeat("a", 64), Bytes: 3, MediaType: "text/plain"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("sessionId"); got != "canonical" {
+			t.Errorf("sessionId = %q", got)
+		}
+		switch r.URL.Path {
+		case "/session-history/page":
+			if r.URL.Query().Get("cursor") != "next" || r.URL.Query().Get("limit") != "7" {
+				t.Errorf("page query = %q", r.URL.RawQuery)
+			}
+			_ = json.NewEncoder(w).Encode(session.MessageHistoryPage{Messages: []session.PersistentMessage{{MessageID: "m1", Role: "user", ContentRef: &ref}}, SnapshotSequence: 9})
+		case "/session-history/content":
+			var request struct {
+				Ref    sessioncontent.Ref `json:"ref"`
+				Offset int64              `json:"offset"`
+				Length int64              `json:"length"`
+			}
+			if err := json.Unmarshal([]byte(r.URL.Query().Get("request")), &request); err != nil {
+				t.Fatal(err)
+			}
+			if request.Ref.Digest != ref.Digest || request.Offset != 0 || request.Length != 3 {
+				t.Errorf("content request = %+v", request)
+			}
+			_ = json.NewEncoder(w).Encode(SessionHistoryContentChunk{Data: base64.StdEncoding.EncodeToString([]byte("big")), NextOffset: 3, Done: true})
+		case "/session-history/search":
+			if r.URL.Query().Get("q") != "needle" || r.URL.Query().Get("cursor") != "older" || r.URL.Query().Get("limit") != "5" {
+				t.Errorf("search query = %q", r.URL.RawQuery)
+			}
+			_ = json.NewEncoder(w).Encode(session.SearchHistoryPage{Hits: []session.SearchHistoryHit{{MessageID: "m1", Preview: "needle"}}, SnapshotSequence: 9})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	app, tab := remoteTranscriptFixture(server)
+	tab.capabilities = map[string]bool{serveCapabilitySessionContentV1: true}
+	tab.session.sessionID = "canonical"
+	page, err := app.RemoteSessionHistoryPageForTab(tab.id, "next", 7)
+	if err != nil || page.SnapshotSequence != 9 || len(page.Messages) != 1 {
+		t.Fatalf("page = %+v, %v", page, err)
+	}
+	chunk, err := app.RemoteSessionHistoryContentForTab(tab.id, ref, 0)
+	if err != nil || chunk.Data != base64.StdEncoding.EncodeToString([]byte("big")) || !chunk.Done {
+		t.Fatalf("chunk = %+v, %v", chunk, err)
+	}
+	search, err := app.RemoteSearchSessionHistoryForTab(tab.id, "needle", "older", 5)
+	if err != nil || len(search.Hits) != 1 || search.Hits[0].MessageID != "m1" {
+		t.Fatalf("search = %+v, %v", search, err)
+	}
+}
+
+func TestRemoteCanonicalSessionHistoryRequiresCapability(t *testing.T) {
+	var reads atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reads.Add(1) }))
+	defer server.Close()
+	app, tab := remoteTranscriptFixture(server)
+	if _, err := app.RemoteSessionHistoryPageForTab(tab.id, "", 0); err == nil {
+		t.Fatal("canonical history unexpectedly enabled")
+	}
+	if reads.Load() != 0 {
+		t.Fatalf("network reads = %d", reads.Load())
 	}
 }

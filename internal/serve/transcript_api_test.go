@@ -13,6 +13,7 @@ import (
 	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/provider"
+	canonical "reasonix/internal/session"
 	"reasonix/internal/transcript"
 )
 
@@ -72,5 +73,65 @@ func TestTranscriptHTTPBindsSessionAndImmutableContent(t *testing.T) {
 	malformed.Body.Close()
 	if malformed.StatusCode != http.StatusBadRequest {
 		t.Fatalf("malformed status=%d", malformed.StatusCode)
+	}
+}
+
+func TestCanonicalSessionHistoryHTTPUsesAuthorizedContentRanges(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "sessions-v4")
+	service, err := canonical.NewService("serve", canonical.NewFilesystemPersistence(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := service.Create(t.Context(), canonical.CreateOptions{SessionID: "canonical"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]any{"message": provider.Message{ID: "large", Role: provider.RoleUser, Content: strings.Repeat("range", 20_000)}})
+	if _, err := runtime.Session().AppendBatch(t.Context(), "message", []canonical.Event{{Kind: "message/complete", Payload: payload}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Session().Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	bc := NewBroadcaster()
+	ctrl := control.New(control.Options{SessionService: service, SessionRuntime: runtime, ExclusiveSession: true, Sink: bc})
+	defer ctrl.Close()
+	server := httptest.NewServer(New(ctrl, bc, config.ServeConfig{}).Handler())
+	defer server.Close()
+	response, err := http.Get(server.URL + "/session-history/page?sessionId=canonical&limit=10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var page canonical.MessageHistoryPage
+	if err := json.NewDecoder(response.Body).Decode(&page); err != nil || response.StatusCode != http.StatusOK || len(page.Messages) != 1 || page.Messages[0].ContentRef == nil {
+		t.Fatalf("history status=%d page=%+v err=%v", response.StatusCode, page, err)
+	}
+	searchResponse, err := http.Get(server.URL + "/session-history/search?sessionId=canonical&q=range&limit=10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer searchResponse.Body.Close()
+	var search canonical.SearchHistoryPage
+	if err := json.NewDecoder(searchResponse.Body).Decode(&search); err != nil || searchResponse.StatusCode != http.StatusOK || len(search.Hits) != 1 || search.Hits[0].MessageID != "large" {
+		t.Fatalf("search status=%d page=%+v err=%v", searchResponse.StatusCode, search, err)
+	}
+	request, _ := json.Marshal(sessionHistoryContentRequest{Ref: *page.Messages[0].ContentRef, Offset: 0, Length: 32})
+	contentResponse, err := http.Get(server.URL + "/session-history/content?sessionId=canonical&request=" + url.QueryEscape(string(request)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer contentResponse.Body.Close()
+	var content sessionHistoryContentResponse
+	if err := json.NewDecoder(contentResponse.Body).Decode(&content); err != nil || contentResponse.StatusCode != http.StatusOK || content.Data == "" || content.NextOffset != 32 {
+		t.Fatalf("content status=%d response=%+v err=%v", contentResponse.StatusCode, content, err)
+	}
+	wrong, err := http.Get(server.URL + "/session-history/page?sessionId=other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong.Body.Close()
+	if wrong.StatusCode != http.StatusConflict {
+		t.Fatalf("wrong session status=%d", wrong.StatusCode)
 	}
 }

@@ -15,7 +15,7 @@ func TestTurnOrchestratorCheckpointBoundaryPrecedesUserMessage(t *testing.T) {
 	sess := agent.NewSession("sys")
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
 	runner := &recordingSessionRunner{session: sess}
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner:      runner,
 		Executor:    exec,
 		SessionDir:  dir,
@@ -51,18 +51,18 @@ func TestTurnOrchestratorCheckpointBoundaryPrecedesUserMessage(t *testing.T) {
 	if err := c.Rewind(0, RewindConversation); err != nil {
 		t.Fatal(err)
 	}
-	// A schema-2 rewind moves the live session onto a new head of the same
-	// log; the boundary precedes the user message, so one message remains,
-	// and the parent chain survives on the main head.
+	// A rewind now moves the runtime to an independent child session. The
+	// boundary precedes the user message, so one message remains and the parent
+	// source stays unchanged as read-only history.
 	live := exec.Session()
 	if live == nil || len(live.Messages) != 1 {
 		t.Fatalf("rewind did not truncate the live transcript: %+v", live)
 	}
-	if ref, ok := live.Head(); !ok || ref.HeadID == agent.SessionMainHead || c.SessionPath() != path {
-		t.Fatalf("rewind must move to a new head of the same log: head=%+v ok=%v path=%q", ref, ok, c.SessionPath())
+	if c.SessionPath() == path {
+		t.Fatalf("rewind must move to an independent child: path=%q", c.SessionPath())
 	}
-	heads, err := agent.ListSessionHeads(path)
-	if err != nil || len(heads) != 2 || heads[0].MessageCount != 2 {
-		t.Fatalf("parent chain must survive on the main head: %+v err=%v", heads, err)
+	parent, err := agent.LoadSession(path)
+	if err != nil || len(parent.Messages) != 2 {
+		t.Fatalf("parent chain changed: %+v err=%v", parent, err)
 	}
 }

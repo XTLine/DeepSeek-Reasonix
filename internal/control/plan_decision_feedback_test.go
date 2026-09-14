@@ -12,7 +12,7 @@ import (
 func TestResolvePlanDecisionStagesRevisionBeforeAnswer(t *testing.T) {
 	session := agent.NewSession("sys")
 	session.Add(provider.Message{Role: provider.RoleAssistant, Content: "proposed plan"})
-	c := New(Options{Executor: agent.New(nil, nil, session, agent.Options{}, event.Discard), WorkspaceRoot: t.TempDir()})
+	c := newOwnedTestController(t, Options{Executor: agent.New(nil, nil, session, agent.Options{}, event.Discard), WorkspaceRoot: t.TempDir()})
 	c.SetSessionPath(filepath.Join(c.workspaceRoot, "session.jsonl"))
 	id, reply := c.approval.registerDecisionKind(planApprovalTool, "", "", true, false, "plan", nil)
 	if err := c.ResolvePlanDecisionWithFeedback(id, PlanDecisionRevisePlan, "cover the rollback path"); err != nil {

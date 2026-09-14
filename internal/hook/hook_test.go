@@ -1216,7 +1216,7 @@ func TestClaudeFacingToolInputAdaptsMappedTools(t *testing.T) {
 		{"task-output-wait-many", "wait", `{"job_ids":["task-1","task-2"]}`, `{"job_ids":["task-1","task-2"],"block":true}`},
 		{"task-stop", "kill_shell", `{"job_id":"bash-1"}`, `{"task_id":"bash-1"}`},
 		{"ask-defaults", "ask", `{"questions":[{"question":"Which?","header":"Choice","options":[{"label":"A"},{"label":"B","description":"Keep B"}]}]}`, `{"questions":[{"question":"Which?","header":"Choice","multiSelect":false,"options":[{"label":"A","description":""},{"label":"B","description":"Keep B"}]}]}`},
-		{"todo-default-active-form", "todo_write", `{"todos":[{"content":"Run tests","status":"pending"},{"content":"Ship it","status":"completed","activeForm":"Shipping it"}]}`, `{"todos":[{"content":"Run tests","status":"pending","activeForm":"Run tests"},{"content":"Ship it","status":"completed","activeForm":"Shipping it"}]}`},
+		{"todo-input-unchanged", "todo_write", `{"todos":[{"content":"Run tests","status":"pending"},{"content":"Ship it","status":"completed","activeForm":"Shipping it"}]}`, `{"todos":[{"content":"Run tests","status":"pending"},{"content":"Ship it","status":"completed","activeForm":"Shipping it"}]}`},
 		{"task-default-description", "task", `{"prompt":"do it"}`, `{"prompt":"do it","description":"Run delegated subagent task"}`},
 		{"task-explicit-description", "task", `{"prompt":"do it","description":"Inspect the auth flow"}`, `{"prompt":"do it","description":"Inspect the auth flow"}`},
 		{"read-only-task-default-description", "read_only_task", `{"prompt":"inspect it"}`, `{"prompt":"inspect it","description":"Run read-only research task"}`},

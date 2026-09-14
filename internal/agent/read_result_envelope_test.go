@@ -68,7 +68,7 @@ func TestStoreBatchToolResultStampsReaderEnvelope(t *testing.T) {
 		EOF:             true,
 	}}
 	a, sess := newEnvelopeTestAgent(t, reader)
-	a.storeBatchToolResult(context.Background(), provider.ToolCall{ID: "c1", Name: "read_file", Arguments: `{"path":"a.go"}`}, toolOutcome{output: "  1→a\n  2→b\n"})
+	sess.Add(a.buildBatchToolResult(context.Background(), provider.ToolCall{ID: "c1", Name: "read_file", Arguments: `{"path":"a.go"}`}, toolOutcome{output: "  1→a\n  2→b\n"}))
 
 	env := storedEnvelope(t, sess)
 	if env.ReadID == "" || env.ResultRef == "" {
@@ -90,10 +90,10 @@ func TestStoreBatchToolResultClipsEnvelopeToVisibleBytes(t *testing.T) {
 		EOF:             true,
 	}}
 	a, sess := newEnvelopeTestAgent(t, reader)
-	a.storeBatchToolResult(context.Background(),
+	sess.Add(a.buildBatchToolResult(context.Background(),
 		provider.ToolCall{ID: "c1", Name: "read_file", Arguments: `{"path":"a.go"}`},
 		toolOutcome{output: "  1→a\n", rawOutput: "  1→a\n  2→b\n", truncated: true},
-	)
+	))
 
 	env := storedEnvelope(t, sess)
 	if env.TransportCut != tool.ReadCutToolOutput {
@@ -109,7 +109,7 @@ func TestStoreBatchToolResultClipsEnvelopeToVisibleBytes(t *testing.T) {
 
 func TestStoreBatchToolResultOmitsEnvelopeForPlainReaders(t *testing.T) {
 	a, sess := newEnvelopeTestAgent(t, plainReader{})
-	a.storeBatchToolResult(context.Background(), provider.ToolCall{ID: "c1", Name: "read_file", Arguments: `{"path":"a.go"}`}, toolOutcome{output: "  1→a\n"})
+	sess.Add(a.buildBatchToolResult(context.Background(), provider.ToolCall{ID: "c1", Name: "read_file", Arguments: `{"path":"a.go"}`}, toolOutcome{output: "  1→a\n"}))
 
 	stored := sess.Snapshot()
 	if len(stored) == 0 {

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"reflect"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -27,7 +28,8 @@ var remoteRuntimeDiagnostics struct {
 
 func validRuntimeState(state event.RuntimeStateSnapshot) bool {
 	return state.SchemaVersion == 1 && state.RuntimeEpoch != "" && state.Revision > 0 && state.BackgroundJobs >= 0 &&
-		(state.Phase == "idle" || state.Phase == "executing" || state.Phase == "finishing" || state.Phase == "closed")
+		state.DurableSeq <= state.CommittedSeq &&
+		(state.Phase == "idle" || state.Phase == "executing" || state.Phase == "finishing" || state.Phase == "cancelling" || state.Phase == "recovery_required" || state.Phase == "closed")
 }
 
 // acceptRemoteRuntimeStateLocked shares source ordering for GET and SSE. Host
@@ -55,7 +57,7 @@ func acceptRemoteRuntimeStateLocked(tab *remoteTab, path string, next event.Runt
 			return false
 		}
 		if next.Revision == previous.Revision {
-			if previous != next {
+			if !reflect.DeepEqual(previous, next) {
 				slog.Warn("remote runtime snapshot version conflict", "source", "serve", "revision", next.Revision, "conflicts", remoteRuntimeDiagnostics.conflicts.Add(1))
 				return false
 			}
@@ -113,9 +115,9 @@ func (a *App) acceptRemoteRuntimeFrame(tabID string, gen uint64, path string, fr
 		return
 	}
 	previous, found := tab.runtimeStates[path]
-	resync := !found || previous.RuntimeEpoch != state.RuntimeEpoch || (previous.Revision == state.Revision && previous != state)
+	resync := !found || previous.RuntimeEpoch != state.RuntimeEpoch || (previous.Revision == state.Revision && !reflect.DeepEqual(previous, state))
 	if resync {
-		if tab.runtimeConflicts[path] == state {
+		if reflect.DeepEqual(tab.runtimeConflicts[path], state) {
 			resync = false
 		} else {
 			if tab.runtimeConflicts == nil {
@@ -292,16 +294,16 @@ func (a *App) applyRemoteRuntimeSnapshot(conn remoteRuntimeConnection, states ma
 			previous := tab.runtimeStates[path]
 			// A GET can establish an epoch only if no newer source update
 			// has changed this binding while it was in flight.
-			if previous.RuntimeEpoch != state.RuntimeEpoch && previous != target.states[path] {
+			if previous.RuntimeEpoch != state.RuntimeEpoch && !reflect.DeepEqual(previous, target.states[path]) {
 				continue
 			}
 			acceptRemoteRuntimeStateLocked(tab, path, state, true)
 		}
-		if !seen[tab.routing.currentPath] && tab.runtimeStates[tab.routing.currentPath] == target.states[tab.routing.currentPath] {
+		if !seen[tab.routing.currentPath] && reflect.DeepEqual(tab.runtimeStates[tab.routing.currentPath], target.states[tab.routing.currentPath]) {
 			markRemoteRuntimeUnknownLocked(tab, tab.routing.currentPath)
 		}
 		for path, state := range tab.runtimeStates {
-			if !seen[path] && path != tab.routing.currentPath && state == target.states[path] && tab.runtimeUnknown[path] == target.unknown[path] {
+			if !seen[path] && path != tab.routing.currentPath && reflect.DeepEqual(state, target.states[path]) && tab.runtimeUnknown[path] == target.unknown[path] {
 				delete(tab.runtimeStates, path)
 				delete(tab.runtimeUnknown, path)
 				delete(tab.routing.running, path)

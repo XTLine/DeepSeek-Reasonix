@@ -133,7 +133,7 @@ func TestServerRejectsEverythingBeforeHello(t *testing.T) {
 func TestServerHelloMismatchCodes(t *testing.T) {
 	h := newHarness(t, &fixtureTarget{}, Hooks{})
 	protocol := h.hello()
-	protocol.ProtocolVersion = 2
+	protocol.ProtocolVersion = ProtocolVersion + 1
 	assertCode(t, h.call("desktop/hello", protocol, nil), CodeProtocolMismatch, "protocol_mismatch")
 
 	contract := h.hello()
@@ -175,7 +175,7 @@ func TestServerHelloResultAndInvoke(t *testing.T) {
 	}}
 	h := newHarness(t, &fixtureTarget{}, hooks)
 	result := h.mustHello()
-	if result.ProtocolVersion != 1 || result.ContractDigest != h.contract.Digest() || result.RuntimeGeneration != "g-test" {
+	if result.ProtocolVersion != ProtocolVersion || result.ContractDigest != h.contract.Digest() || result.RuntimeGeneration != "g-test" {
 		t.Fatalf("hello result = %+v", result)
 	}
 	if result.Service.Version != "v1.0.0" || result.Service.Channel != "stable" || result.Service.Commit != "abc123" || result.Service.PID <= 0 {

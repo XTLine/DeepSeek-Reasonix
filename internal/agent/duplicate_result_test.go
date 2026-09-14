@@ -30,6 +30,16 @@ func TestDedupeUsesRawResultBeforeLossySummary(t *testing.T) {
 	}
 }
 
+func TestTodoWriteResultsAreNeverPresentationDeduplicated(t *testing.T) {
+	a := &Agent{}
+	raw := `{"todos":[{"content":"ship","status":"completed"}],"counts":{"total":1,"pending":0,"in_progress":0,"completed":1}}`
+	first, _, _ := a.boundProviderVisibleResult(raw, "todo_write", "todo-1")
+	second, _, _ := a.boundProviderVisibleResult(raw, "todo_write", "todo-2")
+	if first != raw || second != raw {
+		t.Fatalf("todo result was rewritten: first=%q second=%q", first, second)
+	}
+}
+
 func TestResolvedSkipOutcomeDedupesRepeatedLocalDiscovery(t *testing.T) {
 	a := &Agent{}
 	result := `{"id":"mcp-tool:server/read","input_schema":{"type":"object"}}`

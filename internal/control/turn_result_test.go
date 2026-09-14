@@ -56,7 +56,7 @@ func TestControllerFreezesTurnResultBeforeTerminalPublication(t *testing.T) {
 			events := make(chan event.Event, 2)
 			releaseTerminal := make(chan struct{})
 			var cancelDone chan struct{}
-			c := New(Options{Runner: runner, Executor: executor, WorkspaceRoot: root, SessionDir: dir, SessionPath: filepath.Join(dir, "session.jsonl"), Sink: event.FuncSink(func(e event.Event) {
+			c := newOwnedTestController(t, Options{Runner: runner, Executor: executor, WorkspaceRoot: root, SessionDir: dir, SessionPath: filepath.Join(dir, "session.jsonl"), Sink: event.FuncSink(func(e event.Event) {
 				if e.Kind == event.TurnDone {
 					events <- e
 					// Keep publication open while the test inspects the frozen result.

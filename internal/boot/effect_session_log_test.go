@@ -1,9 +1,11 @@
 package boot
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"reasonix/internal/ablation"
@@ -12,21 +14,18 @@ import (
 	"reasonix/internal/provider"
 )
 
-// TestEffectSessionLogUpgradeKeepsModelMessagesThroughRealBuild opens a
-// schema-1 session written by the real stack, upgrades it on the next save,
-// and pins that the provider-visible transcript (ids included) is
-// byte-identical across the upgrade: the format change never touches the
-// prompt-cache prefix.
+// TestEffectSessionLogUpgradeKeepsModelMessagesThroughRealBuild freezes the
+// production compatibility boundary: continuing a schema-1 transcript imports
+// it into a final identity-bound v3 session, leaves the source bytes untouched,
+// and preserves the provider-visible prefix (including stable message ids).
 func TestEffectSessionLogUpgradeKeepsModelMessagesThroughRealBuild(t *testing.T) {
 	isolateConfigHome(t)
 	dir := robustTempDir(t)
 	t.Chdir(dir)
-	t.Setenv("REASONIX_SESSION_LOG", "v1")
+	t.Setenv(agent.SessionLogSchemaEnv, "v1")
 
 	rec := &effectRecordingProvider{}
-	provider.Register("boot-effect-session-log", func(provider.Config) (provider.Provider, error) {
-		return rec, nil
-	})
+	provider.Register("boot-effect-session-log", func(provider.Config) (provider.Provider, error) { return rec, nil })
 	writeFile(t, dir, "reasonix.toml", `
 default_model = "test-model"
 
@@ -41,56 +40,53 @@ name = "test-model"
 kind = "boot-effect-session-log"
 model = "x"
 `)
-	first, err := Build(context.Background(), Options{Sink: event.Discard, Ablation: ablation.Set{}})
-	if err != nil {
-		t.Fatalf("Build: %v", err)
+
+	legacyDir := filepath.Join(t.TempDir(), "sessions")
+	legacyPath := agent.NewSessionPath(legacyDir, "legacy")
+	legacy := agent.NewSession("BASE")
+	legacy.Add(provider.Message{Role: provider.RoleUser, Content: "reply ok"})
+	legacy.Add(provider.Message{Role: provider.RoleAssistant, Content: "ok"})
+	if err := legacy.Save(legacyPath); err != nil {
+		t.Fatalf("write schema-1 source: %v", err)
 	}
-	first.EnsureSessionPath()
-	if err := first.Run(context.Background(), "reply ok"); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	path := first.SessionPath()
-	before, err := json.Marshal(provider.ModelMessages(first.History()))
+	beforeSource, err := os.ReadFile(legacyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	first.Close()
-	if heads, err := agent.ListSessionHeads(path); err != nil || heads != nil {
-		t.Fatalf("schema-1 session must have no heads yet: %v %v", heads, err)
+	before, err := json.Marshal(provider.ModelMessages(legacy.Snapshot()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Unsetenv(agent.SessionLogSchemaEnv); err != nil {
+		t.Fatal(err)
 	}
 
-	if err := os.Unsetenv("REASONIX_SESSION_LOG"); err != nil {
-		t.Fatal(err)
-	}
-	lease, err := agent.TryAcquireSessionLease(path)
-	if err != nil {
-		t.Fatalf("lease: %v", err)
-	}
-	defer lease.Release()
-	loaded, err := agent.LoadSession(path)
-	if err != nil {
-		t.Fatalf("LoadSession: %v", err)
-	}
-	second, err := Build(context.Background(), Options{Sink: event.Discard, Ablation: ablation.Set{}})
+	ctrl, err := Build(context.Background(), withTestSession(t, Options{SessionDir: legacyDir, Sink: event.Discard, Ablation: ablation.Set{}}))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	defer second.Close()
-	second.Resume(loaded, path)
-	if err := second.Run(context.Background(), "reply again"); err != nil {
-		t.Fatalf("Run after resume: %v", err)
+	ref, err := ctrl.ContinueLegacySession(context.Background(), legacyPath, "")
+	if err != nil {
+		ctrl.Close()
+		t.Fatalf("ContinueLegacySession: %v", err)
 	}
-	if err := second.Snapshot(); err != nil {
-		t.Fatalf("Snapshot: %v", err)
+	if ctrl.SessionPath() != "" {
+		t.Fatalf("migrated v3 runtime retained legacy execution path %q", ctrl.SessionPath())
 	}
-	heads, err := agent.ListSessionHeads(path)
-	if err != nil || len(heads) != 1 {
-		t.Fatalf("session was not upgraded to schema 2: heads=%v err=%v", heads, err)
+	if err := ctrl.Run(context.Background(), "reply again"); err != nil {
+		ctrl.Close()
+		t.Fatalf("Run after migration: %v", err)
 	}
-	after, err := json.Marshal(provider.ModelMessages(second.History()))
+	after, err := json.Marshal(provider.ModelMessages(ctrl.History()))
 	if err != nil {
 		t.Fatal(err)
 	}
+	service, runtime, ok := ctrl.SessionBinding()
+	if !ok || runtime.Ref() != ref {
+		t.Fatalf("bound runtime = %+v, want %+v", runtime, ref)
+	}
+	ctrl.Close()
+
 	var beforeMsgs, afterMsgs []json.RawMessage
 	if err := json.Unmarshal(before, &beforeMsgs); err != nil {
 		t.Fatal(err)
@@ -99,15 +95,21 @@ model = "x"
 		t.Fatal(err)
 	}
 	if len(afterMsgs) <= len(beforeMsgs) {
-		t.Fatalf("resumed transcript did not grow: before %d after %d", len(beforeMsgs), len(afterMsgs))
+		t.Fatalf("migrated transcript did not grow: before %d after %d", len(beforeMsgs), len(afterMsgs))
 	}
 	for i := range beforeMsgs {
 		if string(beforeMsgs[i]) != string(afterMsgs[i]) {
-			t.Fatalf("message %d changed across the schema upgrade\nbefore: %s\nafter:  %s", i, beforeMsgs[i], afterMsgs[i])
+			t.Fatalf("message %d changed across legacy import\nbefore: %s\nafter:  %s", i, beforeMsgs[i], afterMsgs[i])
 		}
 	}
-	reloaded, err := agent.LoadSession(path)
-	if err != nil || len(reloaded.Messages) != len(afterMsgs) {
-		t.Fatalf("reload after upgrade: err=%v len=%d want %d", err, len(reloaded.Messages), len(afterMsgs))
+	if got, err := os.ReadFile(legacyPath); err != nil || !bytes.Equal(got, beforeSource) {
+		t.Fatalf("legacy source changed during import: err=%v", err)
+	}
+	cold, err := service.Query().History(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("cold v3 history: %v", err)
+	}
+	if len(provider.ModelMessages(cold)) != len(afterMsgs) {
+		t.Fatalf("cold v3 history len=%d, want %d", len(provider.ModelMessages(cold)), len(afterMsgs))
 	}
 }

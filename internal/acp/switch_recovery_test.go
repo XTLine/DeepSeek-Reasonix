@@ -114,6 +114,11 @@ func TestACPRebuildSessionContinuesRecoveryPathAfterSnapshotConflict(t *testing.
 	}
 	sess.lease = lease
 	t.Cleanup(sess.releaseSessionLease)
+	t.Cleanup(func() {
+		if ctrl := sess.currentCtrl(); ctrl != nil {
+			ctrl.Close()
+		}
+	})
 
 	svc := &service{
 		factory:  &configurableFactory{dir: dir},
@@ -494,6 +499,11 @@ func TestACPRebuildSessionRefreshesLeadingSystemPromptForNewModel(t *testing.T) 
 	}
 	sess.lease = lease
 	t.Cleanup(sess.releaseSessionLease)
+	t.Cleanup(func() {
+		if ctrl := sess.currentCtrl(); ctrl != nil {
+			ctrl.Close()
+		}
+	})
 
 	sess.ctrl = control.New(control.Options{
 		Executor:    agent.New(nil, nil, oldSession, agent.Options{}, event.Discard),

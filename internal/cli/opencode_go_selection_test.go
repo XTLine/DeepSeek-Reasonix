@@ -43,7 +43,7 @@ model = "deepseek-v4-flash"
 	if got, err := modelForResumePath(ref, path, cfg); err != nil || got != ref {
 		t.Fatalf("explicit CLI selection blocked: %q, %v", got, err)
 	}
-	ctrl := control.New(control.Options{ModelRef: ref, ModelIdentity: cfg.ModelSelectionIdentity(ref)})
+	ctrl := newOwnedTestController(t, control.Options{ModelRef: ref, ModelIdentity: cfg.ModelSelectionIdentity(ref)})
 	defer ctrl.Close()
 	ctrl.Resume(s, path)
 	if err := persistCLIModelSelection(ctrl); err != nil {

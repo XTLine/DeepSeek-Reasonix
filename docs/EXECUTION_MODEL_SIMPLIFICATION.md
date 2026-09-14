@@ -10,7 +10,7 @@ Reasonix 将任务判断、执行控制和运行记录分开。模型负责规�
 - 普通回合在模型正常结束后结束。未完成待办、修改文件数、鉴权或迁移路径、缺少测试或审查不会触发质量门禁或追加回合。
 - 用户的验证要求和项目检查说明仍是任务上下文；它们不再被编译成宿主验收义务。
 - Plan 审批前仍禁止写入，包括 Yolo、代理工具和子 agent。批准后按计划及用户意见执行，待办由模型更新，不需要逐步签收。
-- Goal 的 `update_goal` 是模型状态报告。正常结束时提交 `complete`；`blocked` 停止续跑；`continue` 或漏报保持活动并继续。无独立 evaluator，不从自然语言猜测完成。
+- Goal 的生命周期由 `get_goal`、`create_goal` 和带精确 ID／revision 的 `update_goal` 管理。目标保持 `active + armed` 时，运行时空闲驱动器自动接纳下一轮；模型无需逐轮提交继续回执。`complete` 结束目标，`blocked` 停止续跑。无独立 evaluator，不从自然语言猜测完成。
 - 完成声明不会覆盖测试失败，也不会将未完成待办批量改为完成。取消、权限等待、错误和显式预算边界不会被当作正常完成。
 - `complete_step`、`review_report` 和读取策略回执已退役。旧调用返回普通 `tool_retired` 结果，不改变待办或恢复状态。
 
@@ -32,7 +32,7 @@ Ordinary turns end when the model ends normally. Pending todos, changed-file cou
 
 Plan retains its preapproval write boundary, including Yolo, proxy tools, and subagents. After approval, execution follows the plan and feedback without sequential evidence signoff. The model updates todos.
 
-Goal accepts structured `update_goal` reports at a normal end boundary: `complete` reports completion, `blocked` stops continuation, and `continue` or no report keeps the Goal active. There is no separate completion evaluator or prose-based completion detection. Reports cannot overwrite actual failed checks or unfinished todos. Cancellation, permission waits, errors, and explicit resource pauses remain execution boundaries.
+Goal lifecycle is managed through `get_goal`, `create_goal`, and exact-ID/revision `update_goal` actions. While a Goal remains `active + armed`, the runtime-idle driver admits the next round without a per-turn continuation receipt. `complete` ends the Goal and `blocked` stops continuation. There is no separate completion evaluator or prose-based completion detection. Lifecycle actions cannot overwrite actual failed checks or unfinished todos. Cancellation, permission waits, errors, and explicit resource pauses remain execution boundaries.
 
 `complete_step` is retired from discovery. Compatible old calls receive a
 normal `tool_retired` result and never modify todos.

@@ -9,14 +9,14 @@ import (
 	"reasonix/internal/agent"
 	"reasonix/internal/event"
 	"reasonix/internal/provider"
+	"reasonix/internal/session"
 	"reasonix/internal/store"
 	"reasonix/internal/tool"
 )
 
-// TestConcurrentControllersShareOneLogWithoutRecoveryCopies is the
-// controller-level contract for the schema-2 log: two runtimes on one
-// conversation each keep their own head in the same log, nothing is lost,
-// and no recovery copy is ever created.
+// TestConcurrentControllersShareOneLogWithoutRecoveryCopies covers the short
+// in-process overlap used by runtime replacement. The durable v3 history stays
+// linear; it no longer manufactures same-log heads for each controller.
 func TestConcurrentControllersShareOneLogWithoutRecoveryCopies(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "shared.jsonl")
@@ -25,7 +25,7 @@ func TestConcurrentControllersShareOneLogWithoutRecoveryCopies(t *testing.T) {
 
 	provA := &recordingProvider{streams: reply}
 	execA := agent.New(provA, tool.NewRegistry(), agent.NewSession(systemPrompt), agent.Options{}, event.Discard)
-	ctrlA := New(Options{Runner: execA, Executor: execA, SystemPrompt: systemPrompt, SessionDir: dir, SessionPath: path, Label: "a", Sink: event.Discard})
+	ctrlA := newOwnedTestController(t, Options{Runner: execA, Executor: execA, SystemPrompt: systemPrompt, SessionDir: dir, SessionPath: path, Label: "a", Sink: event.Discard})
 	if err := ctrlA.RunTurn(context.Background(), "first from A"); err != nil {
 		t.Fatalf("A first turn: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestConcurrentControllersShareOneLogWithoutRecoveryCopies(t *testing.T) {
 	}
 	provB := &recordingProvider{streams: reply}
 	execB := agent.New(provB, tool.NewRegistry(), agent.NewSession(systemPrompt), agent.Options{}, event.Discard)
-	ctrlB := New(Options{Runner: execB, Executor: execB, SystemPrompt: systemPrompt, SessionDir: dir, SessionPath: path, Label: "b", Sink: event.Discard})
+	ctrlB := newOwnedTestController(t, Options{Runner: execB, Executor: execB, SystemPrompt: systemPrompt, SessionDir: dir, SessionPath: path, Label: "b", Sink: event.Discard})
 	ctrlB.Resume(loaded, path)
 
 	if err := ctrlA.RunTurn(context.Background(), "second from A"); err != nil {
@@ -64,25 +64,29 @@ func TestConcurrentControllersShareOneLogWithoutRecoveryCopies(t *testing.T) {
 			t.Fatalf("concurrent controllers created a transcript copy: %s", entry.Name())
 		}
 	}
-	heads, err := agent.ListSessionHeads(path)
+	commits, err := session.Replay(sessionDirectory(path), nil)
 	if err != nil {
-		t.Fatalf("ListSessionHeads: %v", err)
+		t.Fatalf("Replay v3: %v", err)
 	}
-	if len(heads) != 2 {
-		t.Fatalf("heads = %+v, want main plus one concurrent head", heads)
-	}
-	for _, h := range heads {
-		if h.MessageCount != 5 {
-			t.Fatalf("head %s has %d messages, want system + two exchanges", h.ID, h.MessageCount)
+	turnEnds := 0
+	var kinds []string
+	for _, commit := range commits {
+		for _, event := range commit.Events {
+			kinds = append(kinds, event.Kind)
+			if event.Kind == "turn/end" {
+				turnEnds++
+			}
 		}
 	}
-	if heads[1].Kind != agent.HeadKindConcurrent {
-		t.Fatalf("second head kind = %q", heads[1].Kind)
+	if turnEnds != 3 {
+		t.Fatalf("linear v3 turn endings = %d, want 3; kinds=%v", turnEnds, kinds)
 	}
 	if ctrlA.SessionPath() != path || ctrlB.SessionPath() != path {
 		t.Fatalf("controllers moved off the shared path: %q %q", ctrlA.SessionPath(), ctrlB.SessionPath())
 	}
-	if len(ctrlB.History()) != 5 || len(ctrlA.History()) != 5 {
+	// system + three complete user/assistant turns come from the shared typed
+	// event projection for both short-lived controller generations.
+	if len(ctrlB.History()) != 7 || len(ctrlA.History()) != 7 {
 		t.Fatalf("histories A=%d B=%d", len(ctrlA.History()), len(ctrlB.History()))
 	}
 }

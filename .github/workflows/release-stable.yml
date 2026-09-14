@@ -38,6 +38,11 @@ on:
         required: false
         default: true
         type: boolean
+      desktop_manual_only:
+        description: "One-time v1.38.8 recovery: unsigned Windows, manual Desktop downloads only"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: stable-release-${{ inputs.tag || github.ref_name }}
@@ -82,6 +87,12 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
           ALLOW_STABLE_RECOVERY: ${{ inputs.allow_recovery }}
         run: bash scripts/resolve-stable-release.sh
+      - name: Restrict manual Desktop recovery
+        if: ${{ inputs.desktop_manual_only }}
+        run: |
+          test "${{ inputs.allow_recovery }}" = "true"
+          test "${{ steps.release.outputs.cli_tag }}" = "v1.38.8"
+          test "${{ steps.release.outputs.sha }}" = "7278072720a2dc7a31cce0eec18c1eacc149c0e0"
       - name: Revalidate normal release candidate and exact push CI
         if: ${{ !inputs.allow_recovery }}
         env:
@@ -182,6 +193,7 @@ jobs:
       approved_sha: ${{ needs.authorize.outputs.sha }}
       orchestrated: true
       signing_preflight: true
+      desktop_manual_only: ${{ inputs.desktop_manual_only || false }}
     secrets: inherit
 
   desktop:
@@ -196,6 +208,7 @@ jobs:
       approved_sha: ${{ needs.authorize.outputs.sha }}
       orchestrated: true
       signing_preflight_verified: true
+      desktop_manual_only: ${{ inputs.desktop_manual_only || false }}
       preflight_artifact_prefix: ${{ needs.signpath-preflight.outputs.artifact_prefix }}
     secrets: inherit
 
@@ -247,6 +260,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.authorize.outputs.version }}
           CLI_TAG: ${{ needs.authorize.outputs.cli_tag }}
           DESKTOP_TAG: ${{ needs.authorize.outputs.desktop_tag }}
+          DESKTOP_MANUAL_ONLY: ${{ inputs.desktop_manual_only || false }}
         run: bash scripts/verify-stable-release-artifacts.sh
       - name: Publish exact Stable release record
         env:

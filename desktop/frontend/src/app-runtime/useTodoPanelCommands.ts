@@ -1,7 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useCommittedCommand } from "../lib/useCommittedCommand";
-import { loadDismissedTodoKeys, saveDismissedTodoKeys } from "../lib/todoDismissalStorage";
-import { parseTodos, type Todo } from "../lib/tools";
+import type { Todo } from "../lib/tools";
 import {
   dismissedTodoKeyForScope,
   resolveTodoPanelTodos,
@@ -26,7 +25,6 @@ export type TodoPanelCommandsInput = {
     canonicalTodos?: Todo[] | null;
     sessionPath?: string;
     eventChannel?: string;
-    dismissedTodoBatches?: string[];
   } | undefined | null;
   activeTab: TabMeta | undefined;
   activeTabId: string | undefined;
@@ -39,43 +37,31 @@ export type TodoPanelCommandsInput = {
   ports: {
     remoteSend(text: string): Promise<void>;
     sendToTab(tabId: string, text: string): Promise<void>;
-    dismissTodoBatch(tabId: string, batchKey: string): Promise<void>;
   };
 };
 
 /**
  * Owns the pinned task list above the composer: the canonical todo_write
- * projection, session-scoped dismissal persistence and the dismiss/continue
- * commands. The live task list comes from the most recent successful
- * top-level todo_write result; failed or still-running attempts do not
- * advance the canonical panel state. Incomplete lists are always shown so a
- * stale local dismissal cannot hide work that still blocks final readiness;
- * every new list starts collapsed while its header keeps showing live
- * progress and the current task. Live completion briefly shows 3/3 before
- * retirement; restored completed lists stay in transcript only. The
- * dismissal key is still based on stable todo content/state so history
- * reloads do not resurrect the same finished list. The status-agnostic batch
- * key prevents false new batches; dismissal remains session-scoped and
- * sidecar-persisted.
+ * projection and the dismiss/continue commands. The shared runtime snapshot
+ * is the only current-state source; transcript tool cards remain history and
+ * are never replayed into the live panel. Dismissal is local presentation state
+ * for this mounted UI and cannot outlive a real turn boundary.
  */
 export function useTodoPanelCommands(input: TodoPanelCommandsInput) {
-  const { items, activeTab, activeTabId, remote, t, ports } = input;
-  const todoEntry = useMemo(() => {
-    for (let i = items.length - 1; i >= 0; i--) {
-      const it = items[i];
-      if (it.kind === "tool" && it.name === "todo_write" && !it.parentId && it.status === "done" && !it.error) {
-        return { item: it, index: i };
-      }
-    }
-    return null;
-  }, [items]);
-  const todoItem = todoEntry?.item ?? null;
-  const metaTodos = remote ? undefined : input.meta?.canonicalTodos;
-  const todos = useMemo(
-    () => resolveTodoPanelTodos(metaTodos, todoItem ? parseTodos(todoItem.args) : undefined),
-    [metaTodos, todoItem],
-  );
-  const [dismissedTodoKeys, setDismissedTodoKeys] = useState<Set<string>>(loadDismissedTodoKeys);
+  const { activeTab, activeTabId, remote, t, ports } = input;
+  const metaTodos = input.meta?.canonicalTodos;
+  const todos = useMemo(() => resolveTodoPanelTodos(metaTodos), [metaTodos]);
+  // Dismissal is a view preference for this mounted UI only. Persisting a todo
+  // fingerprint made stale progress survive real turn boundaries and become a
+  // second business-state store.
+  const [dismissedTodoKeys, setDismissedTodoKeys] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    // turn_started publishes an authoritative empty list before any new
+    // todo_write. Dropping presentation keys here prevents an identical list
+    // in the next turn from inheriting the previous turn's dismissal.
+    if (todos.length === 0) setDismissedTodoKeys(new Set());
+  }, [todos]);
   const todoKey = useMemo(() => todoDismissalKey(todos), [todos]);
   const todoBatch = useMemo(() => todoBatchKey(todos), [todos]);
   const todoScope = useMemo(
@@ -88,22 +74,15 @@ export function useTodoPanelCommands(input: TodoPanelCommandsInput) {
   );
   const scopedTodoKey = useMemo(() => scopedTodoDismissalKey(todoScope, todoKey), [todoKey, todoScope]);
   const scopedTodoBatch = useMemo(() => scopedTodoBatchKey(todoScope, todoBatch), [todoBatch, todoScope]);
-  const showTodos = shouldShowTodoPanel(todoKey, dismissedTodo, todos, { batchKey: todoBatch, batches: !remote && input.meta?.sessionPath === activeTab?.sessionPath ? input.meta?.dismissedTodoBatches : undefined });
+  const showTodos = shouldShowTodoPanel(todoKey, dismissedTodo, todos);
   const dismissTodos = useCommittedCommand(() => {
     if (!scopedTodoKey) return;
     setDismissedTodoKeys((current) => {
       if (current.has(scopedTodoKey)) return current;
       const next = new Set(current);
       next.add(scopedTodoKey);
-      saveDismissedTodoKeys(next);
       return next;
     });
-    if (!remote && activeTabId && todoBatch) {
-      const target = { tabId: activeTabId, sessionKey: input.sessionKey };
-      void input.operations(target, "todo-dismiss", {}, async (_input, authority) => (await import("./sessionRuntimeOwner")).executeTodoDismissal(
-        target, todoBatch, (tabId, batchKey) => ports.dismissTodoBatch(tabId, batchKey), authority,
-      )).catch(() => undefined);
-    }
   });
   const handleTodoContinue = useCommittedCommand(() => {
     const targetTabId = todoContinueTarget(activeTabId, activeTabId, {

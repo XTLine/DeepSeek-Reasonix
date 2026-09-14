@@ -1101,13 +1101,19 @@ The default is `0` (off). Reaching a positive token budget produces one summary
 and a resumable `budget_spend` pause. `/goal resume` grants a fresh configured
 slice while cumulative Goal statistics remain intact. Explicit positive
 `max_steps`, task time, and task cost budgets remain available as well.
-Cumulative turns, tokens, real provider requests, and active work time are
-tracked and shown as statistics; a token limit appears only when explicitly
-configured. A paused goal keeps its todos and runtime history — use `/goal resume` to continue, or `/goal
-pause` to pause a running goal manually. `/goal status` shows turns, requests,
-tokens, and work time. Exact consecutive tool calls receive reminders at the
-third, fifth, and eighth occurrence; the calls still execute. At the end of every goal turn
-the model reports its judgment through `update_goal`: `complete` commits its completion declaration at normal turn end, `blocked` stops continuation, and `continue` or no report keeps the Goal active. No evaluator or host quality check decides completion. Failed checks and unfinished todos remain unchanged. Restoring or forking loads the Goal without activating it; start or resume explicitly.
+Cumulative rounds, tokens and real provider requests are tracked and shown as
+statistics; a token limit appears only when explicitly configured. A paused
+goal keeps its objective and runtime history — use `/goal resume` to continue,
+or `/goal pause` to pause a running goal manually. `/goal status` shows rounds,
+requests and tokens. Exact consecutive tool calls receive reminders at the
+third, fifth, and eighth occurrence; the calls still execute. An active, armed
+goal continues after an ordinary model final through the runtime idle driver;
+there is no per-turn `continue` report. The model uses `update_goal(complete)`
+when it judges the whole objective finished and `update_goal(blocked)` for a
+concrete persistent blocker. No evaluator, todo percentage or host quality
+gate decides completion. Restoring, importing or forking loads the durable
+goal disarmed; a directly authorized user turn or explicit UI action must
+resume it.
 
 For complex work, write the objective as a
 [task contract](./TASK_CONTRACT.md): Context, Request, Output format,
@@ -1116,15 +1122,21 @@ for autonomous work. It keeps going with sensible defaults unless the next step
 requires an irreversible or externally visible operation, a scope change, or
 information only the user can provide.
 
-Legacy simple/write/research classes are still inferred for sidecar and CLI
-compatibility, but they no longer select an execution quota. There is no
-separate research runtime to configure. Goal state and actual usage stay in the normal session sidecar. Legacy `.reasonix/autoresearch/<task-id>/` archives remain read-only; explicit old paths can be recovered as ordinary Goals. Deprecated budget flags are accepted for compatibility but hidden from help and completion.
+Legacy simple/write/research classes and Goal sidecars are read only at the
+explicit compatibility/import boundary. There is no separate research runtime
+to configure. Current Goal state is a versioned `goal/state` projection in the
+linear v3 session, and activation is process-local. Legacy
+`.reasonix/autoresearch/<task-id>/` archives remain read-only. Deprecated
+budget flags are accepted for compatibility but hidden from help and
+completion.
 
 ### Model task progress
 
-`todo_write` updates task progress. The host does not finish todos when a turn
-or Goal ends. `complete_step` is absent from discovery; an old call returns a
-normal `tool_retired` result and never changes task state.
+`todo_write` updates progress for the current top-level turn. A newly admitted
+Goal round starts with a fresh todo plan; compaction, steer and interactive
+answers inside that round keep the current list. The host does not finish todos
+when a turn or Goal ends. `complete_step` is absent from discovery; an old call
+returns a normal `tool_retired` result and never changes task state.
 
 ## @ references
 

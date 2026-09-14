@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"reasonix/internal/agent"
 	"reasonix/internal/agent/testutil"
 	"reasonix/internal/control"
 	"reasonix/internal/event"
@@ -162,7 +161,7 @@ model = "x"
 	)
 	setBootTokenProfileTestProvider(t, prov)
 	var projectedPath string
-	ctrl, err := Build(context.Background(), Options{
+	ctrl, err := Build(context.Background(), withTestSession(t, Options{
 		SessionDir:           sessionDir,
 		Sink:                 event.Discard,
 		HeadlessApprovalMode: control.ToolApprovalYolo,
@@ -173,7 +172,7 @@ model = "x"
 			projectedPath = gotPath
 			return nil
 		},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,12 +181,13 @@ model = "x"
 	if err := ctrl.Run(context.Background(), "name this session"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if projectedPath == "" || projectedPath != ctrl.SessionPath() {
-		t.Fatalf("projected path = %q, current = %q", projectedPath, ctrl.SessionPath())
+	ref, ok := ctrl.SessionRef()
+	if !ok || projectedPath != ref.SessionID {
+		t.Fatalf("projected identity = %q, current = %+v", projectedPath, ref)
 	}
-	meta, ok, err := agent.LoadBranchMeta(projectedPath)
-	if err != nil || !ok || meta.CustomTitle != "Current integration task" {
-		t.Fatalf("meta = %+v, ok=%v, err=%v", meta, ok, err)
+	_, runtime, bound := ctrl.SessionBinding()
+	if !bound || runtime.Session().Snapshot().Projection.Title != "Current integration task" {
+		t.Fatalf("title projection = %q, want current integration task", runtime.Session().Snapshot().Projection.Title)
 	}
 	for _, req := range prov.Requests() {
 		if requestHasTool(req, "set_session_title") {

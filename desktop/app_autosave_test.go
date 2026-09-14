@@ -35,7 +35,9 @@ func controllerWithContent(t *testing.T, path string) *control.Controller {
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "remember this turn"})
 	sess.Add(provider.Message{Role: provider.RoleAssistant, Content: "acknowledged"})
 	ag := agent.New(stubProvider{}, tool.NewRegistry(), sess, agent.Options{}, event.Discard)
-	return control.New(control.Options{Executor: ag, SessionDir: filepath.Dir(path), SessionPath: path, Sink: event.Discard})
+	ctrl := control.New(control.Options{Executor: ag, SessionDir: filepath.Dir(path), SessionPath: path, Sink: event.Discard})
+	t.Cleanup(ctrl.Close)
+	return ctrl
 }
 
 func waitForFile(t *testing.T, path, want string) {
@@ -87,6 +89,7 @@ func appWithTab(t *testing.T, path string) (*App, *WorkspaceTab) {
 		activeTabID: "test_tab",
 	}
 	tab.sink.app = a
+	t.Cleanup(func() { waitForAutosaveIdle(t, tab) })
 	return a, tab
 }
 

@@ -18,7 +18,7 @@ func newSchemaTwoBranchController(t *testing.T) (*Controller, *agent.Session, st
 	sess := exec.Session()
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "root prompt"})
 	sess.Add(provider.Message{Role: provider.RoleAssistant, Content: "root answer"})
-	c := New(Options{Executor: exec, SessionDir: dir, Label: "test", Sink: event.Discard})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, Label: "test", Sink: event.Discard})
 	path := filepath.Join(dir, "root.jsonl")
 	c.SetSessionPath(path)
 	if err := c.Snapshot(); err != nil {
@@ -30,18 +30,18 @@ func newSchemaTwoBranchController(t *testing.T) (*Controller, *agent.Session, st
 	return c, sess, path
 }
 
-func TestBranchAndSwitchUseHeadsForSchemaTwo(t *testing.T) {
-	c, sess, path := newSchemaTwoBranchController(t)
+func TestBranchAndSwitchUseIndependentSessionsForSchemaTwo(t *testing.T) {
+	c, _, path := newSchemaTwoBranchController(t)
 	rootID := agent.BranchID(path)
-	head, err := c.Branch("experiment")
+	branchPath, err := c.Branch("experiment")
 	if err != nil {
 		t.Fatalf("Branch: %v", err)
 	}
-	if head == "" || head == path || strings.HasSuffix(head, ".jsonl") {
-		t.Fatalf("Branch on schema 2 must return a head id, got %q", head)
+	if branchPath == "" || branchPath == path || !strings.HasSuffix(branchPath, ".jsonl") {
+		t.Fatalf("Branch must return an independent session path, got %q", branchPath)
 	}
-	if c.SessionPath() != path {
-		t.Fatalf("branch must not change the session path: %q", c.SessionPath())
+	if c.SessionPath() != branchPath {
+		t.Fatalf("branch must switch to the child session: %q", c.SessionPath())
 	}
 	entries, _ := filepath.Glob(filepath.Join(filepath.Dir(path), "*.jsonl"))
 	transcripts := 0
@@ -50,10 +50,10 @@ func TestBranchAndSwitchUseHeadsForSchemaTwo(t *testing.T) {
 			transcripts++
 		}
 	}
-	if transcripts != 1 {
-		t.Fatalf("branch created a new transcript file: %v", entries)
+	if transcripts != 2 {
+		t.Fatalf("branch transcripts = %v", entries)
 	}
-	sess.Add(provider.Message{Role: provider.RoleUser, Content: "on the branch"})
+	c.executor.Session().Add(provider.Message{Role: provider.RoleUser, Content: "on the branch"})
 	if err := c.Snapshot(); err != nil {
 		t.Fatal(err)
 	}
@@ -66,15 +66,15 @@ func TestBranchAndSwitchUseHeadsForSchemaTwo(t *testing.T) {
 		switch branches[i].ID {
 		case rootID:
 			main = &branches[i]
-		case head:
+		case agent.BranchID(branchPath):
 			branch = &branches[i]
 		}
 	}
 	if main == nil || branch == nil {
-		t.Fatalf("branches = %+v, want the log's main head and the new head", branches)
+		t.Fatalf("branches = %+v, want parent and independent child", branches)
 	}
-	if main.HeadID != agent.SessionMainHead || branch.HeadKind != agent.HeadKindFork || branch.ParentID != rootID || branch.Name != "experiment" || branch.Path != path {
-		t.Fatalf("head branch infos = main %+v branch %+v", main, branch)
+	if branch.ParentID != rootID || branch.Name != "experiment" || branch.Path != branchPath || branch.HeadID != "" {
+		t.Fatalf("file branch infos = main %+v branch %+v", main, branch)
 	}
 	tree := c.BranchTreeText()
 	if !strings.Contains(tree, "experiment") {
@@ -83,25 +83,25 @@ func TestBranchAndSwitchUseHeadsForSchemaTwo(t *testing.T) {
 	if _, err := c.SwitchBranch(rootID); err != nil {
 		t.Fatalf("SwitchBranch main: %v", err)
 	}
-	if got := len(sess.Snapshot()); got != 3 || c.SessionPath() != path {
+	if got := len(c.executor.Session().Snapshot()); got != 3 || c.SessionPath() != path {
 		t.Fatalf("after switching back: %d messages path %q", got, c.SessionPath())
 	}
-	if _, err := c.SwitchBranch(head); err != nil {
-		t.Fatalf("SwitchBranch head: %v", err)
+	if _, err := c.SwitchBranch(agent.BranchID(branchPath)); err != nil {
+		t.Fatalf("SwitchBranch child: %v", err)
 	}
-	if got := sess.Snapshot(); len(got) != 4 || got[3].Content != "on the branch" {
-		t.Fatalf("after switching to the head: %+v", got)
+	if got := c.executor.Session().Snapshot(); len(got) != 4 || got[3].Content != "on the branch" {
+		t.Fatalf("after switching to the child: %+v", got)
 	}
-	reloaded, err := agent.LoadSession(path)
+	reloaded, err := agent.LoadSession(branchPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ref, _ := reloaded.Head(); ref.HeadID != head {
-		t.Fatalf("reload must land on the switched head, got %+v", ref)
+	if got := reloaded.Snapshot(); len(got) != 4 || got[3].Content != "on the branch" {
+		t.Fatalf("reloaded child = %+v", got)
 	}
 }
 
-func TestForkAtTurnCreatesRewindHeadInSameLog(t *testing.T) {
+func TestForkAtTurnCreatesIndependentSession(t *testing.T) {
 	c, sess, path := newSchemaTwoBranchController(t)
 	// A guarded turn opens a checkpoint boundary the fork can target.
 	c.beginCheckpoint(t.Context(), "second prompt")
@@ -119,22 +119,25 @@ func TestForkAtTurnCreatesRewindHeadInSameLog(t *testing.T) {
 	if turn < 0 {
 		t.Fatal("no checkpoint boundary recorded")
 	}
-	head, err := c.ForkNamed(turn, "")
+	childPath, err := c.ForkNamed(turn, "")
 	if err != nil {
 		t.Fatalf("ForkNamed: %v", err)
 	}
-	if c.SessionPath() != path || strings.HasSuffix(head, ".jsonl") {
-		t.Fatalf("fork must stay on the log: path %q head %q", c.SessionPath(), head)
+	if c.SessionPath() != childPath || childPath == path || !strings.HasSuffix(childPath, ".jsonl") {
+		t.Fatalf("fork must switch to independent child: path %q child %q", c.SessionPath(), childPath)
 	}
-	if got := len(sess.Snapshot()); got != 3 {
+	if got := len(c.executor.Session().Snapshot()); got != 3 {
 		t.Fatalf("forked transcript has %d messages, want the prefix before the turn", got)
 	}
-	heads, err := agent.ListSessionHeads(path)
-	if err != nil || len(heads) != 2 || heads[1].ID != head || heads[1].Kind != agent.HeadKindFork {
-		t.Fatalf("heads = %+v err=%v", heads, err)
+	parent, err := agent.LoadSession(path)
+	if err != nil {
+		t.Fatalf("load parent after fork: %v", err)
 	}
-	if heads[0].MessageCount != 5 {
-		t.Fatalf("main head must keep its full chain, got %d messages", heads[0].MessageCount)
+	if len(parent.Snapshot()) != 5 {
+		t.Fatalf("parent changed after fork: messages=%d", len(parent.Snapshot()))
+	}
+	if heads, err := agent.ListSessionHeads(path); err != nil || len(heads) != 1 {
+		t.Fatalf("new fork added a writable legacy head: %+v err=%v", heads, err)
 	}
 }
 
@@ -142,7 +145,7 @@ func TestFileBranchesOnlyKeepsFileBranchesForSchemaTwo(t *testing.T) {
 	dir := t.TempDir()
 	exec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard)
 	exec.Session().Add(provider.Message{Role: provider.RoleUser, Content: "root prompt"})
-	c := New(Options{Executor: exec, SessionDir: dir, Label: "test", Sink: event.Discard, FileBranchesOnly: true})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, Label: "test", Sink: event.Discard, FileBranchesOnly: true})
 	path := filepath.Join(dir, "root.jsonl")
 	c.SetSessionPath(path)
 	if err := c.Snapshot(); err != nil {
@@ -179,15 +182,14 @@ func TestCommitRewindInPlaceForksRewindHeadAndKeepsController(t *testing.T) {
 		t.Fatalf("PrepareRewind = %+v err=%v", plan, err)
 	}
 	result, err := c.CommitRewindInPlace(plan.PlanID)
-	if err != nil || !result.OK || !result.ConversationForked || result.Branch == "" || strings.HasSuffix(result.Branch, ".jsonl") {
+	if err != nil || !result.OK || !result.ConversationForked || result.Branch == "" || !strings.HasSuffix(result.Branch, ".jsonl") {
 		t.Fatalf("CommitRewindInPlace = %+v err=%v", result, err)
 	}
-	if c.SessionPath() != path || len(sess.Snapshot()) != 3 {
-		t.Fatalf("controller after in-place rewind: path %q messages %d", c.SessionPath(), len(sess.Snapshot()))
+	if c.SessionPath() != result.Branch || len(c.executor.Session().Snapshot()) != 3 {
+		t.Fatalf("controller after in-place rewind: path %q messages %d", c.SessionPath(), len(c.executor.Session().Snapshot()))
 	}
-	heads, err := agent.ListSessionHeads(path)
-	if err != nil || len(heads) != 2 || heads[1].ID != result.Branch || heads[1].Kind != agent.HeadKindRewind || !heads[1].Selected || heads[0].MessageCount != 5 {
-		t.Fatalf("heads = %+v err=%v", heads, err)
+	if heads, err := agent.ListSessionHeads(path); err != nil || len(heads) != 1 {
+		t.Fatalf("rewind added a writable legacy head: %+v err=%v", heads, err)
 	}
 }
 
@@ -196,12 +198,12 @@ func TestBranchTreeMarksTheCurrentHead(t *testing.T) {
 	if got := c.CurrentBranchID(); got != agent.BranchID(path) {
 		t.Fatalf("CurrentBranchID on main = %q, want the file id %q", got, agent.BranchID(path))
 	}
-	head, err := c.Branch("experiment")
+	branchPath, err := c.Branch("experiment")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.CurrentBranchID(); got != head {
-		t.Fatalf("CurrentBranchID after Branch = %q, want the new head %q", got, head)
+	if got := c.CurrentBranchID(); got != agent.BranchID(branchPath) {
+		t.Fatalf("CurrentBranchID after Branch = %q, want child %q", got, agent.BranchID(branchPath))
 	}
 	tree := c.BranchTreeText()
 	for line := range strings.SplitSeq(tree, "\n") {

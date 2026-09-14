@@ -8,19 +8,15 @@ import (
 	"reasonix/internal/tool"
 )
 
-type visibilityRecorder struct{}
-
-func (visibilityRecorder) RecordGoalReport(tool.GoalReport) (string, error) { return "", nil }
-
 func TestContextualBuiltinVisibilityFollowsOwningContext(t *testing.T) {
 	goal, _ := tool.LookupBuiltin("update_goal")
 	jobNames := []string{"bash_output", "wait", "kill_shell"}
 
 	if goal.(tool.ContextualTool).ProviderVisible(context.Background()) {
-		t.Fatal("update_goal visible without a Goal recorder")
+		t.Fatal("update_goal visible without a Goal lifecycle owner")
 	}
-	if !goal.(tool.ContextualTool).ProviderVisible(tool.WithGoalTurnRecorder(context.Background(), visibilityRecorder{})) {
-		t.Fatal("update_goal hidden during an active Goal turn")
+	if !goal.(tool.ContextualTool).ProviderVisible(goalLifecycleContext(&goalLifecycleStub{view: goalView()}, tool.GoalSourceDirectHuman)) {
+		t.Fatal("update_goal hidden with a Goal lifecycle owner")
 	}
 	if _, ok := tool.LookupBuiltin("complete_step"); ok {
 		t.Fatal("retired complete_step remains discoverable")

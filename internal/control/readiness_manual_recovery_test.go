@@ -20,7 +20,7 @@ func manualReadinessController(t *testing.T, turns [][]provider.Chunk) (*Control
 	}
 	prov := &scriptedTurns{turns: turns}
 	executor := agent.New(prov, reg, agent.NewSession("stable-system-prefix"), agent.Options{}, event.Discard)
-	c := New(Options{Runner: executor, Executor: executor, Sink: event.Discard})
+	c := newOwnedTestController(t, Options{Runner: executor, Executor: executor, Sink: event.Discard})
 	t.Cleanup(c.Close)
 	return c, prov
 }

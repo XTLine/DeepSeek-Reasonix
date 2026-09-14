@@ -44,7 +44,7 @@ func (f *fakeLanguageRunner) SetReasoningLanguage(lang string) {
 }
 
 func TestCustomCommandLookup(t *testing.T) {
-	c := New(Options{Commands: []command.Command{{Name: "review"}, {Name: "git:commit"}}})
+	c := newOwnedTestController(t, Options{Commands: []command.Command{{Name: "review"}, {Name: "git:commit"}}})
 
 	if _, ok := c.CustomCommand("/review the diff"); !ok {
 		t.Error("review should be found")
@@ -61,7 +61,7 @@ func TestSkillsReflectStoreChangesAfterControllerBuild(t *testing.T) {
 	project := t.TempDir()
 	home := t.TempDir()
 	store := skill.New(skill.Options{HomeDir: home, ProjectRoot: project, DisableBuiltins: true})
-	c := New(Options{SkillStore: store, Skills: store.List()})
+	c := newOwnedTestController(t, Options{SkillStore: store, Skills: store.List()})
 
 	if _, ok := c.RunSkill("/hot now"); ok {
 		t.Fatal("skill should not exist before it is written")
@@ -106,7 +106,7 @@ func TestSubmitSlashSubagentRunsIsolatedAndPersistsDistilledAnswer(t *testing.T)
 		})
 		return "isolated answer", nil
 	}
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner:      mainRunner,
 		Executor:    exec,
 		Sink:        event.FuncSink(func(e event.Event) { events <- e }),
@@ -179,7 +179,7 @@ func TestSubmitInvocationDisplayExecutesStructuredEntitiesInVisualOrder(t *testi
 	events := make(chan event.Event, 24)
 	mainRunner := &fakeTurnRunner{}
 	var names, tasks []string
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner:   mainRunner,
 		Executor: exec,
 		Sink:     event.FuncSink(func(e event.Event) { events <- e }),
@@ -240,7 +240,7 @@ func TestSubmitInvocationDisplayPreparesPluginSubagentBindings(t *testing.T) {
 	exec := agent.New(nil, tool.NewRegistry(), sess, agent.Options{}, event.Discard)
 	events := make(chan event.Event, 12)
 	var got skill.Skill
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Executor: exec, SkillStore: store, Skills: store.List(),
 		Sink: event.FuncSink(func(e event.Event) { events <- e }),
 		SkillRunner: func(_ context.Context, sk skill.Skill, _ string, _ skill.SubagentRunOptions) (string, error) {
@@ -274,7 +274,7 @@ func TestRunSubagentProfilePreparesPluginBindings(t *testing.T) {
 	})
 
 	var got skill.Skill
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		SkillStore: store, Skills: store.List(),
 		SkillRunner: func(_ context.Context, sk skill.Skill, _ string, _ skill.SubagentRunOptions) (string, error) {
 			got = sk
@@ -294,7 +294,7 @@ func TestRunSubagentProfilePreparesPluginBindings(t *testing.T) {
 
 func TestSubmitInvocationDisplayRunsInlineSkillWithoutArguments(t *testing.T) {
 	runner := &fakeTurnRunner{}
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner: runner,
 		Skills: []skill.Skill{{Name: "init", Body: "INITIALIZE_PROJECT", RunAs: skill.RunInline, Scope: skill.ScopeGlobal}},
 	})
@@ -309,7 +309,7 @@ func TestSubmitInvocationDisplayRunsInlineSkillInsideActiveGoal(t *testing.T) {
 	prov := &scriptedTurns{turns: goalToolTurn(GoalStatusComplete, "notes listed", "")}
 	ag := agent.New(prov, goalRegistry(), agent.NewSession(""), agent.Options{}, event.Discard)
 	events := make(chan event.Event, 8)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner:   ag,
 		Executor: ag,
 		Sink: event.FuncSink(func(e event.Event) {
@@ -345,7 +345,7 @@ func TestSubmitInvocationDisplayRunsSubagentSkillInsideActiveGoal(t *testing.T) 
 	exec := agent.New(prov, goalRegistry(), sess, agent.Options{}, event.Discard)
 	events := make(chan event.Event, 8)
 	var gotTask string
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Executor: exec, Runner: exec,
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.TurnDone || e.Kind == event.Notice {
@@ -384,7 +384,7 @@ func TestSubmitSlashSubagentUsesPermissionedRunnerInPlanMode(t *testing.T) {
 	var normalCalls, readOnlyCalls int
 	var gotTask string
 	var gotPlanMode bool
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Executor: exec,
 		Sink:     event.FuncSink(func(e event.Event) { events <- e }),
 		Skills: []skill.Skill{{
@@ -422,7 +422,7 @@ func TestSubmitStructuredSubagentUsesPermissionedRunnerInPlanMode(t *testing.T) 
 	var normalCalls, readOnlyCalls int
 	var gotTask string
 	var gotPlanMode bool
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Executor: exec,
 		Sink:     event.FuncSink(func(e event.Event) { events <- e }),
 		Skills: []skill.Skill{{
@@ -456,7 +456,7 @@ func TestSubmitStructuredSubagentUsesPermissionedRunnerInPlanMode(t *testing.T) 
 func TestSubmitSlashSubagentRequiresTask(t *testing.T) {
 	events := make(chan event.Event, 2)
 	var calls int
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink: event.FuncSink(func(e event.Event) { events <- e }),
 		Skills: []skill.Skill{{
 			Name: "helper", RunAs: skill.RunSubagent, Invocation: "manual", Scope: skill.ScopeGlobal,
@@ -482,7 +482,7 @@ func TestSubmitSlashSubagentRequiresTask(t *testing.T) {
 
 func TestSubmitSlashSubagentWithoutRunnerFinishesWithError(t *testing.T) {
 	events := make(chan event.Event, 2)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink: event.FuncSink(func(e event.Event) { events <- e }),
 		Skills: []skill.Skill{{
 			Name: "helper", RunAs: skill.RunSubagent, Invocation: "manual", Scope: skill.ScopeGlobal,
@@ -502,7 +502,7 @@ func TestCancelSlashSubagentStopsChildAndKeepsParentSessionUsable(t *testing.T) 
 	exec := agent.New(nil, tool.NewRegistry(), sess, agent.Options{}, event.Discard)
 	events := make(chan event.Event, 12)
 	started := make(chan struct{})
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Executor: exec,
 		Sink:     event.FuncSink(func(e event.Event) { events <- e }),
 		Skills: []skill.Skill{{
@@ -562,7 +562,7 @@ func TestRunSkillUsesQualifiedPluginNameAndHiddenShortCompatibility(t *testing.T
 		HomeDir: home, CustomPaths: []string{pluginRoot},
 		PluginPaths: map[string][]string{pluginRoot: {"superpowers"}}, DisableBuiltins: true,
 	})
-	c := New(Options{SkillStore: store, Skills: store.List()})
+	c := newOwnedTestController(t, Options{SkillStore: store, Skills: store.List()})
 
 	if visible := c.SlashSkills(); len(visible) != 1 || visible[0].SlashName() != "superpowers:plan" {
 		t.Fatalf("SlashSkills() = %+v", visible)
@@ -587,7 +587,7 @@ func writeControlSkill(t *testing.T, root, rel, body string) {
 }
 
 func TestComposePlanModeMarker(t *testing.T) {
-	c := New(Options{}) // no executor — SetPlanMode still tracks the flag
+	c := newOwnedTestController(t, Options{}) // no executor — SetPlanMode still tracks the flag
 
 	if got := c.Compose("hi"); got != "hi" {
 		t.Errorf("plan off: Compose = %q, want verbatim", got)
@@ -609,12 +609,12 @@ func TestPlanModeMarkerSeparatesWorkflowFromPermissions(t *testing.T) {
 }
 
 func TestComposeReasoningLanguagePreference(t *testing.T) {
-	auto := New(Options{ReasoningLanguage: "auto"})
+	auto := newOwnedTestController(t, Options{ReasoningLanguage: "auto"})
 	if got := auto.Compose("hi"); got != "hi" {
 		t.Fatalf("auto reasoning language should not alter the turn, got %q", got)
 	}
 
-	zh := New(Options{ReasoningLanguage: "zh"})
+	zh := newOwnedTestController(t, Options{ReasoningLanguage: "zh"})
 	got := zh.Compose("hi")
 	if !strings.HasPrefix(got, "<reasoning-language>") || !strings.Contains(got, "简体中文") || !strings.HasSuffix(got, "hi") {
 		t.Fatalf("zh reasoning language should ride the user turn, got %q", got)
@@ -623,7 +623,7 @@ func TestComposeReasoningLanguagePreference(t *testing.T) {
 		t.Fatalf("StripComposePrefixes = %q, want hi", stripped)
 	}
 
-	autoZh := New(Options{ReasoningLanguage: "auto"})
+	autoZh := newOwnedTestController(t, Options{ReasoningLanguage: "auto"})
 	got = autoZh.Compose("解释 AuthHandler 的 panic")
 	if !strings.HasPrefix(got, "<reasoning-language>") || !strings.Contains(got, "简体中文") || !strings.HasSuffix(got, "解释 AuthHandler 的 panic") {
 		t.Fatalf("auto reasoning language should infer Chinese from the user prompt, got %q", got)
@@ -632,7 +632,7 @@ func TestComposeReasoningLanguagePreference(t *testing.T) {
 
 func TestRunComposesResponseLanguagePreference(t *testing.T) {
 	runner := &fakeTurnRunner{}
-	c := New(Options{ResponseLanguage: "en", Runner: runner})
+	c := newOwnedTestController(t, Options{ResponseLanguage: "en", Runner: runner})
 
 	if err := c.Run(context.Background(), "hi"); err != nil {
 		t.Fatal(err)
@@ -648,7 +648,7 @@ func TestRunComposesResponseLanguagePreference(t *testing.T) {
 
 func TestRunComposesReasoningLanguagePreference(t *testing.T) {
 	runner := &fakeTurnRunner{}
-	c := New(Options{ReasoningLanguage: "zh", Runner: runner})
+	c := newOwnedTestController(t, Options{ReasoningLanguage: "zh", Runner: runner})
 
 	if err := c.Run(context.Background(), "hi"); err != nil {
 		t.Fatal(err)
@@ -671,7 +671,7 @@ func TestRunInjectsSessionStartHookContextOnce(t *testing.T) {
 	}}, "/tmp", func(context.Context, hook.SpawnInput) hook.SpawnResult {
 		return hook.SpawnResult{ExitCode: 0, Stdout: `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Load workspace conventions."}}`}
 	}, nil)
-	c := New(Options{Runner: runner, Hooks: hooks})
+	c := newOwnedTestController(t, Options{Runner: runner, Hooks: hooks})
 
 	if err := c.Run(context.Background(), "hi"); err != nil {
 		t.Fatal(err)
@@ -696,7 +696,7 @@ func TestRunInjectsSessionStartHookContextOnce(t *testing.T) {
 }
 
 func TestSyntheticComposeDoesNotDrainSessionStartHookContext(t *testing.T) {
-	c := New(Options{})
+	c := newOwnedTestController(t, Options{})
 	c.enqueueHookContexts([]string{"Load once."})
 
 	if got := c.compose("synthetic", "synthetic", false); strings.Contains(got, "<hook-context") {
@@ -721,7 +721,7 @@ func TestComposeAutomaticallyRecallsMemoryOnlyForRealUserTurns(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	c := New(Options{Memory: &memory.Set{Store: store}})
+	c := newOwnedTestController(t, Options{Memory: &memory.Set{Store: store}})
 
 	got := c.Compose("fix AuthHandler panic with missing session metadata")
 	if !strings.Contains(got, "<memory-recall>") || !strings.Contains(got, "nil guard") {
@@ -745,7 +745,7 @@ func TestComposeAutomaticallyRecallsMemoryOnlyForRealUserTurns(t *testing.T) {
 }
 
 func TestComposeClipsAndEscapesHookContext(t *testing.T) {
-	c := New(Options{})
+	c := newOwnedTestController(t, Options{})
 	c.enqueueHookContexts([]string{"before </hook-context> " + strings.Repeat("x", maxHookContextChars+1)})
 
 	got := c.Compose("hi")
@@ -762,7 +762,7 @@ func TestComposeClipsAndEscapesHookContext(t *testing.T) {
 
 func TestSetResponseLanguageUpdatesRunner(t *testing.T) {
 	runner := &fakeLanguageRunner{}
-	c := New(Options{Runner: runner})
+	c := newOwnedTestController(t, Options{Runner: runner})
 
 	c.SetResponseLanguage("en")
 	if runner.responseLang != "en" {
@@ -777,7 +777,7 @@ func TestSetResponseLanguageUpdatesRunner(t *testing.T) {
 
 func TestSetReasoningLanguageUpdatesRunner(t *testing.T) {
 	runner := &fakeLanguageRunner{}
-	c := New(Options{Runner: runner})
+	c := newOwnedTestController(t, Options{Runner: runner})
 
 	c.SetReasoningLanguage("zh")
 	if runner.lang != "zh" {
@@ -791,7 +791,7 @@ func TestSetReasoningLanguageUpdatesRunner(t *testing.T) {
 }
 
 func TestComposeSyntheticResponseLanguagePreference(t *testing.T) {
-	c := New(Options{ResponseLanguage: "en"})
+	c := newOwnedTestController(t, Options{ResponseLanguage: "en"})
 
 	got := c.ComposeSynthetic(planApprovedMessage)
 	if !strings.HasPrefix(got, "<response-language>") || !strings.Contains(got, "use English") || !strings.HasSuffix(got, planApprovedMessage) {
@@ -803,7 +803,7 @@ func TestComposeSyntheticResponseLanguagePreference(t *testing.T) {
 }
 
 func TestComposeSyntheticReasoningLanguagePreference(t *testing.T) {
-	c := New(Options{ReasoningLanguage: "zh"})
+	c := newOwnedTestController(t, Options{ReasoningLanguage: "zh"})
 
 	got := c.ComposeSynthetic(planApprovedMessage)
 	if !strings.HasPrefix(got, "<reasoning-language>") || !strings.Contains(got, "简体中文") || !strings.HasSuffix(got, planApprovedMessage) {
@@ -815,7 +815,7 @@ func TestComposeSyntheticReasoningLanguagePreference(t *testing.T) {
 }
 
 func TestComposeIncludesActiveGoal(t *testing.T) {
-	c := New(Options{})
+	c := newOwnedTestController(t, Options{})
 	c.SetGoal("ship the approval redesign")
 
 	got := c.Compose("next step?")
@@ -840,7 +840,7 @@ func TestGoalAutoResearchTriggersForLongHorizonGoals(t *testing.T) {
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolved
 	}
-	c := New(Options{WorkspaceRoot: root})
+	c := newOwnedTestController(t, Options{WorkspaceRoot: root})
 	c.SetGoal("持续排查这个线上卡顿直到根因明确，并验证修复")
 
 	got := c.Compose("next step?")
@@ -869,7 +869,7 @@ func TestParseGoalCommandResearchFlags(t *testing.T) {
 
 func TestGoalCommandSetsReportsAndClears(t *testing.T) {
 	var notices []string
-	c := New(Options{Sink: event.FuncSink(func(e event.Event) {
+	c := newOwnedTestController(t, Options{Sink: event.FuncSink(func(e event.Event) {
 		if e.Kind == event.Notice {
 			notices = append(notices, e.Text)
 		}
@@ -952,7 +952,7 @@ func TestParseGoalCommandStrictOnlyConsumesLeadingFlags(t *testing.T) {
 }
 
 func TestQueueMemoryDoesNotCreateLegacyMemoryUpdate(t *testing.T) {
-	c := New(Options{})
+	c := newOwnedTestController(t, Options{})
 
 	c.QueueMemory("Saved memory \"rmb\": user's balance is in RMB")
 	got := c.Compose("hello")
@@ -1010,7 +1010,7 @@ func TestRememberCommandNote(t *testing.T) {
 func TestSubmitHashNumberStartsTurn(t *testing.T) {
 	runner := &fakeTurnRunner{}
 	events := make(chan event.Event, 4)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner: runner,
 		Sink: event.FuncSink(func(e event.Event) {
 			events <- e
@@ -1040,7 +1040,7 @@ func TestSubmitSlashPathDiagnosticStartsTurnWithFileContext(t *testing.T) {
 	}
 	runner := &fakeTurnRunner{}
 	events := make(chan event.Event, 4)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner: runner,
 		Sink: event.FuncSink(func(e event.Event) {
 			events <- e
@@ -1066,7 +1066,7 @@ func TestSubmitSlashPathDiagnosticStartsTurnWithFileContext(t *testing.T) {
 func TestSubmitMissingSlashPathDiagnosticStartsTurn(t *testing.T) {
 	runner := &fakeTurnRunner{}
 	events := make(chan event.Event, 4)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner: runner,
 		Sink: event.FuncSink(func(e event.Event) {
 			events <- e
@@ -1085,7 +1085,7 @@ func TestSubmitMissingSlashPathDiagnosticStartsTurn(t *testing.T) {
 func TestSubmitBlockCommentPrefixStartsTurn(t *testing.T) {
 	runner := &fakeTurnRunner{}
 	events := make(chan event.Event, 4)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner: runner,
 		Sink: event.FuncSink(func(e event.Event) {
 			events <- e
@@ -1104,7 +1104,7 @@ func TestSubmitBlockCommentPrefixStartsTurn(t *testing.T) {
 func TestSubmitUnknownSlashCommandStillReportsNotice(t *testing.T) {
 	runner := &fakeTurnRunner{}
 	events := make(chan event.Event, 4)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner: runner,
 		Sink: event.FuncSink(func(e event.Event) {
 			events <- e
@@ -1139,7 +1139,7 @@ func TestSubmitUnknownSlashCommandStillReportsNotice(t *testing.T) {
 func TestSubmitDocsShowsLocalOverviewAndGroundsModelTurn(t *testing.T) {
 	runner := &fakeTurnRunner{}
 	events := make(chan event.Event, 16)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner: runner,
 		Sink: event.FuncSink(func(e event.Event) {
 			events <- e
@@ -1174,7 +1174,7 @@ func TestSubmitDocsShowsLocalOverviewAndGroundsModelTurn(t *testing.T) {
 func TestSubmitDocsPreservesExistingCustomCommand(t *testing.T) {
 	runner := &fakeTurnRunner{}
 	events := make(chan event.Event, 8)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner:   runner,
 		Commands: []command.Command{{Name: "docs", Body: "legacy docs workflow: $ARGUMENTS"}},
 		Sink: event.FuncSink(func(e event.Event) {
@@ -1195,7 +1195,7 @@ func TestSubmitDocsPreservesExistingCustomCommand(t *testing.T) {
 func TestSubmitQualifiedReasonixDocsPreservesExistingCommandAndUsesNextFallback(t *testing.T) {
 	runner := &fakeTurnRunner{}
 	events := make(chan event.Event, 8)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner: runner,
 		Commands: []command.Command{
 			{Name: "docs", Body: "legacy docs workflow: $ARGUMENTS"},
@@ -1234,7 +1234,7 @@ func TestSubmitQualifiedReasonixDocsPreservesExistingCommandAndUsesNextFallback(
 func TestSubmitUserTurnBypassesCommandDispatch(t *testing.T) {
 	runner := &fakeTurnRunner{}
 	events := make(chan event.Event, 4)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner: runner,
 		Sink: event.FuncSink(func(e event.Event) {
 			events <- e
@@ -1260,7 +1260,7 @@ func TestSubmitUserTurnBypassesCommandDispatch(t *testing.T) {
 func TestSubmitRememberCommandQuickAddsMemory(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeTurnRunner{}
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner: runner,
 		Memory: memory.Load(memory.Options{CWD: dir}),
 	})

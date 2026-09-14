@@ -1,52 +1,58 @@
 package builtin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
-	"reasonix/internal/evidence"
 	"reasonix/internal/tool"
 )
 
 func init() { tool.RegisterBuiltin(todoWrite{}) }
 
-// todoWrite records the agent's running task list. It has no host side effects —
-// the full list lives in the call's args (the model re-sends it whole on every
-// update), which a frontend renders as a checklist. Execute validates the
-// public shape and stable identities, then acks with a count.
+// todoWrite replaces the current turn's complete, flat task list. The list is
+// model-managed progress UI; it is deliberately independent from Plan and Goal
+// authorization and from delivery evidence.
 type todoWrite struct{}
 
 type todoItem struct {
-	Content    string `json:"content"`
-	Status     string `json:"status"`
-	ActiveForm string `json:"activeForm,omitempty"`
-	Level      int    `json:"level,omitempty"`
-	StepID     string `json:"step_id,omitempty"`
+	Content string `json:"content"`
+	Status  string `json:"status"`
+}
+
+type todoWriteResponse struct {
+	Todos  []todoItem `json:"todos"`
+	Counts struct {
+		Total      int `json:"total"`
+		Pending    int `json:"pending"`
+		InProgress int `json:"in_progress"`
+		Completed  int `json:"completed"`
+	} `json:"counts"`
 }
 
 func (todoWrite) Name() string { return "todo_write" }
 
 func (todoWrite) Description() string {
-	return "Record and update the model's structured task list. Send the complete list every call; it replaces the previous one. Status is model-reported and may be pending, in_progress, or completed. At most one item may be in progress. Optional level 0/1 preserves a two-level display hierarchy, and step_id remains the stable item identity across edits."
+	return "Replace the current turn's complete task list. Send the full flat list on every call; an empty list clears it. Items may be reordered, removed, replanned, or have any number in progress. Each item contains only content and status (pending|in_progress|completed)."
 }
 
 func (todoWrite) Schema() json.RawMessage {
 	return json.RawMessage(`{
 "type":"object",
+"additionalProperties":false,
 "properties":{
   "todos":{
     "type":"array",
-    "description":"The complete task list, in order. Replaces any previous list.",
+    "description":"The complete flat task list for this turn. Replaces the previous list; [] clears it.",
     "items":{
       "type":"object",
+      "additionalProperties":false,
       "properties":{
-        "content":{"type":"string","description":"Imperative description of the task."},
-        "status":{"type":"string","enum":["pending","in_progress","completed"],"description":"Model-reported task state."},
-        "activeForm":{"type":"string","description":"Present-continuous form shown while the task is in progress (e.g. \"Running tests\")."},
-        "level":{"type":"integer","enum":[0,1],"description":"Nesting level: 0 = phase/milestone, 1 = a sub-step of the phase above it. Omit for a flat list."},
-        "step_id":{"type":"string","description":"Stable identity for this item, e.g. \"plan_step_02\". Copy it verbatim from the item's previous entry so completions stay attached across retitles, insertions, and reordering; use a fresh unique id for a genuinely new item."}
+        "content":{"type":"string","minLength":1,"description":"Task text. Leading and trailing whitespace is removed."},
+        "status":{"type":"string","enum":["pending","in_progress","completed"]}
       },
       "required":["content","status"]
     }
@@ -56,114 +62,74 @@ func (todoWrite) Schema() json.RawMessage {
 }`)
 }
 
-// ReadOnly is true: todo_write only records a list (no filesystem or process
-// effect), so it never needs approval and stays available in plan mode — where
-// laying out a plan as todos is exactly the point.
 func (todoWrite) ReadOnly() bool { return true }
 
-func (todoWrite) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+func (todoWrite) Execute(_ context.Context, args json.RawMessage) (string, error) {
 	var p struct {
-		Todos []todoItem `json:"todos"`
+		Todos *[]json.RawMessage `json:"todos"`
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "", fmt.Errorf("invalid args: %w", err)
+	dec := json.NewDecoder(bytes.NewReader(args))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
+		return "", fmt.Errorf("invalid todo_write arguments: %w; send only {todos:[{content,status}]}", err)
 	}
-	var done, active, pending int
-	for i, t := range p.Todos {
-		if t.Content == "" {
-			return "", fmt.Errorf("todo %d: content is required", i+1)
+	if err := ensureJSONEnd(dec); err != nil {
+		return "", fmt.Errorf("invalid todo_write arguments: %w", err)
+	}
+	if p.Todos == nil {
+		return "", fmt.Errorf("todos is required and must be an array")
+	}
+
+	rawTodos := *p.Todos
+	response := todoWriteResponse{Todos: make([]todoItem, len(rawTodos))}
+	seen := make(map[string]int, len(rawTodos))
+	for i, raw := range rawTodos {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return "", fmt.Errorf("todos[%d] must be an object with content and status", i)
 		}
-		if t.Level < 0 || t.Level > 1 {
-			return "", fmt.Errorf("todo %d: invalid level %d (want 0 phase | 1 sub-step)", i+1, t.Level)
+		var item todoItem
+		itemDecoder := json.NewDecoder(bytes.NewReader(raw))
+		itemDecoder.DisallowUnknownFields()
+		if err := itemDecoder.Decode(&item); err != nil {
+			return "", fmt.Errorf("todos[%d] is invalid: %w; use only content and status", i, err)
 		}
-		switch t.Status {
-		case "completed":
-			done++
+		if err := ensureJSONEnd(itemDecoder); err != nil {
+			return "", fmt.Errorf("todos[%d] is invalid: %w", i, err)
+		}
+		item.Content = strings.TrimSpace(item.Content)
+		if item.Content == "" {
+			return "", fmt.Errorf("todos[%d].content must be non-empty after trimming", i)
+		}
+		if previous, ok := seen[item.Content]; ok {
+			return "", fmt.Errorf("todos[%d].content duplicates todos[%d].content %q; merge or rename one item", i, previous, item.Content)
+		}
+		seen[item.Content] = i
+		switch item.Status {
+		case "pending":
+			response.Counts.Pending++
 		case "in_progress":
-			active++
-		case "pending", "":
-			pending++
+			response.Counts.InProgress++
+		case "completed":
+			response.Counts.Completed++
 		default:
-			return "", fmt.Errorf("todo %d: invalid status %q (want pending|in_progress|completed)", i+1, t.Status)
+			return "", fmt.Errorf("todos[%d].status %q is invalid; use pending, in_progress, or completed", i, item.Status)
 		}
+		response.Todos[i] = item
 	}
-	if len(p.Todos) > 0 && p.Todos[0].Level == 1 {
-		return "", fmt.Errorf("first todo cannot be an orphan sub-step")
+	response.Counts.Total = len(response.Todos)
+	out, err := json.Marshal(response)
+	if err != nil {
+		return "", fmt.Errorf("encode todo_write result: %w", err)
 	}
-	if err := verifyStepIDsPreserved(ctx, p.Todos); err != nil {
-		return "", err
-	}
-	if err := verifyUniqueStepIDs(p.Todos); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("Model task list updated: %d total — %d completed, %d in progress, %d pending.",
-		len(p.Todos), done, active, pending), nil
+	return string(out), nil
 }
 
-// verifyUniqueStepIDs keeps a step id an identity: two items claiming the same
-// id would make completion attribution ambiguous again, which is the whole
-// problem ids exist to remove.
-func verifyUniqueStepIDs(todos []todoItem) error {
-	seen := make(map[string]int, len(todos))
-	for i, todo := range todos {
-		id := strings.TrimSpace(todo.StepID)
-		if id == "" {
-			continue
-		}
-		if prev, ok := seen[id]; ok {
-			return fmt.Errorf("todo %d %q reuses step_id %q, already claimed by todo %d; give a new item its own id", i+1, todo.Content, id, prev+1)
-		}
-		seen[id] = i
-	}
-	return nil
-}
-
-func todoBaseline(ctx context.Context) []evidence.TodoItem {
-	if ledger, ok := evidence.FromContext(ctx); ok {
-		if previous, ok := ledger.LatestTodos(); ok && len(previous) > 0 {
-			return previous
-		}
-	}
-	previous, _ := evidence.TodoStateFromContext(ctx)
-	return previous
-}
-
-func toEvidenceTodos(todos []todoItem) []evidence.TodoItem {
-	out := make([]evidence.TodoItem, 0, len(todos))
-	for _, t := range todos {
-		out = append(out, toEvidenceTodo(t))
-	}
-	return out
-}
-
-func toEvidenceTodo(todo todoItem) evidence.TodoItem {
-	return evidence.TodoItem{
-		Content:    todo.Content,
-		Status:     todo.Status,
-		ActiveForm: todo.ActiveForm,
-		Level:      todo.Level,
-		StepID:     strings.TrimSpace(todo.StepID),
-	}
-}
-
-func verifyStepIDsPreserved(ctx context.Context, todos []todoItem) error {
-	previous := todoBaseline(ctx)
-	if len(previous) == 0 {
+func ensureJSONEnd(dec *json.Decoder) error {
+	var extra any
+	if err := dec.Decode(&extra); err == io.EOF {
 		return nil
+	} else if err != nil {
+		return err
 	}
-	next := toEvidenceTodos(todos)
-	for _, todo := range previous {
-		if todo.StepID == "" {
-			continue
-		}
-		if _, ok := evidence.MatchStepID(todo.StepID, next); ok {
-			continue
-		}
-		match, found := evidence.MatchTodoIdentity(todo, next)
-		if !found || match.StepID != "" {
-			continue
-		}
-		return fmt.Errorf("todo %d %q dropped its step_id %q; re-send it with step_id %q so its completion stays attached across retitles and reordering", match.Index, match.Content, todo.StepID, todo.StepID)
-	}
-	return nil
+	return fmt.Errorf("multiple JSON values are not allowed")
 }

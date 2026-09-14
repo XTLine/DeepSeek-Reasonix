@@ -1,11 +1,11 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
+	"reasonix/internal/agent"
 	"reasonix/internal/control"
 	"reasonix/internal/event"
 	"reasonix/internal/turnevent"
@@ -39,21 +39,33 @@ func (a *App) validatePromptIdentity(tabID, turnID, runtimeEpoch string) (contro
 	return ctrl, nil
 }
 
-// stoppableCtrl resolves the controller a Stop request targets. Only an idle
-// tab is rejected; a stale turn id is logged and the active work still stops.
+// stoppableCtrl resolves and captures the controller a Stop request targets.
+// The request is session-scoped and idle cancellation is idempotent.
 func (a *App) stoppableCtrl(tabID, turnID string) (control.SessionAPI, error) {
 	tab, ctrl := a.tabAndCtrlByID(tabID)
 	if ctrl == nil {
 		return nil, a.workspaceNotReadyErr(tab)
 	}
 	status := ctrl.RuntimeStatus()
-	if !status.Running && !status.Cancellable {
-		return nil, errTurnNotRunning
-	}
 	if turnID = strings.TrimSpace(turnID); turnID != status.TurnID {
 		slog.Info("desktop: stop targeted a stale turn id; interrupting the active turn", "tab", tabID, "requested", turnID, "active", status.TurnID)
 	}
 	return ctrl, nil
+}
+
+// CancelSessionForTab is the protocol-v2 Stop operation. It captures the tab's
+// current controller exactly once, so later tab switches cannot retarget it.
+func (a *App) CancelSessionForTab(tabID string) (control.CancelReceipt, error) {
+	ctrl, err := a.stoppableCtrl(tabID, "")
+	if err != nil {
+		return control.CancelReceipt{}, err
+	}
+	if session, ok := ctrl.(interface{ CancelSession() control.CancelReceipt }); ok {
+		return session.CancelSession(), nil
+	}
+	status := ctrl.RuntimeStatus()
+	ctrl.Cancel()
+	return control.CancelReceipt{SessionRef: ctrl.SessionPath(), HeadID: agent.BranchID(ctrl.SessionPath()), Accepted: true, AlreadyIdle: !status.Running && !status.PendingPrompt}, nil
 }
 
 // StartTurnForTab is the turn-id-aware replacement for SubmitToTab. Existing
@@ -90,10 +102,6 @@ func (a *App) StartTurnForTab(tabID, input, submissionID string) (TurnStartView,
 	return TurnStartView{TurnID: turnID, Status: event.TurnQueued, Disposition: control.SubmitTurnStarted, RuntimeEpoch: epoch, SubmissionID: submissionID}, nil
 }
 
-// errTurnNotRunning tells the frontend the tab is already idle so it can
-// reconcile its runtime view instead of reporting a failed Stop.
-var errTurnNotRunning = &inboxCodedError{code: "turn_not_running", cause: errors.New("no turn is running")}
-
 // InterruptTurnForTab stops the tab's active work. Stop is a session-level
 // request: a turn id from a stale button still interrupts whatever is running
 // now, because an unstoppable turn is worse than stopping its replacement.
@@ -102,7 +110,11 @@ func (a *App) InterruptTurnForTab(tabID, turnID string) error {
 	if err != nil {
 		return err
 	}
-	ctrl.Cancel()
+	if session, ok := ctrl.(interface{ CancelSession() control.CancelReceipt }); ok {
+		session.CancelSession()
+	} else {
+		ctrl.Cancel()
+	}
 	return nil
 }
 

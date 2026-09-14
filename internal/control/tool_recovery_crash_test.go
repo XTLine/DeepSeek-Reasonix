@@ -13,6 +13,7 @@ import (
 	"reasonix/internal/agent"
 	"reasonix/internal/event"
 	"reasonix/internal/provider"
+	"reasonix/internal/session"
 	"reasonix/internal/tool"
 )
 
@@ -44,7 +45,7 @@ func TestToolRecoveryCrashAfterEffect(t *testing.T) {
 		reg.Add(crashAfterEffectTool{path: filepath.Join(root, "effects")})
 		p := &recordingProvider{streams: [][]provider.Chunk{{{Type: provider.ChunkToolCall, ToolCall: &provider.ToolCall{ID: "crash", Name: "crash_after_effect", Arguments: `{}`}}, {Type: provider.ChunkDone}}}}
 		a := agent.New(p, reg, agent.NewSession("sys"), agent.Options{}, event.Discard)
-		c := New(Options{Executor: a, Runner: a, SessionPath: filepath.Join(root, "session.jsonl"), SessionDir: root, Sink: event.Discard})
+		c := newOwnedTestController(t, Options{Executor: a, Runner: a, SessionPath: filepath.Join(root, "session.jsonl"), SessionDir: root, Sink: event.Discard})
 		if err := c.RunTurn(context.Background(), "perform effect"); err != nil {
 			t.Fatal(err)
 		}
@@ -59,30 +60,43 @@ func TestToolRecoveryCrashAfterEffect(t *testing.T) {
 		t.Fatalf("crash helper: %v %s", err, out)
 	}
 	path := filepath.Join(root, "session.jsonl")
-	s, err := agent.LoadSession(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := agent.New(nil, tool.NewRegistry(), s, agent.Options{}, event.Discard)
-	c := New(Options{Executor: a, SessionPath: path, SessionDir: root, Sink: event.Discard})
+	a := agent.New(nil, tool.NewRegistry(), agent.NewSession("sys"), agent.Options{}, event.Discard)
+	c := newOwnedTestController(t, Options{Executor: a, SessionPath: path, SessionDir: root, Sink: event.Discard})
 	defer c.Close()
 	c.recoverInterruptedTurn(path)
 	view := c.ToolRecoverySnapshot()
-	if !view.Retired || view.RetryEnabled || len(view.Calls) != 1 {
+	if !view.Retired || view.RetryEnabled || len(view.Calls) != 0 {
 		t.Fatalf("unresolved crash effects=%+v", view)
 	}
-	call := view.Calls[0]
-	req := ToolRecoveryRequest{SessionPath: view.SessionPath, RuntimeEpoch: view.RuntimeEpoch, Revision: view.Revision, AttemptID: call.Identity.AttemptID, Action: "inspect"}
+	req := ToolRecoveryRequest{SessionPath: view.SessionPath, RuntimeEpoch: view.RuntimeEpoch, Revision: view.Revision, AttemptID: "crash", Action: "inspect"}
 	if _, err = c.ResolveToolRecovery(context.Background(), req); err == nil || !strings.Contains(err.Error(), "tool_recovery_retired") {
 		t.Fatalf("retired recovery action err=%v", err)
 	}
-	reopened, err := agent.LoadSession(path)
+	projection := loadDurableSessionProjection(t, path)
+	if len(projection.ActiveTools) != 0 || projection.TurnStatus != event.TurnInterrupted {
+		t.Fatal("retired endpoint rewrote the historical unknown fact")
+	}
+	commits, err := session.Replay(sessionDirectory(path), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := agent.New(nil, tool.NewRegistry(), reopened, agent.Options{}, event.Discard)
-	if len(other.PendingToolRecovery()) != 1 {
-		t.Fatal("retired endpoint rewrote the historical unknown fact")
+	unknown := false
+	for _, commit := range commits {
+		for _, recorded := range commit.Events {
+			if recorded.Kind != "tool/result" {
+				continue
+			}
+			var body struct {
+				ID    string `json:"id"`
+				State string `json:"state"`
+			}
+			if json.Unmarshal(recorded.Payload, &body) == nil && body.ID == "crash" && body.State == "result_unknown" {
+				unknown = true
+			}
+		}
+	}
+	if !unknown {
+		t.Fatal("restart did not preserve the unknown external result as a typed v3 fact")
 	}
 	effects, err := os.ReadFile(filepath.Join(root, "effects"))
 	if err != nil || string(effects) != "effect\n" {

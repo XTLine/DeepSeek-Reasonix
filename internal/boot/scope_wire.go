@@ -7,7 +7,20 @@ import (
 	"reasonix/internal/lsp"
 	"reasonix/internal/plugin"
 	"reasonix/internal/sessiontemp"
+	"reasonix/internal/skill"
 )
+
+func closeSkillStores(stores ...*skill.Store) {
+	for _, store := range stores {
+		_ = store.Close()
+	}
+}
+
+func closeUnownedSkills(owned *bool, cleanup func()) {
+	if !*owned {
+		cleanup()
+	}
+}
 
 // wireRuntimeScopeCleanup folds MCP host / LSP / session-temp inventory into
 // the RuntimeSet when it already holds generation effects. Empty sets stay

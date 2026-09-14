@@ -165,7 +165,7 @@ func TestCLITakeoverManagerReclaimReturnsLeaseAndSignalsExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec := agent.New(nil, nil, loaded, agent.Options{}, &takeoverRecordSink{})
-	ctrl := control.New(control.Options{Executor: exec, SessionDir: dir, SessionPath: path})
+	ctrl := newOwnedTestController(t, control.Options{Executor: exec, SessionDir: dir, SessionPath: path})
 	defer ctrl.Close()
 	leases := control.NewSessionLeaseKeeper()
 	defer leases.Release()
@@ -229,7 +229,7 @@ func TestCLITakeoverManagerReclaimWaitsForBackgroundJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := jobs.NewManager(event.Discard)
-	ctrl := control.New(control.Options{
+	ctrl := newOwnedTestController(t, control.Options{
 		Executor:    agent.New(nil, nil, session, agent.Options{}, event.Discard),
 		Jobs:        manager,
 		SessionDir:  dir,

@@ -49,6 +49,7 @@ function Probe() {
   const { runGoalAction } = useGoalActionHandler();
   const { clearGoalFromUi, setCollaborationModeFromUi } = useComposerGoalCommands({
     applyGoal: async (goal) => { if (goal !== "") throw new Error("wrong goal capture"); throw new Error("stop goal bridge failed"); },
+    editGoal: async () => { throw new Error("edit goal bridge failed"); },
     applyCollaborationMode: async (mode) => { if (mode !== "plan") throw new Error("wrong mode capture"); throw new Error("switch mode bridge failed"); },
   });
   const run = (label: string) => {

@@ -16,7 +16,7 @@ import (
 
 func newComposerMouseTestTUI(t *testing.T, width, height int) chatTUI {
 	t.Helper()
-	m := newChatTUI(control.New(control.Options{}), "", make(chan event.Event, 1), width)
+	m := newChatTUI(newOwnedTestController(t, control.Options{}), "", make(chan event.Event, 1), width)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	return next.(chatTUI)
 }

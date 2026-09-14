@@ -863,23 +863,29 @@ Goal 默认不设模型轮数、跨 Run turn 数、墙钟时长或数字式无�
 goal_token_budget = 20000000
 ```
 
-默认值 `0` 表示关闭。达到正数阈值后，Goal 会先生成一次总结再进入可恢复的 `budget_spend` 暂停；
-`/goal resume` 会授予新的完整预算切片，但累计 turn、token、请求数和实际工作时间不会清零。
-未配置对应预算时，累计 turn、token、真实 provider 请求数与实际工作时间只做统计展示。
+默认值 `0` 表示关闭。达到正数阈值后，Goal 进入原因码为 `resource-budget` 的可恢复阻塞；
+`/goal resume` 会授予新的完整预算切片，但累计轮次、token 和请求数不会清零。
+未配置对应预算时，累计轮次、token 与真实 provider 请求数只做统计展示。
 完全相同的连续工具调用只会在第 3、5、8 次给出提醒，调用仍会执行。暂停会保留 Goal、todo 与运行历史——用
-`/goal resume` 继续，`/goal pause` 可手动暂停运行中的目标；`/goal status` 只显示轮次、请求数、
-token、可选的显式 token 阈值和工作时间。每个目标 turn 结束时，模型通过结构化的 `update_goal` 工具报告
-`complete` 在正常结束边界提交模型完成声明，`blocked` 停止续跑，`continue` 或漏报保持活动并继续。没有独立 evaluator 或宿主质量验收。失败检查和未完成待办不被改写；恢复和分叉只加载目标，显式启动或恢复后才激活续跑。
+`/goal resume` 继续，`/goal pause` 可手动暂停运行中的目标；`/goal status` 显示轮次、请求数、
+token 和可选的显式 token 阈值。目标保持 `active + armed` 时，普通模型 final 之后由运行时空闲
+驱动器接纳下一顶层回合，不再需要每轮 `continue`。模型只在判断整个目标完成时调用
+`update_goal(complete)`，或在具体阻碍持续存在时调用 `update_goal(blocked)`。没有独立 evaluator、
+Todo 比例或宿主质量验收。恢复、导入和分叉只加载持久目标且一律 disarm，必须由直接授权的人类
+回合或 UI 操作恢复。
 
 复杂任务建议把目标写成[任务合约](./TASK_CONTRACT.zh-CN.md)：Context、Request、
 Output format、Constraints 和 Pause policy。Goal 模式会把这些部分当作自主执行的边界；
 除非下一步需要不可逆或对外可见操作、任务范围变化，或必须由用户提供信息，否则会继续采用合理默认值推进，并在最后汇报假设与结果。
 
-旧的简单/写入/研究参数仅作兼容元数据，不改变执行额度。Goal 和真实用量保存在普通会话 sidecar。旧 `.reasonix/autoresearch/<task-id>/` 目录保持只读，显式引用旧路径可恢复为普通 Goal。旧预算参数仍可解析，但不显示在帮助或补全中。
+旧的简单/写入/研究参数和 Goal sidecar 仅在显式兼容／导入边界读取，不改变执行额度。当前 Goal
+以版本化 `goal/state` 事件保存在 v3 线性会话中，activation 只存在于当前进程。旧
+`.reasonix/autoresearch/<task-id>/` 目录保持只读。旧预算参数仍可解析，但不显示在帮助或补全中。
 
 ### 模型更新任务进度
 
-`todo_write` 更新任务进度，回合或 Goal 结束不会自动完成待办。`complete_step`
+`todo_write` 更新当前顶层回合的任务进度；新接纳的 Goal 轮次会重新规划，回合内的压缩、steer
+与交互回答保留当前列表。回合或 Goal 结束不会自动完成待办。`complete_step`
 不再出现在工具发现中；旧调用只返回普通 `tool_retired`，不会改变任务状态。
 
 ## @ 引用

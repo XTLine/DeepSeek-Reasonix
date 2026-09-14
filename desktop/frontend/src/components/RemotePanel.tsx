@@ -1,4 +1,5 @@
 import { useAppNavigationStore } from "../store/appNavigation";
+import { cancelFileNavigation } from "../lib/fileNavigationLifetime";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { app } from "../lib/bridge";
@@ -17,7 +18,7 @@ const EMPTY_REMOTE_FORWARDS: RemoteForwardView[] = [];
 
 /** RemotePanel is the right-dock remote work surface: a host header with
  *  Files / Ports / Server tabs. */
-export function RemotePanel({ onClose }: { onClose: () => void }) {
+export function RemotePanel({ onClose, tabId, dockTabId, navigationSignal }: { onClose: () => void; tabId?: string; dockTabId?: string; navigationSignal?: AbortSignal }) {
   const t = useT();
   const hostId = useRemoteStore((s) => s.explorerHostId);
   const host = useRemoteStore((s) => s.hosts.find((item) => item.id === hostId));
@@ -95,9 +96,12 @@ export function RemotePanel({ onClose }: { onClose: () => void }) {
       <div className="remote-panel__body">
         {tab === "files" && (
           <RemoteFilesTab
+            key={hostId}
             hostId={hostId}
             connected={connected}
-            revealRequest={presentedRequest?.ref.hostId === hostId ? presentedRequest : null}
+            navigationSignal={navigationSignal}
+            revealRequest={presentedRequest?.ref.hostId === hostId && presentedRequest.ref.tabId === tabId
+              && presentedRequest.dockTabId === dockTabId && !presentedRequest.signal.aborted ? presentedRequest : null}
           />
         )}
         {tab === "ports" && <RemotePortsTab hostId={hostId} connected={connected} />}
@@ -109,30 +113,40 @@ export function RemotePanel({ onClose }: { onClose: () => void }) {
 
 // ── Files tab: lean lazy tree + preview/edit ──
 
-function RemoteFilesTab({ hostId, connected, revealRequest }: {
+function RemoteFilesTab({ hostId, connected, revealRequest, navigationSignal }: {
   hostId: string;
   connected: boolean;
-  revealRequest: { id: number; ref: { path: string; source: "presented" | "workspace" }; action: "preview" | "reveal-tree" | "source" } | null;
+  navigationSignal?: AbortSignal;
+  revealRequest: { id: number; ref: { path: string; source: "presented" | "workspace" }; action: "preview" | "reveal-tree" | "source"; signal?: AbortSignal; acceptNavigation?: () => boolean } | null;
 }) {
   const t = useT();
   const [entriesByDir, setEntriesByDir] = useState<Record<string, RemoteDirEntry[]>>({});
   const [openDirs, setOpenDirs] = useState<Set<string>>(new Set());
-  const [selected, setSelected] = useState<string | null>(null);
-  const [presentedSelection, setPresentedSelection] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(revealRequest?.ref.path ?? null);
+  const [presentedSelection, setPresentedSelection] = useState<string | null>(revealRequest?.ref.source === "presented" ? revealRequest.ref.path : null);
   const [loadErr, setLoadErr] = useState("");
   const rootPath = "."; // remote home; RealPath resolves it server-side
+  const lifetime = useRef(0);
+  const loads = useRef(new Map<string, number>());
+  useEffect(() => () => { lifetime.current++; loads.current.clear(); }, []);
 
   const loadDir = useCallback(
-    async (path: string) => {
+    async (path: string, signal?: AbortSignal) => {
+      const owner = lifetime.current;
+      const generation = (loads.current.get(path) ?? 0) + 1;
+      loads.current.set(path, generation);
+      const current = () => !signal?.aborted && !navigationSignal?.aborted && owner === lifetime.current && loads.current.get(path) === generation;
       try {
         const entries = await app.ListRemoteDir(hostId, path);
+        if (!current()) return;
         setEntriesByDir((m) => ({ ...m, [path]: entries }));
         setLoadErr("");
       } catch (e) {
+        if (!current()) return;
         setLoadErr(t("remote.tree.loadError", { err: String(e) }));
       }
     },
-    [hostId, t],
+    [hostId, t, navigationSignal],
   );
 
   useEffect(() => {
@@ -142,6 +156,7 @@ function RemoteFilesTab({ hostId, connected, revealRequest }: {
   const lastRevealID = useRef(0);
   useEffect(() => {
     if (!connected || !revealRequest || revealRequest.id === lastRevealID.current) return;
+    if (revealRequest.acceptNavigation && !revealRequest.acceptNavigation()) return;
     lastRevealID.current = revealRequest.id;
     const target = revealRequest.ref.path;
     setSelected(target);
@@ -157,13 +172,14 @@ function RemoteFilesTab({ hostId, connected, revealRequest }: {
     const requestID = revealRequest.id;
     void (async () => {
       for (const dir of ancestors) {
-        if (lastRevealID.current !== requestID) return;
-        await loadDir(dir);
-        if (lastRevealID.current !== requestID) return;
+        if (navigationSignal?.aborted || lastRevealID.current !== requestID) return;
+        await loadDir(dir, revealRequest.signal);
+        if (navigationSignal?.aborted || lastRevealID.current !== requestID) return;
         setOpenDirs(prev => new Set(prev).add(dir));
       }
     })();
-  }, [connected, loadDir, revealRequest]);
+    return () => { lastRevealID.current = 0; };
+  }, [connected, loadDir, revealRequest, navigationSignal]);
 
   const toggleDir = (path: string) => {
     setOpenDirs((prev) => {
@@ -194,7 +210,7 @@ function RemoteFilesTab({ hostId, connected, revealRequest }: {
         ) : (
           <button
             className={`remote-tree__row ${selected === e.path ? "is-selected" : ""}`}
-            onClick={() => setSelected(e.path)}
+            onClick={() => { cancelFileNavigation(); lastRevealID.current = 0; setPresentedSelection(null); setSelected(e.path); }}
             role="treeitem"
           >
             {e.name}
@@ -225,6 +241,7 @@ function RemoteFilesTab({ hostId, connected, revealRequest }: {
       <div className="remote-files__view">
         {selected ? (
           <RemoteFileView
+            key={`${hostId}::${selected}`}
             hostId={hostId}
             path={selected}
             connected={connected}
@@ -246,15 +263,21 @@ function RemoteFileView({ hostId, path, connected, forceReadOnly = false }: { ho
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [err, setErr] = useState("");
+  const operation = useRef(0);
+  useEffect(() => () => { operation.current++; }, []);
 
   const load = useCallback(async () => {
-    const p = await app.ReadRemoteFile(hostId, path);
-    setBody(p.body);
-    setDraft(null);
-    setMtime(p.mtimeUnix);
-    setBinary(p.binary);
-    setTruncated(p.truncated);
-    setErr(p.err ?? "");
+    const generation = ++operation.current;
+    try {
+      const p = await app.ReadRemoteFile(hostId, path);
+      if (operation.current !== generation) return;
+      setBody(p.body);
+      setDraft(null);
+      setMtime(p.mtimeUnix);
+      setBinary(p.binary);
+      setTruncated(p.truncated);
+      setErr(p.err ?? "");
+    } catch (error) { if (operation.current === generation) setErr(String(error)); }
   }, [hostId, path]);
 
   useEffect(() => {
@@ -266,19 +289,24 @@ function RemoteFileView({ hostId, path, connected, forceReadOnly = false }: { ho
 
   const save = async (force: boolean) => {
     if (draft === null) return;
+    const generation = ++operation.current;
+    const submitted = draft;
     setSaving(true);
     try {
       const res = await app.WriteRemoteFile(hostId, path, draft, force ? 0 : mtime);
+      if (operation.current !== generation) return;
       if (res.conflict) {
         setConflict(true);
         return;
       }
-      setBody(draft);
-      setDraft(null);
+      setBody(submitted);
+      setDraft(current => current === submitted ? null : current);
       setMtime(res.newMtimeUnix);
       setConflict(false);
+    } catch (error) {
+      if (operation.current === generation) setErr(String(error));
     } finally {
-      setSaving(false);
+      if (operation.current === generation) setSaving(false);
     }
   };
 

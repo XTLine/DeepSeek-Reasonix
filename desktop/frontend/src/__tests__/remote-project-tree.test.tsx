@@ -46,9 +46,9 @@ ok(
 );
 
 ok(
-  /remoteSession: \{ hostId: node\.remote!\.hostId, workspace: node\.remote!\.workspace, name: row\.name, path: row\.path, title: row\.title \}/.test(remoteSource) &&
+  /remoteSession: \{ hostId: node\.remote!\.hostId, workspace: node\.remote!\.workspace, name: row\.name, path: row\.path, sessionId: row\.sessionId, title: row\.title \}/.test(remoteSource) &&
     /openRemoteSessionNode\(remote, openRemoteProject\)/.test(source) &&
-    /sessionPath: remote\.path, sessionTitle: remote\.title/.test(remoteSource),
+    /sessionPath: remote\.path, sessionId: remote\.sessionId, sessionTitle: remote\.title/.test(remoteSource),
   "session rows open the matching in-app remote session",
 );
 ok(
@@ -122,9 +122,10 @@ ok(
 );
 ok(
   /items: visibleRuntimeState\.items/.test(compositionSource) &&
-    /for \(let i = items\.length - 1/.test(todoSource) &&
-    /!remote && activeTabId && todoBatch/.test(todoSource),
-  "remote todo shelf projects the visible transcript without calling the local dismissal backend",
+    /const metaTodos = input\.meta\?\.canonicalTodos/.test(todoSource) &&
+    /resolveTodoPanelTodos\(metaTodos\)/.test(todoSource) &&
+    /setDismissedTodoKeys/.test(todoSource),
+  "remote todo shelf consumes the shared runtime projection with mount-local dismissal",
 );
 ok(
   /EnsureRemoteProjectSessions\(hostId: string, workspace: string\): Promise<RemoteSessionView\[\]>;/.test(bridgeSource),

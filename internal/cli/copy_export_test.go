@@ -22,7 +22,7 @@ func newTestChatTUIWithMessages(t *testing.T, workspaceRoot string, msgs ...prov
 		sess.Add(msg)
 	}
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	ctrl := control.New(control.Options{Executor: exec, WorkspaceRoot: workspaceRoot})
+	ctrl := newOwnedTestController(t, control.Options{Executor: exec, WorkspaceRoot: workspaceRoot})
 	return newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 }
 

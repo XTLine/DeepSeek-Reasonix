@@ -71,7 +71,7 @@ func loadSessionTranscript(ctx context.Context, sessionPath string, limits sessi
 		msgs, times := st.materialize(headID)
 		hasher.addAll(msgs)
 		return sessionLoadResult{
-			msgs: msgs, times: times, fromEvents: true, damaged: st.damaged, dag: true,
+			msgs: msgs, times: times, fromEvents: true, damaged: st.damaged || st.holes != 0, dag: true,
 			head:      HeadRef{HeadID: headID, LeafID: st.heads[headID].leaf, LogGeneration: st.generation, LogOffset: st.lastGoodEnd},
 			headCount: len(st.heads),
 			state:     st,

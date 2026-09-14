@@ -1,18 +1,22 @@
 package control
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
-	"reasonix/internal/agent"
-	"reasonix/internal/event"
 	"sort"
 	"sync"
+
+	"reasonix/internal/agent"
+	"reasonix/internal/event"
 )
 
 type PendingPromptOwner struct {
 	mu       sync.Mutex
 	pending  map[string]PendingPrompt
-	resolved map[string]PromptIdentity
+	resolved map[string]PromptResolution
+	next     uint64
+	revision uint64
 }
 
 type PendingPromptState string
@@ -22,11 +26,32 @@ const (
 	PromptResolving PendingPromptState = "resolving"
 )
 
+type PromptTerminalState string
+
+const (
+	PromptAnswered    PromptTerminalState = "answered"
+	PromptRejected    PromptTerminalState = "rejected"
+	PromptCancelled   PromptTerminalState = "cancelled"
+	PromptUnavailable PromptTerminalState = "unavailable"
+)
+
+type PromptResolution struct {
+	Identity     PromptIdentity
+	State        PromptTerminalState
+	AnswerDigest string
+}
+
 type PendingPrompt struct {
 	Identity PromptIdentity
 	State    PendingPromptState
-	Resolve  func(PromptAnswer) error
-	Cancel   func() error
+	Order    uint64
+	// AnswerDigest is filled only after the exact resolver wins the one-shot
+	// transition. It lets an identical retry succeed idempotently while a
+	// conflicting late answer is rejected.
+	AnswerDigest string
+	Done         chan struct{}
+	Resolve      func(PromptAnswer) error
+	Cancel       func() error
 }
 
 func (o *PendingPromptOwner) RegisterPrompt(prompt PendingPrompt) error {
@@ -40,7 +65,10 @@ func (o *PendingPromptOwner) RegisterPrompt(prompt PendingPrompt) error {
 		o.pending = make(map[string]PendingPrompt)
 	}
 	if o.resolved == nil {
-		o.resolved = make(map[string]PromptIdentity)
+		o.resolved = make(map[string]PromptResolution)
+	}
+	if _, exists := o.resolved[identity.PromptID]; exists {
+		return fmt.Errorf("prompt %q was already terminal", identity.PromptID)
 	}
 	if _, exists := o.pending[identity.PromptID]; exists {
 		return fmt.Errorf("prompt %q already registered", identity.PromptID)
@@ -48,7 +76,13 @@ func (o *PendingPromptOwner) RegisterPrompt(prompt PendingPrompt) error {
 	if prompt.State == "" {
 		prompt.State = PromptPending
 	}
+	if prompt.Done == nil {
+		prompt.Done = make(chan struct{})
+	}
+	o.next++
+	prompt.Order = o.next
 	o.pending[identity.PromptID] = prompt
+	o.revision++
 	return nil
 }
 
@@ -67,24 +101,77 @@ func (o *PendingPromptOwner) Prompt(id string) (PendingPrompt, bool) {
 	p, ok := o.pending[id]
 	return p, ok
 }
-func (o *PendingPromptOwner) Remove(id string) { o.mu.Lock(); delete(o.pending, id); o.mu.Unlock() }
+func (o *PendingPromptOwner) Remove(id string) {
+	o.mu.Lock()
+	if prompt, ok := o.pending[id]; ok {
+		delete(o.pending, id)
+		close(prompt.Done)
+		o.revision++
+	}
+	o.mu.Unlock()
+}
 func (o *PendingPromptOwner) RemoveKind(kind PromptKind) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	changed := false
 	for id, prompt := range o.pending {
 		if prompt.Identity.Kind == kind {
 			delete(o.pending, id)
+			close(prompt.Done)
+			changed = true
 		}
+	}
+	if changed {
+		o.revision++
+	}
+}
+
+func (o *PendingPromptOwner) MarkKindTerminal(kind PromptKind, state PromptTerminalState) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.resolved == nil {
+		o.resolved = make(map[string]PromptResolution)
+	}
+	changed := false
+	for id, prompt := range o.pending {
+		if prompt.Identity.Kind != kind {
+			continue
+		}
+		delete(o.pending, id)
+		close(prompt.Done)
+		changed = true
+		if _, exists := o.resolved[id]; !exists {
+			o.resolved[id] = PromptResolution{Identity: prompt.Identity, State: state}
+		}
+	}
+	if changed {
+		o.revision++
 	}
 }
 func (o *PendingPromptOwner) MarkResolved(identity PromptIdentity) {
+	o.MarkTerminal(identity, PromptAnswered)
+}
+func (o *PendingPromptOwner) MarkTerminal(identity PromptIdentity, state PromptTerminalState) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	delete(o.pending, identity.PromptID)
-	if o.resolved == nil {
-		o.resolved = make(map[string]PromptIdentity)
+	prompt, pending := o.pending[identity.PromptID]
+	if pending {
+		identity = normalizePromptIdentity(identity, prompt.Identity)
 	}
-	o.resolved[identity.PromptID] = identity
+	delete(o.pending, identity.PromptID)
+	if pending {
+		close(prompt.Done)
+	}
+	if o.resolved == nil {
+		o.resolved = make(map[string]PromptResolution)
+	}
+	if _, exists := o.resolved[identity.PromptID]; !exists {
+		o.resolved[identity.PromptID] = PromptResolution{Identity: identity, State: state, AnswerDigest: prompt.AnswerDigest}
+		pending = true
+	}
+	if pending {
+		o.revision++
+	}
 }
 func (o *PendingPromptOwner) BeginResolve(identity PromptIdentity) error {
 	o.mu.Lock()
@@ -96,6 +183,7 @@ func (o *PendingPromptOwner) BeginResolve(identity PromptIdentity) error {
 		}
 		return ErrPromptNotPending
 	}
+	identity = normalizePromptIdentity(identity, p.Identity)
 	if p.Identity != identity {
 		return ErrPromptStaleTurn
 	}
@@ -103,16 +191,12 @@ func (o *PendingPromptOwner) BeginResolve(identity PromptIdentity) error {
 		return ErrPromptAlreadyResolved
 	}
 	p.State = PromptResolving
-	o.pending[identity.PromptID] = p
-	return nil
-}
-func (o *PendingPromptOwner) Restore(identity PromptIdentity) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if p, ok := o.pending[identity.PromptID]; ok && p.Identity == identity {
-		p.State = PromptPending
-		o.pending[identity.PromptID] = p
+	if p.Done == nil {
+		p.Done = make(chan struct{})
 	}
+	o.pending[identity.PromptID] = p
+	o.revision++
+	return nil
 }
 
 // BindRouting fills routing fields that were not available when a prompt was
@@ -125,35 +209,122 @@ func (o *PendingPromptOwner) BindRouting(id, turnID, runtimeEpoch string) (Promp
 	if !ok {
 		return PromptIdentity{}, false
 	}
+	changed := false
 	if prompt.Identity.TurnID == "" && turnID != "" {
 		prompt.Identity.TurnID = turnID
+		changed = true
 	}
 	if prompt.Identity.RuntimeEpoch == "" && runtimeEpoch != "" {
 		prompt.Identity.RuntimeEpoch = runtimeEpoch
+		changed = true
 	}
 	o.pending[id] = prompt
+	if changed {
+		o.revision++
+	}
 	return prompt.Identity, true
 }
 func (o *PendingPromptOwner) Resolve(identity PromptIdentity, answer PromptAnswer) error {
-	if err := o.BeginResolve(identity); err != nil {
-		return err
+	digest := promptAnswerDigest(answer)
+	wantState := promptAnswerTerminal(identity, answer)
+	for {
+		o.mu.Lock()
+		if resolution, ok := o.resolved[identity.PromptID]; ok {
+			identity = normalizePromptIdentity(identity, resolution.Identity)
+			o.mu.Unlock()
+			if resolution.Identity == identity && resolution.State == wantState && resolution.AnswerDigest == digest {
+				return nil
+			}
+			return ErrPromptAlreadyResolved
+		}
+		prompt, ok := o.pending[identity.PromptID]
+		if !ok {
+			o.mu.Unlock()
+			return ErrPromptNotPending
+		}
+		identity = normalizePromptIdentity(identity, prompt.Identity)
+		if prompt.Identity != identity {
+			o.mu.Unlock()
+			return ErrPromptStaleTurn
+		}
+		if prompt.State == PromptResolving {
+			if prompt.AnswerDigest != digest {
+				o.mu.Unlock()
+				return ErrPromptAlreadyResolved
+			}
+			done := prompt.Done
+			o.mu.Unlock()
+			<-done
+			continue
+		}
+		prompt.State = PromptResolving
+		prompt.AnswerDigest = digest
+		if prompt.Done == nil {
+			prompt.Done = make(chan struct{})
+		}
+		o.pending[identity.PromptID] = prompt
+		o.revision++
+		o.mu.Unlock()
+
+		if prompt.Resolve == nil {
+			// A published request without a live answerer is terminal. Leaving it
+			// pending would recreate the permanent-wait failure this registry owns.
+			o.MarkTerminal(identity, PromptUnavailable)
+			return ErrPromptUnavailable
+		}
+		if err := prompt.Resolve(answer); err != nil {
+			// The typed answerer failed after this registry awarded it the
+			// one-shot transition. It is no longer safe to advertise the request
+			// as answerable: terminalize it and detach typed cleanup so neither a
+			// dead connection nor a throwing adapter can create an infinite wait.
+			o.MarkTerminal(identity, PromptUnavailable)
+			if prompt.Cancel != nil {
+				go func(cancel func() error) { _ = cancel() }(prompt.Cancel)
+			}
+			return errors.Join(ErrPromptUnavailable, err)
+		}
+		o.MarkTerminal(identity, wantState)
+		resolution, ok := o.Resolution(identity.PromptID)
+		if !ok || resolution.State != wantState || resolution.AnswerDigest != digest {
+			return ErrPromptAlreadyResolved
+		}
+		return nil
 	}
-	prompt, ok := o.Prompt(identity.PromptID)
-	if !ok || prompt.Resolve == nil {
-		o.Restore(identity)
-		return ErrPromptNotPending
+}
+
+// normalizePromptIdentity preserves compatibility with transports that were
+// shipped before toolCallId became part of the shared interaction snapshot.
+// The owner remains authoritative: an omitted field adopts the captured value,
+// while a conflicting non-empty value still fails the exact identity check.
+func normalizePromptIdentity(candidate, owned PromptIdentity) PromptIdentity {
+	if candidate.ToolCallID == "" {
+		candidate.ToolCallID = owned.ToolCallID
 	}
-	err := prompt.Resolve(answer)
-	if err != nil {
-		o.Restore(identity)
-		return err
+	return candidate
+}
+
+func promptAnswerDigest(answer PromptAnswer) string {
+	b, _ := json.Marshal(answer)
+	return string(b)
+}
+
+func promptAnswerTerminal(identity PromptIdentity, answer PromptAnswer) PromptTerminalState {
+	if identity.Kind == PromptMCP && answer.Action == "cancel" {
+		return PromptCancelled
 	}
-	if _, pending := o.Identity(identity.PromptID); pending {
-		o.Restore(identity)
-		return ErrPromptNotPending
+	if (identity.Kind == PromptApproval && !answer.Allow) ||
+		(identity.Kind == PromptMCP && answer.Action == "decline") ||
+		(identity.Kind == PromptPlan && answer.Action != "start") ||
+		(identity.Kind == PromptRecovery && answer.Action != string(agent.RecoveryActionContinue)) {
+		return PromptRejected
 	}
-	o.MarkResolved(identity)
-	return nil
+	return PromptAnswered
+}
+
+func (o *PendingPromptOwner) MarkIDTerminal(id string, state PromptTerminalState) {
+	if prompt, ok := o.Prompt(id); ok {
+		o.MarkTerminal(prompt.Identity, state)
+	}
 }
 func (o *PendingPromptOwner) WasResolved(id string) bool {
 	o.mu.Lock()
@@ -161,35 +332,88 @@ func (o *PendingPromptOwner) WasResolved(id string) bool {
 	_, ok := o.resolved[id]
 	return ok
 }
+func (o *PendingPromptOwner) Resolution(id string) (PromptResolution, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	resolution, ok := o.resolved[id]
+	return resolution, ok
+}
 func (o *PendingPromptOwner) Clear() {
 	o.mu.Lock()
+	for _, prompt := range o.pending {
+		close(prompt.Done)
+	}
 	o.pending = make(map[string]PendingPrompt)
-	o.resolved = make(map[string]PromptIdentity)
+	o.resolved = make(map[string]PromptResolution)
+	o.revision++
 	o.mu.Unlock()
 }
 func (o *PendingPromptOwner) CancelAll() {
 	o.mu.Lock()
 	cancels := make([]func() error, 0, len(o.pending))
+	identities := make([]PromptIdentity, 0, len(o.pending))
+	prompts := make([]PendingPrompt, 0, len(o.pending))
 	for _, prompt := range o.pending {
+		prompts = append(prompts, prompt)
+		identities = append(identities, prompt.Identity)
 		if prompt.Cancel != nil {
 			cancels = append(cancels, prompt.Cancel)
 		}
 	}
 	o.pending = make(map[string]PendingPrompt)
+	if o.resolved == nil {
+		o.resolved = make(map[string]PromptResolution)
+	}
+	for _, identity := range identities {
+		if _, exists := o.resolved[identity.PromptID]; !exists {
+			o.resolved[identity.PromptID] = PromptResolution{Identity: identity, State: PromptCancelled}
+		}
+	}
+	for _, prompt := range prompts {
+		close(prompt.Done)
+	}
+	if len(identities) > 0 {
+		o.revision++
+	}
 	o.mu.Unlock()
 	for _, cancel := range cancels {
-		_ = cancel()
+		// A connector or legacy adapter may provide a cancellation callback that
+		// blocks. Registry state is already terminal, so cleanup runs detached and
+		// can never delay the session's Stop path.
+		go func(cancel func() error) { _ = cancel() }(cancel)
 	}
 }
 func (o *PendingPromptOwner) Identities() []PromptIdentity {
+	identities, _ := o.IdentitiesRevision()
+	return identities
+}
+
+// IdentitiesRevision returns one registry projection boundary. Runtime-state
+// assembly verifies the revision after sampling its other owners so a prompt
+// transition cannot be published with an older todo/turn snapshot.
+func (o *PendingPromptOwner) IdentitiesRevision() ([]PromptIdentity, uint64) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	out := make([]PromptIdentity, 0, len(o.pending))
-	for _, prompt := range o.pending {
-		out = append(out, prompt.Identity)
+	type orderedIdentity struct {
+		identity PromptIdentity
+		order    uint64
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].PromptID < out[j].PromptID })
-	return out
+	ordered := make([]orderedIdentity, 0, len(o.pending))
+	for _, prompt := range o.pending {
+		ordered = append(ordered, orderedIdentity{identity: prompt.Identity, order: prompt.Order})
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].order < ordered[j].order })
+	out := make([]PromptIdentity, len(ordered))
+	for i := range ordered {
+		out[i] = ordered[i].identity
+	}
+	return out, o.revision
+}
+
+func (o *PendingPromptOwner) Revision() uint64 {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.revision
 }
 
 // PromptKind identifies the interactive surface that owns a pending decision.
@@ -208,21 +432,23 @@ const (
 // controller replacement.
 type PromptIdentity struct {
 	PromptID     string
+	ToolCallID   string
 	TurnID       string
 	RuntimeEpoch string
 	Kind         PromptKind
 }
 
 func (c *Controller) promptIdentitySnapshot() (string, string) {
-	c.promptResolveMu.Lock()
-	defer c.promptResolveMu.Unlock()
 	turnID, _, _, _ := c.turnEventRuntimeStatus()
-	return turnID, c.promptRuntimeEpoch
+	c.promptEpochMu.RLock()
+	epoch := c.promptRuntimeEpoch
+	c.promptEpochMu.RUnlock()
+	return turnID, epoch
 }
 
 func (c *Controller) registerOwnedPrompt(id string, kind PromptKind) {
 	turn, epoch := c.promptIdentitySnapshot()
-	identity := PromptIdentity{PromptID: id, TurnID: turn, RuntimeEpoch: epoch, Kind: kind}
+	identity := PromptIdentity{PromptID: id, ToolCallID: id, TurnID: turn, RuntimeEpoch: epoch, Kind: kind}
 	resolve := func(answer PromptAnswer) error {
 		switch kind {
 		case PromptAsk:
@@ -267,8 +493,6 @@ func (c *Controller) bindOwnedPromptRouting(id, turnID, runtimeEpoch string) Pro
 func (c *Controller) PendingPromptIdentities() []PromptIdentity { return c.promptOwner.Identities() }
 
 func (c *Controller) cancelOwnedPrompt(id string) {
-	c.promptResolveMu.Lock()
-	defer c.promptResolveMu.Unlock()
 	c.cancelOwnedPromptLocked(id)
 }
 
@@ -280,7 +504,7 @@ func (c *Controller) cancelOwnedPromptLocked(id string) {
 		c.approval.cancelAsk(id)
 		c.approval.cancelMCPInteraction(id)
 	}
-	c.promptOwner.Remove(id)
+	c.promptOwner.MarkIDTerminal(id, PromptCancelled)
 }
 
 var (
@@ -288,6 +512,7 @@ var (
 	ErrPromptStaleRuntime    = errors.New("prompt belongs to a stale runtime")
 	ErrPromptAlreadyResolved = errors.New("prompt is already resolved")
 	ErrPromptNotPending      = errors.New("prompt is not pending")
+	ErrPromptUnavailable     = errors.New("prompt answerer is unavailable")
 )
 
 // PromptAnswer is the transport-neutral union used by exact prompt resolve.
@@ -304,8 +529,9 @@ type PromptAnswer struct {
 }
 
 // ResolvePromptExact is the single controller-owned decision boundary. The
-// specialized resolvers retain their validation and durable receipts; this
-// mutex makes their check-and-wake path single-writer for one controller.
+// specialized resolvers retain their validation and durable receipts. The
+// owner claims the one-shot transition before invoking an answerer, without
+// holding its registry lock or any controller-wide lock.
 func (c *Controller) ResolvePromptExact(identity PromptIdentity, answer PromptAnswer) error {
 	defer c.refreshRuntimeState(event.Event{})
 	if c == nil {
@@ -314,15 +540,16 @@ func (c *Controller) ResolvePromptExact(identity PromptIdentity, answer PromptAn
 	if identity.PromptID == "" || identity.TurnID == "" {
 		return ErrPromptNotPending
 	}
-	c.promptResolveMu.Lock()
-	defer c.promptResolveMu.Unlock()
 	c.mu.Lock()
 	closed := c.closed
 	c.mu.Unlock()
 	if closed {
 		return ErrPromptNotPending
 	}
-	if c.promptRuntimeEpoch != "" && (identity.RuntimeEpoch == "" || identity.RuntimeEpoch != c.promptRuntimeEpoch) {
+	c.promptEpochMu.RLock()
+	epoch := c.promptRuntimeEpoch
+	c.promptEpochMu.RUnlock()
+	if epoch != "" && (identity.RuntimeEpoch == "" || identity.RuntimeEpoch != epoch) {
 		return ErrPromptStaleRuntime
 	}
 	turnID, _, _, _ := c.turnEventRuntimeStatus()
@@ -331,11 +558,12 @@ func (c *Controller) ResolvePromptExact(identity PromptIdentity, answer PromptAn
 	}
 	owned, ok := c.promptOwner.Identity(identity.PromptID)
 	if !ok {
-		if c.promptOwner.WasResolved(identity.PromptID) {
-			return ErrPromptAlreadyResolved
-		}
-		return ErrPromptNotPending
+		// Let the owner compare the terminal state and answer digest. An
+		// identical transport retry is idempotent; a different late answer is
+		// rejected as a conflict.
+		return c.promptOwner.Resolve(identity, answer)
 	}
+	identity = normalizePromptIdentity(identity, owned)
 	if owned.TurnID != identity.TurnID || owned.Kind != identity.Kind {
 		return ErrPromptStaleTurn
 	}

@@ -2,6 +2,7 @@ package event
 
 import (
 	"encoding/json"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,7 +35,7 @@ func TestRuntimeStateForwardsOutsideTranscriptEvents(t *testing.T) {
 			PublishRuntimeState(sink, want)
 			select {
 			case got := <-capture.states:
-				if got != want {
+				if !reflect.DeepEqual(got, want) {
 					t.Fatalf("wrapper changed snapshot: got=%+v want=%+v", got, want)
 				}
 			case <-time.After(5 * time.Second):

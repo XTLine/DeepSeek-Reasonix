@@ -27,6 +27,9 @@ var sessionReset = map[string]bool{
 	"compactionState":                       true,
 	"cacheState":                            true,
 	"compaction":                            true,
+	"todoMu":                                true,
+	"todoState":                             true,
+	"todoWritten":                           true,
 }
 
 // sessionCarryOver names the fields reset deliberately leaves alone, each with
@@ -36,8 +39,6 @@ var sessionCarryOver = map[string]bool{
 	"compactionRunMu": true, // a singleflight latch, not conversation state
 	"path":            true, // preflight rebinds on the next transcript bind
 	"checkpointState": true, // preflight rebinds with the transcript
-	"todoMu":          true,
-	"todoState":       true, // SetSession rebuilds it from the new snapshot
 	// lastPrefixShape survives the swap today; the next request compares its
 	// prefix against the replaced conversation's shape. Left as found here.
 	"lastPrefixShape":     true,

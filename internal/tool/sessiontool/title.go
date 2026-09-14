@@ -21,6 +21,13 @@ type setSessionTitleTool struct {
 	sessionDir         string
 	currentSessionPath func() string
 	onTitleChanged     TitleChangedFunc
+	currentSessionID   func() string
+	writeEventTitle    func(context.Context, string) error
+}
+
+// NewSetSessionTitleEventTool writes through the final session event owner.
+func NewSetSessionTitleEventTool(currentSessionID func() string, write func(context.Context, string) error) *setSessionTitleTool {
+	return &setSessionTitleTool{currentSessionID: currentSessionID, writeEventTitle: write}
 }
 
 const setSessionTitleMaxRunes = 120
@@ -69,6 +76,22 @@ func (t *setSessionTitleTool) Execute(ctx context.Context, args json.RawMessage)
 	if params.Title == nil {
 		return "", fmt.Errorf("set_session_title: 'title' argument is required")
 	}
+	title := strings.TrimSpace(*params.Title)
+	if len([]rune(title)) > setSessionTitleMaxRunes {
+		return "", fmt.Errorf("set_session_title: title exceeds %d characters", setSessionTitleMaxRunes)
+	}
+	if t != nil && t.writeEventTitle != nil {
+		if t.currentSessionID == nil || strings.TrimSpace(t.currentSessionID()) == "" {
+			return "", fmt.Errorf("set_session_title: current session is unavailable")
+		}
+		if err := t.writeEventTitle(ctx, title); err != nil {
+			return "", fmt.Errorf("set_session_title: %w", err)
+		}
+		if title == "" {
+			return "Cleared the current conversation title.", nil
+		}
+		return fmt.Sprintf("Set the current conversation title to %q.", title), nil
+	}
 	if t == nil || t.currentSessionPath == nil {
 		return "", fmt.Errorf("set_session_title: current session is unavailable")
 	}
@@ -81,10 +104,6 @@ func (t *setSessionTitleTool) Execute(ctx context.Context, args json.RawMessage)
 	}
 	if agent.IsCleanupPending(sessionPath) {
 		return "", fmt.Errorf("set_session_title: current session is pending cleanup")
-	}
-	title := strings.TrimSpace(*params.Title)
-	if len([]rune(title)) > setSessionTitleMaxRunes {
-		return "", fmt.Errorf("set_session_title: title exceeds %d characters", setSessionTitleMaxRunes)
 	}
 	if err := agent.RenameSession(sessionPath, title); err != nil {
 		return "", fmt.Errorf("set_session_title: %w", err)

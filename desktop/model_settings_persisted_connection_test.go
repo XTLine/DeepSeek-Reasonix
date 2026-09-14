@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"reasonix/internal/agent"
+	"reasonix/internal/control"
 )
 
 func TestModelSettingsCredentialRefreshPersistsSelectedConnection(t *testing.T) {
@@ -34,10 +34,14 @@ func TestModelSettingsCredentialRefreshPersistsSelectedConnection(t *testing.T) 
 	if got := current.ModelRef(); got != want {
 		t.Fatalf("runtime model = %q, want %q", got, want)
 	}
-	if err := current.Snapshot(); err != nil {
+	_, runtime, ok := current.(*control.Controller).SessionBinding()
+	if !ok {
+		t.Fatal("rebuilt controller lost its v3 runtime")
+	}
+	if _, err := runtime.Session().Flush(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := agent.LoadSessionModel(current.SessionPath()); !ok || got != want {
-		t.Fatalf("persisted model = %q, present=%v, want %q", got, ok, want)
+	if got := runtime.Session().Snapshot().Projection.ModelRef; got != want {
+		t.Fatalf("persisted model event = %q, want %q", got, want)
 	}
 }

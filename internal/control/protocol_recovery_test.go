@@ -35,7 +35,7 @@ func TestProtocolRecoveryControllerDurabilityAndConcurrentAdmission(t *testing.T
 	a := agent.New(p, tool.NewRegistry(), session, agent.Options{}, event.Discard)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
-	c := New(Options{Runner: a, Executor: a, SessionDir: dir, SessionPath: path, Sink: event.Discard})
+	c := newOwnedTestController(t, Options{Runner: a, Executor: a, SessionDir: dir, SessionPath: path, Sink: event.Discard})
 	defer c.Close()
 	if err := c.RunTurn(context.Background(), "next"); err == nil {
 		t.Fatal("expected opaque failure")
@@ -44,12 +44,9 @@ func TestProtocolRecoveryControllerDurabilityAndConcurrentAdmission(t *testing.T
 	if action == nil {
 		t.Fatal("missing recovery token")
 	}
-	loaded, err := agent.LoadSession(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := loadDurableSessionProjection(t, path)
 	var pending bool
-	for _, m := range loaded.Snapshot() {
+	for _, m := range loaded.Messages {
 		r, ok := provider.DecodeProtocolRecovery(m.ProtocolRecovery)
 		pending = pending || ok && r.State == "pending"
 	}
@@ -59,12 +56,9 @@ func TestProtocolRecoveryControllerDurabilityAndConcurrentAdmission(t *testing.T
 	done := make(chan error, 1)
 	go func() { done <- c.RunProtocolRecoveryWithAdmission(context.Background(), action.ID, "", nil) }()
 	<-p.entered
-	loaded, err = agent.LoadSession(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded = loadDurableSessionProjection(t, path)
 	var consumed bool
-	for _, m := range loaded.Snapshot() {
+	for _, m := range loaded.Messages {
 		r, ok := provider.DecodeProtocolRecovery(m.ProtocolRecovery)
 		consumed = consumed || ok && r.State == "consumed"
 	}
@@ -100,7 +94,7 @@ func TestProtocolRecoveryCancelledBeforeAdmissionKeepsToken(t *testing.T) {
 	session := agent.NewSession("system")
 	session.Add(provider.Message{Role: provider.RoleAssistant, Content: "earlier", ReasoningContent: "proof"})
 	a := agent.New(p, tool.NewRegistry(), session, agent.Options{}, event.Discard)
-	c := New(Options{Runner: a, Executor: a, Sink: event.Discard})
+	c := newOwnedTestController(t, Options{Runner: a, Executor: a, Sink: event.Discard})
 	defer c.Close()
 	_ = c.RunTurn(context.Background(), "next")
 	action := c.PendingProtocolRecovery()

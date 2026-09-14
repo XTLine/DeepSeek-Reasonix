@@ -48,7 +48,7 @@ func newChatBudgetController(t *testing.T, exec *agent.Agent) (*Controller, chan
 	// Round admission does not depend on session durability. Keep this fixture
 	// in memory; persistence and writer authority have their own integration tests.
 	sink, done, _ := collectSink()
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner:   exec,
 		Executor: exec,
 		Sink:     sink,

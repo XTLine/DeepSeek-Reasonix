@@ -10,6 +10,7 @@ import (
 	"reasonix/internal/capability"
 	"reasonix/internal/config"
 	"reasonix/internal/plugin"
+	"reasonix/internal/skill"
 	"reasonix/internal/tool"
 )
 
@@ -101,5 +102,126 @@ func TestUseCapabilityListSummarizesMCPWithoutExpandingCachedDirectories(t *test
 	disabledInspect, err := frontend.Execute(context.Background(), json.RawMessage(`{"action":"inspect","capability_id":"mcp-server:disabled"}`))
 	if err != nil || !strings.Contains(disabledInspect, "disabled") || strings.Contains(disabledInspect, "catalog-bloat-sentinel") {
 		t.Fatalf("disabled inspect exposed a non-actionable cached directory: %v\n%s", err, disabledInspect)
+	}
+}
+
+func TestUseCapabilityListPagesOneImmutableCatalogVersion(t *testing.T) {
+	skills := make([]skill.Skill, 123)
+	for i := range skills {
+		skills[i] = skill.Skill{Name: fmt.Sprintf("skill-%03d", i), Description: "candidate", Scope: skill.ScopeProject}
+	}
+	revision := 0
+	catalogFn := func() capability.Catalog {
+		current := append([]skill.Skill(nil), skills...)
+		if revision > 0 {
+			current = append(current, skill.Skill{Name: "new", Description: "candidate", Scope: skill.ScopeProject})
+		}
+		return capability.BuildCatalog(capability.CatalogOptions{Skills: current})
+	}
+	runtime := NewMCPCapabilityRuntime(context.Background(), nil, nil, tool.NewRegistry(), catalogFn)
+	frontend := runtime.NewFrontend(nil, nil)
+
+	type page struct {
+		Capabilities []struct {
+			ID string `json:"id"`
+		} `json:"capabilities"`
+		CatalogVersion string `json:"catalog_version"`
+		NextCursor     string `json:"next_cursor"`
+		Truncated      bool   `json:"truncated"`
+	}
+	read := func(raw string) page {
+		t.Helper()
+		out, err := frontend.Execute(context.Background(), json.RawMessage(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got page
+		if err := json.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	first := read(`{"action":"list"}`)
+	if len(first.Capabilities) != 50 || !first.Truncated || first.NextCursor == "" || first.CatalogVersion == "" {
+		t.Fatalf("first page = %+v", first)
+	}
+	second := read(fmt.Sprintf(`{"action":"list","cursor":%q,"limit":50}`, first.NextCursor))
+	if len(second.Capabilities) != 50 || second.CatalogVersion != first.CatalogVersion || second.NextCursor == "" {
+		t.Fatalf("second page = %+v", second)
+	}
+	third := read(fmt.Sprintf(`{"action":"list","cursor":%q,"limit":50}`, second.NextCursor))
+	if len(third.Capabilities) != 23 || third.Truncated || third.NextCursor != "" || third.CatalogVersion != first.CatalogVersion {
+		t.Fatalf("third page = %+v", third)
+	}
+
+	revision++
+	if _, err := frontend.Execute(context.Background(), json.RawMessage(fmt.Sprintf(`{"action":"list","cursor":%q}`, first.NextCursor))); err == nil || !strings.Contains(err.Error(), "cursor expired") {
+		t.Fatalf("old cursor survived catalog replacement: %v", err)
+	}
+}
+
+func TestUseCapabilityListLimitAlsoBoundsServerSummaries(t *testing.T) {
+	specs := make([]plugin.Spec, 120)
+	entries := make([]config.PluginEntry, 120)
+	for i := range specs {
+		name := fmt.Sprintf("server-%03d", i)
+		specs[i] = plugin.Spec{Name: name, Type: "stdio", Command: "unused", Authorized: true}
+		entries[i] = config.PluginEntry{Name: name, Type: "stdio", Command: "unused"}
+	}
+	runtime := NewMCPCapabilityRuntime(context.Background(), nil, specs, tool.NewRegistry(), func() capability.Catalog {
+		return capability.BuildCatalog(capability.CatalogOptions{Plugins: entries})
+	})
+	runtime.ConfigureServers(entries, specs, nil)
+	frontend := runtime.NewFrontend(nil, nil)
+
+	var first struct {
+		Servers    []listServerInfo `json:"servers"`
+		NextCursor string           `json:"next_cursor"`
+		Truncated  bool             `json:"truncated"`
+	}
+	out, err := frontend.Execute(context.Background(), json.RawMessage(`{"action":"list","limit":50}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(out), &first); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Servers) != 50 || !first.Truncated || first.NextCursor == "" {
+		t.Fatalf("first server page = %+v", first)
+	}
+	var second struct {
+		Servers []listServerInfo `json:"servers"`
+	}
+	out, err = frontend.Execute(context.Background(), json.RawMessage(fmt.Sprintf(`{"action":"list","limit":50,"cursor":%q}`, first.NextCursor)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(out), &second); err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Servers) != 50 || second.Servers[0].Name != "server-050" {
+		t.Fatalf("second server page = %+v", second.Servers)
+	}
+}
+
+func TestUseCapabilitySearchLargeCatalogHonorsSmallLimit(t *testing.T) {
+	skills := make([]skill.Skill, 10_000)
+	for i := range skills {
+		skills[i] = skill.Skill{Name: fmt.Sprintf("catalog-%05d", i), Description: "large catalog candidate", Scope: skill.ScopeProject}
+	}
+	catalogFn := func() capability.Catalog {
+		return capability.BuildCatalog(capability.CatalogOptions{Skills: skills})
+	}
+	runtime := NewMCPCapabilityRuntime(context.Background(), nil, nil, tool.NewRegistry(), catalogFn)
+	frontend := runtime.NewFrontend(nil, nil)
+	out, err := frontend.Execute(context.Background(), json.RawMessage(`{"action":"search","query":"catalog","limit":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Results []json.RawMessage `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil || len(payload.Results) != 1 {
+		t.Fatalf("large catalog result count=%d err=%v", len(payload.Results), err)
 	}
 }

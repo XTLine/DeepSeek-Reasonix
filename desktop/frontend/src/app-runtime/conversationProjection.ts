@@ -5,7 +5,7 @@ import { projectSessionAvailability } from "../lib/sessionAvailability";
 
 type Input = {
   local: State;
-  remote?: Pick<RemoteSessionApi, "transcript" | "running" | "modelLabel" | "commands" | "composerProfile" | "goalRuntime" | "effort">;
+  remote?: Pick<RemoteSessionApi, "transcript" | "running" | "modelLabel" | "commands" | "composerProfile" | "goalView" | "goalRuntime" | "effort">;
   tab?: Pick<TabMeta, "id" | "label" | "remote" | "workspaceName">;
   activeTabId?: string;
   backgroundRuntimes: BackgroundRuntimeView[];
@@ -55,6 +55,7 @@ export function projectConversation({ local, remote, tab, activeTabId, backgroun
       ...timing,
       running: remote ? remote.running : local.running,
       goalStatus: remote ? remote.composerProfile?.goalStatus : local.meta?.goalStatus,
+      goalView: remote ? remote.goalView : local.meta?.goalView,
       goalRuntime: remote ? remote.goalRuntime : local.meta?.goalRuntime,
       cwd: remote ? tab?.remote?.workspace : local.meta?.cwd,
       modelLabel: modelLabel || connectingLabel,

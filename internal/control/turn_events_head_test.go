@@ -22,7 +22,7 @@ func TestTurnDoneStampsHeadReferenceForSchemaTwo(t *testing.T) {
 	reply := [][]provider.Chunk{{{Type: provider.ChunkText, Text: "ok"}, {Type: provider.ChunkDone}}}
 	exec := agent.New(&recordingProvider{streams: reply}, tool.NewRegistry(), agent.NewSession("SYS"), agent.Options{}, event.Discard)
 	done := make(chan event.Event, 4)
-	c := New(Options{Runner: exec, Executor: exec, SystemPrompt: "SYS", SessionDir: dir, SessionPath: path, Label: "test",
+	c := newOwnedTestController(t, Options{Runner: exec, Executor: exec, SystemPrompt: "SYS", SessionDir: dir, SessionPath: path, Label: "test",
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.TurnDone {
 				done <- e

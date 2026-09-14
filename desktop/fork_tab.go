@@ -9,6 +9,7 @@ import (
 
 	"reasonix/internal/agent"
 	"reasonix/internal/config"
+	"reasonix/internal/control"
 	"reasonix/internal/worktree"
 )
 
@@ -103,9 +104,15 @@ func (a *App) forkForTabWithOptions(tabID string, turn int, isolateWorkspace boo
 	if err != nil {
 		return ForkWorktreeResultView{}, a.rollbackUnusedForkWorktree(created, err)
 	}
-	if err := copyPinnedContextState(ctrl.SessionPath(), newPath); err != nil {
-		cleanupErr := removeDesktopSessionArtifacts(newPath)
-		return ForkWorktreeResultView{}, a.rollbackUnusedForkWorktree(created, errors.Join(err, cleanupErr))
+	exclusiveV3 := false
+	if identity, ok := ctrl.(control.IdentityLifecycle); ok {
+		exclusiveV3 = identity.UsesExclusiveSession()
+	}
+	if !exclusiveV3 {
+		if err := copyPinnedContextState(ctrl.SessionPath(), newPath); err != nil {
+			cleanupErr := removeDesktopSessionArtifacts(newPath)
+			return ForkWorktreeResultView{}, a.rollbackUnusedForkWorktree(created, errors.Join(err, cleanupErr))
+		}
 	}
 	opened, err := a.openForkedSessionTabWithWorkspace(sourceTab, newPath, created.WorkspaceRoot)
 	result.Tab = opened.tab
@@ -183,15 +190,21 @@ func (a *App) openForkedSessionTabWithWorkspace(sourceTab *WorkspaceTab, newPath
 	if err := setTopicTitle(titleRoot, topicID, topicTitle); err != nil {
 		return forkedSessionTabOpen{}, err
 	}
-	m, _ := agent.EnsureBranchMeta(newPath)
-	m.Scope = scope
-	m.WorkspaceRoot = workspaceRoot
-	m.TopicID = topicID
-	m.TopicTitle = topicTitle
-	if err := agent.SaveBranchMeta(newPath, m); err != nil {
-		return forkedSessionTabOpen{}, err
+	exclusiveV3 := false
+	if identity, ok := sourceTab.Ctrl.(control.IdentityLifecycle); ok {
+		exclusiveV3 = identity.UsesExclusiveSession()
 	}
-	invalidateTopicSessionIndexForPath(newPath)
+	if !exclusiveV3 {
+		m, _ := agent.EnsureBranchMeta(newPath)
+		m.Scope = scope
+		m.WorkspaceRoot = workspaceRoot
+		m.TopicID = topicID
+		m.TopicTitle = topicTitle
+		if err := agent.SaveBranchMeta(newPath, m); err != nil {
+			return forkedSessionTabOpen{}, err
+		}
+		invalidateTopicSessionIndexForPath(newPath)
+	}
 	opened := forkedSessionTabOpen{workspaceReferenced: strings.TrimSpace(workspaceRootOverride) != ""}
 
 	if opened.workspaceReferenced && scope == "project" {
@@ -211,6 +224,10 @@ func (a *App) openForkedSessionTabWithWorkspace(sourceTab *WorkspaceTab, newPath
 		return opened, nil
 	}
 	newTabID := a.newUniqueTabIDLocked()
+	childPath, childID := newPath, ""
+	if exclusiveV3 {
+		childPath, childID = "", newPath
+	}
 	tab := &WorkspaceTab{
 		ID:               newTabID,
 		Scope:            scope,
@@ -218,7 +235,8 @@ func (a *App) openForkedSessionTabWithWorkspace(sourceTab *WorkspaceTab, newPath
 		TopicID:          topicID,
 		TopicTitle:       topicTitle,
 		topicTitleSource: topicTitleSourceManual,
-		SessionPath:      newPath,
+		SessionPath:      childPath,
+		SessionID:        childID,
 		model:            model,
 		effort:           effort,
 		mode:             mode,

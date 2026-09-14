@@ -24,7 +24,7 @@ func TestTranscriptRetainsProtocolRecoveryAfterProviderFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan event.Event, 1)
-	c := New(Options{Runner: a, Executor: a, SessionDir: dir, SessionPath: path, Sink: event.FuncSink(func(e event.Event) {
+	c := newOwnedTestController(t, Options{Runner: a, Executor: a, SessionDir: dir, SessionPath: path, Sink: event.FuncSink(func(e event.Event) {
 		if e.Kind == event.TurnDone {
 			done <- e
 		}

@@ -21,7 +21,7 @@ func TestCloseIsIdempotent(t *testing.T) {
 		sessionEnds.Add(1)
 		return hook.SpawnResult{ExitCode: 0}
 	}, nil)
-	c := New(Options{Runner: &fakeTurnRunner{}, Hooks: hooks})
+	c := newOwnedTestController(t, Options{Runner: &fakeTurnRunner{}, Hooks: hooks})
 	// A completed turn arms startedOnce so SessionEnd is eligible to fire.
 	if err := c.Run(context.Background(), "hi"); err != nil {
 		t.Fatal(err)

@@ -11,17 +11,6 @@ type goalLaunchState struct {
 	explicit bool
 }
 
-// disarmAfterError prevents an unrelated later message from silently restarting
-// an unsuccessful Goal run. An explicit resume owns the next activation.
-func (g *goalMachine) disarmAfterError(epoch uint64) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.continuationEpoch == epoch {
-		g.disarmed = true
-		g.continuationEpoch++
-	}
-}
-
 func (g *goalMachine) markExplicitStart() {
 	g.mu.Lock()
 	g.launch.explicit = true

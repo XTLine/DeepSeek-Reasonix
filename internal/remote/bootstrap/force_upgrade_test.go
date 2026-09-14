@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -49,8 +48,8 @@ func TestForceUpgradePrefersUploadAndSkipsLocate(t *testing.T) {
 		Workspace:      "~",
 		ForceUpgrade:   true,
 		LocalBinary:    localBin,
-		LocalGOOS:      runtime.GOOS,
-		LocalGOARCH:    runtime.GOARCH,
+		LocalGOOS:      "linux",
+		LocalGOARCH:    "amd64",
 		ProductVersion: "1.9.5",
 		Clock:          time.Now,
 	})
@@ -242,8 +241,8 @@ func TestForceUpgradeContinuesPastShortRung(t *testing.T) {
 		Workspace:      "~",
 		ForceUpgrade:   true,
 		LocalBinary:    localBin,
-		LocalGOOS:      runtime.GOOS,
-		LocalGOARCH:    runtime.GOARCH,
+		LocalGOOS:      "linux",
+		LocalGOARCH:    "amd64",
 		ProductVersion: "1.9.5",
 		FetchBinary: func(_ context.Context, _ string, _, _ string) ([]byte, error) {
 			fetchCalled = true
@@ -521,8 +520,8 @@ func TestForceUpgradeNPMRungRestoresManaged(t *testing.T) {
 		Workspace:      "~",
 		ForceUpgrade:   true,
 		LocalBinary:    localBin,
-		LocalGOOS:      runtime.GOOS,
-		LocalGOARCH:    runtime.GOARCH,
+		LocalGOOS:      "linux",
+		LocalGOARCH:    "amd64",
 		ProductVersion: "1.9.5",
 		Clock:          time.Now,
 	})

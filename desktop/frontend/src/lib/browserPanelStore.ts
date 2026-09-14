@@ -24,7 +24,7 @@ export type BrowserPanelState = Projection & {
   clearDraft(tabId: string | null): void;
   clearDownloads(): void;
   activate(tabId: string): void;
-  open(url: string, temporary?: boolean): Promise<void>;
+  open(url: string, temporary?: boolean, signal?: AbortSignal): Promise<void>;
   submitAddress(): Promise<void>;
   openDraft(): Promise<boolean>;
   close(tabId: string): Promise<void>;
@@ -130,10 +130,14 @@ export const useBrowserPanelStore = create<BrowserPanelState>((set, get) => {
     clearDraft: (tabId) => clearDraft(draftKey(tabId)),
     clearDownloads: () => set((state) => ({ downloads: state.downloads.filter((entry) => entry.state === "progressing") })),
     activate: (tabId) => project({ activeTabId: tabId }),
-    async open(url, temporary = false) {
+    async open(url, temporary = false, signal) {
       const { host } = get();
-      if (!host) return;
-      await call(host.open(url, { taskId: USER_TASK_ID, temporary }).then((tab) => {
+      if (!host || signal?.aborted) return;
+      await call(host.open(url, { taskId: USER_TASK_ID, temporary }).then(async (tab) => {
+        if (signal?.aborted || get().host !== host) {
+          await host.close(tab.id);
+          return;
+        }
         const tabs = get().tabs;
         project({ tabs: tabs.some((entry) => entry.id === tab.id) ? tabs : [...tabs, tab], activeTabId: tab.id });
       }));

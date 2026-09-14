@@ -630,7 +630,8 @@ func (*UseCapabilityTool) Schema() json.RawMessage {
 			"action":{"type":"string","enum":["list","search","inspect","call","decline"],"description":"Use search for discovery, inspect one exact result, then call. list is diagnostic only."},
 			"capability_id":{"type":"string","description":"Capability id such as skill:review, mcp-server:github, or mcp-tool:github/search_issues. Not required for action=list."},
 			"query":{"type":"string","description":"Local catalog query required for action=search. No process or network is started."},
-			"limit":{"type":"integer","minimum":1,"maximum":8,"default":5,"description":"Maximum search results; defaults to 5."},
+			"limit":{"type":"integer","minimum":1,"maximum":100,"description":"Maximum results. Search defaults to 5 and allows at most 8; list defaults to 50 and allows at most 100."},
+			"cursor":{"type":"string","description":"Opaque cursor returned by action=list. It is valid only for the same catalog version."},
 			"arguments":{"type":"object","description":"Raw MCP tool arguments for action=call"},
 			"reason":{"type":"string","description":"Required non-empty reason when action=decline"}
 		},

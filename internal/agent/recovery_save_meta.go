@@ -54,7 +54,6 @@ func (s *Session) prepareRecoveryBranchMetaLocked(path string, opts RecoveryBran
 			meta.Revision = max(int64(1), existing.Revision+1)
 		}
 		meta.InFlightTurn = existing.InFlightTurn
-		meta.DismissedTodoBatches = MergeDismissedTodoBatches(existing.DismissedTodoBatches, meta.DismissedTodoBatches)
 		if ledgerCurrent && strings.TrimSpace(existing.WriterID) != "" {
 			meta.WriterID = existing.WriterID
 		}

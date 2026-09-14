@@ -73,7 +73,7 @@ export function TodoPanel({
   const done = todos.filter((t) => t.status === "completed").length;
   const current = todos.find((t) => t.status === "in_progress");
   const allDone = todos.length > 0 && done === todos.length;
-  const summary = current?.activeForm || current?.content || todos[todos.length - 1]?.content || "";
+  const summary = current?.content || todos[todos.length - 1]?.content || "";
   const [open, setOpen] = useState(() => loadOpenState(stateKey, shouldOpenTodoPanelByDefault()));
   const [visible, setVisible] = useState(!allDone);
 
@@ -95,7 +95,7 @@ export function TodoPanel({
   useEffect(() => {
     if (!open) return;
     currentRef.current?.scrollIntoView({ block: "nearest" });
-  }, [open, current?.content, current?.activeForm]);
+  }, [open, current?.content]);
 
   if (todos.length === 0 || !visible) return null;
 
@@ -134,13 +134,13 @@ export function TodoPanel({
               <li
                 key={index}
                 ref={sourceStatus === "in_progress" ? currentRef : undefined}
-                className={`todobar__item todobar__item--${status}${todo.level ? " todobar__item--sub" : ""}`}
+                className={`todobar__item todobar__item--${status}`}
               >
                 <span className={`todobar__status todobar__status--${status}`}>
                   {t(todoStatusLabelKey(status))}
                 </span>
                 <span className="todobar__text">
-                  {sourceStatus === "in_progress" && todo.activeForm ? todo.activeForm : todo.content}
+                  {todo.content}
                 </span>
               </li>
             );

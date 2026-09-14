@@ -51,6 +51,14 @@ func (c *Controller) clearInFlightTurn(marker agent.InFlightTurnMeta) {
 // crash marker. A crash can therefore leave either a recoverable marker or a
 // durable completed transcript, never an unmarked in-memory-only suffix.
 func (c *Controller) finishInFlightTurn(startMessages int, marker agent.InFlightTurnMeta) {
+	if ledger := c.turnEventLedger(); ledger != nil && ledger.CurrentStatus() == event.TurnRecoveryRequired {
+		// The watchdog already sealed this runtime generation while its worker
+		// was still alive. Once that worker finally returns, discard every
+		// assistant/tool message it produced after the seal. Late output is
+		// diagnostic only and must never become model-visible history.
+		c.stripRecoverySealedTurn(startMessages, marker)
+		return
+	}
 	if marker.HeadID != "" {
 		c.finishLoggedTurn(startMessages, marker)
 		return
@@ -81,6 +89,40 @@ func (c *Controller) finishInFlightTurn(startMessages int, marker agent.InFlight
 		// Do not clear an unprepared marker: a crash between the snapshot and this
 		// point would otherwise leave recovery without exact commit evidence.
 		slog.Warn("controller: keeping in-flight marker without commit digest", "marker_id", marker.ID)
+		return
+	}
+	c.clearInFlightTurn(marker)
+}
+
+func (c *Controller) stripRecoverySealedTurn(startMessages int, marker agent.InFlightTurnMeta) {
+	if c == nil || c.executor == nil {
+		return
+	}
+	msgs := c.executor.Session().Snapshot()
+	start := startMessages
+	if resolved, ok := resolveInterruptedTurnStart(msgs, startMessages, marker.PreserveUser, marker.StartedAt, provider.Message{}); ok {
+		start = resolved
+	}
+	start = max(0, min(start, len(msgs)))
+	next := append([]provider.Message(nil), msgs[:start]...)
+	if marker.PreserveUser || marker.ID == "" {
+		for _, message := range msgs[start:] {
+			if !agent.IsUserAuthoredTurnMessage(message) {
+				continue
+			}
+			message.Content = StripComposePrefixes(message.Content)
+			next = append(next, message)
+			break
+		}
+	}
+	c.replaceSessionAfterCancel(next)
+	if marker.HeadID != "" {
+		if session := c.loggedTurnSession(); session != nil {
+			session.QueueTurnEnd(marker.ID)
+			if err := c.snapshot(false, true, false); err != nil {
+				slog.Warn("controller: persist recovery-sealed transcript", "err", err)
+			}
+		}
 		return
 	}
 	c.clearInFlightTurn(marker)

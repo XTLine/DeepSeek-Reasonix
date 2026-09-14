@@ -512,12 +512,14 @@ func (p Policy) Decide(toolName string, readOnly bool, args json.RawMessage) Dec
 - **Collaboration mode is separate from tool approval.** The desktop composer
   presents collaboration as `normal` ("正常模式"), `plan` ("计划模式"), and
   `goal` ("目标模式"). `/goal <objective>` starts an autonomous, session-scoped
-  active goal: the controller prepends goal context to user turns outside the
-  cache-stable system prompt and keeps issuing continuation turns until the
-  model reports completion, repeats the same blocked state three times, the user
-  stops it, or the safety continuation limit is reached. Blocked-state matching
-  is normalized for casing, whitespace, and punctuation so minor wording drift
-  does not reset the audit; restarting a goal begins a fresh blocked audit. A
+  active goal: stable lifecycle-tool rules stay in the cacheable system prefix,
+  while each automatic round carries the escaped objective and exact goal
+  identity as dynamic user input. A runtime-idle driver admits one normal
+  top-level turn at a time until the model completes or blocks the goal, the
+  user pauses or clears it, or an explicit resource boundary is reached. An
+  automatic blocked transition is rejected before three admitted goal rounds;
+  deciding whether the same blocker persisted is the model's responsibility,
+  not a second host detector. A
   goal is treated as a task contract: if the objective includes Context,
   Request, Output format, Constraints, or Pause policy sections, those sections
   define the autonomous work boundary. When they are absent, the model infers a
@@ -530,12 +532,15 @@ func (p Policy) Decide(toolName string, readOnly bool, args json.RawMessage) Dec
   explicitly reported as unverified.
   Goal has no default model-round, cross-Run turn, wall-clock, or numeric
   no-progress boundary. Exact consecutive tool calls receive bounded reminders
-  and still execute. All classes use the same Goal FSM and model-authored
-  `update_goal` report; there is no host readiness evaluator or second research
-  protocol or writable sidecar runtime. Legacy `.reasonix/autoresearch/...`
+  and still execute. The model-facing lifecycle is `get_goal`, `create_goal`
+  and versioned `update_goal(edit|pause|resume|complete|blocked)`. There is no
+  `continue` action: `active + armed` is sufficient for the idle driver. There
+  is no host readiness evaluator, second research protocol or writable sidecar
+  runtime. Legacy `.reasonix/autoresearch/...`
   archives remain read-only and explicit old paths recover as ordinary Goals.
-  Outside goal mode, ordinary prompts never change collaboration mode; the user
-  must choose Goal or use `/goal` explicitly.
+  Ordinary prompts never force collaboration mode at the host level, although
+  the model may create a long-running goal from a directly authorized human
+  request when its semantics require autonomous continuation.
   Turns,
   tokens, provider requests, and active work duration remain observational when
   the corresponding budget is not configured. Positive user-selected

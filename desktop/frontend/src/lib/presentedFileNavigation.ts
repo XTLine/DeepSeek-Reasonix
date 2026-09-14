@@ -3,6 +3,7 @@ import { useBrowserPanelStore, waitForBrowserHost } from "./browserPanelStore";
 import { useActivityBarStore } from "../store/activityBar";
 import { useLayoutStore } from "../store/layout";
 import { useRemoteStore } from "../store/remote";
+import { beginFileNavigation, cancelFileNavigation } from "./fileNavigationLifetime";
 
 type ResourceBase = { hostId: string; tabId: string; path: string };
 export type FileResourceRef =
@@ -10,10 +11,9 @@ export type FileResourceRef =
   | (ResourceBase & { source: "workspace"; toolCallId: string });
 
 export type PresentedFileAction = "preview" | "browser" | "reveal-tree" | "source" | "open-native" | "reveal-native" | "save-copy";
-export type PresentedFileRequest = { id: number; ref: FileResourceRef; action: "preview" | "reveal-tree" | "source" };
+export type PresentedFileRequest = { id: number; ref: FileResourceRef; action: "preview" | "reveal-tree" | "source"; dockTabId: string; signal: AbortSignal; acceptNavigation: () => boolean };
 
 let nextRequestId = 1;
-let navigationGeneration = 0;
 let request: PresentedFileRequest | null = null;
 const listeners = new Set<() => void>();
 
@@ -24,36 +24,49 @@ export const subscribePresentedFileRequest = (listener: () => void) => {
 };
 
 export function invalidateFileResourceNavigation(): void {
-  navigationGeneration += 1;
+  cancelFileNavigation();
 }
 
-function publish(ref: FileResourceRef, action: PresentedFileRequest["action"]) {
-  navigationGeneration += 1;
-  request = { id: nextRequestId++, ref, action };
+function publish(ref: FileResourceRef, action: PresentedFileRequest["action"], signal: AbortSignal) {
+  if (signal.aborted) return;
   const layout = useLayoutStore.getState();
+  let dockTabId: string;
   if (ref.hostId !== "local") {
     const remote = useRemoteStore.getState();
     remote.openExplorer(ref.hostId);
     remote.setExplorerTab("files");
     layout.setRightDockMode("remote");
     layout.setWorkspacePanelOpen(true);
-    useActivityBarStore.getState().openEntry("remote", "Remote");
-    listeners.forEach(listener => listener());
-    return;
+    dockTabId = useActivityBarStore.getState().openEntry("remote", "Remote");
+  } else {
+    layout.setRightDockMode("files");
+    layout.setWorkspacePanelOpen(true);
+    dockTabId = useActivityBarStore.getState().openEntry("file", "Files");
   }
-  layout.setRightDockMode("files");
-  layout.setWorkspacePanelOpen(true);
-  useActivityBarStore.getState().openEntry("file", "Files");
+  let accepted = false;
+  const acceptNavigation = () => {
+    if (signal.aborted || accepted) return false;
+    accepted = true;
+    return true;
+  };
+  request = { id: nextRequestId++, ref, action, dockTabId, signal, acceptNavigation };
+  signal.addEventListener("abort", () => {
+    if (request?.signal !== signal) return;
+    request = null;
+    listeners.forEach(listener => listener());
+  }, { once: true });
   listeners.forEach(listener => listener());
 }
 
 async function openBrowser(ref: FileResourceRef) {
   if (ref.hostId !== "local") throw new Error("Remote file browser preview is unavailable; save a copy to this device first");
-  const generation = ++navigationGeneration;
-  const url = ref.source === "presented"
-    ? await app.CreatePresentedBrowserPreviewForTab(ref.tabId, ref.toolCallId, ref.path)
-    : await app.CreateWorkspaceBrowserPreviewForTab(ref.tabId, ref.path);
-  if (generation !== navigationGeneration) {
+  const signal = beginFileNavigation();
+  const creation = ref.source === "presented"
+    ? app.CreatePresentedBrowserPreviewForTab(ref.tabId, ref.toolCallId, ref.path)
+    : app.CreateWorkspaceBrowserPreviewForTab(ref.tabId, ref.path);
+  const url = await creation.catch(error => { if (!signal.aborted) throw error; return null; });
+  if (!url) return;
+  if (signal.aborted) {
     await app.RevokeWorkspaceBrowserPreview(url).catch(() => undefined);
     return;
   }
@@ -63,14 +76,15 @@ async function openBrowser(ref: FileResourceRef) {
   useActivityBarStore.getState().openEntry("browser", "Browser");
   try {
     await waitForBrowserHost();
-    if (generation !== navigationGeneration) {
+    if (signal.aborted) {
       await app.RevokeWorkspaceBrowserPreview(url).catch(() => undefined);
       return;
     }
-    await useBrowserPanelStore.getState().open(url, true);
+    await useBrowserPanelStore.getState().open(url, true, signal);
+    if (signal.aborted) await app.RevokeWorkspaceBrowserPreview(url).catch(() => undefined);
   } catch (error) {
     await app.RevokeWorkspaceBrowserPreview(url).catch(() => undefined);
-    throw error;
+    if (!signal.aborted) throw error;
   }
 }
 
@@ -94,28 +108,31 @@ export async function performResourceAction(ref: FileResourceRef, action: Presen
     case "preview":
     case "reveal-tree":
     case "source": {
-      const target = ref.hostId !== "local" && ref.source === "workspace"
-        ? { ...ref, path: await resolveFileResourcePath(ref) }
-        : ref;
-      publish(target, action);
+      const signal = beginFileNavigation();
+      try {
+        const target = ref.hostId !== "local" && ref.source === "workspace"
+          ? { ...ref, path: await resolveFileResourcePath(ref) }
+          : ref;
+        publish(target, action, signal);
+      } catch (error) { if (!signal.aborted) throw error; }
       return;
     }
     case "browser":
       return openBrowser(ref);
     case "open-native":
-      navigationGeneration += 1;
+      cancelFileNavigation();
       if (ref.hostId !== "local") throw new Error("This remote host does not expose a desktop opener");
       return ref.source === "presented"
         ? app.OpenPresentedPathForTab(ref.tabId, ref.toolCallId, ref.path)
         : app.OpenWorkspacePathForTab(ref.tabId, ref.path);
     case "reveal-native":
-      navigationGeneration += 1;
+      cancelFileNavigation();
       if (ref.hostId !== "local") throw new Error("This remote host does not expose a desktop file manager");
       return ref.source === "presented"
         ? app.RevealPresentedPathForTab(ref.tabId, ref.toolCallId, ref.path)
         : app.RevealWorkspacePathForTab(ref.tabId, ref.path);
     case "save-copy":
-      navigationGeneration += 1;
+      cancelFileNavigation();
       if (ref.hostId !== "local") {
         if (ref.source === "presented") await app.SaveRemotePresentedFileAs(ref.tabId, ref.hostId, ref.toolCallId, ref.path);
         else await app.SaveRemoteFileAs(ref.hostId, await resolveFileResourcePath(ref));

@@ -16,7 +16,7 @@ import (
 // the memoryManager (off-c.mu) extraction must preserve.
 func TestMemoryWriteReflectsInSnapshot(t *testing.T) {
 	dir := t.TempDir()
-	c := New(Options{Memory: memory.Load(memory.Options{CWD: dir})})
+	c := newOwnedTestController(t, Options{Memory: memory.Load(memory.Options{CWD: dir})})
 
 	before := c.Memory()
 	if before == nil {
@@ -52,7 +52,7 @@ func TestSaveMemoryRefreshesBackgroundSnapshotWithoutLegacyUpdate(t *testing.T) 
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	c := New(Options{Memory: memory.Load(memory.Options{CWD: cwd, UserDir: userDir})})
+	c := newOwnedTestController(t, Options{Memory: memory.Load(memory.Options{CWD: cwd, UserDir: userDir})})
 
 	body := "Always answer in Chinese unless the user explicitly asks for English.\nKeep technical terms precise."
 	if _, err := c.SaveMemory(memory.Memory{
@@ -92,7 +92,7 @@ func TestForgetMemoryRefreshesBackgroundSnapshotWithoutLegacyUpdate(t *testing.T
 	}); err != nil {
 		t.Fatal(err)
 	}
-	c := New(Options{Memory: memory.Load(memory.Options{CWD: cwd, UserDir: userDir})})
+	c := newOwnedTestController(t, Options{Memory: memory.Load(memory.Options{CWD: cwd, UserDir: userDir})})
 	if before := c.Memory().Block(); !strings.Contains(before, body) {
 		t.Fatalf("test setup did not load global guidance:\n%s", before)
 	}
@@ -127,7 +127,7 @@ func TestRestoreArchivedMemoryRefreshesBackgroundSnapshotWithoutLegacyUpdate(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := New(Options{Memory: memory.Load(memory.Options{CWD: cwd, UserDir: userDir})})
+	c := newOwnedTestController(t, Options{Memory: memory.Load(memory.Options{CWD: cwd, UserDir: userDir})})
 
 	restored, err := c.RestoreArchivedMemory(archivePath)
 	if err != nil {
@@ -152,7 +152,7 @@ func TestRestoreArchivedMemoryRefreshesBackgroundSnapshotWithoutLegacyUpdate(t *
 // note lands.
 func TestMemoryWritesConcurrencySafe(t *testing.T) {
 	dir := t.TempDir()
-	c := New(Options{Memory: memory.Load(memory.Options{CWD: dir})})
+	c := newOwnedTestController(t, Options{Memory: memory.Load(memory.Options{CWD: dir})})
 
 	const writers = 8
 	const each = 5
@@ -204,7 +204,7 @@ func TestMemoryWritesConcurrencySafe(t *testing.T) {
 
 func TestRestoreMemoryRefreshesBackgroundSnapshotWithoutLegacyUpdate(t *testing.T) {
 	dir := t.TempDir()
-	c := New(Options{Memory: memory.Load(memory.Options{CWD: dir, UserDir: t.TempDir()})})
+	c := newOwnedTestController(t, Options{Memory: memory.Load(memory.Options{CWD: dir, UserDir: t.TempDir()})})
 	store := c.Memory().Store
 	first, err := store.SaveWithOptions(memory.Memory{Name: "release-target", Description: "v1", Body: "main-v2"}, memory.SaveOptions{})
 	if err != nil {

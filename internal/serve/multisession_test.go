@@ -169,7 +169,7 @@ func TestCapturedRecoveryCallbackFollowsDetachedKeeper(t *testing.T) {
 	targetPath := filepath.Join(dir, "target.jsonl")
 	recoveryPath := filepath.Join(dir, "old-recovery.jsonl")
 	old := control.New(control.Options{SessionPath: oldPath})
-	server := New(old, NewBroadcaster(), config.ServeConfig{})
+	server := newLifecycleTestServer(t, old, NewBroadcaster(), config.ServeConfig{})
 	leases := control.NewSessionLeaseKeeper()
 	defer leases.Release()
 	if err := leases.Rebind(oldPath); err != nil {
@@ -185,6 +185,7 @@ func TestCapturedRecoveryCallbackFollowsDetachedKeeper(t *testing.T) {
 	}
 	defer detached.Release()
 	replacement := control.New(control.Options{SessionPath: targetPath})
+	defer replacement.Close()
 	if err := leases.BindControllerAuthority(replacement); err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +317,7 @@ func TestSlashNewRefreshesControllerTagAndForegroundRoute(t *testing.T) {
 	}
 	exec := agent.New(nil, nil, loaded, agent.Options{}, tag)
 	ctrl := control.New(control.Options{Executor: exec, Sink: tag, SessionDir: dir, SessionPath: path, Label: "test"})
-	server := New(ctrl, bc, config.ServeConfig{})
+	server := newLifecycleTestServer(t, ctrl, bc, config.ServeConfig{})
 	server.RegisterSessionTag(ctrl, tag)
 	leases := control.NewSessionLeaseKeeper()
 	defer leases.Release()
@@ -531,7 +532,7 @@ func TestBusyResumeDetachesAndReattachesRunningController(t *testing.T) {
 	tag := NewSessionTagSink(bc)
 	tag.SetPath(aPath)
 	ctrlA := control.New(control.Options{Runner: blockingRunner{}, Sink: tag, SessionDir: dir, SessionPath: aPath, Label: "test"})
-	server := New(ctrlA, bc, config.ServeConfig{})
+	server := newLifecycleTestServer(t, ctrlA, bc, config.ServeConfig{})
 	server.RegisterSessionTag(ctrlA, tag)
 	leases := control.NewSessionLeaseKeeper()
 	defer leases.Release()

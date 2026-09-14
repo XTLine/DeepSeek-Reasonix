@@ -3,7 +3,6 @@ package main
 import (
 	"strings"
 
-	"reasonix/internal/checkpoint"
 	"reasonix/internal/control"
 )
 
@@ -39,14 +38,10 @@ func (a *App) CommitRewindForTab(tabID, planID string, turn int, scope string) R
 		}
 		planID = plan.PlanID
 	}
-	_, inPlace := ctrl.SessionHead()
-	var result checkpoint.RewindResult
-	var err error
-	if inPlace {
-		result, err = ctrl.CommitRewindInPlace(planID)
-	} else {
-		result, err = ctrl.CommitRewind(planID)
-	}
+	// Conversation rewinds always publish an independent child session. The
+	// source tab and source event log stay unchanged and remain available as
+	// history; execution ownership is attached only after the child is complete.
+	result, err := ctrl.CommitRewind(planID)
 	view := rewindResultToView(result)
 	if err != nil {
 		view.OK = false
@@ -56,12 +51,7 @@ func (a *App) CommitRewindForTab(tabID, planID string, turn int, scope string) R
 		return view
 	}
 	if view.OK && view.ConversationForked && strings.TrimSpace(view.Branch) != "" && tab != nil {
-		if inPlace {
-			meta := a.tabMetaAfterHeadSwitch(tab)
-			view.TabID, view.Tab = meta.ID, &meta
-		} else {
-			view = a.attachForkedRewindTab(tab, view)
-		}
+		view = a.attachForkedRewindTab(tab, view)
 	}
 	return view
 }

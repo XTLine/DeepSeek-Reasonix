@@ -15,7 +15,7 @@ import (
 func TestPinnedContextNeverChangesBasePrompt(t *testing.T) {
 	dir := t.TempDir()
 	exec := agent.New(nil, nil, agent.NewSession("legacy composed system"), agent.Options{}, event.Discard)
-	ctrl := New(Options{
+	ctrl := newOwnedTestController(t, Options{
 		Runner:       exec,
 		Executor:     exec,
 		SystemPrompt: "BASE",
@@ -56,7 +56,7 @@ func TestPinnedContextLoaderAppendsAtAdmittedTurns(t *testing.T) {
 	content := "A"
 	loads := 0
 	sessionPath := filepath.Join(t.TempDir(), "session.jsonl")
-	ctrl := New(Options{
+	ctrl := newOwnedTestController(t, Options{
 		Runner:       exec,
 		Executor:     exec,
 		SystemPrompt: "BASE",

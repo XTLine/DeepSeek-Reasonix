@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 
 	"reasonix/internal/event"
 	"reasonix/internal/extension"
@@ -18,6 +19,9 @@ func (c *Controller) runSynchronousTurn(
 ) error {
 	if err := c.ensureWriteAuthorityReady(); err != nil {
 		return err
+	}
+	if ledger := c.turnEventLedger(); ledger != nil && ledger.CurrentStatus() == event.TurnRecoveryRequired {
+		return ErrRecoveryRequired
 	}
 	ctx, cancel := context.WithCancel(extension.ContextWithRuntimeOwner(ctx, c.RuntimeOwner()))
 	c.mu.Lock()
@@ -36,17 +40,43 @@ func (c *Controller) runSynchronousTurn(
 		return ErrRuntimeDraining
 	}
 	c.cancel = cancel
+	c.activeDone = make(chan struct{})
 	c.running = true
 	c.canceling = false
 	c.mu.Unlock()
 	c.refreshRuntimeState(event.Event{})
+	runtimeCtx, runtimeActivity, runtimeErr := c.beginSessionRuntimeActivity(ctx, "turn")
+	if runtimeErr != nil {
+		finish := func() {
+			c.mu.Lock()
+			c.running = false
+			if c.activeDone != nil {
+				close(c.activeDone)
+				c.activeDone = nil
+			}
+			c.cancel = nil
+			c.canceling = false
+			c.mu.Unlock()
+			c.refreshRuntimeState(event.Event{})
+			cancel()
+		}
+		finish()
+		return runtimeErr
+	}
+	ctx = runtimeCtx
 	finish := func() {
 		c.mu.Lock()
 		c.running = false
+		if c.activeDone != nil {
+			close(c.activeDone)
+			c.activeDone = nil
+		}
 		c.cancel = nil
 		c.canceling = false
 		c.mu.Unlock()
 		c.refreshRuntimeState(event.Event{})
+		c.finishSessionRuntimeActivity(runtimeActivity)
+		c.kickGoalDriver()
 		cancel()
 	}
 	if onAdmitted != nil {
@@ -60,5 +90,25 @@ func (c *Controller) runSynchronousTurn(
 		finish()
 		c.onInboxTurnDone()
 	}()
-	return run(ctx)
+	// Blocking transports use the same host-owned turn boundary as interactive
+	// submissions. The agent's TurnStarted notification is deliberately a
+	// duplicate display event; it cannot create runtime ownership or a durable
+	// turn by itself.
+	run = c.prepareTurnAdmission(run)
+	runErr := run(ctx)
+	if ledger := c.turnEventLedger(); ledger != nil && ledger.ActiveTurnID() != "" && !ledger.CurrentStatus().Terminal() {
+		cancelled := errors.Is(ctx.Err(), context.Canceled)
+		done := event.Event{Kind: event.TurnDone, Err: runErr, Cancelled: cancelled, Outcome: turnOutcome(runErr)}
+		if cancelled {
+			done.Status = event.TurnInterrupted
+		} else if runErr != nil {
+			done.Status = event.TurnFailed
+		} else {
+			done.Status = event.TurnCompleted
+		}
+		if terminalErr := c.emitTurnEventChecked(done); terminalErr != nil {
+			runErr = errors.Join(runErr, terminalErr)
+		}
+	}
+	return runErr
 }

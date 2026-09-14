@@ -28,6 +28,7 @@ func TestNewSessionAfterResumeKeepsWritePath(t *testing.T) {
 	bc := NewBroadcaster()
 	exec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, bc)
 	ctrl := control.New(control.Options{Executor: exec, Sink: bc, SessionDir: dir, SessionPath: aPath})
+	t.Cleanup(ctrl.Close)
 	server := New(ctrl, bc, config.ServeConfig{})
 	leases := control.NewSessionLeaseKeeper()
 	defer leases.Release()

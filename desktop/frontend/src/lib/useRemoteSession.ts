@@ -8,8 +8,8 @@ import { historyMessagesToItems, initialState, reducer, type ControllerLiveStore
 import { TurnEventProjector } from "./turnEventProjection";
 import { rebaseSnapshotContentPatches, resolveSnapshotItems, resolveSnapshotTool, StaleCut, TranscriptSnapshotClient } from "./transcriptSnapshotClient";
 import { getTranscriptStore } from "./transcriptStore";
-import { isAuthoritativeRemoteStatus, remoteCheckpoints, remoteComposerState, remoteGoalRuntime, remoteStatusToAction, type RemoteStatus } from "./remoteStatus";
-import type { CollaborationMode, CommandInfo, EffortInfo, GoalRuntime, GoalStatus, HistoryMessage, QualityFloor, RemoteTabStateValue, TabMeta, ToolApprovalMode, WireEvent } from "./types";
+import { isAuthoritativeRemoteStatus, remoteCheckpoints, remoteComposerState, remoteGoalRuntime, remoteGoalView, remoteStatusToAction, type RemoteStatus } from "./remoteStatus";
+import type { CollaborationMode, CommandInfo, EffortInfo, GoalLifecycleView, GoalRuntime, GoalStatus, HistoryMessage, QualityFloor, RemoteTabStateValue, TabMeta, ToolApprovalMode, WireEvent } from "./types";
 import type { RemoteAskAnswer } from "./remoteTypes";
 
 const loadRemoteSurface = () => import("../components/RemoteSessionSurface");
@@ -41,6 +41,7 @@ export interface RemoteSessionApi {
     qualityFloor: QualityFloor;
   };
   goalRuntime?: GoalRuntime;
+  goalView?: GoalLifecycleView;
   effort?: EffortInfo;
   /** Changes whenever the tab adopts a new/reconnected Serve session snapshot. */
   surfaceGeneration: number;
@@ -59,6 +60,7 @@ export interface RemoteSessionApi {
   setQualityFloor: (floor: QualityFloor) => Promise<void>;
   pauseGoal: () => Promise<void>;
   resumeGoal: () => Promise<void>;
+  editGoal: (objective: string, maxGoalRounds: number | null) => Promise<void>;
   steer: (input: string) => Promise<void>;
   cancelJob: (jobId: string) => Promise<boolean>;
   drainApprovals: (ids: string[]) => void;
@@ -116,6 +118,7 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
   const [commands, setCommands] = useState<CommandInfo[]>([]);
   const [composerProfile, setComposerProfile] = useState<RemoteSessionApi["composerProfile"]>();
   const [goalRuntime, setGoalRuntime] = useState<GoalRuntime>();
+  const [goalView, setGoalView] = useState<GoalLifecycleView>();
   const [effort, setEffortInfo] = useState<EffortInfo>();
   const [surfaceGeneration, setSurfaceGeneration] = useState(0);
   const [promptError, setPromptError] = useState("");
@@ -164,6 +167,7 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
     setModelLabel(next.modelLabel);
     setComposerProfile(next.composerProfile);
     setGoalRuntime(remoteGoalRuntime(status));
+    setGoalView(remoteGoalView(status));
     setEffortInfo(next.effort);
   }, []);
 
@@ -185,6 +189,7 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
     setCommands([]);
     setComposerProfile(undefined);
     setGoalRuntime(undefined);
+    setGoalView(undefined);
     setEffortInfo(undefined);
     hydratedRef.current = false;
     hydratingRef.current = false;
@@ -738,6 +743,12 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
     await refreshStatus();
   }, [refreshStatus, tabId]);
 
+  const editGoal = useCallback(async (objective: string, maxGoalRounds: number | null) => {
+    if (!tabId) return;
+    await app.EditRemoteTabGoal(tabId, objective, maxGoalRounds);
+    await refreshStatus();
+  }, [refreshStatus, tabId]);
+
   const steer = useCallback(async (input: string) => {
     if (!tabId) return;
     await app.SteerRemoteTab(tabId, input);
@@ -749,8 +760,8 @@ export function useRemoteSession(tabId: string | undefined, initial?: RemoteTabS
 
   return {
     state, error, transcript, liveStore, hydrated, syncMode, loadOlderHistory: () => olderRef.current?.() ?? Promise.resolve(false), running: transcript.running, modelLabel, commands,
-    composerProfile, goalRuntime, effort, surfaceGeneration, promptError, submit, runManagementCommand, compact, cancelTurn,
-    approve, resolvePlanDecision, answer, clearExtensionForm, rewind, setModel, setEffort, setQualityFloor, pauseGoal, resumeGoal, steer, cancelJob,
+    composerProfile, goalRuntime, goalView, effort, surfaceGeneration, promptError, submit, runManagementCommand, compact, cancelTurn,
+    approve, resolvePlanDecision, answer, clearExtensionForm, rewind, setModel, setEffort, setQualityFloor, pauseGoal, resumeGoal, editGoal, steer, cancelJob,
     drainApprovals, retryHydration,
   };
 }

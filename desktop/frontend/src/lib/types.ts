@@ -117,6 +117,8 @@ export interface WireTool {
   id?: string;
   name: string;
   args?: string;
+  todos?: Todo[];
+  todoWritten?: boolean;
   resolvedName?: string;
   capabilityId?: string;
   output?: string;
@@ -604,6 +606,7 @@ export interface TabMeta extends RemoteTabMetaFields {
   floorInferred?: boolean; // retired compatibility field; current hosts emit false
   goal?: string;
   goalStatus?: GoalStatus;
+  goalView?: GoalLifecycleView;
   recovered?: boolean;
   recoveryReason?: string;
   recoveryDigest?: string;
@@ -1058,8 +1061,9 @@ export interface Meta extends RemoteSessionMetaFields {
   floorInferred?: boolean; // retired compatibility field; current hosts emit false
   goal?: string;
   goalStatus?: GoalStatus;
+  goalView?: GoalLifecycleView;
   goalRuntime?: GoalRuntime;
-  canonicalTodos?: Todo[]; dismissedTodoBatches?: string[]; pinnedFiles?: PinnedFileInfo[];
+  canonicalTodos?: Todo[]; pinnedFiles?: PinnedFileInfo[];
 }
 export type CollaborationMode = "normal" | "plan" | "goal";
 export type PermissionPreset = "read-only" | "workspace-write" | "danger-full-access";
@@ -1095,6 +1099,21 @@ export type TokenMode = "full" | "economy" | "delivery" | "light" | "balanced";
 export type AgentPreset = "standard" | "light" | "balanced" | "delivery";
 export type QualityFloor = "standard" | "delivery";
 export type GoalStatus = "running" | "complete" | "blocked" | "stopped";
+export type GoalPhase = "active" | "paused" | "blocked" | "complete";
+export type GoalActivation = "armed" | "disarmed";
+export interface GoalLifecycleView {
+  id: string;
+  revision: number;
+  objective: string;
+  phase: GoalPhase;
+  maxGoalRounds: number | null;
+  roundsStarted: number;
+  blockedReason?: { code: string; message: string };
+  createdAt: string;
+  updatedAt: string;
+  activation: GoalActivation;
+  stopReason?: string;
+}
 // Optional Goal runtime summary; absent for old hosts or when no goal is active.
 export interface GoalRuntime {
   turnsUsed: number;

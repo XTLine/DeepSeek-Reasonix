@@ -629,7 +629,7 @@ func (a *Agent) commitPinnedRevisionPlan(plan pinnedRevisionPlan) {
 	a.pinned.mu.Unlock()
 }
 
-func (a *Agent) appendPinnedRevisionAndUser(ctx context.Context, plan pinnedRevisionPlan, user provider.Message) {
+func (a *Agent) appendPinnedRevisionAndUser(ctx context.Context, plan pinnedRevisionPlan, user provider.Message) error {
 	batch := make([]provider.Message, 0, 3)
 	if contextMessage, ok := a.prepareTurnContext(ctx); ok {
 		batch = append(batch, contextMessage)
@@ -638,8 +638,11 @@ func (a *Agent) appendPinnedRevisionAndUser(ctx context.Context, plan pinnedRevi
 		batch = append(batch, *plan.message)
 	}
 	batch = append(batch, user)
-	a.sess.conversation.AddBatch(batch...)
+	if err := a.appendCommittedMessages(ctx, "turn-admission", batch...); err != nil {
+		return err
+	}
 	a.commitPinnedRevisionPlan(plan)
+	return nil
 }
 
 func pinnedContextCheckpointForMessages(messages []provider.Message) (provider.Message, bool, error) {

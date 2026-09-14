@@ -198,7 +198,7 @@ func TestForegroundMutationRejectsStaleSessionPath(t *testing.T) {
 	stalePath := filepath.Join(dir, "stale.jsonl")
 	bc := NewBroadcaster()
 	ctrl := control.New(control.Options{Runner: blockingRunner{}, Sink: bc, SessionPath: currentPath})
-	s := New(ctrl, bc, config.ServeConfig{})
+	s := newLifecycleTestServer(t, ctrl, bc, config.ServeConfig{})
 
 	ctrl.SubmitHTTP("hi")
 	waitRunning(t, ctrl)

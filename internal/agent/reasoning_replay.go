@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"slices"
 	"strings"
 
@@ -183,7 +184,7 @@ func (a *Agent) ensureUnreplayableHistoryRecovery() {
 			return
 		}
 	}
-	a.sess.conversation.Add(provider.Message{
+	_ = a.appendCommittedMessages(context.Background(), "reasoning-replay-recovery", provider.Message{
 		Role: provider.RoleTool, ToolCallID: provider.LocalOnlyToolID,
 		Name: provider.LocalOnlyToolName, LocalOnly: true, InterruptedTurn: recovery,
 	})

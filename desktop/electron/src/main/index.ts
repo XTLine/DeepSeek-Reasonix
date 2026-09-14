@@ -300,6 +300,7 @@ function bootstrap(dataHome: string): void {
     },
     {
       hello: async (client) => validateHelloResult(await client.request("desktop/hello", buildHelloParams({
+        protocolVersion: contract.protocolVersion,
         contractDigest: contract.digest,
         ...loadBuildIdentity(app.isPackaged, process.resourcesPath, process.env),
         hostVersion: process.versions.electron,
@@ -308,7 +309,7 @@ function bootstrap(dataHome: string): void {
         arch: process.arch,
         home: dataHome,
         dev,
-      }), 10_000)),
+      }), 10_000), contract.protocolVersion),
       onRequest: (method, params) => {
         if (lifecycle.isQuitting) return Promise.reject(new Error("Reasonix is shutting down"));
         return dispatchHostCall(hostCalls, method, params);

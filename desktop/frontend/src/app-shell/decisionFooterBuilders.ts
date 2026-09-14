@@ -302,6 +302,7 @@ export function buildComposerSurface(input: ComposerSurfaceInput): DecisionFoote
       onSetCollaborationMode: goals.setCollaborationModeFromUi,
       onSetToolApprovalMode: modes.applyToolApprovalMode,
       onClearGoal: goals.clearGoalFromUi,
+      onEditGoal: goals.editGoalFromUi,
       onPauseGoal: remoteGoal.pauseGoal,
       onResumeGoal: remoteGoal.resumeGoal,
       onSwitchModel: modelSwitch.switchModelFromUi,

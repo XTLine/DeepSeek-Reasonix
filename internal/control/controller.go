@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -41,6 +42,7 @@ import (
 	"reasonix/internal/extension"
 	"reasonix/internal/extension/dispatch"
 	"reasonix/internal/extension/uihub"
+	goaldomain "reasonix/internal/goal"
 	"reasonix/internal/guardian"
 	"reasonix/internal/hook"
 	"reasonix/internal/i18n"
@@ -53,6 +55,7 @@ import (
 	"reasonix/internal/plugin"
 	"reasonix/internal/provider"
 	"reasonix/internal/sandbox"
+	"reasonix/internal/session"
 	"reasonix/internal/sessioncontext"
 	"reasonix/internal/sessioninbox"
 	"reasonix/internal/sessiontemp"
@@ -75,6 +78,11 @@ var ErrNoFinalReadinessRecovery = errors.New("final_readiness_recovery_retired: 
 // superseded by a successful rebuild.
 var ErrRuntimeDraining = errors.New("runtime is draining after rebuild")
 
+// ErrRecoveryRequired reports that the previous foreground activity did not
+// stop inside the cancellation grace period. The controller keeps queued input
+// and write ownership sealed until the process is restarted.
+var ErrRecoveryRequired = errors.New("session recovery is required before another turn can start")
+
 // errTurnRunningRotation and errRotationInProgress are returned by the
 // session-rotation gate (beginRotation) when a rotation cannot proceed: a turn
 // is in flight, or another rotation already holds the gate.
@@ -93,19 +101,20 @@ var errNoSessionPath = errors.New("session has content but no session path; conv
 // methods; observe through the Sink passed in Options.
 type Controller struct {
 	runtimeState controllerRuntimeState
-	// promptResolveMu serializes exact prompt decisions on one controller. It
-	// prevents two UI submissions from racing through separate prompt managers.
-	promptResolveMu    sync.Mutex
-	promptRuntimeEpoch string
-	promptOwner        PendingPromptOwner
-	runner             agent.Runner
-	executor           *agent.Agent
-	guardianSess       *guardian.Session // nil when guardian is disabled
-	guardianPath       string            // persisted guardian session file ("" when disabled)
+	controllerPromptRouting
+	runner       agent.Runner
+	executor     *agent.Agent
+	guardianSess *guardian.Session // nil when guardian is disabled
+	guardianPath string            // persisted guardian session file ("" when disabled)
 	// taskBudget is the configured spend gate, as passed at construction.
 	taskBudget agent.TaskBudget
 	// goalTokenBudget bounds an unattended Goal loop; 0 leaves it unbounded.
-	goalTokenBudget int
+	goalTokenBudget      int
+	goalResourceMu       sync.Mutex
+	goalTokensUsed       int
+	goalRequestsUsed     int
+	goalTokenLimit       int
+	goalBudgetExtensions int
 
 	// goalUsageTee accounts billable usage events into the active goal turn's
 	// observational token total. It wraps the public sink when the caller didn't provide one.
@@ -131,7 +140,13 @@ type Controller struct {
 	pinnedContextLoader     PinnedContextLoader
 	sessionContextStatic    sessioncontext.Sections
 	sessionDir              string
-	commands                atomic.Pointer[[]command.Command]
+	controllerSessionBinding
+	// managedSessionEvents is set for hosts that publish controllers only after
+	// a session-lease handoff. An unpublished replacement may read the shared
+	// v3 projection, but it must not mutate that projection before its final
+	// write authority is bound.
+	managedSessionEvents atomic.Bool
+	commands             atomic.Pointer[[]command.Command]
 	// skills owns the session's discovered skills (enabled subset, full set, and
 	// the reloadable stores) — the skills slice of the Capabilities concern. See
 	// skill.go.
@@ -157,6 +172,9 @@ type Controller struct {
 	// testCacheColdAfter overrides cacheColdAfter() in tests. Zero uses the
 	// vendor-aware resolution from config.
 	testCacheColdAfter time.Duration
+	// testCancelGrace overrides the production cancellation grace in tests.
+	// Zero uses the documented 15 second boundary.
+	testCancelGrace time.Duration
 
 	shell                             sandbox.Shell                    // interpreter for user-invoked "!" commands; zero = auto
 	startedOnce                       bool                             // guards the one-shot SessionStart hook on first turn
@@ -231,6 +249,21 @@ type Controller struct {
 	// and its persistence, behind its own mutex so a per-turn goal save never
 	// stalls an approval or status poll on c.mu. See goal.go.
 	goals goalMachine
+	// goalLifecycle is the versioned session goal authority. The legacy
+	// goalMachine remains only while old sidecars are imported and must not be
+	// used as the execution source once the v3 lifecycle cutover is complete.
+	goalLifecycleMu         sync.RWMutex
+	goalLifecycleMutationMu sync.Mutex
+	goalLifecycle           *goaldomain.Machine
+	goalLifecycleLoadErr    error
+	// goalDriver is a level-triggered, process-local scheduler. It never owns a
+	// cross-turn Activity: each accepted continuation enters through the normal
+	// guarded top-level turn path.
+	goalDriverMu      sync.Mutex
+	goalDriverWG      sync.WaitGroup
+	goalDriverPending bool
+	goalDriverActive  *goalRoundReservation
+	goalDriverControl goalDriverControl
 	// legacyResearchArchive reads explicit pre-unification task paths. It never
 	// creates or mutates archive state. See
 	// autoresearch_manager.go.
@@ -276,6 +309,7 @@ type Controller struct {
 	// non-blocking.
 	mu                sync.Mutex
 	cancel            context.CancelFunc
+	activeDone        chan struct{}
 	running           bool
 	finishing         bool // TurnDone is still being delivered; park a replacement turn
 	finishingBoundary turnFinishingBoundary
@@ -364,6 +398,32 @@ type pendingAsk struct {
 
 type plannerSessionResetter interface {
 	ResetPlannerSession()
+}
+
+type controllerSessionBinding struct {
+	// sessionRuntime is the final identity-bound v3 owner. When exclusiveSession is
+	// set, SessionPath is a legacy import/display locator only and no production
+	// transcript or business sidecar may be written through it.
+	sessionService   *session.Service
+	sessionRuntime   *session.Runtime
+	sessionBinding   *session.ClientBinding
+	exclusiveSession bool
+	v3BindingMu      sync.RWMutex
+	v3ActivityMu     sync.Mutex
+	v3Activity       *session.Activity
+}
+
+type controllerPromptRouting struct {
+	// promptEpochMu protects only the routing epoch. One-shot resolution is
+	// owned by PendingPromptOwner and the typed registries; cancellation must
+	// never wait behind an answer callback.
+	promptEpochMu      sync.RWMutex
+	promptRuntimeEpoch string
+	promptOwner        PendingPromptOwner
+	// promptResolveMu serializes permission-generation changes with legacy
+	// resolver entry points while they transition onto PendingPromptOwner.
+	// It is never held while waiting for a user answer.
+	promptResolveMu sync.Mutex
 }
 
 // RuntimeStatus is the frontend-facing snapshot of foreground turn state. It is
@@ -523,7 +583,14 @@ type Options struct {
 	PinnedContextLoader PinnedContextLoader
 	SessionDir          string
 	SessionPath         string
-	Host                *plugin.Host
+	// SessionRuntime binds this Controller/Agent view to an already-published
+	// immutable v3 session identity. SessionService owns exact-instance close,
+	// fork, query and cancellation. ExclusiveSession disables legacy
+	// transcript and business-sidecar writes.
+	SessionService   *session.Service
+	SessionRuntime   *session.Runtime
+	ExclusiveSession bool
+	Host             *plugin.Host
 	// MCPHostProfile is the surface lazily created hosts declare; injected
 	// hosts keep their own profile.
 	MCPHostProfile plugin.HostProfile
@@ -683,12 +750,15 @@ func New(opts Options) *Controller {
 	}
 	runtimeOwner := runtimeOwnerOrDefault(opts.RuntimeOwner)
 	pluginCtx = extension.ContextWithRuntimeOwner(pluginCtx, runtimeOwner)
+	goalDriverCtx, goalDriverCancel := context.WithCancel(context.Background())
 	if opts.Hooks != nil {
 		opts.Hooks.SetSessionID(agent.BranchID(opts.SessionPath))
 	}
+	sessionRuntime, sessionBinding := bindInitialSessionRuntime(opts)
 	c := &Controller{
 		taskBudget:                        opts.TaskBudget,
 		goalTokenBudget:                   opts.GoalTokenBudget,
+		goalTokenLimit:                    opts.GoalTokenBudget,
 		goals:                             goalMachine{tokenBudget: opts.GoalTokenBudget},
 		runner:                            opts.Runner,
 		executor:                          opts.Executor,
@@ -713,6 +783,7 @@ func New(opts Options) *Controller {
 		sessionContextStatic:              opts.SessionContextStatic,
 		sessionDir:                        opts.SessionDir,
 		sessionPath:                       opts.SessionPath,
+		controllerSessionBinding:          controllerSessionBinding{sessionService: opts.SessionService, sessionRuntime: sessionRuntime, sessionBinding: sessionBinding, exclusiveSession: opts.ExclusiveSession},
 		commands:                          atomic.Pointer[[]command.Command]{},
 		skills:                            newSkillSet(opts.Skills, opts.AllSkills, opts.SkillStore, opts.AllSkillStore),
 		disableImplicitSkillInvocation:    opts.DisableImplicitSkillInvocation,
@@ -748,8 +819,17 @@ func New(opts Options) *Controller {
 		providerResolver:                  opts.ProviderResolver,
 		runtimeGeneration:                 opts.RuntimeGeneration,
 		runtimeOwner:                      runtimeOwner,
+		goalDriverControl:                 goalDriverControl{ctx: goalDriverCtx, cancel: goalDriverCancel},
 		approval:                          newApprovalManager(opts.Policy, ToolApprovalAsk, opts.ApprovalTimeout),
 	}
+	c.initializeOwnedResources(opts)
+	return c
+}
+
+func (c *Controller) initializeOwnedResources(opts Options) {
+	c.goalUsageTee.setLifecycleUsageRecorder(c.recordGoalLifecycleUsage)
+	c.installGoalLifecycle(opts.SessionRuntime)
+	c.managedSessionEvents.Store(opts.OnSessionTransition != nil)
 	c.permissionRevision.Store(1)
 	// Session-private temporary directory: reuse a shared Manager on hot
 	// rebuild, otherwise create one. Retain so ReleaseResources/Close drop the
@@ -779,6 +859,17 @@ func New(opts Options) *Controller {
 	}
 	if c.executor != nil {
 		c.executor.SetSink(c.sink)
+		c.executor.SetSessionCheckpointer(c)
+		if _, runtime, _ := c.v3Binding(); runtime != nil {
+			if runtime.StateSnapshot().Session.EventSequence == 0 {
+				if err := c.seedSessionEventsFromExecutor("session-open"); err != nil {
+					c.failTurnEventLedger(err)
+				}
+			}
+			c.restoreExecutorFromSessionEvents()
+		} else if err := c.seedSessionEventsFromExecutor("session-open"); err != nil {
+			c.failTurnEventLedger(err)
+		}
 	}
 	cmdsInit := opts.Commands
 	c.commands.Store(&cmdsInit)
@@ -793,7 +884,6 @@ func New(opts Options) *Controller {
 	// because the session path is only fixed once the first turn begins.
 	c.initializeTaskRecorder(opts.TaskStore)
 	c.initializeRuntimeState()
-	return c
 }
 
 func (c *Controller) initializeTaskRecorder(store taskmonitor.WriteStore) {
@@ -1022,6 +1112,17 @@ func ckptDir(sessionPath string) string {
 // construction and whenever the session path changes (NewSession/Resume/SetSessionPath).
 // Also re-wires the mutation observer so capture targets the new store.
 func (c *Controller) rebindCheckpoints(sessionPath string) {
+	if c.sessionEngineEnabled() {
+		// Goal and runtime business state are v3 events. Legacy goal/checkpoint
+		// sidecars must not become a second restore source in exclusive mode.
+		c.goals.setStatePath("")
+		c.checkpoints.rebind("", c.workspaceRoot, c.checkpointOptions()...)
+		c.rebindTurnEvents(sessionPath)
+		if c.executor != nil {
+			c.wireMutationObserver()
+		}
+		return
+	}
 	c.goals.setStatePath(goalStatePath(sessionPath))
 	c.checkpoints.rebind(ckptDir(sessionPath), c.workspaceRoot, c.checkpointOptions()...)
 	c.rebindTurnEvents(sessionPath)
@@ -1034,9 +1135,19 @@ func (c *Controller) rebindCheckpoints(sessionPath string) {
 
 // spawnGuardedTurn launches an admitted turn body plus its autosave companion.
 // The caller must already have claimed admission (running=true) under c.mu.
-func (c *Controller) spawnGuardedTurn(ctx context.Context, cancel context.CancelFunc, body func(ctx context.Context) error) {
-	body = c.prepareTurnAdmission(body)
+func (c *Controller) spawnGuardedTurn(ctx context.Context, cancel context.CancelFunc, body func(ctx context.Context) error, goalRound *goalRoundReservation) {
 	ctx, completion := withGuardedTurnCompletion(ctx)
+	runtimeCtx, runtimeActivity, runtimeErr := c.beginSessionRuntimeActivity(ctx, "turn")
+	if runtimeErr != nil {
+		go func() {
+			defer cancel()
+			c.finishGuardedTurn(runtimeErr, completion)
+			c.finishGoalRoundActivity(goalRound)
+		}()
+		return
+	}
+	ctx = runtimeCtx
+	body = c.prepareTurnAdmissionWithGoalRound(body, goalRound)
 	c.liveness.reset(time.Now())
 	c.autosaveWG.Go(func() {
 		c.autosaveWhileRunning(ctx)
@@ -1044,13 +1155,30 @@ func (c *Controller) spawnGuardedTurn(ctx context.Context, cancel context.Cancel
 	go func() {
 		defer cancel()
 		defer func() {
+			c.finishSessionRuntimeActivity(runtimeActivity)
+			c.finishGoalRoundActivity(goalRound)
+			c.kickGoalDriver()
+		}()
+		defer func() {
 			if r := recover(); r != nil {
-				c.finishGuardedTurn(fmt.Errorf("internal error: %v", r), completion)
+				err := fmt.Errorf("internal error: %v", r)
+				goalRound.setResult(err, false)
+				c.finishGuardedTurn(err, completion)
 			}
 		}()
 		err := body(ctx)
+		if goalRound != nil {
+			goalRound.setResult(err, errors.Is(ctx.Err(), context.Canceled) && c.CancelRequested())
+		}
 		c.finishGuardedTurn(explainError(err), completion)
 	}()
+}
+
+func (c *Controller) cancellationGrace() time.Duration {
+	if c != nil && c.testCancelGrace > 0 {
+		return c.testCancelGrace
+	}
+	return 15 * time.Second
 }
 
 // finishGuardedTurn keeps admission closed while TurnDone is delivered. The
@@ -1070,6 +1198,10 @@ func (c *Controller) finishGuardedTurn(err error, completion *guardedTurnComplet
 	c.mu.Lock()
 	cancelRequested := c.canceling
 	c.running = false
+	if c.activeDone != nil {
+		close(c.activeDone)
+		c.activeDone = nil
+	}
 	// A live controller keeps admission closed until TurnDone fan-out finishes.
 	// Close has already sealed admission permanently, so a late completion must
 	// not resurrect a finishing state after teardown.
@@ -1095,6 +1227,13 @@ func (c *Controller) finishGuardedTurn(err error, completion *guardedTurnComplet
 			c.refreshRuntimeState(event.Event{})
 			return
 		}
+		// Preserve queued input after an uncooperative activity, but do not run it
+		// in a process whose previous effects can no longer be proven.
+		if ledger := c.turnEventLedger(); ledger != nil && ledger.CurrentStatus() == event.TurnRecoveryRequired {
+			c.mu.Unlock()
+			c.refreshRuntimeState(event.Event{})
+			return
+		}
 		if len(c.parkedTurns) == 0 {
 			c.mu.Unlock()
 			// No parked compatibility body: admit the next durable inbox item.
@@ -1106,10 +1245,11 @@ func (c *Controller) finishGuardedTurn(err error, completion *guardedTurnComplet
 		c.parkedTurns = c.parkedTurns[1:]
 		ctx, cancel := context.WithCancel(extension.ContextWithRuntimeOwner(context.Background(), c.runtimeOwner))
 		c.cancel = cancel
+		c.activeDone = make(chan struct{})
 		c.running = true
 		c.canceling = false
 		c.mu.Unlock()
-		c.spawnGuardedTurn(ctx, cancel, next)
+		c.spawnGuardedTurn(ctx, cancel, next, nil)
 		c.refreshRuntimeState(event.Event{})
 	}()
 	c.inbox.mu.Lock()
@@ -1204,8 +1344,9 @@ const SandboxEscapeApprovalTool = "sandbox_escape"
 // so YOLO/auto approval must never answer it.
 const ManagedConfigWriteApprovalTool = "config_write"
 
-// planApprovedMessage is the follow-up turn sent once the user approves a plan —
-// the in-context nudge to execute and keep the (already-seeded) task list honest.
+// planApprovedMessage is the follow-up turn sent once the user approves a plan.
+// Approval grants the plan scope; the model owns any fresh todo list it chooses
+// to write during the execution turn.
 const planApprovedMessage = "Plan approved — plan mode is off. Implement the approved plan and user feedback. Explicit scope, permission and sandbox restrictions still apply. Update todos to reflect actual progress. Use the plan’s checks and acceptance notes as task instructions, and report what you changed and verified."
 
 // runTurn runs one model turn, then applies the plan-approval gate. This is the
@@ -1214,8 +1355,8 @@ const planApprovedMessage = "Plan approved — plan mode is off. Implement the a
 // the active Permissions/Sandbox path.
 // When the turn ends with a text proposal, the controller asks the user to
 // approve (reusing the ApprovalRequest channel both frontends already render);
-// on approval it exits plan mode, seeds the task list from the plan, and
-// continues straight into execution; on rejection it stays in plan mode so the
+// on approval it exits plan mode and continues straight into execution; on
+// rejection it stays in plan mode so the
 // next turn can revise. Plan mode is only ever set interactively, so the headless
 // `Run` path (which doesn't call this) never blocks on a prompt.
 func (c *Controller) runTurn(ctx context.Context, input string) error {
@@ -1227,9 +1368,13 @@ func (c *Controller) runTurn(ctx context.Context, input string) error {
 // composition, checkpoints, hooks, and plan approval. It is for transports that
 // need a blocking request/response boundary, such as ACP session/prompt.
 func (c *Controller) RunTurn(ctx context.Context, input string) error {
-	return c.runSynchronousTurn(ctx, nil, func(runCtx context.Context) error {
+	err := c.runSynchronousTurn(ctx, nil, func(runCtx context.Context) error {
 		return c.runTurn(runCtx, input)
 	})
+	if err != nil {
+		return err
+	}
+	return c.waitForGoalTerminal(ctx)
 }
 
 func (c *Controller) runTurnWithRaw(ctx context.Context, input, raw string) error {
@@ -1278,7 +1423,7 @@ func (c *Controller) runSubagentSkillSlash(sk skill.Skill, task, raw, display st
 }
 
 func (c *Controller) stopGoal(status string) {
-	path, data, ok := c.goals.stop(status, c.goalTodos())
+	path, data, ok := c.goals.stop(status)
 	c.persistGoalState(path, data, ok)
 }
 
@@ -1712,129 +1857,14 @@ func (c *Controller) rememberProjectNote(note string) {
 	}
 }
 
-func (c *Controller) applyGoalCommand(input, display string) bool {
-	cmd, ok := ParseGoalCommand(input)
-	if !ok {
-		return false
-	}
-	if cmd.DeprecatedBudgetFlag {
-		c.notice(GoalBudgetFlagDeprecatedNotice)
-	}
-	switch cmd.Action {
-	case GoalCommandSet:
-		c.SetPlanMode(false)
-		c.SetGoalWithResearchMode(cmd.Text, cmd.ResearchMode)
-		c.GoalStrict(cmd.Strict)
-		c.startGoalCommandTurn(cmd, display)
-	case GoalCommandClear:
-		c.ClearGoal()
-		c.notice(i18n.M.GoalCleared)
-	case GoalCommandPause:
-		if !c.PauseGoal() {
-			c.notice(i18n.M.GoalNotRunning)
-		}
-	case GoalCommandResume:
-		if !c.ResumeGoal() {
-			c.notice(i18n.M.GoalNotPaused)
-		}
-	default:
-		goal := c.Goal()
-		if strings.TrimSpace(goal) == "" {
-			c.notice(i18n.M.GoalEmpty)
-			break
-		}
-		rt := c.GoalRuntime()
-		c.notice(fmt.Sprintf(i18n.M.GoalCurrentFmt, goal))
-		c.notice(fmt.Sprintf(i18n.M.GoalRuntimeFmt,
-			rt.TurnsUsed, rt.RequestsUsed, rt.TokensUsed,
-			GoalWorkDurationText(rt.WorkDurationMs)))
-		if rt.LastReason != "" {
-			c.noticeDetail(i18n.M.GoalRuntimeLastReason, rt.LastReason)
-		}
-		if rt.StopCause != "" {
-			c.notice(fmt.Sprintf(i18n.M.GoalPausedFmt, rt.StopCause))
-		}
-	}
-	return true
-}
-
-// applyPlanExec reads the current canonical todo list and starts a goal that
-// analyzes and dispatches independent steps concurrently via parallel_tasks.
-// Supports --strict flag: /plan-exec --strict enables strict goal mode.
-func (c *Controller) applyPlanExec(input, display string) {
-	todos := c.executor.CanonicalTodoState()
-	if len(todos) == 0 {
-		c.notice("no active plan with todos to execute")
-		return
-	}
-
-	// Parse --strict flag.
-	strict := slices.Contains(strings.Fields(input), "--strict")
-
-	// Count completion status.
-	total := len(todos)
-	done := 0
-	for _, t := range todos {
-		if t.Status == "completed" {
-			done++
-		}
-	}
-
-	var b strings.Builder
-	b.WriteString("You are the execution conductor. Route each step to the right sub-agent by module.\n\n")
-
-	// Detect project structure for module-aware routing.
-	modules := c.detectProjectModules()
-	if len(modules) > 0 {
-		b.WriteString("## Project modules detected\n\n")
-		for _, m := range modules {
-			fmt.Fprintf(&b, "- %s/", m)
-		}
-		b.WriteString("\n\nRoute steps to the module they belong to. Steps in different modules can run in parallel.\n\n")
-	}
-
-	b.WriteString("## Plan steps\n\n")
-	for _, t := range todos {
-		status := t.Status
-		if status == "" {
-			status = "pending"
-		}
-		mark := " "
-		if status == "completed" {
-			mark = "x"
-		}
-		fmt.Fprintf(&b, "- [%s] %s (%s)\n", mark, t.Content, status)
-	}
-	b.WriteString("\n## Routing rules\n")
-	b.WriteString("1. Group steps by MODULE \u2014 same module = serial, different modules = parallel batches\n")
-	b.WriteString("2. Research/exploration across modules = use parallel_tasks\n")
-	b.WriteString("3. Dispatch each batch via parallel_tasks \u2014 each sub-agent gets one module\u2019s context\n")
-	b.WriteString("4. Verify each batch before the next\n")
-	b.WriteString("5. Failures: fix before moving on\n")
-	b.WriteString("\nGoal: each sub-agent focuses on one module and does not carry irrelevant context.\n")
-	if done > 0 {
-		fmt.Fprintf(&b, "\nNote: %d/%d steps are already completed. Focus on the remaining %d steps.\n", done, total, total-done)
-	}
-	prompt := b.String()
-
-	// Show module preview.
-	if len(modules) > 0 {
-		c.notice(fmt.Sprintf("plan-exec: detected %d modules — %s", len(modules), strings.Join(modules, ", ")))
-	}
-
-	c.SetPlanMode(false)
-	c.SetGoal("execute plan: " + ShortGoalForNotice(todos[0].Content))
-	c.GoalStrict(strict)
-	c.notice(fmt.Sprintf("plan-exec: dispatching %d plan steps (strict=%v)", total, strict))
-	if c.runner != nil {
-		c.runGuarded(func(ctx context.Context) error {
-			return c.runGoalLoopWithRawDisplay(ctx, prompt, prompt, display)
-		})
-	}
+// applyPlanExec is a command tombstone. The old path coupled Plan approval,
+// todo state and Goal continuation and is intentionally absent from the runtime.
+func (c *Controller) applyPlanExec(_, _ string) {
+	c.notice("/plan-exec is retired; approve the Plan, then let the model create a fresh todo list for the new turn")
 }
 
 // prometheusPrompt is the strategic planner system prompt.
-const prometheusPrompt = "You are Prometheus, a strategic planner. Interview the user one question at a time. Cover: scope, modules, files, constraints, tests. When ready, output a numbered plan with each step tagged by module. End by calling update_goal with status complete. Do not implement.\n\nFor independent research directions, use parallel_tasks before planning."
+const prometheusPrompt = "You are Prometheus, a strategic planner. Interview the user one question at a time. Cover: scope, modules, files, constraints, tests. When ready, output a numbered plan with each step tagged by module. Read the current goal with get_goal, then call update_goal with its exact ID/revision and action complete. Do not implement.\n\nFor independent research directions, use parallel_tasks before planning."
 
 // applyPrometheus starts an interactive planning interview, inspired by OMO's
 // Prometheus agent. It enters goal mode with a structured interview prompt.
@@ -2081,7 +2111,6 @@ func (c *Controller) runReady(ctx context.Context, input string) (err error) {
 		c.emitDrainingNotice()
 		return ErrRuntimeDraining
 	}
-	defer event.RecordTurnCompletion(c.sink)
 	c.maybeSessionStart(ctx)
 	parentSession := c.parentSessionID()
 	ctx = agent.WithParentSession(ctx, parentSession)
@@ -2203,28 +2232,22 @@ func (c *Controller) CancelRequested() bool {
 // PendingPrompt reports whether the current turn is blocked waiting for a user
 // approval, plan approval, memory approval, or ask-tool answer.
 func (c *Controller) PendingPrompt() bool {
-	return c.approval.hasPending()
+	return len(c.promptOwner.Identities()) > 0
 }
 
 // RuntimeStatus reports the active work owned by the foreground controller.
 func (c *Controller) RuntimeStatus() RuntimeStatus {
-	c.mu.Lock()
-	running := c.running
-	active := running || c.finishing
-	canceling := c.canceling
-	c.mu.Unlock()
-	pending := c.approval.hasPending()
-	backgroundJobs := len(c.Jobs())
-	turnID, status, turnEventSeq, replayAfterSeq := c.turnEventRuntimeStatus()
+	snapshot := c.RuntimeStateSnapshot()
+	_, _, _, replayAfterSeq := c.turnEventRuntimeStatus()
 	return RuntimeStatus{
-		Running:         active,
-		PendingPrompt:   pending,
-		BackgroundJobs:  backgroundJobs,
-		CancelRequested: canceling,
-		Cancellable:     running || pending || canceling,
-		TurnID:          turnID,
-		Status:          status,
-		TurnEventSeq:    turnEventSeq,
+		Running:         snapshot.Running,
+		PendingPrompt:   snapshot.PendingPrompt,
+		BackgroundJobs:  snapshot.BackgroundJobs,
+		CancelRequested: snapshot.CancelRequested,
+		Cancellable:     snapshot.Cancellable,
+		TurnID:          snapshot.TurnID,
+		Status:          snapshot.TurnStatus,
+		TurnEventSeq:    snapshot.TurnEventSeq,
 		ReplayAfterSeq:  replayAfterSeq,
 	}
 }
@@ -2343,7 +2366,6 @@ func (p plannerPlanApprover) RunWithPlannerApproval(ctx context.Context, plan st
 	if !allow {
 		return nil
 	}
-	c.seedPlanTodos(plan)
 	c.approval.setPlanAutoApprove(true)
 	defer c.approval.setPlanAutoApprove(false)
 	if err := run(ctx); err != nil {
@@ -2521,64 +2543,16 @@ func (c *Controller) SteerConsumed() bool {
 	return true
 }
 
-// promptQueueNoticeDelay is how long a prompt may wait behind another before
-// the user is told why nothing has appeared. Short enough to beat "it's stuck",
-// long enough that an approval answered promptly never emits a notice.
-var promptQueueNoticeDelay = 3 * time.Second
-
-// lockPromptFor acquires the prompt lock, emitting one notice if the wait is
-// long enough to look like a hang. It reports false only when ctx ended first;
-// the lock is held on true.
-func (c *Controller) lockPromptFor(ctx context.Context, kind string) bool {
-	acquired := make(chan struct{})
-	go func() {
-		c.approval.promptMu.Lock()
-		close(acquired)
-	}()
-	select {
-	case <-acquired:
-		return true
-	case <-ctx.Done():
-	case <-time.After(promptQueueNoticeDelay):
-	}
-	if ctx.Err() == nil {
-		c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Code: event.NoticeCodePromptQueued,
-			Text:   "A " + kind + " is waiting for you to answer the prompt ahead of it.",
-			Detail: "the assistant asked something while an earlier approval or question was still open; it appears once that one is answered"})
-	}
-	select {
-	case <-acquired:
-		return true
-	case <-ctx.Done():
-		// The lock may still be handed to the goroutine above; release it so the
-		// next prompt is not blocked by this abandoned wait.
-		go func() {
-			<-acquired
-			c.approval.promptMu.Unlock()
-		}()
-		return false
-	}
-}
-
 // Ask implements agent.Asker: it emits an AskRequest and blocks until
-// AnswerQuestion(ID, …) answers or ctx is cancelled. promptMu serialises it
-// against tool-approval prompts so at most one user prompt is outstanding.
+// AnswerQuestion(ID, …) answers or ctx is cancelled. Multiple requests may be
+// outstanding; the frontend presents the shared pending list one at a time.
 // Unlike tool-approval gates, Ask is NOT bypassed in YOLO mode — the `ask`
 // tool exists to get a genuine user decision, and YOLO only auto-approves
 // tool calls; it must not answer the user's questions for them.
 func (c *Controller) Ask(ctx context.Context, questions []event.AskQuestion) ([]event.AskAnswer, error) {
-	// Registering after the lock left a queued question invisible everywhere:
-	// no event, absent from the snapshot, unreachable by ReplayPendingPrompts.
+	c.approval.promptEmitMu.Lock()
 	id, reply := c.approval.registerAsk(questions)
 	c.registerOwnedPrompt(id, PromptAsk)
-
-	if !c.lockPromptFor(ctx, "question") {
-		c.cancelOwnedPrompt(id)
-		return nil, ctx.Err()
-	}
-	defer c.approval.promptMu.Unlock()
-
-	c.approval.promptEmitMu.Lock()
 	turnID, _, _, _ := c.turnEventRuntimeStatus()
 	_, runtimeEpoch := c.promptIdentitySnapshot()
 	if identity := c.bindOwnedPromptRouting(id, turnID, runtimeEpoch); identity.TurnID != "" {
@@ -2614,20 +2588,18 @@ func (c *Controller) AnswerQuestion(id string, answers []event.AskAnswer) {
 // agent loop. A failed ledger write leaves the prompt pending and retryable.
 func (c *Controller) AnswerQuestionChecked(id string, answers []event.AskAnswer) error {
 	defer c.refreshRuntimeState(event.Event{})
-	c.promptResolveMu.Lock()
-	defer c.promptResolveMu.Unlock()
 	return c.answerQuestionCheckedLocked(id, answers)
 }
 
 func (c *Controller) answerQuestionCheckedLocked(id string, answers []event.AskAnswer) error {
 	pending, ok, err := c.approval.resolveAskAfter(id, func(p pendingAsk) error {
-		return c.emitTurnEventChecked(event.Event{Kind: event.PromptAnswered, ItemID: id, Status: event.TurnInProgress})
+		return c.emitTurnEventChecked(event.Event{Kind: event.PromptAnswered, ItemID: id, InteractionState: string(PromptAnswered), Status: event.TurnInProgress})
 	})
 	if err != nil {
 		return err
 	}
 	if ok {
-		c.promptOwner.Remove(id)
+		c.promptOwner.MarkIDTerminal(id, PromptAnswered)
 		// An answer batch with no selections is the explicit "skip and continue
 		// chat" path. End the current turn instead of feeding a prose dismissal
 		// back to the model and trusting it not to ask again (#6869).
@@ -2698,9 +2670,8 @@ func askAnswersHaveSelection(answers []event.AskAnswer) bool {
 // prompt currently blocking the run loop. A frontend that reconnected or reloaded
 // after the original event has no way to rebuild its approval/ask modal otherwise,
 // so the blocked gate goroutine stays stuck forever while the session shows a
-// "waiting" status with no actionable prompt. promptMu serialises Ask and
-// requestApproval, so in practice at most one prompt is outstanding; the loops
-// stay general so a future concurrent prompt would still replay correctly.
+// "waiting" status with no actionable prompt. All outstanding interactions
+// are replayed from the same registry; the frontend presents them in order.
 func (c *Controller) ReplayPendingPrompts() {
 	c.approval.promptEmitMu.Lock()
 	noApprovals := c.replayPendingPromptsTo(c.sink)
@@ -2793,10 +2764,12 @@ func (c *Controller) applyPlanMode(v bool) {
 	c.mu.Unlock()
 	if setter, ok := c.runner.(interface{ SetPlanMode(bool) }); ok {
 		setter.SetPlanMode(v)
-		return
-	}
-	if c.executor != nil {
+	} else if c.executor != nil {
 		c.executor.SetPlanMode(v)
+	}
+	payload, _ := json.Marshal(map[string]any{"enabled": v})
+	if err := c.appendDomainState("plan/state", payload, "mode"); err != nil {
+		slog.Warn("controller: append plan mode event", "err", err)
 	}
 }
 
@@ -2841,7 +2814,10 @@ func (c *Controller) PlanMode() bool {
 // incomplete-todo intercept can never be overridden, so the flag is persisted
 // for compatibility with older frontends but no longer changes FSM behavior.
 func (c *Controller) GoalStrict(strict bool) {
-	path, data, ok := c.goals.setStrict(strict, c.goalTodos())
+	if c.sessionEngineEnabled() {
+		return
+	}
+	path, data, ok := c.goals.setStrict(strict)
 	c.persistGoalState(path, data, ok)
 }
 
@@ -2864,6 +2840,39 @@ func (c *Controller) LoadInactiveGoal(goal string) {
 // SetGoalDurable updates the Goal only when its sidecar can be replaced
 // atomically.
 func (c *Controller) SetGoalDurable(goal string) error {
+	if c.sessionEngineEnabled() {
+		goal = strings.TrimSpace(goal)
+		current, err := c.goalLifecycleView()
+		if err != nil {
+			return err
+		}
+		if goal == "" {
+			if current == nil {
+				return nil
+			}
+			_, err = c.applyHostGoalMutation(context.Background(), "clear", func(machine *goaldomain.Machine) (*goaldomain.View, error) {
+				if clearErr := machine.Clear(current.Ref()); clearErr != nil {
+					return nil, clearErr
+				}
+				return nil, nil
+			})
+			if err == nil {
+				c.resetGoalResourceBudget()
+			}
+			return err
+		}
+		if current != nil && current.Objective == goal && current.Phase == goaldomain.PhaseActive && current.Activation == goaldomain.ActivationArmed {
+			return nil
+		}
+		_, err = c.applyHostGoalMutation(context.Background(), "set", func(machine *goaldomain.Machine) (*goaldomain.View, error) {
+			created, createErr := machine.Replace(goaldomain.CreateRequest{Objective: goal})
+			return &created, createErr
+		})
+		if err == nil {
+			c.resetGoalResourceBudget()
+		}
+		return err
+	}
 	snapshot := c.goals.capture()
 	legacySnapshot, hadLegacySnapshot := c.legacyRestoreSnapshot()
 	resolved, setup := c.resolveGoalText(goal, GoalResearchAuto)
@@ -2871,10 +2880,10 @@ func (c *Controller) SetGoalDurable(goal string) error {
 	var data []byte
 	var persist bool
 	if setup.blockReason != "" {
-		path, data, persist = c.goals.setLegacyArchiveBlockedWithTaskID(resolved, setup.budgetClass, setup.blockReason, setup.legacyTaskID, c.goalTodos())
+		path, data, persist = c.goals.setLegacyArchiveBlockedWithTaskID(resolved, setup.budgetClass, setup.blockReason, setup.legacyTaskID)
 		c.replaceLegacyRestore(legacyGoalRestore{taskID: setup.legacyTaskID, epoch: c.goals.continuationToken(), explicit: setup.explicit})
 	} else {
-		path, data, persist = c.goals.set(resolved, setup.budgetClass, c.goalTodos())
+		path, data, persist = c.goals.set(resolved, setup.budgetClass)
 		c.replaceLegacyRestore(legacyGoalRestore{})
 	}
 	if persist {
@@ -2899,6 +2908,12 @@ func (c *Controller) SetGoalDurable(goal string) error {
 }
 
 func (c *Controller) SetGoalWithResearchMode(goal string, researchMode GoalResearchMode) {
+	if c.sessionEngineEnabled() {
+		if err := c.SetGoalDurable(goal); err != nil {
+			c.notice("goal: " + err.Error())
+		}
+		return
+	}
 	resolved, setup := c.resolveGoalText(goal, researchMode)
 	if setup.notice != "" {
 		c.notice(setup.notice)
@@ -2907,11 +2922,11 @@ func (c *Controller) SetGoalWithResearchMode(goal string, researchMode GoalResea
 	var data []byte
 	var ok bool
 	if setup.blockReason != "" {
-		path, data, ok = c.goals.setLegacyArchiveBlockedWithTaskID(resolved, setup.budgetClass, setup.blockReason, setup.legacyTaskID, c.goalTodos())
+		path, data, ok = c.goals.setLegacyArchiveBlockedWithTaskID(resolved, setup.budgetClass, setup.blockReason, setup.legacyTaskID)
 		c.replaceLegacyRestore(legacyGoalRestore{taskID: setup.legacyTaskID, epoch: c.goals.continuationToken(), explicit: setup.explicit})
 		c.notice("legacy research archive resume failed: " + setup.blockReason)
 	} else {
-		path, data, ok = c.goals.set(resolved, setup.budgetClass, c.goalTodos())
+		path, data, ok = c.goals.set(resolved, setup.budgetClass)
 		c.replaceLegacyRestore(legacyGoalRestore{})
 	}
 	c.persistGoalState(path, data, ok)
@@ -2943,11 +2958,32 @@ func (c *Controller) resolveGoalText(goal string, researchMode GoalResearchMode)
 // ResumeGoal re-enters a recoverable blocked/stopped Goal without resetting its
 // delivery evidence scope or accumulated usage statistics.
 func (c *Controller) ResumeGoal() bool {
+	if c.sessionEngineEnabled() {
+		current, err := c.goalLifecycleView()
+		if err != nil || current == nil {
+			return false
+		}
+		_, err = c.applyHostGoalMutation(context.Background(), "resume", func(machine *goaldomain.Machine) (*goaldomain.View, error) {
+			resumed, resumeErr := machine.Resume(current.Ref(), true)
+			return &resumed, resumeErr
+		})
+		if err != nil {
+			return false
+		}
+		if current.BlockedReason != nil && current.BlockedReason.Code == "resource-budget" && c.goalTokenBudget > 0 {
+			c.goalResourceMu.Lock()
+			c.goalTokenLimit += c.goalTokenBudget
+			c.goalBudgetExtensions++
+			c.goalResourceMu.Unlock()
+		}
+		c.kickGoalDriver()
+		return true
+	}
 	if handled, resumed := c.retryBlockedLegacyGoal(); handled {
 		return resumed
 	}
 	spentBudget := c.goals.runtimeView().StopCause == stopCauseBudgetSpend
-	path, data, persist, resumed := c.goals.resume(c.goalTodos())
+	path, data, persist, resumed := c.goals.resume()
 	if !resumed {
 		return false
 	}
@@ -2961,14 +2997,37 @@ func (c *Controller) ResumeGoal() bool {
 	return true
 }
 
-// PauseGoal suspends a running Goal without losing its todo list, Delivery
-// checkpoint, or runtime history; ResumeGoal restores it. Returns false when no
+// PauseGoal suspends a running Goal without losing its Delivery checkpoint or
+// runtime history; ResumeGoal restores it. Returns false when no
 // running Goal exists.
 func (c *Controller) PauseGoal() bool {
+	if c.sessionEngineEnabled() {
+		current, err := c.goalLifecycleView()
+		if err != nil || current == nil || current.Phase != goaldomain.PhaseActive {
+			return false
+		}
+		// Revoke automatic execution before persistence or cancellation can block.
+		c.disarmGoalLifecycle("user-paused")
+		_, err = c.applyHostGoalMutation(context.Background(), "pause", func(machine *goaldomain.Machine) (*goaldomain.View, error) {
+			paused, pauseErr := machine.Pause(current.Ref())
+			return &paused, pauseErr
+		})
+		if err != nil {
+			return false
+		}
+		c.goalDriverMu.Lock()
+		activeGoalRound := c.goalDriverActive != nil
+		c.goalDriverMu.Unlock()
+		if activeGoalRound {
+			c.Cancel()
+		}
+		c.notice(i18n.M.GoalPaused)
+		return true
+	}
 	if !c.goals.active() {
 		return false
 	}
-	path, data, ok := c.goals.pauseFor(stopCauseManual, i18n.M.GoalPausedReason, c.goalTodos())
+	path, data, ok := c.goals.pauseFor(stopCauseManual, i18n.M.GoalPausedReason)
 	c.persistGoalState(path, data, ok)
 	c.notice(i18n.M.GoalPaused)
 	return true
@@ -2976,27 +3035,68 @@ func (c *Controller) PauseGoal() bool {
 
 // GoalRuntime returns the active Goal's usage/runtime summary for frontends.
 func (c *Controller) GoalRuntime() GoalRuntimeView {
+	if c.sessionEngineEnabled() {
+		view, _ := c.goalLifecycleView()
+		if view == nil {
+			return GoalRuntimeView{}
+		}
+		limit := 0
+		if view.MaxGoalRounds != nil {
+			limit = int(*view.MaxGoalRounds)
+		}
+		c.goalResourceMu.Lock()
+		used, requests, tokenLimit, extensions := c.goalTokensUsed, c.goalRequestsUsed, c.goalTokenLimit, c.goalBudgetExtensions
+		c.goalResourceMu.Unlock()
+		return GoalRuntimeView{TurnsUsed: int(view.RoundsStarted), TurnsLimit: limit, TokensUsed: used,
+			RequestsUsed: requests, TokensLimit: tokenLimit, StopCause: view.StopReason, BudgetExtensions: extensions}
+	}
 	return c.goals.runtimeView()
 }
 
-func (c *Controller) persistGoalDeliveryCheckpoint() {
-	if c.executor == nil {
+func (c *Controller) ClearGoal() {
+	if c.sessionEngineEnabled() {
+		c.disarmGoalLifecycle("cleared")
+		_ = c.SetGoalDurable("")
+		c.goalDriverMu.Lock()
+		activeGoalRound := c.goalDriverActive != nil
+		c.goalDriverMu.Unlock()
+		if activeGoalRound {
+			c.Cancel()
+		}
 		return
 	}
-	checkpoint := c.executor.DeliveryCheckpoint()
-	path, data, ok := c.goals.setDeliveryCheckpoint(checkpoint, c.goalTodos())
-	c.persistGoalState(path, data, ok)
-}
-
-func (c *Controller) ClearGoal() {
 	c.SetGoal("")
 }
 
 func (c *Controller) Goal() string {
+	if c.sessionEngineEnabled() {
+		view, _ := c.goalLifecycleView()
+		if view == nil {
+			return ""
+		}
+		return view.Objective
+	}
 	return c.goals.goalText()
 }
 
 func (c *Controller) GoalStatus() string {
+	if c.sessionEngineEnabled() {
+		view, err := c.goalLifecycleView()
+		if err != nil || view == nil {
+			return GoalStatusStopped
+		}
+		switch view.Phase {
+		case goaldomain.PhaseComplete:
+			return GoalStatusComplete
+		case goaldomain.PhaseBlocked:
+			return GoalStatusBlocked
+		case goaldomain.PhaseActive:
+			if view.Activation == goaldomain.ActivationArmed {
+				return GoalStatusRunning
+			}
+		}
+		return GoalStatusStopped
+	}
 	return c.goals.statusForDisplay()
 }
 
@@ -3051,6 +3151,9 @@ func (c *Controller) NewSession() error {
 		return err
 	}
 	defer c.endRotation()
+	if c.sessionEngineEnabled() {
+		return c.rotateExclusiveSession(false)
+	}
 	// Retire asynchronous recovery writes before Snapshot publishes the final
 	// old-session checkpoint. Otherwise an earlier write can outlive the path
 	// rotation (or process teardown) and race cleanup of the old session.
@@ -3087,6 +3190,7 @@ func (c *Controller) NewSession() error {
 	}
 	c.ResetPlannerSession()
 	c.rebindCheckpoints(freshPath)
+	seedErr := c.seedSessionEventsFromExecutor("session-new")
 	c.resetRecoveryForNewSession(freshPath)
 	c.rotateSessionTemp()
 	c.snapshotMu.Unlock()
@@ -3106,6 +3210,9 @@ func (c *Controller) NewSession() error {
 	c.enqueueHookContexts(c.hooks.SessionStart(context.Background(), "clear"))
 	c.extensionSessionEvent(extension.PointSessionStart, dispatch.PhaseStart, c.SessionPath())
 	c.clearSessionWriteAccess()
+	if seedErr != nil {
+		return fmt.Errorf("seed new session events: %w", seedErr)
+	}
 	return nil
 }
 
@@ -3126,6 +3233,9 @@ func (c *Controller) ClearSession() error {
 		return err
 	}
 	defer c.endRotation()
+	if c.sessionEngineEnabled() {
+		return c.rotateExclusiveSession(true)
+	}
 	c.mu.Lock()
 	oldPath := c.sessionPath
 	c.mu.Unlock()
@@ -3182,6 +3292,7 @@ func (c *Controller) ClearSession() error {
 	}
 	c.ResetPlannerSession()
 	c.rebindCheckpoints(freshPath)
+	seedErr := c.seedSessionEventsFromExecutor("session-clear")
 	c.resetRecoveryForNewSession(freshPath)
 	c.rotateSessionTemp()
 	c.snapshotMu.Unlock()
@@ -3209,6 +3320,9 @@ func (c *Controller) ClearSession() error {
 			}
 			destroy.Finish()
 		}()
+	}
+	if seedErr != nil {
+		return fmt.Errorf("seed cleared session events: %w", seedErr)
 	}
 	return nil
 }
@@ -3368,6 +3482,37 @@ func (c *Controller) summarizeAt(ctx context.Context, turn int, from bool) error
 // see the previous session's temporary files. Same-path Resume (hot rebuild
 // migration via AdoptHistory) keeps the generation.
 func (c *Controller) Resume(s *agent.Session, path string) {
+	if c.sessionEngineEnabled() {
+		if _, runtime, _ := c.v3Binding(); runtime != nil && strings.TrimSpace(path) == "" {
+			c.restoreExecutorFromSessionEvents()
+			return
+		}
+		if strings.TrimSpace(path) == "" {
+			if _, err := c.BindFreshSession(context.Background(), ""); err != nil {
+				c.failTurnEventLedger(err)
+			}
+			return
+		}
+		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+			if _, err := c.BindFreshSession(context.Background(), ""); err != nil {
+				c.failTurnEventLedger(err)
+				return
+			}
+			if s != nil && len(s.Snapshot()) > 0 {
+				if err := c.replaceSessionEventProjection(context.Background(), "fresh-resume", s.Snapshot()); err != nil {
+					c.failTurnEventLedger(err)
+				} else {
+					c.restoreExecutorFromSessionEvents()
+				}
+			}
+			return
+		}
+		if _, err := c.ContinueLegacySession(context.Background(), path, ""); err != nil {
+			slog.Warn("controller: migrate legacy resume into v3", "path", path, "err", err)
+			c.failTurnEventLedger(err)
+		}
+		return
+	}
 	// See snapshotMu: the swap must not interleave with an in-flight save.
 	// recoverInterruptedTurn and maybeColdResumePrune snapshot on their own,
 	// so they stay outside the locked section (snapshotMu is not reentrant).
@@ -3384,6 +3529,23 @@ func (c *Controller) Resume(s *agent.Session, path string) {
 	c.ResetPlannerSession()
 	c.setActiveJobSession(path)
 	c.rebindCheckpoints(path)
+	if err := c.seedSessionEventsFromExecutor("legacy-resume"); err != nil {
+		slog.Warn("controller: import resumed transcript into v3", "err", err)
+	}
+	if err := c.importLegacyResumeOverPlaceholder(s); err != nil {
+		slog.Warn("controller: replace placeholder v3 history from legacy resume", "err", err)
+	}
+	if err := c.adoptResumeSystemPrompt(s); err != nil {
+		slog.Warn("controller: record refreshed system prompt in v3", "err", err)
+	}
+	// A host-managed replacement is deliberately unbound until its final lease
+	// handoff. Keep the exact carried transcript on that private candidate; the
+	// successful BindSessionWriteAuthority call publishes it to the shared v3
+	// projection. Restoring the currently-active projection here would erase the
+	// carried tail before the candidate had any chance to become authoritative.
+	if c.sessionEventCommitAllowed() {
+		c.restoreExecutorFromSessionEvents()
+	}
 	migPath, migData, migrated, legacy := c.goals.restoreFromState(path)
 	if !c.restorePendingLegacyGoal(legacy) && migrated {
 		c.persistGoalState(migPath, migData, true)
@@ -3391,7 +3553,6 @@ func (c *Controller) Resume(s *agent.Session, path string) {
 	if c.executor != nil {
 		c.executor.RestoreDeliveryCheckpoint(c.goals.deliveryState())
 	}
-	c.restoreTerminalGoalTodos(path)
 	c.loadGuardianSession()
 	c.loadRecoveryState(path)
 	if shouldRotateSessionTempOnResume(prevPath, path) {
@@ -3548,6 +3709,18 @@ func (c *Controller) snapshotWithDurability(markActivity, forceRewrite, shutdown
 			"label", c.Label(), "session_dir", c.SessionDir(), "message_count", len(s.Snapshot()))
 		return false, nil
 	}
+	if c.sessionEngineEnabled() {
+		if _, runtime, _ := c.v3Binding(); runtime == nil || c.sessionEventStore() == nil {
+			return false, errors.New("exclusive v3 controller has no bound session runtime")
+		}
+		// Export/switch/shutdown callers ask for durability explicitly. The
+		// transcript, Goal, Plan, Todo and runtime facts already live in the one
+		// event sequence; no legacy transcript or business sidecar is refreshed.
+		if _, err := c.flushSessionEvents(context.Background()); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
 	if path == "" {
 		// There IS content but nowhere to write it: this silently dropped whole
 		// bot conversations (#4414). Surface it loudly instead of returning nil
@@ -3555,6 +3728,14 @@ func (c *Controller) snapshotWithDurability(markActivity, forceRewrite, shutdown
 		slog.Warn("controller: session has content but no session path; conversation will not be persisted",
 			"label", c.Label(), "session_dir", c.SessionDir())
 		return false, errNoSessionPath
+	}
+	// Snapshot is an explicit persistence request (session switch, export or
+	// shutdown), so it is also a v3 semantic checkpoint. Live events normally
+	// remain eligible for the 200 ms write-behind window; callers asking for a
+	// snapshot must receive a durable receipt before the rebuildable legacy
+	// transcript cache is refreshed.
+	if _, err := c.flushSessionEvents(context.Background()); err != nil {
+		return false, err
 	}
 	// session.save: the session_policy owner rules on the impending save; a
 	// failure (required-class) vetoes the write. The event goes out after a
@@ -4193,10 +4374,9 @@ func (c *Controller) replaceSessionAfterCancel(msgs []provider.Message) {
 	c.snapshotMu.Lock()
 	defer c.snapshotMu.Unlock()
 	c.executor.Session().Replace(append([]provider.Message(nil), msgs...))
-	// Rebuild canonical todo state from the truncated transcript so
-	// Controller.Todos(), goal readiness, and the task panel no longer see
-	// the in_progress items written by the cancelled turn.
-	c.executor.RebuildTodoState()
+	if err := c.replaceSessionEventProjection(context.Background(), "cancel-or-recovery-rewrite", msgs); err != nil {
+		slog.Warn("controller: record cancel/recovery transcript rewrite", "err", err)
+	}
 	// The mid-turn autosave may have already written a partial transcript to
 	// disk. snapshotActivityIfChanged skips the write when messageCount()
 	// returns to startMessages, so flush the cleaned transcript here. SaveRewrite
@@ -4233,12 +4413,24 @@ func (c *Controller) snapshotActivityIfChanged(startMessages int) (bool, error) 
 // preference. Callers creating a genuinely fresh conversation should use
 // SetFreshSessionPath; callers resuming history should use Resume.
 func (c *Controller) SetSessionPath(p string) {
+	if c.sessionEngineEnabled() {
+		// Path-based execution rebinding is intentionally unavailable. Hosts use
+		// ContinueLegacySession for imports or publish an exact SessionRuntime.
+		slog.Warn("controller: ignored legacy path rebind for exclusive v3 session", "path", p)
+		return
+	}
 	c.setSessionPath(p, false)
 }
 
 // SetFreshSessionPath binds a path that is known to belong to a newly-created
 // session and samples the configured new-session recovery default.
 func (c *Controller) SetFreshSessionPath(p string) {
+	if service, _, exclusive := c.v3Binding(); exclusive && service != nil {
+		if _, err := c.BindFreshSession(context.Background(), ""); err != nil {
+			c.failTurnEventLedger(err)
+		}
+		return
+	}
 	c.setSessionPath(p, true)
 }
 
@@ -4254,6 +4446,15 @@ func (c *Controller) setSessionPath(p string, fresh bool) {
 	c.bindExecutorProjection(p, !fresh)
 	c.setActiveJobSession(p)
 	c.rebindCheckpoints(p)
+	// A path binding is the ownership boundary for the typed session log. Seed
+	// the exact current transcript before any subsequent runtime or UI event can
+	// make an otherwise empty v3 projection look authoritative. This covers the
+	// initial EnsureSessionPath path as well as compatibility callers that bind
+	// an already-loaded transcript without going through Resume.
+	if err := c.seedSessionEventsFromExecutor("session-path-bind"); err != nil {
+		slog.Warn("controller: seed bound session events", "path", p, "err", err)
+		c.failTurnEventLedger(err)
+	}
 	if fresh {
 		c.resetRecoveryForNewSession(p)
 		// A newly-created conversation must not share the previous logical
@@ -4288,7 +4489,21 @@ func (c *Controller) SessionPath() string {
 	return c.sessionPath
 }
 
+// SessionRef returns the immutable v3 execution identity. The legacy path is
+// intentionally absent from this contract and may only remain as an import or
+// display locator while hosts complete their catalog transition.
+func (c *Controller) SessionRef() (session.SessionRef, bool) {
+	_, runtime, _ := c.v3Binding()
+	if runtime == nil {
+		return session.SessionRef{}, false
+	}
+	return runtime.Ref(), true
+}
+
 func (c *Controller) parentSessionID() string {
+	if ref, ok := c.SessionRef(); ok {
+		return ref.SessionID
+	}
 	return agent.BranchID(c.SessionPath())
 }
 
@@ -4297,6 +4512,31 @@ func (c *Controller) parentSessionID() string {
 func (c *Controller) History() []provider.Message {
 	if c.executor == nil {
 		return nil
+	}
+	if snapshot, ok := c.sessionEventSnapshot(); ok && snapshot.EventSequence > 0 {
+		if c.sessionEngineEnabled() {
+			// Controller.History is the provider workset compatibility API used by
+			// rebuilds and model switches. Durable UI history is deliberately
+			// separate and flows through SessionService.Query/TranscriptReplay.
+			return append([]provider.Message(nil), snapshot.Projection.ModelMessages...)
+		}
+		projected := snapshot.Projection.ModelMessages
+		if store := c.sessionEventStore(); store != nil {
+			// The retired path-bound compatibility store still owns its complete
+			// persisted transcript. Its provider projection intentionally strips
+			// host-origin metadata, so explicit history reads use the stored view.
+			projected = store.Snapshot().Projection.Messages
+		}
+		current := c.executor.Session().Snapshot()
+		// Compatibility runners and an interrupted pre-v3 caller can still leave
+		// a live, unsaved message tail in the legacy Session cache. Keep that tail
+		// visible without inferring or persisting business state from it. Normal
+		// agent execution records exact messages first, so this branch disappears
+		// as the remaining compatibility callers are retired.
+		if len(current) > len(projected) && (len(projected) == 0 || reflect.DeepEqual(current[:len(projected)], projected)) {
+			return current
+		}
+		return append([]provider.Message(nil), projected...)
 	}
 	return c.executor.Session().Snapshot() // copy — a turn may be appending concurrently
 }
@@ -4308,6 +4548,16 @@ func (c *Controller) History() []provider.Message {
 func (c *Controller) SessionHasUnsavedChanges() bool {
 	if c == nil || c.executor == nil {
 		return false
+	}
+	if snapshot, ok := c.sessionEventSnapshot(); ok && snapshot.EventSequence > 0 {
+		// The v3 projection is the authoritative transcript. A mismatch identifies
+		// obsolete compatibility code that bypassed the explicit event recorder;
+		// checkpoints deliberately do not infer or mirror that unrecorded tail.
+		current := c.executor.Session().Snapshot()
+		return snapshot.EventSequence > snapshot.DurableSequence ||
+			snapshot.PersistenceStatus == "failed" ||
+			snapshot.PersistenceStatus == "uncertain" ||
+			!reflect.DeepEqual(snapshot.Projection.ModelMessages, current)
 	}
 	return c.executor.Session().HasUnsavedChanges(c.SessionPath())
 }
@@ -4379,13 +4629,21 @@ func (c *Controller) SessionCache() (hit, miss int) {
 	return c.executor.SessionCache()
 }
 
-// Todos returns a copy of the canonical task list (the latest todo_write state
-// merged with complete_step advances) so frontends can render a live task panel.
+// Todos returns the committed event projection used by every frontend. The
+// executor's mutable copy is only a tool-loop convenience and cannot override
+// a failed or superseded durable commit.
 func (c *Controller) Todos() []evidence.TodoItem {
-	if c.executor == nil {
-		return nil
+	var todos []event.Todo
+	if ledger := c.turnEventLedger(); ledger != nil {
+		todos, _ = ledger.TodoState()
+	} else {
+		todos, _ = c.volatileTodoState()
 	}
-	return c.executor.CanonicalTodoState()
+	out := make([]evidence.TodoItem, len(todos))
+	for i, todo := range todos {
+		out[i] = evidence.TodoItem{Content: todo.Content, Status: todo.Status}
+	}
+	return out
 }
 
 // Balance queries the active provider's wallet balance, or (nil, nil) when the
@@ -4485,6 +4743,14 @@ func (c *Controller) SlashSkills() []skill.Skill {
 // management surfaces that need to re-enable a hidden skill.
 func (c *Controller) AllSkills() []skill.Skill {
 	return c.skills.listAll()
+}
+
+// LoadSkill reads the selected skill body without expanding every catalog
+// candidate. It is intentionally outside the shared capability interface:
+// management surfaces may opt into body loading, while search/list stay
+// metadata-only and cache-stable.
+func (c *Controller) LoadSkill(name string) (skill.Skill, bool) {
+	return c.skills.load(name)
 }
 
 // DisabledSkills returns all discoverable skills that are disabled in config.
@@ -4967,28 +5233,6 @@ func (c *Controller) ModelSettingsState() (applied, desired string, err error) {
 // It is transport bookkeeping only, never part of the conversation.
 func (c *Controller) ModelSettingsSourceRevision() string { return c.modelSettings.sourceRevision }
 
-// InheritLifecycleFrom carries same-session lifecycle state across controller
-// rebuilds, such as model switches that preserve the conversation.
-func (c *Controller) InheritLifecycleFrom(prev *Controller) {
-	if prev == nil {
-		return
-	}
-	if c.workspaceRoot == prev.workspaceRoot && c.executor != nil {
-		c.executor.InheritFileObservationsFrom(prev.executor)
-	}
-	prev.mu.Lock()
-	started := prev.startedOnce
-	turn := prev.turn
-	prev.mu.Unlock()
-
-	c.mu.Lock()
-	c.startedOnce = started
-	if c.turn < turn {
-		c.turn = turn
-	}
-	c.mu.Unlock()
-}
-
 // SessionAuthorizations snapshots this controller's same-session tool
 // grants ("Allow for this session") and Plan-mode read-only command trust,
 // for carrying into a replacement controller across a rebuild — see
@@ -5059,21 +5303,34 @@ func (c *Controller) close(fireSessionEnd bool, jobsMode closeJobsMode) {
 		}
 		c.mu.Unlock()
 		if cancel != nil {
-			// clearAll deliberately does not signal waiters. Pair it with the
-			// foreground cancellation so approval/ask waits always unblock.
-			c.promptResolveMu.Lock()
+			// Signal the owned turn before prompt bookkeeping or callbacks. A
+			// stalled registry/adapter must never delay Stop during shutdown.
+			cancel()
 			c.promptOwner.CancelAll()
 			c.approval.clearAll()
-			c.promptResolveMu.Unlock()
-			cancel()
 		} else {
 			c.promptOwner.Clear()
 		}
+		if c.goalDriverControl.cancel != nil {
+			c.goalDriverControl.cancel()
+		}
+		// Goal-driver workers may be inside the pre-admission durability
+		// checkpoint. Join them before closing the v3 writer so teardown cannot
+		// race a late Flush or recreate files under a test/session directory.
+		c.goalDriverWG.Wait()
 		// Join sidecar creation and queue scans without waiting for the
 		// dispatcher itself: host admission may retire its own controller.
 		c.inbox.scanMu.Lock()
 		c.inbox.mu.Lock()
 		c.inbox.closed = true
+		if c.inbox.store != nil {
+			c.inbox.store.Close()
+			c.inbox.store = nil
+		}
+		if c.inbox.tempLease != nil {
+			c.inbox.tempLease.Release()
+			c.inbox.tempLease = nil
+		}
 		c.inbox.mu.Unlock()
 		c.inbox.scanMu.Unlock()
 		if fireSessionEnd && started {
@@ -5091,6 +5348,23 @@ func (c *Controller) close(fireSessionEnd bool, jobsMode closeJobsMode) {
 		if ledger := c.turnEventLedger(); ledger != nil {
 			if err := ledger.Close(); err != nil {
 				slog.Warn("controller: close turn event ledger", "err", err)
+			}
+		}
+		service, runtime, exclusive := c.v3Binding()
+		if exclusive && runtime != nil {
+			c.releaseSessionRuntimeBinding(service)
+		} else if v3 := c.sessionEventStore(); v3 != nil {
+			c.turnEvents.mu.RLock()
+			release := c.turnEvents.v3Release
+			c.turnEvents.mu.RUnlock()
+			var err error
+			if release != nil {
+				err = release(context.Background())
+			} else {
+				err = v3.Close(context.Background())
+			}
+			if err != nil {
+				slog.Warn("controller: flush and close v3 session", "err", err)
 			}
 		}
 		if c.cleanup != nil {
@@ -5702,9 +5976,8 @@ func parseRewind(args string, cps []checkpoint.Meta) (int, RewindScope, error) {
 
 // requestApproval emits an ApprovalRequest and blocks until Approve(ID, …)
 // answers or ctx is cancelled. A prior session grant (or a bypass posture) for
-// the same approval scope short-circuits. The approvalManager's promptMu
-// serialises outstanding prompts; this method keeps the I/O (events, hooks,
-// remember) that the manager deliberately stays out of.
+// the same approval scope short-circuits. Each prompt waits independently;
+// this method keeps the I/O (events, hooks, remember) out of the registry.
 func (c *Controller) requestApproval(ctx context.Context, tool, subject string, args json.RawMessage) (bool, bool, error) {
 	return c.requestApprovalWithReason(ctx, tool, subject, args, "")
 }
@@ -5754,15 +6027,6 @@ func (c *Controller) requestApprovalDecisionWithOptions(ctx context.Context, too
 		return approvalReply{allow: true}, nil
 	}
 
-	c.approval.promptMu.Lock()
-	defer c.approval.promptMu.Unlock()
-
-	// Re-check: a session grant may have landed while we queued behind another
-	// prompt for the same subject.
-	if c.approval.preApprovedForDecisionOptions(tool, subject, args, opts.fresh, opts.requireHuman) {
-		return approvalReply{allow: true}, nil
-	}
-
 	// Claude's PermissionRequest contract answers the dialog on the plugin's
 	// behalf (auto-allow/auto-deny) instead of merely observing it, so a
 	// decision here must preempt the prompt rather than just notify — this
@@ -5786,6 +6050,12 @@ func (c *Controller) requestApprovalDecisionWithOptions(ctx context.Context, too
 	}
 
 	c.approval.promptEmitMu.Lock()
+	// Re-check at the publication boundary: a session grant may have landed
+	// after the initial policy check.
+	if c.approval.preApprovedForDecisionOptions(tool, subject, args, opts.fresh, opts.requireHuman) {
+		c.approval.promptEmitMu.Unlock()
+		return approvalReply{allow: true}, nil
+	}
 	var id string
 	var reply chan approvalReply
 	kind := ""

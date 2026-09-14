@@ -32,7 +32,7 @@ func (c *Controller) RunInboxTurn(ctx context.Context, id string) error {
 		_ = st.SetPaused(true)
 		return fmt.Errorf("%w: %s", sessioninbox.ErrInvalidState, block)
 	}
-	return c.runSynchronousTurn(ctx, func() error {
+	err = c.runSynchronousTurn(ctx, func() error {
 		c.inbox.admissionMu.Lock()
 		defer c.inbox.admissionMu.Unlock()
 		c.inbox.trackAdmission(id)
@@ -45,6 +45,10 @@ func (c *Controller) RunInboxTurn(ctx context.Context, id string) error {
 		c.inbox.mu.Unlock()
 		return nil
 	}, run)
+	if err != nil {
+		return err
+	}
+	return c.waitForGoalTerminal(ctx)
 }
 
 func (c *Controller) prepareInboxRun(env sessioninbox.PromptEnvelope) (func(context.Context) error, string, error) {

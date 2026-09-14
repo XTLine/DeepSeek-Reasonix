@@ -38,8 +38,8 @@ func TestToolResultDurabilityFailureStopsNextWriter(t *testing.T) {
 		t.Fatalf("err=%v calls=%d,%d", batch.err, first, second)
 	}
 	msgs := session.Snapshot()
-	if msgs[2].ToolRunState != provider.ToolRunCompleted || msgs[3].ToolRunState != provider.ToolRunNotStarted {
-		t.Fatalf("states=%+v", msgs)
+	if len(msgs) != 2 {
+		t.Fatalf("failed authoritative result append changed legacy transcript: %+v", msgs)
 	}
 }
 

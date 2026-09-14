@@ -94,7 +94,7 @@ func (g *goalMachine) writeStateErr(path string, data []byte) error {
 	return writeGoalStateData(path, data)
 }
 
-func (g *goalMachine) writeStateAtEpoch(epoch uint64, todos []evidence.TodoItem) (bool, error) {
+func (g *goalMachine) writeStateAtEpoch(epoch uint64) (bool, error) {
 	g.writeMu.Lock()
 	defer g.writeMu.Unlock()
 	g.mu.Lock()
@@ -102,7 +102,7 @@ func (g *goalMachine) writeStateAtEpoch(epoch uint64, todos []evidence.TodoItem)
 		g.mu.Unlock()
 		return false, nil
 	}
-	path, data, ok := g.buildStateLocked(todos)
+	path, data, ok := g.buildStateLocked()
 	g.mu.Unlock()
 	if !ok {
 		return true, nil

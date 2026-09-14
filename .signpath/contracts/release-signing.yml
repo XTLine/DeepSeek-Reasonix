@@ -14,6 +14,7 @@ fingerprint_files:
   - .signpath/artifact-configurations/windows-payload.xml
   - .signpath/artifact-configurations/windows-installer-v2.xml
   - scripts/complete-signpath-request.ps1
+  - scripts/signpath-checkpoint.mjs
   - scripts/package-windows-desktop.sh
   - scripts/verify-windows-authenticode.ps1
   - cmd/signpath-contract/main.go

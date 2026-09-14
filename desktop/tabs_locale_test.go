@@ -223,25 +223,6 @@ func installLocaleTestCatalog(t *testing.T, app *App) *sessioncatalog.Catalog {
 	return catalog
 }
 
-func TestCatalogTopicTitleLocalizesAtSidebarBoundary(t *testing.T) {
-	isolateDesktopUserDirs(t)
-	app := NewApp()
-	app.projectTreeChangedHook = func() {}
-	app.setDesktopLocale("en-US")
-
-	if _, err := app.EnsureBlankTab("global", ""); err != nil {
-		t.Fatalf("EnsureBlankTab: %v", err)
-	}
-	catalog := installLocaleTestCatalog(t, app)
-	page, err := app.catalogTopicPage(catalog, ProjectTopicPageRequest{Scope: "global", WorkspaceRoot: "", Limit: 100})
-	if err != nil {
-		t.Fatalf("catalogTopicPage: %v", err)
-	}
-	if len(page.Items) != 1 || page.Items[0].Label != defaultTopicTitleEn {
-		t.Fatalf("catalog sidebar label = %+v, want localized %q", page.Items, defaultTopicTitleEn)
-	}
-}
-
 func TestCatalogManualDefaultTitleIsNotLocalized(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	app := NewApp()

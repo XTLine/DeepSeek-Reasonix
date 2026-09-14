@@ -13,6 +13,32 @@ trap cleanup EXIT
 
 # Stable tags have one entrypoint and one protected environment. Reusable
 # publishers must verify that only that entrypoint can claim prior approval.
+# The manual exception is immutable-candidate scoped and cannot advance any
+# Desktop update entry point. Keep normal signing as the default.
+python3 - "$repo_root" <<'PY'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+stable = (root / '.github/workflows/release-stable.yml').read_text()
+desktop = (root / '.github/workflows/release-desktop.yml').read_text()
+publisher = (root / 'scripts/publish-desktop-github-release.sh').read_text()
+for workflow in (stable, desktop):
+    block = workflow.split('      desktop_manual_only:', 1)[1].split('\n\n', 1)[0]
+    assert 'default: false' in block
+    assert '7278072720a2dc7a31cce0eec18c1eacc149c0e0' in workflow
+assert stable.count('desktop_manual_only: ${{ inputs.desktop_manual_only || false }}') == 2
+assert "HAS_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' && !inputs.desktop_manual_only }}" in desktop
+assert desktop.index('name: Validate signing mode') < desktop.index('name: Build and package')
+assert "inputs.orchestrated }}\" != \"true\"" in desktop
+assert 'manual-download only' in desktop
+manual_exit = desktop.index('if [ "$DESKTOP_MANUAL_ONLY" = "true" ]; then', desktop.index('name: Mirror immutable assets'))
+assert manual_exit < desktop.index('validate_current_pointer()', manual_exit)
+assert 'pointer_moved=false' in desktop[manual_exit:manual_exit + 350]
+attach = desktop.split('name: Attach desktop manifest to matching CLI release', 1)[1].split('env:', 1)[0]
+assert '!inputs.desktop_manual_only' in attach
+manual_publish = publisher.split('if [ "${DESKTOP_MANUAL_ONLY:-false}" = "true" ]; then', 1)[1].split('elif', 1)[0]
+assert 'desktop-v1.38.8' in manual_publish and 'args+=(--latest=false)' in manual_publish
+assert 'name: Sign artifacts (minisign)' in desktop
+PY
 [ "$(grep -Ec '^    environment: release$' "$repo_root/.github/workflows/release-stable.yml")" = "1" ]
 relay="$repo_root/.github/workflows/release-stable-trigger.yml"
 grep -Eq 'actions: write' "$relay"

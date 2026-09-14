@@ -870,6 +870,7 @@ func TestServeAdvertisesCommandsAfterEverySessionOpenResponse(t *testing.T) {
 	client.send(t, 4, "session/load", SessionLoadParams{SessionID: persistedID, Cwd: sessionDir})
 	requireResponseFrame(t, client.next(t), 4)
 	requireAvailableCommandsFrame(t, client.next(t))
+	requirePlanFrame(t, client.next(t))
 
 	client.send(t, 5, "session/close", SessionCloseParams{SessionID: persistedID})
 	requireResponseFrame(t, client.next(t), 5)
@@ -877,6 +878,23 @@ func TestServeAdvertisesCommandsAfterEverySessionOpenResponse(t *testing.T) {
 	client.send(t, 6, "session/resume", SessionResumeParams{SessionID: persistedID, Cwd: sessionDir})
 	requireResponseFrame(t, client.next(t), 6)
 	requireAvailableCommandsFrame(t, client.next(t))
+	requirePlanFrame(t, client.next(t))
+}
+
+func requirePlanFrame(t *testing.T, got frame) {
+	t.Helper()
+	if got.Method != "session/update" || got.ID != nil {
+		t.Fatalf("frame = %+v, want plan session/update notification", got)
+	}
+	var params struct {
+		Update planUpdate `json:"update"`
+	}
+	if err := json.Unmarshal(got.Params, &params); err != nil {
+		t.Fatalf("decode plan frame: %v", err)
+	}
+	if params.Update.SessionUpdate != "plan" {
+		t.Fatalf("session update = %q, want plan", params.Update.SessionUpdate)
+	}
 }
 
 func TestServeSessionConfigSwitchesModelAndEffort(t *testing.T) {

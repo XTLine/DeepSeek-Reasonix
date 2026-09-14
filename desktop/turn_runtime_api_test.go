@@ -121,11 +121,11 @@ func TestInterruptTurnForTabStopsActiveWorkDespiteStaleTurnID(t *testing.T) {
 	app := &App{tabs: map[string]*WorkspaceTab{tab.ID: tab}, activeTabID: tab.ID}
 	sink.app = app
 
-	if err := app.InterruptTurnForTab(tab.ID, "turn_none"); !errors.Is(err, errTurnNotRunning) {
-		t.Fatalf("idle stop = %v, want %v", err, errTurnNotRunning)
+	if err := app.InterruptTurnForTab(tab.ID, "turn_none"); err != nil {
+		t.Fatalf("idle stop = %v, want idempotent success", err)
 	}
-	if err := app.InterruptTurnForTab(tab.ID, "turn_none"); err == nil || err.Error() != "reasonix_error:turn_not_running" {
-		t.Fatalf("idle stop wire error = %v, want stable reasonix_error code", err)
+	if receipt, err := app.CancelSessionForTab(tab.ID); err != nil || !receipt.Accepted || !receipt.AlreadyIdle {
+		t.Fatalf("idle cancel receipt = %+v, %v", receipt, err)
 	}
 
 	if _, err := app.StartTurnForTab(tab.ID, "hold this turn", "submission-1"); err != nil {

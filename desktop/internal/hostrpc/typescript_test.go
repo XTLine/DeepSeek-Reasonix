@@ -39,7 +39,7 @@ func TestWriteTypeScriptEmitsContractDeclarations(t *testing.T) {
 		t.Fatalf("header = %.80q", out)
 	}
 	for _, want := range []string{
-		"export const DESKTOP_PROTOCOL_VERSION = 1;",
+		"export const DESKTOP_PROTOCOL_VERSION = 6;",
 		`export const DESKTOP_CONTRACT_DIGEST = "` + c.Digest() + `";`,
 		"export const DESKTOP_COMMANDS = [\n  \"List\",\n  \"Others\",\n  \"Reset\",\n  \"Save\",\n  \"Version\",\n] as const;",
 		"export const DESKTOP_EVENTS = [\n  \"agent:event\",\n  \"runtime:rebuilt\",\n] as const;",

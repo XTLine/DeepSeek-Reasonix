@@ -67,7 +67,7 @@ class FakeChild extends EventEmitter {
       this.send({
         id: frame.id,
         result: {
-          protocolVersion: 1,
+          protocolVersion: 3,
           contractDigest: "sha256:abc",
           service: { version: "dev", channel: "dev", commit: "dev", pid: 1 },
           runtimeGeneration: this.generation,

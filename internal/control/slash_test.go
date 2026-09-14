@@ -226,7 +226,7 @@ func TestMemoryListTextIncludesSavedMemories(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	c := New(Options{Memory: &memory.Set{Store: store}})
+	c := newOwnedTestController(t, Options{Memory: &memory.Set{Store: store}})
 	out := MemoryCommandText(c, "")
 	for _, want := range []string{"saved memories", "[Cache first](cache-first.md)", "Preserve prompt cache stability"} {
 		if !strings.Contains(out, want) {
@@ -250,7 +250,7 @@ func TestMemoryListTextIncludesArchivedMemories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := New(Options{Memory: &memory.Set{Store: store}})
+	c := newOwnedTestController(t, Options{Memory: &memory.Set{Store: store}})
 	out := MemoryCommandText(c, "")
 	for _, want := range []string{"archived memories", "[Stale plan](" + archive + ")", "Superseded by the new retrieval design"} {
 		if !strings.Contains(out, want) {
@@ -284,7 +284,7 @@ func TestMemoryListTextIncludesEveryScopeAndObservableMetadata(t *testing.T) {
 	}
 
 	store := memory.Store{Dir: projectDir, GlobalDir: globalDir}
-	c := New(Options{Memory: &memory.Set{Store: store}})
+	c := newOwnedTestController(t, Options{Memory: &memory.Set{Store: store}})
 	out := MemoryCommandText(c, "")
 	for _, want := range []string{
 		globalSaved.Memory.ID,
@@ -318,7 +318,7 @@ func TestManagementMemoryRecallAndInstructionDiagnostics(t *testing.T) {
 		}},
 	}
 	var notices []string
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Memory: set,
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.Notice {
@@ -385,7 +385,7 @@ func TestManagementMemoryRevisionRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	var notices []string
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Memory: &memory.Set{Store: store, CWD: cwd, UserDir: userDir},
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.Notice {
@@ -431,7 +431,7 @@ func TestManagementMemoryArchiveRecoveryAcceptsQuotedPathWithSpaces(t *testing.T
 		t.Fatal(err)
 	}
 	var notices []string
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Memory: &memory.Set{Store: store, CWD: cwd, UserDir: userDir},
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.Notice {
@@ -464,7 +464,7 @@ func TestManagementMemoryArchiveRecoveryAcceptsQuotedPathWithSpaces(t *testing.T
 func TestManagementHooksTrustCompatibilityNotice(t *testing.T) {
 	isolateControlConfigHome(t)
 	var notices []string
-	c := New(Options{Sink: event.FuncSink(func(e event.Event) {
+	c := newOwnedTestController(t, Options{Sink: event.FuncSink(func(e event.Event) {
 		if e.Kind == event.Notice {
 			notices = append(notices, e.Text)
 		}
@@ -480,7 +480,7 @@ func TestManagementHooksTrustCompatibilityNotice(t *testing.T) {
 func TestManagementMigrateEmitsProgress(t *testing.T) {
 	isolateControlConfigHome(t)
 	var notices []string
-	c := New(Options{Sink: event.FuncSink(func(e event.Event) {
+	c := newOwnedTestController(t, Options{Sink: event.FuncSink(func(e event.Event) {
 		if e.Kind == event.Notice {
 			notices = append(notices, e.Text)
 		}
@@ -512,7 +512,7 @@ func TestManagementMigrateFromImportsExplicitSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	var notices []string
-	c := New(Options{Sink: event.FuncSink(func(e event.Event) {
+	c := newOwnedTestController(t, Options{Sink: event.FuncSink(func(e event.Event) {
 		if e.Kind == event.Notice {
 			notices = append(notices, e.Text)
 		}

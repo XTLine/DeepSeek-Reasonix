@@ -17,7 +17,7 @@ func TestTurnOrchestratorUserTextMatchingLegacySyntheticPrefixKeepsUserOrigin(t 
 	sess := agent.NewSession("sys")
 	prov := &scriptedTurns{turns: [][]provider.Chunk{textTurn("done")}}
 	exec := agent.New(prov, tool.NewRegistry(), sess, agent.Options{}, event.Discard)
-	c := New(Options{Runner: exec, Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Runner: exec, Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 
 	raw := agent.CompletionValidationContinuationPrefix + " give me a plan only"
 	if !IsSyntheticUserMessage(raw) {
@@ -40,7 +40,7 @@ func TestComposedSyntheticTurnPersistsHostOriginWithoutKeywordFallback(t *testin
 	sess := agent.NewSession("sys")
 	prov := &scriptedTurns{turns: [][]provider.Chunk{textTurn("done")}}
 	exec := agent.New(prov, tool.NewRegistry(), sess, agent.Options{}, event.Discard)
-	c := New(Options{Runner: exec, Executor: exec, Label: "test"})
+	c := newOwnedTestController(t, Options{Runner: exec, Executor: exec, Label: "test"})
 
 	const synthetic = "ordinary looking continuation"
 	if IsSyntheticUserMessage(synthetic) {

@@ -7,7 +7,7 @@ import { useOverlayStore } from "../store/overlays";
 import type { Translator } from "../lib/i18n";
 import type { Item, LiveStream } from "../lib/useController";
 
-export type SessionExportFormat = "markdown" | "json" | "pdf" | "image";
+export type SessionExportFormat = "markdown" | "json" | "pdf" | "image" | "diagnostic";
 
 /**
  * Owns the session export commands (markdown/json/pdf/image file pickers and
@@ -50,7 +50,10 @@ export function useSessionExportCommands(input: {
     const base = safeFilename(sessionTitle);
     setTopicExportOpen(false);
     try {
-      if (format === "json") {
+      if (format === "diagnostic") {
+        const path = await app.ExportGoalDiagnostics();
+        if (path) showToast(t("topicBar.exportSuccess", { count: 1 }), "info");
+      } else if (format === "json") {
         const path = await app.PickExportFile(`${base}.json`, "application/json");
         if (path) {
           await app.SaveExportFile(path, await getSessionJson(), false);

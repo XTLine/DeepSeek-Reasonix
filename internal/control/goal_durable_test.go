@@ -13,7 +13,7 @@ func TestSetGoalDurableRollsBackAllRuntimeStateOnWriteFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	exec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 	c.SetGoal("keep the old goal")
 	c.goals.mu.Lock()
 	c.goals.turnsUsed = 7
@@ -45,7 +45,7 @@ func TestSetGoalDurableRollsBackAllRuntimeStateOnWriteFailure(t *testing.T) {
 
 func TestApplyComposerProfileIsTransactionalAndPreservesMatchingGoal(t *testing.T) {
 	dir := t.TempDir()
-	c := New(Options{SessionDir: dir, SessionPath: filepath.Join(dir, "session.jsonl"), Label: "test"})
+	c := newOwnedTestController(t, Options{SessionDir: dir, SessionPath: filepath.Join(dir, "session.jsonl"), Label: "test"})
 	if err := c.SetGoalDurable("keep the old goal"); err != nil {
 		t.Fatal(err)
 	}

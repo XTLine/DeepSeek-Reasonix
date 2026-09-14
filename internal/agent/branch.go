@@ -88,8 +88,6 @@ type BranchMeta struct {
 	HeadCount     int    `json:"head_count,omitempty"`
 	LogSchema     int    `json:"log_schema,omitempty"`
 	LogGeneration int64  `json:"log_generation,omitempty"`
-	// Closed completed todo shelves; desktop remounts hide the same fingerprint.
-	DismissedTodoBatches []string `json:"dismissed_todo_batches,omitempty"`
 }
 
 // SessionVersionKind is the durable identity class of a physical transcript.
@@ -351,7 +349,6 @@ func preserveBranchMetaPersistence(next *BranchMeta, existing BranchMeta) {
 	if next == nil {
 		return
 	}
-	next.DismissedTodoBatches = MergeDismissedTodoBatches(existing.DismissedTodoBatches, next.DismissedTodoBatches)
 	if existing.Revision > next.Revision {
 		next.Revision = existing.Revision
 		next.ContentDigest = existing.ContentDigest

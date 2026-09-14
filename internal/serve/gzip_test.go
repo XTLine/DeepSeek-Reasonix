@@ -92,6 +92,28 @@ func TestGzipMiddlewareKeepsSmallResponsesPlain(t *testing.T) {
 	if rr.Body.String() != "small" {
 		t.Fatalf("small body = %q", rr.Body.String())
 	}
+	if got := rr.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+		t.Fatalf("small response Content-Type = %q", got)
+	}
+	if got := rr.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("small response X-Content-Type-Options = %q", got)
+	}
+}
+
+func TestGzipMiddlewareDoesNotRenderUntypedReflectedHTML(t *testing.T) {
+	h := gzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(r.URL.Query().Get("value")))
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/status?value=%3Cscript%3Ealert(1)%3C/script%3E", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if got := rr.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+		t.Fatalf("reflected response Content-Type = %q", got)
+	}
+	if got := rr.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("reflected response X-Content-Type-Options = %q", got)
+	}
 }
 
 func TestGzipMiddlewareHonorsDisabledEncoding(t *testing.T) {
@@ -106,5 +128,34 @@ func TestGzipMiddlewareHonorsDisabledEncoding(t *testing.T) {
 		if got := rr.Header().Get("Content-Encoding"); got != "" {
 			t.Fatalf("Accept-Encoding %q produced %q", encoding, got)
 		}
+	}
+}
+
+func TestGzipPlainWritesPreserveDeclaredMediaType(t *testing.T) {
+	for _, mediaType := range []string{"", "application/json", "text/html; charset=utf-8", "application/octet-stream"} {
+		t.Run(mediaType, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			if mediaType != "" {
+				rr.Header().Set("Content-Type", mediaType)
+			}
+			writer := &gzipBufferedWriter{ResponseWriter: rr}
+			writer.startPlain()
+			payload := []byte("<script>alert(1)</script>")
+			if _, err := writer.Write(payload); err != nil {
+				t.Fatal(err)
+			}
+			response := rr.Result()
+			defer response.Body.Close()
+			wantType := mediaType
+			if wantType == "" {
+				wantType = "text/plain; charset=utf-8"
+			}
+			if got := response.Header.Get("Content-Type"); got != wantType {
+				t.Fatalf("committed content type = %q, want %q", got, wantType)
+			}
+			if response.Header.Get("X-Content-Type-Options") != "nosniff" || !bytes.Equal(rr.Body.Bytes(), payload) {
+				t.Fatal("plain write changed payload or omitted nosniff")
+			}
+		})
 	}
 }

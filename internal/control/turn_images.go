@@ -28,12 +28,6 @@ func (c *Controller) imagesForOrchestratedTurn(ctx context.Context, turn orchest
 	if turn.imagesResolved {
 		return turn.userImages, turn.imageCandidates
 	}
-	if turn.goalContinuation != nil {
-		// A Goal continuation belongs to the same visible user turn, so keep its
-		// child-only image candidates. Do not add them to the synthetic parent
-		// message: a vision parent already has the image in its earlier history.
-		return nil, agent.SubagentImageCandidates(ctx)
-	}
 	return c.resolveTurnImages(turn.imageReferenceInput())
 }
 

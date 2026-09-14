@@ -740,6 +740,20 @@
       ]
     }
   },
+  "CancelSessionForTab": {
+    "domain": "desktop/turn_runtime_api.go",
+    "owner": "App.CancelSessionForTab",
+    "sources": [
+      "desktop/turn_runtime_api.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.CancelSessionForTab",
+      "inputs": [
+        "tabID"
+      ]
+    }
+  },
   "CancelShellInstall": {
     "domain": "desktop/shell_support.go",
     "owner": "App.CancelShellInstall",
@@ -1009,10 +1023,10 @@
     }
   },
   "ClearGoalForTab": {
-    "domain": "desktop/app.go",
+    "domain": "desktop/goal_app.go",
     "owner": "App.ClearGoalForTab",
     "sources": [
-      "desktop/app.go"
+      "desktop/goal_app.go"
     ],
     "scope": {
       "kind": "owner-inputs",
@@ -1708,18 +1722,35 @@
       ]
     }
   },
-  "DismissTodoBatchForTab": {
-    "domain": "desktop/todo_dismissal.go",
-    "owner": "App.DismissTodoBatchForTab",
+  "EditGoalForTab": {
+    "domain": "desktop/goal_app.go",
+    "owner": "App.EditGoalForTab",
     "sources": [
-      "desktop/todo_dismissal.go"
+      "desktop/goal_app.go"
     ],
     "scope": {
       "kind": "owner-inputs",
-      "resolver": "App.DismissTodoBatchForTab",
+      "resolver": "App.EditGoalForTab",
       "inputs": [
         "tabID",
-        "batchKey"
+        "objective",
+        "maxGoalRounds"
+      ]
+    }
+  },
+  "EditRemoteTabGoal": {
+    "domain": "desktop/remote_goal_edit.go",
+    "owner": "App.EditRemoteTabGoal",
+    "sources": [
+      "desktop/remote_goal_edit.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.EditRemoteTabGoal",
+      "inputs": [
+        "tabID",
+        "objective",
+        "maxGoalRounds"
       ]
     }
   },
@@ -1880,6 +1911,18 @@
         "hostID",
         "workspace"
       ]
+    }
+  },
+  "ExportGoalDiagnostics": {
+    "domain": "desktop/goal_diagnostics_export.go",
+    "owner": "App.ExportGoalDiagnostics",
+    "sources": [
+      "desktop/goal_diagnostics_export.go"
+    ],
+    "scope": {
+      "kind": "owner-state",
+      "resolver": "App.ExportGoalDiagnostics",
+      "inputs": []
     }
   },
   "ExportScrollDiagnostics": {
@@ -3833,10 +3876,10 @@
     }
   },
   "PauseGoalForTab": {
-    "domain": "desktop/app.go",
+    "domain": "desktop/goal_app.go",
     "owner": "App.PauseGoalForTab",
     "sources": [
-      "desktop/app.go"
+      "desktop/goal_app.go"
     ],
     "scope": {
       "kind": "owner-inputs",
@@ -4574,6 +4617,23 @@
       ]
     }
   },
+  "RemoteSearchSessionHistoryForTab": {
+    "domain": "desktop/remote_transcript_api.go",
+    "owner": "App.RemoteSearchSessionHistoryForTab",
+    "sources": [
+      "desktop/remote_transcript_api.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.RemoteSearchSessionHistoryForTab",
+      "inputs": [
+        "tabID",
+        "textQuery",
+        "cursor",
+        "limit"
+      ]
+    }
+  },
   "RemoteServerLogs": {
     "domain": "desktop/remote_app.go",
     "owner": "App.RemoteServerLogs",
@@ -4602,6 +4662,38 @@
       "inputs": [
         "hostID",
         "workspace"
+      ]
+    }
+  },
+  "RemoteSessionHistoryContentForTab": {
+    "domain": "desktop/remote_transcript_api.go",
+    "owner": "App.RemoteSessionHistoryContentForTab",
+    "sources": [
+      "desktop/remote_transcript_api.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.RemoteSessionHistoryContentForTab",
+      "inputs": [
+        "tabID",
+        "ref",
+        "offset"
+      ]
+    }
+  },
+  "RemoteSessionHistoryPageForTab": {
+    "domain": "desktop/remote_transcript_api.go",
+    "owner": "App.RemoteSessionHistoryPageForTab",
+    "sources": [
+      "desktop/remote_transcript_api.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.RemoteSessionHistoryPageForTab",
+      "inputs": [
+        "tabID",
+        "cursor",
+        "limit"
       ]
     }
   },
@@ -5533,10 +5625,10 @@
     }
   },
   "ResumeGoalForTab": {
-    "domain": "desktop/app.go",
+    "domain": "desktop/goal_app.go",
     "owner": "App.ResumeGoalForTab",
     "sources": [
-      "desktop/app.go"
+      "desktop/goal_app.go"
     ],
     "scope": {
       "kind": "owner-inputs",
@@ -6281,6 +6373,55 @@
       ]
     }
   },
+  "SearchSessionHistoryForTab": {
+    "domain": "desktop/session_history_service.go",
+    "owner": "App.SearchSessionHistoryForTab",
+    "sources": [
+      "desktop/session_history_service.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.SearchSessionHistoryForTab",
+      "inputs": [
+        "tabID",
+        "textQuery",
+        "cursor",
+        "limit"
+      ]
+    }
+  },
+  "SessionHistoryContentForTab": {
+    "domain": "desktop/session_history_service.go",
+    "owner": "App.SessionHistoryContentForTab",
+    "sources": [
+      "desktop/session_history_service.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.SessionHistoryContentForTab",
+      "inputs": [
+        "tabID",
+        "ref",
+        "offset"
+      ]
+    }
+  },
+  "SessionHistoryPageForTab": {
+    "domain": "desktop/session_history_service.go",
+    "owner": "App.SessionHistoryPageForTab",
+    "sources": [
+      "desktop/session_history_service.go"
+    ],
+    "scope": {
+      "kind": "owner-inputs",
+      "resolver": "App.SessionHistoryPageForTab",
+      "inputs": [
+        "tabID",
+        "cursor",
+        "limit"
+      ]
+    }
+  },
   "SetActiveSessionVersion": {
     "domain": "desktop/recovery_lineage.go",
     "owner": "App.SetActiveSessionVersion",
@@ -6785,10 +6926,10 @@
     }
   },
   "SetGoal": {
-    "domain": "desktop/app.go",
+    "domain": "desktop/goal_app.go",
     "owner": "App.SetGoal",
     "sources": [
-      "desktop/app.go"
+      "desktop/goal_app.go"
     ],
     "scope": {
       "kind": "owner-inputs",
@@ -6799,10 +6940,10 @@
     }
   },
   "SetGoalForTab": {
-    "domain": "desktop/app.go",
+    "domain": "desktop/goal_app.go",
     "owner": "App.SetGoalForTab",
     "sources": [
-      "desktop/app.go"
+      "desktop/goal_app.go"
     ],
     "scope": {
       "kind": "owner-inputs",

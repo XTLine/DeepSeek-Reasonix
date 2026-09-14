@@ -41,6 +41,11 @@ func (a *App) ResolveToolRecoveryForTab(tabID string, req control.ToolRecoveryRe
 }
 
 func (a *App) remoteToolRecovery(tabID string, req *control.ToolRecoveryRequest) (control.ToolRecoverySnapshot, error) {
+	if req != nil {
+		if err := a.requireRemoteExecutionProtocol(tabID); err != nil {
+			return control.ToolRecoverySnapshot{}, err
+		}
+	}
 	client, base, path, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return control.ToolRecoverySnapshot{}, err

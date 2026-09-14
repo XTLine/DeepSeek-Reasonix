@@ -58,6 +58,7 @@ import (
 	"reasonix/internal/provider"
 	"reasonix/internal/sandbox"
 	"reasonix/internal/secrets"
+	"reasonix/internal/session"
 	"reasonix/internal/sessioncontext"
 	"reasonix/internal/sessiontemp"
 	"reasonix/internal/skill"
@@ -148,6 +149,13 @@ type Options struct {
 	// SessionDir overrides where persisted chat transcripts are written. When
 	// empty, the shared CLI/global session directory is used.
 	SessionDir string
+	// SessionService is shared by all controllers on one host. Rebuild injects
+	// the previous service and runtime so changing model/settings replaces only
+	// the Agent while the immutable session identity and writer remain owned by
+	// the same SessionRuntime.
+	SessionService *session.Service
+	SessionRuntime *session.Runtime
+	SessionHostID  string
 	// SharedHost is an optional plugin.Host shared across controllers for the
 	// same workspace root. When set, boot.Build reuses its running clients
 	// instead of creating new subprocesses, and the caller manages the host's
@@ -568,6 +576,14 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 	if sessionDir == "" {
 		sessionDir = config.SessionDir()
 	}
+	// The host owns the final-format SessionService. Boot only attaches an
+	// Agent to the exact service/runtime it receives; constructing a service
+	// here would create competing registries over the same writer files during
+	// model switches or multi-tab startup.
+	sessionService := opts.SessionService
+	if opts.SessionRuntime != nil && sessionService == nil {
+		return nil, errors.New("v3 session runtime requires a session service")
+	}
 	reconcileCleanupPending := opts.CleanupPendingReconciler
 	if reconcileCleanupPending == nil {
 		reconcileCleanupPending = control.ReconcileCleanupPending
@@ -641,18 +657,27 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 	sysPrompt = memory.Compose(sysPrompt, mem)
 
 	implicitSkillInvocation := cfg.ImplicitSkillInvocationEnabled()
+	// A controller owns its production skill watcher and closes it with the
+	// controller. Go package tests routinely construct short-lived controllers
+	// without exercising host teardown; starting one kqueue/inotify instance per
+	// fixture would exhaust process descriptors before the suite completes.
+	// Store-level watcher tests opt in directly and still cover invalidation.
+	watchSkills := !strings.HasSuffix(strings.TrimSuffix(os.Args[0], ".exe"), ".test")
 	// Skills: rediscovery skipped on no-op/interceptor/UI rebuilds when
 	// ReuseAssembly is retained from the previous BuildResult.
 	var skillStore *skill.Store
 	var skills []skill.Skill
 	var allSkillStore *skill.Store
 	var allSkills []skill.Skill
+	skillCleanup := func() { closeSkillStores(skillStore, allSkillStore) }
+	skillsOwned := false
+	defer closeUnownedSkills(&skillsOwned, skillCleanup)
 	canReuseSkills := opts.ReuseAssembly != nil && shouldReuseDiscovery(opts.PreviousPlan) &&
 		opts.ReuseAssembly.ImplicitSkillInvocation == implicitSkillInvocation
 	if canReuseSkills {
 		skills = opts.ReuseAssembly.Skills
 		allSkills = skills
-		skillStore = skill.New(skill.Options{ProjectRoot: root, Stderr: io.Discard})
+		skillStore = skill.New(skill.Options{ProjectRoot: root, Stderr: io.Discard, Watch: watchSkills})
 		allSkillStore = skillStore
 		if s := strings.TrimSpace(opts.ReuseAssembly.SystemPrompt); s != "" {
 			sysPrompt = s
@@ -661,11 +686,11 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 		skillStore = skill.New(skill.Options{
 			ProjectRoot: root, CustomPaths: cfg.SkillCustomPaths(), PluginPaths: cfg.PluginPackageSkillOwners(),
 			PluginAgentPaths: cfg.PluginPackageAgentOwners(), ExcludedPaths: cfg.SkillExcludedPaths(),
-			DisabledNames: cfg.DisabledSkillNames(), MaxDepth: cfg.SkillMaxDepth(), Stderr: opts.Stderr,
+			DisabledNames: cfg.DisabledSkillNames(), MaxDepth: cfg.SkillMaxDepth(), Stderr: opts.Stderr, Watch: watchSkills,
 		})
 		skillStore.ConfigureInvocationPolicy("", nil)
 		skills = skillStore.List()
-		allSkillStore = skill.New(skill.Options{ProjectRoot: root, CustomPaths: cfg.SkillCustomPaths(), PluginPaths: cfg.PluginPackageSkillOwners(), PluginAgentPaths: cfg.PluginPackageAgentOwners(), ExcludedPaths: cfg.SkillExcludedPaths(), MaxDepth: cfg.SkillMaxDepth(), Stderr: io.Discard})
+		allSkillStore = skill.New(skill.Options{ProjectRoot: root, CustomPaths: cfg.SkillCustomPaths(), PluginPaths: cfg.PluginPackageSkillOwners(), PluginAgentPaths: cfg.PluginPackageAgentOwners(), ExcludedPaths: cfg.SkillExcludedPaths(), MaxDepth: cfg.SkillMaxDepth(), Stderr: io.Discard, Watch: watchSkills})
 		allSkills = allSkillStore.List()
 		if implicitSkillInvocation {
 			sysPrompt += "\n\n" + skill.InvocationPolicyBlock()
@@ -911,12 +936,15 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 		sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: msg})
 	}
 
-	cleanup := pluginHost.Close
+	cleanup := func() {
+		skillCleanup()
+		pluginHost.Close()
+	}
 	if opts.SharedHost != nil {
 		// The caller owns the shared host's lifecycle; the controller must not
 		// close it. A no-op cleanup keeps Controller.Close happy without
 		// shutting down MCP processes that other controllers still use.
-		cleanup = func() {}
+		cleanup = skillCleanup
 	}
 
 	// addTools registers tools on reg and returns the names that were added.
@@ -1606,14 +1634,17 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 				failedNow[failure.Name] = failure.Error
 			}
 		}
+		skillSnapshot, skillSnapshotErr := skillStore.Snapshot(ctx)
 		catOpts := capability.CatalogOptions{
-			Tools:       reg.AllContractEntries(),
-			Skills:      skillStore.List(),
-			Plugins:     cfg.Plugins,
-			Connected:   conn,
-			Failed:      failedNow,
-			CachedTools: cachedTools,
-			CacheKeyOK:  cacheKeyOK,
+			Tools:             reg.AllContractEntries(),
+			Skills:            skillSnapshot.Candidates,
+			Plugins:           cfg.Plugins,
+			Connected:         conn,
+			Failed:            failedNow,
+			CachedTools:       cachedTools,
+			CacheKeyOK:        cacheKeyOK,
+			CatalogIncomplete: skillSnapshotErr != nil || !skillSnapshot.Complete,
+			CatalogStale:      skillSnapshot.Stale,
 		}
 		if capRuntime != nil {
 			catOpts.Plugins, catOpts.CachedTools, catOpts.CacheKeyOK, catOpts.Disabled, catOpts.ProxyTools = capRuntime.CapabilityCatalogState()
@@ -1697,7 +1728,30 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 		MaxSubagentDepth:             maxSubagentDepth,
 		MissingReasoningWarnStateDir: config.MissingReasoningWarnStateDir(),
 	}, sink)
-	reg.Add(sessiontool.NewSetSessionTitleTool(sessionDir, executor.SessionPath, opts.OnSessionTitleChanged))
+	reg.Add(sessiontool.NewSetSessionTitleEventTool(
+		func() string {
+			if controller := ctrlRef.Load(); controller != nil {
+				if ref, ok := controller.SessionRef(); ok {
+					return ref.SessionID
+				}
+			}
+			return ""
+		},
+		func(ctx context.Context, title string) error {
+			controller := ctrlRef.Load()
+			if controller == nil {
+				return errors.New("current session is unavailable")
+			}
+			if err := controller.SetSessionTitle(ctx, title); err != nil {
+				return err
+			}
+			if opts.OnSessionTitleChanged != nil {
+				ref, _ := controller.SessionRef()
+				return opts.OnSessionTitleChanged(sessionDir, ref.SessionID, title)
+			}
+			return nil
+		},
+	))
 
 	var runner agent.Runner = executor
 	label := entry.Model
@@ -1788,6 +1842,9 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 		SystemPrompt:                   sysPrompt,
 		PinnedContextLoader:            opts.PinnedContextLoader,
 		SessionDir:                     sessionDir,
+		SessionService:                 sessionService,
+		SessionRuntime:                 opts.SessionRuntime,
+		ExclusiveSession:               sessionService != nil,
 		Host:                           pluginHost,
 		Commands:                       cmds,
 		Skills:                         skills,
@@ -1979,6 +2036,9 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 	if extensionResolver != nil {
 		providerResolver = extensionResolver
 	}
+	if runtimeSet != nil && runtimeSet.Len() > 0 {
+		_ = extension.TrackWatcher(runtimeSet.Scope(), "skill-catalogs", func() error { skillCleanup(); return nil })
+	}
 	cleanup = wireRuntimeScopeCleanup(runtimeSet, cleanup, opts.SharedHost, pluginHost, lspMgr, opts.SessionTemp)
 	ctrl.SetExtensions(extensionDispatcher)
 	if extensionMgr == nil {
@@ -2007,6 +2067,7 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 		Registry:                reg,
 		ImplicitSkillInvocation: implicitSkillInvocation,
 	}
+	skillsOwned = true
 	return finalizeBuildResult(&BuildResult{Controller: ctrl, Snapshot: snap, Runtime: runtimeSet, Owner: owner, Extensions: extensionMgr, Dispatcher: extensionDispatcher, ExtensionUI: extUIHub, ProviderResolver: providerResolver, BaseProviderResolver: baseResolver, Assembly: assembly}, !opts.deferPublish), nil
 }
 

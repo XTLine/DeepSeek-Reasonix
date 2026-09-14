@@ -104,6 +104,8 @@ func (m *chatTUI) consumeAgentEvent(e event.Event, drained *agentEventDrain) {
 	// Record before ingest so TurnDone still counts as an active heartbeat.
 	m.noteWatchdogHeartbeat(watchdogAgentSource(e.Kind))
 	if e.Kind == event.TurnStarted {
+		m.todos = nil
+		m.todosDismissed = false
 		if cmd := m.noteControllerTurnStarted(); cmd != nil {
 			drained.cmds = append(drained.cmds, cmd)
 		}

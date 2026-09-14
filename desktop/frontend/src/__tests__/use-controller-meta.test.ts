@@ -1,10 +1,9 @@
 // Run: tsx src/__tests__/use-controller-meta.test.ts
 
-import { currentTurnWaitMs, foregroundRunningFromRuntimeMeta, historyMessagesToItems, initialState, localizedBackendNoticeText, localizedNoticeText, metaFromTab, reducer, sameMeta, type Item } from "../lib/useController";
+import { currentTurnWaitMs, foregroundRunningFromRuntimeMeta, historyMessagesToItems, initialState, localizedBackendNoticeText, localizedNoticeText, metaFromTab, reducer, sameMeta } from "../lib/useController";
 import { effortSwitchNoticeText, modelSwitchNoticeText } from "../lib/controllerSwitchNotices";
 import { historyPageRequestBudget, historyTurnsToLoad } from "../lib/historyPaging";
 import { shouldReconcileStaleTurn } from "../lib/useStaleTurnWatchdog";
-import { parseTodos } from "../lib/tools";
 import { resolveTodoPanelTodos } from "../lib/todoVisibility";
 import type { HistoryMessage, Meta, TabMeta, WireUsage } from "../lib/types";
 
@@ -386,16 +385,6 @@ eq(sameMeta(meta({ collaborationMode: "normal" }), meta({ collaborationMode: "pl
     true,
     "equivalent empty canonical todo lists keep meta stable",
   );
-  eq(
-    sameMeta(meta({ dismissedTodoBatches: ["a"] }), meta({ dismissedTodoBatches: ["a"] })),
-    true,
-    "identical dismissed todo batches keep meta stable",
-  );
-  eq(
-    sameMeta(meta({ dismissedTodoBatches: ["a"] }), meta({ dismissedTodoBatches: ["b"] })),
-    false,
-    "persisted todo dismissal changes invalidate meta equality",
-  );
 }
 
 {
@@ -405,10 +394,6 @@ eq(sameMeta(meta({ collaborationMode: "normal" }), meta({ collaborationMode: "pl
   const todos = [{ content: "Keep task state", status: "in_progress" }];
   const withTodos = metaFromTab(tab(), meta({ canonicalTodos: todos }));
   eq(withTodos.canonicalTodos, todos, "optimistic tab metadata preserves canonical todos for the same session");
-  const dismissed = metaFromTab(tab({ sessionPath: "/s/a.jsonl" }), meta({ sessionPath: "/s/a.jsonl", dismissedTodoBatches: ["done"] }));
-  eq(dismissed.dismissedTodoBatches?.[0], "done", "optimistic metadata keeps session-sidecar todo dismissals");
-  const remounted = metaFromTab(tab({ sessionPath: "/s/leaf.jsonl" }), meta({ sessionPath: "/s/a.jsonl", dismissedTodoBatches: ["done"] }));
-  eq(remounted.dismissedTodoBatches, undefined, "a session remount waits for the new sidecar dismissals");
 }
 
 {
@@ -417,10 +402,8 @@ eq(sameMeta(meta({ collaborationMode: "normal" }), meta({ collaborationMode: "pl
   const updated = reducer({ ...initialState, meta: before }, { type: "meta", meta: completed });
   eq(updated.meta?.canonicalTodos?.[0]?.status, "completed", "meta refresh applies canonical todo progress");
 
-  const withDismissed = reducer(updated, { type: "meta", meta: meta({ canonicalTodos: completed.canonicalTodos, dismissedTodoBatches: ["done"] }) });
-  const reset = reducer(withDismissed, { type: "reset" });
+  const reset = reducer(updated, { type: "reset" });
   eq(reset.meta?.canonicalTodos, undefined, "session reset clears canonical todos from the previous session");
-  eq(reset.meta?.dismissedTodoBatches, undefined, "session reset clears persisted todo dismissals from the previous session");
 
   const cleared = reducer(reset, { type: "meta", meta: meta({ canonicalTodos: [] }) });
   eq(cleared.meta?.canonicalTodos?.length, 0, "authoritative empty canonical todos survive meta refresh");
@@ -434,11 +417,8 @@ eq(sameMeta(meta({ collaborationMode: "normal" }), meta({ collaborationMode: "pl
     ],
   });
   const hydrated = reducer({ ...initialState, meta: delayedLiveMeta }, { type: "meta", meta: delayedLiveMeta });
-  const noLiveTodo = hydrated.items.find(
-    (item): item is Extract<Item, { kind: "tool" }> => item.kind === "tool" && item.name === "todo_write",
-  );
-  eq(
-    resolveTodoPanelTodos(hydrated.meta?.canonicalTodos, noLiveTodo ? parseTodos(noLiveTodo.args) : undefined),
+	  eq(
+		resolveTodoPanelTodos(hydrated.meta?.canonicalTodos),
     delayedLiveMeta.canonicalTodos,
     "panel uses fresh Meta todos while the live todo_write event is delayed",
   );
@@ -462,24 +442,24 @@ eq(sameMeta(meta({ collaborationMode: "normal" }), meta({ collaborationMode: "pl
   });
   liveState = reducer(liveState, {
     type: "event",
-    e: { kind: "tool_result_preview", tool: { id: "todo-live", name: "todo_write", readOnly: true, output: "Todos updated" } },
+    e: {
+      kind: "tool_result",
+      tool: {
+        id: "todo-live", name: "todo_write", readOnly: true,
+        output: JSON.stringify({ todos: JSON.parse(liveArgs).todos, counts: { total: 2, pending: 0, in_progress: 1, completed: 1 } }),
+        todos: JSON.parse(liveArgs).todos, todoWritten: true, durationMs: 4,
+      },
+    },
   });
-  const liveTodo = liveState.items.find(
-    (item): item is Extract<Item, { kind: "tool" }> => item.kind === "tool" && item.name === "todo_write",
-  );
   eq(
-    JSON.stringify(resolveTodoPanelTodos(liveState.meta?.canonicalTodos, liveTodo ? parseTodos(liveTodo.args) : undefined)),
+    JSON.stringify(resolveTodoPanelTodos(liveState.meta?.canonicalTodos)),
     JSON.stringify(JSON.parse(liveArgs).todos),
-    "panel switches to the live todo_write snapshot when its result preview arrives",
+    "panel switches on the committed semantic todo result",
   );
-  liveState = reducer(liveState, {
-    type: "event",
-    e: { kind: "tool_result", tool: { id: "todo-live", name: "todo_write", readOnly: true, output: "Todos updated", durationMs: 4 } },
-  });
   eq(
     liveState.items.filter((item) => item.kind === "tool" && item.id === "todo-live").length,
     1,
-    "provider-ordered terminal result upserts the preview instead of duplicating the card",
+    "committed semantic result keeps a single card",
   );
 }
 
@@ -763,21 +743,21 @@ eq(sameMeta(meta({ collaborationMode: "normal" }), meta({ collaborationMode: "pl
   eq(s.historyOlderLoading, false, "older history clears loading");
 }
 
-// ── Todo-only readiness cards retract once the list shows all complete ──────
+// ── Readiness cards do not derive authorization from todo completion ────────
 {
   const args = JSON.stringify({ todos: [{ content: "Write verification notes", status: "completed" }] });
   let s = reducer(initialState, { type: "event", e: { kind: "turn_done", outcome: "final_readiness", readiness: { missing: ["todo"], attempts: 1 } } });
   ok(s.items.some((item) => item.kind === "notice" && item.variant === "delivery"), "todo-only readiness card shows at the gated turn");
   s = reducer(s, { type: "event", e: { kind: "tool_dispatch", tool: { id: "tw1", name: "todo_write", args, readOnly: true } } });
-  s = reducer(s, { type: "event", e: { kind: "tool_result", tool: { id: "tw1", name: "todo_write", args, readOnly: true, output: "task list updated" } } });
+  s = reducer(s, { type: "event", e: { kind: "tool_result", tool: { id: "tw1", name: "todo_write", args, readOnly: true, output: "task list updated", todoWritten: true, todos: [{ content: "Write verification notes", status: "completed" }] } } });
   s = reducer(s, { type: "event", e: { kind: "turn_done" } });
-  ok(!s.items.some((item) => item.kind === "notice" && item.variant === "delivery"), "an all-complete todo list retracts the stale todo-only card");
+  ok(s.items.some((item) => item.kind === "notice" && item.variant === "delivery"), "an all-complete todo list cannot retract a host readiness card");
 }
 {
   const args = JSON.stringify({ todos: [{ content: "Write verification notes", status: "completed" }] });
   let s = reducer(initialState, { type: "event", e: { kind: "turn_done", outcome: "final_readiness", readiness: { missing: ["todo", "verification"], attempts: 1 } } });
   s = reducer(s, { type: "event", e: { kind: "tool_dispatch", tool: { id: "tw2", name: "todo_write", args, readOnly: true } } });
-  s = reducer(s, { type: "event", e: { kind: "tool_result", tool: { id: "tw2", name: "todo_write", args, readOnly: true, output: "task list updated" } } });
+  s = reducer(s, { type: "event", e: { kind: "tool_result", tool: { id: "tw2", name: "todo_write", args, readOnly: true, output: "task list updated", todoWritten: true, todos: [{ content: "Write verification notes", status: "completed" }] } } });
   s = reducer(s, { type: "event", e: { kind: "turn_done" } });
   ok(s.items.some((item) => item.kind === "notice" && item.variant === "delivery"), "a card listing non-todo gaps survives todo completion");
 }
@@ -785,7 +765,7 @@ eq(sameMeta(meta({ collaborationMode: "normal" }), meta({ collaborationMode: "pl
   const args = JSON.stringify({ todos: [{ content: "Write verification notes", status: "in_progress" }] });
   let s = reducer(initialState, { type: "event", e: { kind: "turn_done", outcome: "final_readiness", readiness: { missing: ["todo"], attempts: 1 } } });
   s = reducer(s, { type: "event", e: { kind: "tool_dispatch", tool: { id: "tw3", name: "todo_write", args, readOnly: true } } });
-  s = reducer(s, { type: "event", e: { kind: "tool_result", tool: { id: "tw3", name: "todo_write", args, readOnly: true, output: "task list updated" } } });
+  s = reducer(s, { type: "event", e: { kind: "tool_result", tool: { id: "tw3", name: "todo_write", args, readOnly: true, output: "task list updated", todoWritten: true, todos: [{ content: "Write verification notes", status: "in_progress" }] } } });
   s = reducer(s, { type: "event", e: { kind: "turn_done" } });
   ok(s.items.some((item) => item.kind === "notice" && item.variant === "delivery"), "an incomplete todo list keeps the todo-only card");
 }

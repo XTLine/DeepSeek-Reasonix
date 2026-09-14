@@ -1,6 +1,8 @@
 // Run: tsx src/__tests__/composer-profile.test.ts
 
 import {
+  composerProfileFromMeta,
+  composerProfileFromTab,
   composerProfileMode,
   controllerComposerProfileCollaborationMode,
   displayedComposerProfileCollaborationMode,
@@ -72,6 +74,18 @@ function meta(overrides: Partial<LooseMeta> = {}): Meta {
 }
 
 console.log("\ncomposer profile");
+
+{
+  const goalView = {
+    id: "goal-1", revision: 2, objective: "finish the migration", phase: "paused" as const,
+    maxGoalRounds: null, roundsStarted: 4, createdAt: "2026-09-13T10:00:00Z",
+    updatedAt: "2026-09-13T10:10:00Z", activation: "disarmed" as const, stopReason: "user-paused",
+  };
+  eq(composerProfileFromTab(tab({ goal: "finish the migration", goalStatus: "stopped", goalView })).goal,
+    "finish the migration", "paused lifecycle goal remains visible from tab metadata");
+  eq(composerProfileFromMeta(meta({ goal: "finish the migration", goalStatus: "stopped", goalView })).goal,
+    "finish the migration", "paused lifecycle goal remains visible from controller metadata");
+}
 
 {
   let profiles: ComposerProfilesByTab = {};

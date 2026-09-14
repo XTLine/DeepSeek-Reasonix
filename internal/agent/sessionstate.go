@@ -46,11 +46,12 @@ type sessionRuntime struct {
 	path            string // bound transcript path for projection sidecars
 	checkpointState string // none|restored|applied; runtime-only
 
-	// todoState is the host's canonical task list. It never rides in the prompt,
-	// so it survives compaction, and SetSession rebuilds it from the incoming
-	// snapshot rather than letting reset blank it.
-	todoMu    sync.Mutex
-	todoState []evidence.TodoItem
+	// todoState is an executor-local mirror populated only after the semantic
+	// ToolResult commit succeeds. It never rebuilds from transcript text and is
+	// never used as frontend or authorization state.
+	todoMu      sync.Mutex
+	todoState   []evidence.TodoItem
+	todoWritten bool
 
 	// lastPrefixShape records the previous provider request's cacheable prefix
 	// so usage events can explain prefix churn on the next request. Carried
@@ -82,6 +83,10 @@ func (r *sessionRuntime) reset(s *Session) {
 	r.compaction.consecutive = 0
 	r.compaction.failedTurn.Store(0)
 	r.compaction.lastTurn.Store(0)
+	r.todoMu.Lock()
+	r.todoState = nil
+	r.todoWritten = false
+	r.todoMu.Unlock()
 }
 
 // clearReasoningReplayStrongProjection drops the process-local repair overlay.

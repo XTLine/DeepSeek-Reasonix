@@ -13,6 +13,7 @@ import (
 	"reasonix/internal/control"
 	"reasonix/internal/event"
 	"reasonix/internal/provider"
+	"reasonix/internal/transcript"
 )
 
 // appendHistoryTestSessionTurn writes one more turn to a session's durable log
@@ -54,7 +55,7 @@ func requireSingleDurableRead(t *testing.T, page HistoryPage) {
 	if page.Switch.DurableReads != 1 {
 		t.Fatalf("switch durable reads = %d, want 1", page.Switch.DurableReads)
 	}
-	if page.Switch.LoadedCount == 0 || page.Switch.HistoryCount == 0 {
+	if page.Switch.LoadedCount == 0 || page.Switch.LoadedBytes == 0 {
 		t.Fatalf("switch phase counts missing: %+v", page.Switch)
 	}
 }
@@ -129,8 +130,10 @@ func TestResumeSessionPageBuildsFirstScreenFromOneDurableRead(t *testing.T) {
 	}
 	requireSingleDurableRead(t, page)
 	requireHistoryTurnCount(t, page, 1, "switch page")
-	// Control: the write is real, and a page that does read the log sees it.
-	requireHistoryTurnCount(t, app.HistoryPageForTab(tab.ID, 0, defaultHistoryPageTurns), 2, "durable page")
+	// The legacy transcript is a rebuildable display cache after v3 adoption.
+	// An external append to it cannot override the event projection owned by the
+	// rebound controller.
+	requireHistoryTurnCount(t, app.HistoryPageForTab(tab.ID, 0, defaultHistoryPageTurns), 1, "v3 page")
 }
 
 func TestOpenChannelSessionPageBuildsFirstScreenFromOneDurableRead(t *testing.T) {
@@ -185,8 +188,12 @@ func TestSequentialSwitchesKeepPageIdentityWithTheirSession(t *testing.T) {
 	if first.Digest == "" || second.Digest == "" || first.Digest == second.Digest {
 		t.Fatalf("page digests = %q then %q, want distinct non-empty fingerprints", first.Digest, second.Digest)
 	}
-	if got := tab.currentSessionPath(); sessionRuntimeKey(got) != sessionRuntimeKey(thirdPath) {
-		t.Fatalf("tab session after sequential switches = %q, want %q", got, thirdPath)
+	if got := tab.currentSessionPath(); got != "" {
+		t.Fatalf("v3 tab retained legacy execution path %q", got)
+	}
+	snapshot, snapshotErr := app.TranscriptSnapshotForTab(tab.ID, transcript.PageRequest{})
+	if snapshotErr != nil || tab.SessionID == "" || snapshot.Identity.SessionID != tab.SessionID {
+		t.Fatalf("tab session id after sequential switches = %q, snapshot = %q, err = %v", tab.SessionID, snapshot.Identity.SessionID, snapshotErr)
 	}
 	requireHistoryPagesMatch(t, app.HistoryPageForTab(tab.ID, 0, defaultHistoryPageTurns), second, "final page")
 }
@@ -294,6 +301,27 @@ func TestResumeSessionPageFollowsCanonicalContinuation(t *testing.T) {
 	ctrl.Resume(parent, parentPath)
 
 	app := newRebindTestApp(t, root, parentPath, ctrl, "continuation")
+	service := app.desktopSessionService(dir)
+	v3Ctrl := control.New(control.Options{
+		Executor:   agent.New(nil, nil, parent, agent.Options{}, event.Discard),
+		SessionDir: dir, Label: "parent", Sink: event.Discard,
+		SessionService: service, ExclusiveSession: true,
+	})
+	// A unified import refuses to wait behind a live retired sidecar writer.
+	// The host retires its legacy producer before preparing the replacement.
+	ctrl.Close()
+	ref, err := v3Ctrl.ContinueLegacySession(t.Context(), parentPath, "")
+	if err != nil {
+		t.Fatalf("migrate parent: %v", err)
+	}
+	tab := app.tabs["continuation"]
+	app.mu.Lock()
+	delete(app.runtimeBySessionKey, sessionRuntimeKey(parentPath))
+	tab.Ctrl = v3Ctrl
+	tab.SessionID = ref.SessionID
+	tab.SessionPath = ""
+	app.newSessionRuntimeLocked(tab, sessionRuntimeKey(tab.currentSessionIdentity()))
+	app.mu.Unlock()
 	installSessionCatalogForTest(t, app, dir, "global", "")
 	if got := app.continuePathForOpen(parentPath); got != leafPath {
 		t.Fatalf("continuePathForOpen = %q, want covering leaf %q", got, leafPath)
@@ -304,9 +332,9 @@ func TestResumeSessionPageFollowsCanonicalContinuation(t *testing.T) {
 		t.Fatalf("ResumeSessionPageForTab: %v", err)
 	}
 	requireSingleDurableRead(t, page)
-	bound := app.controllerForTab(app.tabs["continuation"])
-	if got := bound.SessionPath(); sessionRuntimeKey(got) != sessionRuntimeKey(leafPath) {
-		t.Fatalf("bound path = %q, want continuation %q", got, leafPath)
+	bound := app.controllerForTab(tab)
+	if tab.SessionID == "" || bound.SessionPath() != "" {
+		t.Fatalf("bound identity = session %q path %q, want exclusive v3", tab.SessionID, bound.SessionPath())
 	}
 	// The window must be the leaf's two turns, not the parent's one.
 	requireHistoryTurnCount(t, page, 2, "continuation page")

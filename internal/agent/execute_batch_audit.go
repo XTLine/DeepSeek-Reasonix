@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"reasonix/internal/event"
+	"reasonix/internal/evidence"
 	"reasonix/internal/provider"
 	"reasonix/internal/tool"
 )
 
-func (a *Agent) emitBatchToolResult(ctx context.Context, c provider.ToolCall, o toolOutcome, duration, started int64, parallel bool, batchStart time.Time) error {
+func (a *Agent) emitBatchToolResult(ctx context.Context, c provider.ToolCall, o toolOutcome, committedMessage provider.Message, duration, started int64, parallel bool, batchStart time.Time) error {
 	t, _, ambiguous := a.svc.tools.ResolveCall(c.Name)
 	ok := t != nil && len(ambiguous) == 0
 	readOnly := ok && t.ReadOnly()
@@ -49,6 +50,22 @@ func (a *Agent) emitBatchToolResult(ctx context.Context, c provider.ToolCall, o 
 			tr.SubagentRetryable = outcome.Retryable
 		}
 	}
+	var committedTodos []evidence.TodoItem
+	if c.Name == "todo_write" && o.errMsg == "" && !o.blocked {
+		receipt := evidence.ReceiptFromToolCall("todo_write", json.RawMessage(c.Arguments), true, true)
+		// Successful execution means the strict todo_write validator already
+		// accepted these arguments. Commit the normalized call data itself; tool
+		// output is presentation and may be compacted independently.
+		committedTodos = append([]evidence.TodoItem(nil), receipt.Todos...)
+		for i := range committedTodos {
+			committedTodos[i].Content = strings.TrimSpace(committedTodos[i].Content)
+		}
+		tr.TodoWritten = true
+		tr.Todos = make([]event.Todo, len(committedTodos))
+		for i, todo := range committedTodos {
+			tr.Todos[i] = event.Todo{Content: todo.Content, Status: todo.Status}
+		}
+	}
 	if started > 0 {
 		tr.StartedAt = started
 		tr.EndedAt = started + duration
@@ -58,8 +75,11 @@ func (a *Agent) emitBatchToolResult(ctx context.Context, c provider.ToolCall, o 
 			tr.WorkspaceAllPaths = mutation.AllPaths
 		}
 	}
-	if err := event.EmitChecked(a.svc.sink, event.Event{Kind: event.ToolResult, MessageID: messageIdentity(ctx), Tool: tr}); err != nil {
+	if err := event.EmitChecked(a.svc.sink, event.Event{Kind: event.ToolResult, MessageID: messageIdentity(ctx), Tool: tr, CommittedMessage: &committedMessage}); err != nil {
 		return err
+	}
+	if tr.TodoWritten {
+		a.setTodoState(committedTodos)
 	}
 	if o.truncated && o.truncMsg != "" {
 		a.svc.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: o.truncMsg})
@@ -93,7 +113,7 @@ func (a *Agent) recordToolExecutionAudit(readOnly, parallel bool, startedAt, dur
 	a.capabilityAudit.RecordToolExecution(readOnly, parallel, queueMs, durationMs, rawBytes, len(o.output))
 }
 
-func (a *Agent) storeBatchToolResult(ctx context.Context, call provider.ToolCall, o toolOutcome) {
+func (a *Agent) buildBatchToolResult(ctx context.Context, call provider.ToolCall, o toolOutcome) provider.Message {
 	state := outcomeRunState(o)
 	msg := provider.Message{Role: provider.RoleTool, Content: o.output, Images: o.images, VisionSummary: o.visionSummary, ToolCallID: call.ID, Name: call.Name, ToolRunState: state, ToolExecution: toProviderToolExecution(o.execution), PresentedFiles: provider.NewPresentedFilesMetadata(o.presentedFiles)}
 	if o.diagnostic != nil {
@@ -110,5 +130,8 @@ func (a *Agent) storeBatchToolResult(ctx context.Context, call provider.ToolCall
 			msg.ReadResult = raw
 		}
 	}
-	a.sess.conversation.Add(msg)
+	if msg.ID == "" {
+		msg.ID = NewMessageID()
+	}
+	return msg
 }

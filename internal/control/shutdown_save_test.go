@@ -27,7 +27,7 @@ func TestSnapshotForShutdownAppendsToSessionLogInsteadOfForking(t *testing.T) {
 	current.Add(provider.Message{Role: provider.RoleAssistant, Content: "shutdown tail"})
 	exec := agent.New(nil, nil, current, agent.Options{}, event.Discard)
 	sink := &noticeSink{}
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Executor: exec, SessionDir: dir, SessionPath: path, Label: "shutdown", Sink: sink,
 		OnSessionRecovered: func(info SessionRecoveryInfo) error {
 			t.Errorf("a session log must not enter the recovery handoff: %+v", info)

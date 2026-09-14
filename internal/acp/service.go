@@ -26,6 +26,7 @@ import (
 	"reasonix/internal/jobs"
 	"reasonix/internal/plugin"
 	"reasonix/internal/provider"
+	"reasonix/internal/session"
 	"reasonix/internal/sessioninbox"
 	"reasonix/internal/store"
 	"reasonix/internal/tool/builtin"
@@ -719,12 +720,15 @@ func (s *service) sessionNew(ctx context.Context, raw json.RawMessage) (any, err
 		updatedAt:        now,
 	}
 	s.bindStatusEvents(sess)
-	// Pin a transcript file keyed by session id when the controller has a session
-	// dir, so every turn auto-saves there, session/prompt can hand the path back,
-	// and session/load can find it again by id across process restarts. The
-	// session lease is taken with it (defensive: the id-keyed path is brand new)
-	// so no other runtime can bind the transcript while this session lives.
-	if dir := ctrl.SessionDir(); dir != "" {
+	// Exclusive v3 sessions bind the ACP id directly to the immutable storage
+	// identity. They never manufacture an id.jsonl transcript or acquire its
+	// legacy lease. Older factories retain the isolated compatibility path.
+	if ctrl.UsesExclusiveSession() {
+		if _, err := ctrl.BindFreshSession(ctx, id); err != nil {
+			ctrl.Close()
+			return nil, &RPCError{Code: ErrInternal, Message: "session/new: " + err.Error()}
+		}
+	} else if dir := ctrl.SessionDir(); dir != "" {
 		sess.transcript = transcriptPath(dir, id)
 		lease, err := agent.TryAcquireSessionLease(sess.transcript)
 		if err != nil {
@@ -793,31 +797,14 @@ func (s *service) sessionSetMode(ctx context.Context, raw json.RawMessage) (any,
 	sess.stateChangeMu.Lock()
 	defer sess.stateChangeMu.Unlock()
 	ctrl := sess.currentCtrl()
-	nextMode := p.ModeID
-	legacyApproval := ""
-	switch p.ModeID {
-	case sessionModeNormal:
-		ctrl.SetPlanMode(false)
-		ctrl.ClearGoal()
-	case sessionModePlan:
-		ctrl.ClearGoal()
-		ctrl.SetPlanMode(true)
-	case sessionModeGoal:
-		ctrl.SetPlanMode(false)
-	case sessionModeLegacyDefault:
-		nextMode = sessionModeNormal
-		legacyApproval = control.ToolApprovalReadOnly
-		ctrl.SetPlanMode(false)
-		ctrl.ClearGoal()
-	case sessionModeLegacyAuto:
-		nextMode = sessionModeNormal
-		legacyApproval = control.ToolApprovalWorkspaceWrite
-		ctrl.SetPlanMode(false)
-		ctrl.ClearGoal()
-	default:
-		return nil, &RPCError{Code: ErrInvalidParams, Message: "session/set_mode: unknown modeId " + p.ModeID}
+	nextMode, legacyApproval, rpcErr := applyACPSessionMode(ctrl, p.ModeID)
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
-	sess.setGoalDraftMode(nextMode == sessionModeGoal && ctrl.GoalStatus() != control.GoalStatusRunning)
+	// Entering Goal mode only arms a draft when no lifecycle exists. A restored,
+	// blocked, paused, or disarmed Goal must retain its complete objective so the
+	// user's next prompt can authorize recovery instead of replacing it.
+	sess.setGoalDraftMode(selectedGoalDraftMode(nextMode, ctrl.Goal()))
 	if legacyApproval != "" {
 		ctrl.SetToolApprovalMode(legacyApproval)
 		sess.setToolApprovalMode(legacyApproval)
@@ -889,7 +876,7 @@ func (s *service) sessionLoad(ctx context.Context, raw json.RawMessage) (any, er
 	}
 	return afterResponse{
 		result: SessionLoadResult{Models: cfgState.Models, Modes: s.sessionModesFor(p.SessionID), ConfigOptions: cfgState.ConfigOptions},
-		after:  func() { s.sendAvailableCommands(s.session(p.SessionID)) },
+		after:  func() { s.sendSessionProjection(s.session(p.SessionID)) },
 	}, nil
 }
 
@@ -916,8 +903,24 @@ func (s *service) sessionResume(ctx context.Context, raw json.RawMessage) (any, 
 	}
 	return afterResponse{
 		result: SessionResumeResult{Models: cfgState.Models, Modes: s.sessionModesFor(p.SessionID), ConfigOptions: cfgState.ConfigOptions},
-		after:  func() { s.sendAvailableCommands(s.session(p.SessionID)) },
+		after:  func() { s.sendSessionProjection(s.session(p.SessionID)) },
 	}, nil
+}
+
+// sendSessionProjection publishes current host-owned state after load/resume.
+// History replay is presentation data and may contain legacy todo tool cards;
+// the committed runtime snapshot is the only source of the current ACP plan.
+func (s *service) sendSessionProjection(sess *acpSession) {
+	if sess == nil {
+		return
+	}
+	s.sendAvailableCommands(sess)
+	reader, ok := sess.currentCtrl().(control.RuntimeStateReader)
+	if !ok {
+		return
+	}
+	snapshot := reader.RuntimeStateSnapshot()
+	sess.sink.send(planUpdate{SessionUpdate: "plan", Entries: planEntriesFromTodos(snapshot.Todos)})
 }
 
 func (s *service) openExistingSession(ctx context.Context, method, id, cwdParam string, servers []MCPServerSpec, replay bool) (SessionConfigState, error) {
@@ -1003,54 +1006,53 @@ func (s *service) openExistingSession(ctx context.Context, method, id, cwdParam 
 	ctrl.EnableInteractiveApproval()
 	sink.bindControllerPrompts(ctrl, sessionParams.MCPInteractions)
 
-	dir := ctrl.SessionDir()
-	if dir == "" {
-		ctrl.Close()
-		return SessionConfigState{}, &RPCError{Code: ErrInternal, Message: method + ": persistence is disabled"}
-	}
-	path := resolveTranscriptPath(dir, id)
-	if path != persistedPath && agent.IsCleanupPending(path) {
-		ctrl.Close()
-		return SessionConfigState{}, &RPCError{Code: ErrInvalidParams, Message: method + ": unknown session " + id}
-	}
-	// Bind the transcript for writing only if no other runtime (a desktop
-	// window, the CLI) holds it; the editor should not silently double-write a
-	// session that is open elsewhere.
-	lease, leaseErr := agent.TryAcquireSessionLease(path)
-	if leaseErr != nil {
-		ctrl.Close()
-		return SessionConfigState{}, sessionLeaseBindError(method, leaseErr)
-	}
-	loaded, err := agent.LoadSession(path)
-	if err != nil {
-		lease.Release()
-		ctrl.Close()
-		return SessionConfigState{}, &RPCError{Code: ErrInvalidParams, Message: method + ": unknown session " + id}
-	}
-	if err := resumeACPControllerForWrite(ctrl, loaded, path, lease); err != nil {
-		return SessionConfigState{}, sessionLeaseBindError(method, err)
+	path := ""
+	var lease *agent.SessionLease
+	if ctrl.UsesExclusiveSession() {
+		service := ctrl.SessionService()
+		if service == nil {
+			ctrl.Close()
+			return SessionConfigState{}, &RPCError{Code: ErrInternal, Message: method + ": v3 session service is unavailable"}
+		}
+		if _, err := ctrl.OpenSession(ctx, session.SessionRef{HostID: service.HostID(), SessionID: id}); err != nil {
+			ctrl.Close()
+			return SessionConfigState{}, &RPCError{Code: ErrInvalidParams, Message: method + ": unknown session " + id}
+		}
+	} else {
+		dir := ctrl.SessionDir()
+		if dir == "" {
+			ctrl.Close()
+			return SessionConfigState{}, &RPCError{Code: ErrInternal, Message: method + ": persistence is disabled"}
+		}
+		path = resolveTranscriptPath(dir, id)
+		if path != persistedPath && agent.IsCleanupPending(path) {
+			ctrl.Close()
+			return SessionConfigState{}, &RPCError{Code: ErrInvalidParams, Message: method + ": unknown session " + id}
+		}
+		// Legacy sessions keep the path lease until their one-time migration path
+		// is selected by an explicit legacy client.
+		var leaseErr error
+		lease, leaseErr = agent.TryAcquireSessionLease(path)
+		if leaseErr != nil {
+			ctrl.Close()
+			return SessionConfigState{}, sessionLeaseBindError(method, leaseErr)
+		}
+		loaded, loadErr := agent.LoadSession(path)
+		if loadErr != nil {
+			lease.Release()
+			ctrl.Close()
+			return SessionConfigState{}, &RPCError{Code: ErrInvalidParams, Message: method + ": unknown session " + id}
+		}
+		if err := resumeACPControllerForWrite(ctrl, loaded, path, lease); err != nil {
+			return SessionConfigState{}, sessionLeaseBindError(method, err)
+		}
 	}
 	toolApprovalMode := normalizeACPToolApprovalMode(saved.ToolApprovalMode)
 	if strings.TrimSpace(saved.ToolApprovalMode) == "" {
 		toolApprovalMode = control.ToolApprovalWorkspaceWrite
 	}
 	ctrl.SetToolApprovalMode(toolApprovalMode)
-	modeID := normalizeACPCollaborationMode(saved.CollaborationMode)
-	goalDraftMode := false
-	switch modeID {
-	case sessionModePlan:
-		ctrl.SetPlanMode(true)
-	case sessionModeGoal:
-		ctrl.SetPlanMode(false)
-		goalDraftMode = ctrl.GoalStatus() != control.GoalStatusRunning
-	default:
-		if ctrl.GoalStatus() == control.GoalStatusRunning {
-			modeID = sessionModeGoal
-		} else {
-			modeID = sessionModeNormal
-			ctrl.SetPlanMode(false)
-		}
-	}
+	modeID, goalDraftMode := applyLoadedACPMode(ctrl, saved.CollaborationMode)
 
 	meta := metadataForLoadedSession(path, id, cwd, ctrl.History())
 	meta.Model = cfgState.Model
@@ -1080,10 +1082,12 @@ func (s *service) openExistingSession(ctx context.Context, method, id, cwdParam 
 		lease:            lease,
 	}
 	s.bindStatusEvents(sess)
-	if err := saveACPMeta(path, sess.meta()); err != nil {
-		sess.releaseSessionLease()
-		ctrl.Close()
-		return SessionConfigState{}, &RPCError{Code: ErrInternal, Message: method + ": " + err.Error()}
+	if path != "" {
+		if err := saveACPMeta(path, sess.meta()); err != nil {
+			sess.releaseSessionLease()
+			ctrl.Close()
+			return SessionConfigState{}, &RPCError{Code: ErrInternal, Message: method + ": " + err.Error()}
+		}
 	}
 	s.mu.Lock()
 	s.sessions[id] = sess
@@ -1182,6 +1186,9 @@ func (s *service) sessionPrompt(ctx context.Context, raw json.RawMessage) (any, 
 		cancel()
 	}()
 	statusStarted := false
+	if rpcErr := prepareACPGoalPrompt(sess, text); rpcErr != nil {
+		return nil, rpcErr
+	}
 	beginTurn := func() {
 		if sess.status == nil {
 			sess.status = newStatusTelemetry()
@@ -1189,10 +1196,6 @@ func (s *service) sessionPrompt(ctx context.Context, raw json.RawMessage) (any, 
 		sess.status.beginTurn()
 		s.publishStatus(sess, "phase")
 		sess.sink.setTurnContext(runCtx)
-		if sess.takeGoalDraftMode() {
-			sess.currentCtrl().SetGoal(text)
-			sess.saveMetaIfPresent()
-		}
 		statusStarted = true
 	}
 	var runErr error
@@ -1463,6 +1466,7 @@ func (s *service) reloadSessionExtensionsLocked(ctx context.Context, sess *acpSe
 		_ = saveACPMeta(sess.transcript, sess.metaLocked())
 	}
 	sess.mu.Unlock()
+	newCtrl.ActivateGoalDriverAfterRebuild()
 	sink.bindControllerPrompts(newCtrl, rebuildParams.MCPInteractions)
 
 	// Release the outgoing controller only after the swap published the
@@ -1926,12 +1930,9 @@ func (s *service) rebuildSessionLocked(ctx context.Context, sess *acpSession, cf
 	// InheritLifecycleFrom wires two concrete controllers' turn/hook state; it's a
 	// construction concern, not part of the driving port. cur is always the
 	// *control.Controller the factory built for this session, so this is safe.
-	if prev, ok := cur.(*control.Controller); ok {
-		newCtrl.InheritLifecycleFrom(prev)
-		// A rebuild must not force the user to re-approve tools already granted
-		// for this session, or re-trust Plan-mode read-only commands already
-		// trusted this session.
-		newCtrl.RestoreSessionAuthorizations(prev.SessionAuthorizations())
+	if rpcErr := inheritACPControllerLifecycle(newCtrl, cur); rpcErr != nil {
+		newCtrl.ReleaseResources()
+		return rpcErr
 	}
 	// Persist before publishing the replacement. If this fails, the outgoing
 	// controller and transcript still agree and remain fully usable; publishing
@@ -1966,6 +1967,7 @@ func (s *service) rebuildSessionLocked(ctx context.Context, sess *acpSession, cf
 		_ = saveACPMeta(sess.transcript, sess.metaLocked())
 	}
 	sess.mu.Unlock()
+	newCtrl.ActivateGoalDriverAfterRebuild()
 	sink.bindControllerPrompts(newCtrl, rebuildParams.MCPInteractions)
 
 	cur.ReleaseResources()

@@ -2,27 +2,20 @@ package control
 
 import (
 	"context"
-	"reasonix/internal/extension"
-	"reasonix/internal/extension/dispatch"
+	"reasonix/internal/agent"
 )
 
-// checkpointToolTranscript persists execution evidence before another tool may
-// start. Listing projections and other UI sidecars remain on the normal autosave.
-func (c *Controller) checkpointToolTranscript() error {
-	c.snapshotMu.Lock()
-	defer c.snapshotMu.Unlock()
-	path := c.SessionPath()
-	if path == "" || c.executor == nil {
+// CheckpointSession implements agent.SessionCheckpointer. The boundary is
+// intentionally semantic: ordinary todo, approval, assistant and turn-end
+// events remain eligible for the write-behind batch.
+func (c *Controller) CheckpointSession(ctx context.Context, boundary agent.SessionCheckpointBoundary) error {
+	switch boundary {
+	case agent.CheckpointBeforeModel, agent.CheckpointBeforeTopTool:
+		if _, err := c.flushSessionEvents(ctx); err != nil {
+			return err
+		}
+		return nil
+	default:
 		return nil
 	}
-	session := c.executor.Session()
-	if session == nil || !session.HasContent() {
-		return nil
-	}
-	_, err := c.extensionSessionStrategy(context.Background(), extension.PointSessionSave, dispatch.PhaseSave, path)
-	if err != nil {
-		return err
-	}
-	err, _ = persistSessionSnapshotMode(session, path, false, true)
-	return err
 }

@@ -136,8 +136,8 @@ func contextualToolGateOutcome(ctx context.Context, target tool.Tool, name strin
 	}
 	msg := fmt.Sprintf("blocked: tool %q is unavailable in the current workflow context", name)
 	switch name {
-	case "update_goal":
-		msg = "update_goal is only available while an active goal turn is running — no goal state was changed"
+	case "get_goal", "create_goal", "update_goal":
+		msg = "goal tools require the current top-level host-attested goal context — no goal state was changed"
 	case "bash_output", "wait", "kill_shell":
 		msg = "background jobs are not available in this context"
 	}
@@ -377,13 +377,6 @@ func (a *Agent) prepareToolExecution(ctx context.Context, plan *toolCallPlan) (t
 	cctx = WithSubagentDepth(cctx, a.subagentDepth)
 	if a.task.ledger != nil {
 		cctx = evidence.WithLedger(cctx, a.task.ledger)
-		cctx = evidence.WithSessionMessages(cctx, a.sess.conversation.Snapshot)
-	}
-	if !a.planMode.Load() {
-		cctx = a.withContractState(cctx)
-	}
-	if plan.planReplacementAuthorized {
-		cctx = tool.WithPlanReplacementAuthorization(cctx)
 	}
 	if a.svc.jobs != nil {
 		cctx = jobs.WithManager(cctx, a.svc.jobs)
@@ -418,6 +411,10 @@ func (a *Agent) prepareToolExecution(ctx context.Context, plan *toolCallPlan) (t
 // finishToolExecution performs the concrete Execute, records evidence, runspost hooksandrecoveryobservation,
 // and truncates the model-facing result.
 func (a *Agent) finishToolExecution(ctx context.Context, plan *toolCallPlan) toolOutcome {
+	if err := a.checkpointSession(ctx, CheckpointBeforeTopTool); err != nil {
+		message := "session durability checkpoint failed before tool dispatch: " + err.Error()
+		return toolOutcome{output: "error: " + message, errMsg: message, blocked: true}
+	}
 	plan.executed = true
 	cctx := a.withWriteRecovery(plan.cctx, plan.call)
 	if plan.expectedWriteSource.Path != "" {

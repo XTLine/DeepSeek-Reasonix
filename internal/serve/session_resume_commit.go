@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -34,14 +35,32 @@ func (s *Server) commitLoadedResume(w http.ResponseWriter, cur control.SessionAP
 	if hook := resumeBindHookForTest; hook != nil {
 		hook()
 	}
-	cur.Resume(loaded, realPath)
+	if identity, ok := cur.(control.IdentityLifecycle); ok && identity.UsesExclusiveSession() {
+		ref, err := identity.ContinueLegacySession(context.Background(), realPath, "")
+		if err != nil {
+			_ = s.rebindSessionLease(cur.SessionPath())
+			http.Error(w, "migrate session: "+err.Error(), http.StatusConflict)
+			return false
+		}
+		w.Header().Set(sessionIDHeader, ref.SessionID)
+		if s.leases != nil {
+			// Migration has frozen and published the source. It is now a
+			// read-only legacy artifact, so the Serve must release that lease.
+			if err := s.leases.Rebind(""); err != nil {
+				http.Error(w, "release legacy session lease: "+err.Error(), http.StatusInternalServerError)
+				return false
+			}
+		}
+	} else {
+		cur.Resume(loaded, realPath)
+	}
 	if !concrete {
 		return true
 	}
 	// Rebind dropped the controller handlers with the outgoing authority. Resume
 	// has now made loaded current, so restore its owner binding before the next
 	// /new, /clear, or /fork enters the ordinary authorized transition path.
-	if s.leases != nil {
+	if s.leases != nil && !ctrl.UsesExclusiveSession() {
 		if err := s.leases.BindControllerAuthority(ctrl); err != nil {
 			slog.Warn("serve: rebind controller authority after resume", "err", err)
 		}

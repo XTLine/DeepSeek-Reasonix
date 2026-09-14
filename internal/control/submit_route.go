@@ -104,10 +104,7 @@ func (c *Controller) isPathSubmit(trimmed string) bool {
 }
 
 func (c *Controller) classifyPlanExecSubmit() SubmitDisposition {
-	if c.executor == nil || len(c.executor.CanonicalTodoState()) == 0 {
-		return SubmitManagementHandled
-	}
-	return SubmitTurnStarted
+	return SubmitManagementHandled
 }
 
 func classifyPrometheusSubmit(trimmed, command string) SubmitDisposition {

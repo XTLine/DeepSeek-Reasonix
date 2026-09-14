@@ -127,9 +127,8 @@ async function renderComposer(props: Partial<Parameters<typeof Composer>[0]> = {
     onSetMode: () => {},
     onSetCollaborationMode: (mode) => calls.setCollaborationMode.push(mode),
     onSetToolApprovalMode: () => {},
-        onClearGoal: () => {
-      calls.clearGoal += 1;
-    },
+    onClearGoal: () => { calls.clearGoal += 1; },
+    onEditGoal: () => {}, onPauseGoal: () => {}, onResumeGoal: () => {},
     onSwitchModel: () => {},
     onSetEffort: () => {},
 
@@ -706,7 +705,6 @@ console.log("\ncomposer goal toggle");
   const goalActions = Array.from(document.querySelectorAll(".composer-intent-menu__stop")) as HTMLButtonElement[];
   const stopGoal = goalActions.find((b) => b.textContent === "End goal");
   if (!stopGoal) throw new Error("explicit end-goal action did not render");
-  ok(goalActions.some((b) => b.textContent === "Pause goal"), "running goal offers a pause action");
   await act(async () => {
     stopGoal.click();
     await flushTimers();

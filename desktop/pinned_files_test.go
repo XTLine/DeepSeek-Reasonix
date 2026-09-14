@@ -245,7 +245,7 @@ func TestPinnedContextEndToEndProviderRequest(t *testing.T) {
 
 	prov := &capturingProvider{}
 	exec := agent.New(prov, tool.NewRegistry(), agent.NewSession(baseSystem), agent.Options{}, event.Discard)
-	ctrl := control.New(control.Options{
+	ctrl := newFixtureController(t, control.Options{
 		Runner:              exec,
 		Executor:            exec,
 		SystemPrompt:        baseSystem,

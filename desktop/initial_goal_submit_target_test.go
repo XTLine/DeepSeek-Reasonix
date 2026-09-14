@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"reasonix/internal/control"
@@ -11,6 +13,29 @@ type initialGoalSubmitRecorder struct {
 	display     string
 	input       string
 	invocations []control.InvocationRequest
+}
+
+func TestSubmitInitialGoalStopsBeforeProviderWhenPersistenceFails(t *testing.T) {
+	app := testAppWithOrderedTabs(t, "a", "a")
+	base := control.New(control.Options{Label: "test"})
+	defer base.Close()
+	recorder := &initialGoalSubmitRecorder{SessionAPI: base}
+	tab := app.tabs["a"]
+	tab.Ctrl = &rejectingGoalSession{SessionAPI: recorder, err: errors.New("disk full")}
+
+	_, err := app.SubmitInitialGoalToTab(
+		tab.ID, "ship the fix", "ship the fix", "ship the fix", nil,
+		"normal", "ask",
+	)
+	if err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("SubmitInitialGoalToTab error = %v, want persistence failure", err)
+	}
+	if recorder.input != "" || recorder.display != "" {
+		t.Fatalf("provider submission escaped failed goal mutation: display=%q input=%q", recorder.display, recorder.input)
+	}
+	if tab.goal != "" {
+		t.Fatalf("tab goal = %q, want unpublished", tab.goal)
+	}
 }
 
 func (r *initialGoalSubmitRecorder) SubmitDisplay(display, input string) {

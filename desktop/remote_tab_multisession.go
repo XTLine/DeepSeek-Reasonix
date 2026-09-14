@@ -38,6 +38,9 @@ func enterRemoteSession(ctx context.Context, client *http.Client, base string, o
 // observe an immediate replay from a detached controller.
 func preflightRemoteSessionTarget(ctx context.Context, client *http.Client, base string, opts RemoteTabOpenOptions) (serveSessionEntry, error) {
 	name := strings.TrimSpace(opts.SessionName)
+	if sessionID := strings.TrimSpace(opts.SessionID); sessionID != "" {
+		return serveSessionEntry{Name: name, SessionID: sessionID, Title: strings.TrimSpace(opts.SessionTitle), Current: true}, nil
+	}
 	if path := strings.TrimSpace(opts.SessionPath); path != "" {
 		return serveSessionEntry{Name: name, Path: path, Title: strings.TrimSpace(opts.SessionTitle), Current: true}, nil
 	}
@@ -60,24 +63,38 @@ func preflightRemoteSessionTarget(ctx context.Context, client *http.Client, base
 func enterRemoteSessionTarget(ctx context.Context, client *http.Client, base string, opts RemoteTabOpenOptions) (serveSessionEntry, error) {
 	name := strings.TrimSpace(opts.SessionName)
 	if opts.NewSession {
-		path, err := servePostSessionPath(ctx, client, serveURL(base, "/new"), nil)
+		identity, err := servePostSessionIdentityForSession(ctx, client, serveURL(base, "/new"), nil, "")
 		if err != nil {
 			return serveSessionEntry{}, err
 		}
-		return serveSessionEntry{Path: path, Current: true}, nil
+		return serveSessionEntry{Path: identity.Path, SessionID: identity.SessionID, Current: true}, nil
+	}
+	if sessionID := strings.TrimSpace(opts.SessionID); sessionID != "" {
+		body, err := json.Marshal(map[string]string{"sessionId": sessionID})
+		if err != nil {
+			return serveSessionEntry{}, err
+		}
+		identity, err := servePostSessionIdentityForSession(ctx, client, serveURL(base, "/resume"), body, "")
+		if err != nil {
+			return serveSessionEntry{}, err
+		}
+		if identity.SessionID != "" {
+			sessionID = identity.SessionID
+		}
+		return serveSessionEntry{Name: name, SessionID: sessionID, Title: strings.TrimSpace(opts.SessionTitle), Current: true}, nil
 	}
 	if sessionPath := strings.TrimSpace(opts.SessionPath); sessionPath != "" {
 		body, err := json.Marshal(map[string]string{"path": sessionPath})
 		if err != nil {
 			return serveSessionEntry{}, err
 		}
-		mountedPath, err := servePostSessionPath(ctx, client, serveURL(base, "/resume"), body)
+		identity, err := servePostSessionIdentityForSession(ctx, client, serveURL(base, "/resume"), body, "")
 		if err != nil {
 			return serveSessionEntry{}, err
 		}
 		return serveSessionEntry{
-			Name: name, Path: sessionPath, Title: strings.TrimSpace(opts.SessionTitle), Current: true,
-			TakenOver: strings.TrimSpace(mountedPath) != "",
+			Name: name, Path: sessionPath, SessionID: identity.SessionID, Title: strings.TrimSpace(opts.SessionTitle), Current: true,
+			TakenOver: strings.TrimSpace(identity.Path) != "",
 		}, nil
 	}
 	// Focus-only attaches retain the current session; only explicit NewSession
@@ -94,16 +111,19 @@ func enterRemoteSessionTarget(ctx context.Context, client *http.Client, base str
 		if session.Name != name {
 			continue
 		}
-		body, err := json.Marshal(map[string]string{"path": session.Path})
+		body, err := json.Marshal(map[string]string{"path": session.Path, "hostId": session.HostID, "sessionId": session.SessionID})
 		if err != nil {
 			return serveSessionEntry{}, err
 		}
-		mountedPath, err := servePostSessionPath(ctx, client, serveURL(base, "/resume"), body)
+		identity, err := servePostSessionIdentityForSession(ctx, client, serveURL(base, "/resume"), body, "")
 		if err != nil {
 			return serveSessionEntry{}, err
 		}
 		session.Current = true
-		session.TakenOver = strings.TrimSpace(mountedPath) != ""
+		if identity.SessionID != "" {
+			session.SessionID = identity.SessionID
+		}
+		session.TakenOver = strings.TrimSpace(identity.Path) != ""
 		return session, nil
 	}
 	return serveSessionEntry{}, fmt.Errorf("remote session %q not found", name)
@@ -133,7 +153,13 @@ func installRemoteTabAttachRoute(tab *remoteTab, path string) {
 	}
 	tab.routing.rehydratingPath = ""
 	tab.routing.rehydratingFrames = nil
-	tab.session.path = tab.routing.currentPath
+	if sessionID, ok := strings.CutPrefix(tab.routing.currentPath, remoteSessionIDRoutePrefix); ok {
+		tab.session.path = ""
+		tab.session.sessionID = sessionID
+	} else {
+		tab.session.path = tab.routing.currentPath
+		tab.session.sessionID = ""
+	}
 	tab.routing.revision++
 }
 
@@ -276,7 +302,13 @@ func adoptRemoteTabSessionPathLocked(tab *remoteTab, sessionPath string) bool {
 	tab.routing.rehydratingPath = ""
 	tab.routing.rehydratingFrames = nil
 	tab.routing.revision++
-	tab.session.path = sessionPath
+	if sessionID, ok := strings.CutPrefix(sessionPath, remoteSessionIDRoutePrefix); ok {
+		tab.session.path = ""
+		tab.session.sessionID = sessionID
+	} else {
+		tab.session.path = sessionPath
+		tab.session.sessionID = ""
+	}
 	tab.session.newSession = false
 	tab.session.reset = false
 	tab.runtime.running = running

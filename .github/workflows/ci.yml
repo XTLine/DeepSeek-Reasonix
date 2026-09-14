@@ -470,7 +470,6 @@ jobs:
           PREPARE_REQUIRED: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.desktop != 'false' }}
           NATIVE_REQUIRED: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.native != 'false' }}
           FRONTEND_REQUIRED: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.frontend != 'false' || needs.changes.outputs.electron != 'false' }}
-          BROWSER_REQUIRED: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.notes_only != 'true') || needs.changes.outputs.browser != 'false' }}
           PREPARE_RESULT: ${{ needs.desktop-prepare.result }}
           GO_RESULT: ${{ needs.desktop-go.result }}
           GO_RACE_RESULT: ${{ needs.desktop-go-race.result }}
@@ -483,7 +482,8 @@ jobs:
           test "$GO_RESULT" = "$(expected "$NATIVE_REQUIRED")"
           test "$GO_RACE_RESULT" = "$(expected "$NATIVE_REQUIRED")"
           test "$FRONTEND_RESULT" = "$(expected "$FRONTEND_REQUIRED")"
-          test "$BROWSER_RESULT" = "$(expected "$BROWSER_REQUIRED")"
+          # The browser aggregate always runs and validates skipped groups itself.
+          test "$BROWSER_RESULT" = success
 
   desktop-frontend:
     needs: [changes, desktop-prepare]
@@ -1396,7 +1396,7 @@ jobs:
             .github/workflows/release-verify-issues.yml \
             .github/workflows/docs-impact.yml \
             .github/workflows/ci.yml
-          node --test scripts/desktop-release-artifacts.test.mjs scripts/ci-workflow.test.mjs scripts/notarize-desktop.test.mjs scripts/windows-go-tests.test.mjs
+          node --test scripts/desktop-release-artifacts.test.mjs scripts/signpath-checkpoint.test.mjs scripts/ci-workflow.test.mjs scripts/notarize-desktop.test.mjs scripts/windows-go-tests.test.mjs
           bash scripts/release-workflows.test.sh
           node scripts/check-single-release-public-contract.mjs
 
@@ -1489,6 +1489,18 @@ jobs:
         id: gocache
         with:
           module: root
+
+      - name: Install and verify Linux sandbox backend
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if sysctl -n kernel.unprivileged_userns_clone >/dev/null 2>&1; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --ro-bind / / --dev /dev --proc /proc -- true
 
       - name: test with coverage
         run: go test -coverprofile=coverage.out -covermode=atomic ./...

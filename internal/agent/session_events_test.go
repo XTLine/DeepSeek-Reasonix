@@ -470,6 +470,28 @@ func TestLoadSessionMessagesDoesNotFallbackAfterEventReplayBudget(t *testing.T) 
 	}
 }
 
+func TestMigrationReplayIsNotBoundByInteractiveHistoryBudget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	events := `{"schema_version":1,"type":"replace","messages":[{"role":"system","content":"system"},{"role":"user","content":"` +
+		strings.Repeat("x", 4096) + `"}]}` + "\n"
+	if err := os.WriteFile(store.SessionEventLog(path), []byte(events), 0o600); err != nil {
+		t.Fatalf("write event log: %v", err)
+	}
+
+	interactive := defaultSessionReplayLimits
+	interactive.maxBytes = 1024
+	if _, err := loadSessionUnlockedWithLimits(path, interactive); !errors.Is(err, ErrSessionReplayLimitExceeded) {
+		t.Fatalf("interactive load error = %v, want ErrSessionReplayLimitExceeded", err)
+	}
+	migrated, err := loadSessionUnlockedWithLimits(path, migrationSessionReplayLimits())
+	if err != nil {
+		t.Fatalf("migration load: %v", err)
+	}
+	if got := migrated.Snapshot(); len(got) != 2 || got[1].Content != strings.Repeat("x", 4096) {
+		t.Fatalf("migration transcript = %#v", got)
+	}
+}
+
 func TestProbeSessionEventLogReadsOnlyNativeHeader(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	logPath := store.SessionEventLog(path)
@@ -591,6 +613,29 @@ func TestEventLogCompactionBoundsGrowth(t *testing.T) {
 	}
 	if got := anchor[len(anchor)-1].Content; got != strings.Repeat("z", 60) {
 		t.Fatal("anchor not refreshed by checkpoint compaction")
+	}
+}
+
+func TestMigrationLoadRejectsDamagedAuthoritativeLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	s := NewSession("sys")
+	s.Add(provider.Message{Role: provider.RoleUser, Content: "checkpoint"})
+	if err := s.SaveSnapshot(path); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(SessionEventLogPath(path), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("{not-json}\n"); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadSessionForMigration(t.Context(), path); !errors.Is(err, ErrSessionHistoryDamaged) {
+		t.Fatalf("migration error = %v, want ErrSessionHistoryDamaged", err)
 	}
 }
 

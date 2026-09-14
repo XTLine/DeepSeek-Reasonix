@@ -9,6 +9,7 @@
 /.github/workflows/release-stable-trigger.yml @SivanCola @esengine
 /.github/workflows/release-desktop.yml @SivanCola @esengine
 /scripts/complete-signpath-request.ps1 @SivanCola @esengine
+/scripts/signpath-checkpoint.mjs @SivanCola @esengine
 /scripts/package-windows-desktop.sh @SivanCola @esengine
 /scripts/verify-windows-authenticode.ps1 @SivanCola @esengine
 /cmd/signpath-contract/ @SivanCola @esengine

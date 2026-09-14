@@ -78,6 +78,13 @@ func (c *Controller) SetOnSessionTransition(fn func(SessionTransitionInfo) error
 	c.mu.Lock()
 	c.onSessionTransition = fn
 	c.mu.Unlock()
+	// Once a host delegates path transitions to a lease owner, unpublished
+	// replacements must remain fenced even if that callback is later detached
+	// during shutdown. Downgrading to permissive event writes would let a stale
+	// controller mutate the shared v3 projection.
+	if fn != nil {
+		c.managedSessionEvents.Store(true)
+	}
 }
 
 func (c *Controller) sessionTransitionHandler() func(SessionTransitionInfo) error {

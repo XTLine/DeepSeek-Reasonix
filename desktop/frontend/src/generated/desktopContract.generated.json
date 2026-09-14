@@ -1410,6 +1410,32 @@
     },
     {
       "cancellation": "before-dispatch",
+      "domain": "desktop/turn_runtime_api.go",
+      "name": "CancelSessionForTab",
+      "owner": "App.CancelSessionForTab",
+      "params": [
+        {
+          "kind": "string"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "control.CancelReceipt"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.CancelSessionForTab"
+      },
+      "sources": [
+        "desktop/turn_runtime_api.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
       "domain": "desktop/shell_support.go",
       "name": "CancelShellInstall",
       "owner": "App.CancelShellInstall",
@@ -1898,7 +1924,7 @@
     },
     {
       "cancellation": "before-dispatch",
-      "domain": "desktop/app.go",
+      "domain": "desktop/goal_app.go",
       "name": "ClearGoalForTab",
       "owner": "App.ClearGoalForTab",
       "params": [
@@ -1915,7 +1941,7 @@
         "resolver": "App.ClearGoalForTab"
       },
       "sources": [
-        "desktop/app.go"
+        "desktop/goal_app.go"
       ]
     },
     {
@@ -3128,28 +3154,68 @@
     },
     {
       "cancellation": "before-dispatch",
-      "domain": "desktop/todo_dismissal.go",
-      "name": "DismissTodoBatchForTab",
-      "owner": "App.DismissTodoBatchForTab",
+      "domain": "desktop/goal_app.go",
+      "name": "EditGoalForTab",
+      "owner": "App.EditGoalForTab",
       "params": [
         {
           "kind": "string"
         },
         {
           "kind": "string"
+        },
+        {
+          "elem": {
+            "kind": "integer"
+          },
+          "kind": "nullable"
         }
       ],
       "returnsError": true,
       "scope": {
         "inputs": [
           "tabID",
-          "batchKey"
+          "objective",
+          "maxGoalRounds"
         ],
         "kind": "owner-inputs",
-        "resolver": "App.DismissTodoBatchForTab"
+        "resolver": "App.EditGoalForTab"
       },
       "sources": [
-        "desktop/todo_dismissal.go"
+        "desktop/goal_app.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/remote_goal_edit.go",
+      "name": "EditRemoteTabGoal",
+      "owner": "App.EditRemoteTabGoal",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "elem": {
+            "kind": "integer"
+          },
+          "kind": "nullable"
+        }
+      ],
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "objective",
+          "maxGoalRounds"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.EditRemoteTabGoal"
+      },
+      "sources": [
+        "desktop/remote_goal_edit.go"
       ]
     },
     {
@@ -3498,6 +3564,25 @@
       },
       "sources": [
         "desktop/remote_listing.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/goal_diagnostics_export.go",
+      "name": "ExportGoalDiagnostics",
+      "owner": "App.ExportGoalDiagnostics",
+      "params": [],
+      "result": {
+        "kind": "string"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [],
+        "kind": "owner-state",
+        "resolver": "App.ExportGoalDiagnostics"
+      },
+      "sources": [
+        "desktop/goal_diagnostics_export.go"
       ]
     },
     {
@@ -7172,7 +7257,7 @@
     },
     {
       "cancellation": "before-dispatch",
-      "domain": "desktop/app.go",
+      "domain": "desktop/goal_app.go",
       "name": "PauseGoalForTab",
       "owner": "App.PauseGoalForTab",
       "params": [
@@ -7191,7 +7276,7 @@
         "resolver": "App.PauseGoalForTab"
       },
       "sources": [
-        "desktop/app.go"
+        "desktop/goal_app.go"
       ]
     },
     {
@@ -8494,6 +8579,44 @@
     },
     {
       "cancellation": "before-dispatch",
+      "domain": "desktop/remote_transcript_api.go",
+      "name": "RemoteSearchSessionHistoryForTab",
+      "owner": "App.RemoteSearchSessionHistoryForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "integer"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "session.SearchHistoryPage"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "textQuery",
+          "cursor",
+          "limit"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.RemoteSearchSessionHistoryForTab"
+      },
+      "sources": [
+        "desktop/remote_transcript_api.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
       "domain": "desktop/remote_app.go",
       "name": "RemoteServerLogs",
       "owner": "App.RemoteServerLogs",
@@ -8553,6 +8676,75 @@
       },
       "sources": [
         "desktop/remote_app.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/remote_transcript_api.go",
+      "name": "RemoteSessionHistoryContentForTab",
+      "owner": "App.RemoteSessionHistoryContentForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "object",
+          "ref": "sessioncontent.Ref"
+        },
+        {
+          "kind": "integer"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "main.SessionHistoryContentChunk"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "ref",
+          "offset"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.RemoteSessionHistoryContentForTab"
+      },
+      "sources": [
+        "desktop/remote_transcript_api.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/remote_transcript_api.go",
+      "name": "RemoteSessionHistoryPageForTab",
+      "owner": "App.RemoteSessionHistoryPageForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "integer"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "session.MessageHistoryPage"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "cursor",
+          "limit"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.RemoteSessionHistoryPageForTab"
+      },
+      "sources": [
+        "desktop/remote_transcript_api.go"
       ]
     },
     {
@@ -10272,7 +10464,7 @@
     },
     {
       "cancellation": "before-dispatch",
-      "domain": "desktop/app.go",
+      "domain": "desktop/goal_app.go",
       "name": "ResumeGoalForTab",
       "owner": "App.ResumeGoalForTab",
       "params": [
@@ -10291,7 +10483,7 @@
         "resolver": "App.ResumeGoalForTab"
       },
       "sources": [
-        "desktop/app.go"
+        "desktop/goal_app.go"
       ]
     },
     {
@@ -11694,6 +11886,113 @@
     },
     {
       "cancellation": "before-dispatch",
+      "domain": "desktop/session_history_service.go",
+      "name": "SearchSessionHistoryForTab",
+      "owner": "App.SearchSessionHistoryForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "integer"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "session.SearchHistoryPage"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "textQuery",
+          "cursor",
+          "limit"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.SearchSessionHistoryForTab"
+      },
+      "sources": [
+        "desktop/session_history_service.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/session_history_service.go",
+      "name": "SessionHistoryContentForTab",
+      "owner": "App.SessionHistoryContentForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "object",
+          "ref": "sessioncontent.Ref"
+        },
+        {
+          "kind": "integer"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "main.SessionHistoryContentChunk"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "ref",
+          "offset"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.SessionHistoryContentForTab"
+      },
+      "sources": [
+        "desktop/session_history_service.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
+      "domain": "desktop/session_history_service.go",
+      "name": "SessionHistoryPageForTab",
+      "owner": "App.SessionHistoryPageForTab",
+      "params": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "integer"
+        }
+      ],
+      "result": {
+        "kind": "object",
+        "ref": "session.MessageHistoryPage"
+      },
+      "returnsError": true,
+      "scope": {
+        "inputs": [
+          "tabID",
+          "cursor",
+          "limit"
+        ],
+        "kind": "owner-inputs",
+        "resolver": "App.SessionHistoryPageForTab"
+      },
+      "sources": [
+        "desktop/session_history_service.go"
+      ]
+    },
+    {
+      "cancellation": "before-dispatch",
       "domain": "desktop/recovery_lineage.go",
       "name": "SetActiveSessionVersion",
       "owner": "App.SetActiveSessionVersion",
@@ -12015,6 +12314,7 @@
           "kind": "string"
         }
       ],
+      "returnsError": true,
       "scope": {
         "inputs": [
           "tabID",
@@ -12524,7 +12824,7 @@
     },
     {
       "cancellation": "before-dispatch",
-      "domain": "desktop/app.go",
+      "domain": "desktop/goal_app.go",
       "name": "SetGoal",
       "owner": "App.SetGoal",
       "params": [
@@ -12541,12 +12841,12 @@
         "resolver": "App.SetGoal"
       },
       "sources": [
-        "desktop/app.go"
+        "desktop/goal_app.go"
       ]
     },
     {
       "cancellation": "before-dispatch",
-      "domain": "desktop/app.go",
+      "domain": "desktop/goal_app.go",
       "name": "SetGoalForTab",
       "owner": "App.SetGoalForTab",
       "params": [
@@ -12567,7 +12867,7 @@
         "resolver": "App.SetGoalForTab"
       },
       "sources": [
-        "desktop/app.go"
+        "desktop/goal_app.go"
       ]
     },
     {
@@ -16410,7 +16710,7 @@
     "topic:activation",
     "updater:progress"
   ],
-  "protocolVersion": 1,
+  "protocolVersion": 6,
   "types": {
     "agent.ToolRecoveryStatistics": {
       "fields": [
@@ -17712,6 +18012,46 @@
         }
       ]
     },
+    "control.CancelReceipt": {
+      "fields": [
+        {
+          "name": "sessionRef",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "headId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "runtimeEpoch",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "accepted",
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "alreadyIdle",
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "recoveryRequired",
+          "type": {
+            "kind": "boolean"
+          }
+        }
+      ]
+    },
     "control.PermissionCapabilities": {
       "fields": [
         {
@@ -18132,6 +18472,47 @@
         }
       ]
     },
+    "event.PendingInteraction": {
+      "fields": [
+        {
+          "name": "requestId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "toolCallId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "kind",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "headId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "turnId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "runtimeEpoch",
+          "type": {
+            "kind": "string"
+          }
+        }
+      ]
+    },
     "event.RecoveryStatus": {
       "fields": [
         {
@@ -18222,9 +18603,36 @@
           }
         },
         {
+          "name": "hostId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "sessionId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "sessionCodec",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "runtimeEpoch",
           "type": {
             "kind": "string"
+          }
+        },
+        {
+          "name": "activityRevision",
+          "type": {
+            "kind": "integer"
           }
         },
         {
@@ -18264,7 +18672,64 @@
           }
         },
         {
+          "name": "committedEventSeq",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "durableEventSeq",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "persistenceStatus",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "persistenceError",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "headId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "pendingPrompt",
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "pendingInteractions",
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "event.PendingInteraction"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "todos",
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "event.Todo"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "todoWritten",
           "type": {
             "kind": "boolean"
           }
@@ -18289,6 +18754,51 @@
         },
         {
           "name": "activity",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "recovery",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "event.RecoveryStatus"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "goal",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "goal.View"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "goalError",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        }
+      ]
+    },
+    "event.Todo": {
+      "fields": [
+        {
+          "name": "content",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "status",
           "type": {
             "kind": "string"
           }
@@ -20398,6 +20908,23 @@
           }
         },
         {
+          "name": "todos",
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "event.Todo"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "todoWritten",
+          "optional": true,
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        {
           "name": "resolvedName",
           "optional": true,
           "type": {
@@ -20945,6 +21472,102 @@
         },
         {
           "name": "step_id",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        }
+      ]
+    },
+    "goal.BlockReason": {
+      "fields": [
+        {
+          "name": "code",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "message",
+          "type": {
+            "kind": "string"
+          }
+        }
+      ]
+    },
+    "goal.View": {
+      "fields": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "revision",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "objective",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "phase",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "maxGoalRounds",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "integer"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "roundsStarted",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "blockedReason",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "goal.BlockReason"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
+          "name": "createdAt",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "updatedAt",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "activation",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "stopReason",
           "optional": true,
           "type": {
             "kind": "string"
@@ -26394,6 +27017,13 @@
           }
         },
         {
+          "name": "sessionId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "sessionRevision",
           "optional": true,
           "type": {
@@ -26506,6 +27136,17 @@
           }
         },
         {
+          "name": "goalView",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "goal.View"
+            },
+            "kind": "nullable"
+          }
+        },
+        {
           "name": "goalRuntime",
           "optional": true,
           "type": {
@@ -26528,16 +27169,6 @@
               "kind": "array"
             },
             "kind": "nullable"
-          }
-        },
-        {
-          "name": "dismissedTodoBatches",
-          "optional": true,
-          "type": {
-            "elem": {
-              "kind": "string"
-            },
-            "kind": "array"
           }
         },
         {
@@ -29803,6 +30434,20 @@
     "main.RemoteSessionView": {
       "fields": [
         {
+          "name": "hostId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "sessionId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "name",
           "type": {
             "kind": "string"
@@ -29877,6 +30522,13 @@
         },
         {
           "name": "sessionPath",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "sessionId",
           "optional": true,
           "type": {
             "kind": "string"
@@ -30373,6 +31025,13 @@
         },
         {
           "name": "topicId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "sessionId",
+          "optional": true,
           "type": {
             "kind": "string"
           }
@@ -30999,10 +31658,60 @@
         }
       ]
     },
+    "main.SessionHistoryContentChunk": {
+      "fields": [
+        {
+          "name": "data",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "nextOffset",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "done",
+          "type": {
+            "kind": "boolean"
+          }
+        }
+      ]
+    },
     "main.SessionMeta": {
       "fields": [
         {
           "name": "path",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "sessionId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "hostId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "codec",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "error",
+          "optional": true,
           "type": {
             "kind": "string"
           }
@@ -32352,6 +33061,13 @@
           }
         },
         {
+          "name": "sessionId",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "sessionRevision",
           "optional": true,
           "type": {
@@ -32544,6 +33260,17 @@
           "optional": true,
           "type": {
             "kind": "string"
+          }
+        },
+        {
+          "name": "goalView",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "goal.View"
+            },
+            "kind": "nullable"
           }
         },
         {
@@ -35181,6 +35908,209 @@
         },
         {
           "name": "durationMs",
+          "optional": true,
+          "type": {
+            "kind": "integer"
+          }
+        }
+      ]
+    },
+    "session.MessageHistoryPage": {
+      "fields": [
+        {
+          "name": "messages",
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "session.PersistentMessage"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "snapshotSequence",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "nextCursor",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "hasMore",
+          "type": {
+            "kind": "boolean"
+          }
+        }
+      ]
+    },
+    "session.PersistentMessage": {
+      "fields": [
+        {
+          "name": "messageId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "position",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "version",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "role",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "preview",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "eventSequence",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "inline",
+          "optional": true,
+          "type": {
+            "kind": "any"
+          }
+        },
+        {
+          "name": "contentRef",
+          "optional": true,
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "sessioncontent.Ref"
+            },
+            "kind": "nullable"
+          }
+        }
+      ]
+    },
+    "session.SearchHistoryHit": {
+      "fields": [
+        {
+          "name": "messageId",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "position",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "role",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "preview",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "eventSequence",
+          "type": {
+            "kind": "integer"
+          }
+        }
+      ]
+    },
+    "session.SearchHistoryPage": {
+      "fields": [
+        {
+          "name": "hits",
+          "type": {
+            "elem": {
+              "kind": "object",
+              "ref": "session.SearchHistoryHit"
+            },
+            "kind": "array"
+          }
+        },
+        {
+          "name": "snapshotSequence",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "nextCursor",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "hasMore",
+          "type": {
+            "kind": "boolean"
+          }
+        }
+      ]
+    },
+    "sessioncontent.Ref": {
+      "fields": [
+        {
+          "name": "digest",
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "bytes",
+          "type": {
+            "kind": "integer"
+          }
+        },
+        {
+          "name": "mediaType",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "name",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "indexDigest",
+          "optional": true,
+          "type": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "integrityBlockBytes",
           "optional": true,
           "type": {
             "kind": "integer"

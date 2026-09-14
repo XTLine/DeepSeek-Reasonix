@@ -84,7 +84,7 @@ func newOwnershipFixture(t *testing.T) *ownershipFixture {
 	bc := NewBroadcaster()
 	exec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, bc)
 	ctrl := control.New(control.Options{Executor: exec, Sink: bc, SessionDir: dir, SessionPath: active})
-	server := New(ctrl, bc, config.ServeConfig{})
+	server := newLifecycleTestServer(t, ctrl, bc, config.ServeConfig{})
 	leases := control.NewSessionLeaseKeeper()
 	if err := leases.Rebind(active); err != nil {
 		t.Fatalf("seed lease on active: %v", err)
@@ -300,10 +300,15 @@ func TestExternalFramesReachSubscriber(t *testing.T) {
 	if status, body := f.handoffForce(t, "wait"); status != http.StatusOK {
 		t.Fatalf("handoff status = %d (body %q)", status, body)
 	}
-	// Drain the takeover notice, then push a writer frame.
+	// Drain the takeover notice, then push a writer frame. Runtime state is a
+	// first-class frame and may be published while handoff changes ownership, so
+	// do not make the lifecycle assertion depend on incidental queue order.
 	var notice eventwire.Event
-	if err := events.next(&notice, 3*time.Second); err != nil || notice.Code != "session_taken_over" {
-		t.Fatalf("expected taken_over notice first, got %+v (%v)", notice, err)
+	deadline := time.Now().Add(3 * time.Second)
+	for notice.Code != "session_taken_over" {
+		if err := events.next(&notice, time.Until(deadline)); err != nil {
+			t.Fatalf("expected taken_over notice, got %+v (%v)", notice, err)
+		}
 	}
 
 	status, body := f.post(t, "/external/frames", map[string]any{
@@ -529,7 +534,7 @@ func TestHandoffWaitsOnRunningForeground(t *testing.T) {
 
 	bc := NewBroadcaster()
 	ctrl := &runningForeverController{Controller: control.New(control.Options{Sink: bc, SessionDir: dir, SessionPath: active})}
-	server := New(ctrl, bc, config.ServeConfig{})
+	server := newLifecycleTestServer(t, ctrl, bc, config.ServeConfig{})
 	leases := control.NewSessionLeaseKeeper()
 	defer leases.Release()
 	if err := leases.Rebind(active); err != nil {

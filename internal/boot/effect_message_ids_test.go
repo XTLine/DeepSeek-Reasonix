@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"reasonix/internal/ablation"
-	"reasonix/internal/agent"
 	"reasonix/internal/event"
 	"reasonix/internal/provider"
 )
@@ -46,7 +45,7 @@ name = "test-model"
 kind = "boot-effect-message-ids"
 model = "x"
 `)
-	ctrl, err := Build(context.Background(), Options{Sink: event.Discard, Ablation: ablation.Set{}})
+	ctrl, err := Build(context.Background(), withTestSession(t, Options{Sink: event.Discard, Ablation: ablation.Set{}}))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -54,7 +53,11 @@ model = "x"
 	if err := ctrl.Run(context.Background(), "reply ok"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	path := ctrl.SessionPath()
+	service, runtime, ok := ctrl.SessionBinding()
+	if !ok {
+		t.Fatal("controller did not bind a v3 session")
+	}
+	ref := runtime.Ref()
 	ctrl.Close()
 	reqs := rec.requests()
 	if len(reqs) == 0 {
@@ -67,12 +70,12 @@ model = "x"
 		}
 		sent[m.ID] = m.Content
 	}
-	loaded, err := agent.LoadSession(path)
+	loaded, err := service.Query().History(context.Background(), ref)
 	if err != nil {
-		t.Fatalf("LoadSession(%s): %v", path, err)
+		t.Fatalf("cold v3 History(%s): %v", ref.SessionID, err)
 	}
 	matched := 0
-	for _, m := range loaded.Messages {
+	for _, m := range loaded {
 		if m.ID == "" {
 			t.Fatalf("persisted message %q lost its id", m.Content)
 		}
@@ -84,6 +87,6 @@ model = "x"
 		}
 	}
 	if matched == 0 {
-		t.Fatalf("no request message id survived the save/load round trip (sent %d, loaded %d)", len(sent), len(loaded.Messages))
+		t.Fatalf("no request message id survived the save/load round trip (sent %d, loaded %d)", len(sent), len(loaded))
 	}
 }

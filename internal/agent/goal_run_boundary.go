@@ -42,7 +42,9 @@ func (a *Agent) resetTurnEvidence() {
 func (a *Agent) stopUnexecutedBoundaryCalls(ctx context.Context, state *turnRuntime, calls []provider.ToolCall, usage *provider.Usage) (error, bool) {
 	switch {
 	case state.graceRound && !a.allowsBoundaryTurnFinalizer(ctx, state, calls):
-		a.pairUnexecutedGraceCalls(calls, "blocked: the tool-call round budget is exhausted; no more tools will run in this turn")
+		if err := a.pairUnexecutedGraceCalls(ctx, calls, "blocked: the tool-call round budget is exhausted; no more tools will run in this turn"); err != nil {
+			return err, true
+		}
 		return a.gracePause(state), true
 	default:
 		return nil, false

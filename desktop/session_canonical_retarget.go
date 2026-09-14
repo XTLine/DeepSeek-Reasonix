@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"reasonix/internal/agent"
+	"reasonix/internal/control"
 	"reasonix/internal/sessioncatalog"
 )
 
@@ -117,6 +118,16 @@ func (a *App) resumeSessionForTranscript(tabID, path string, limit int, includeH
 		phases.Outcome = "tab_not_ready"
 		return HistoryPage{}, fmt.Errorf("tab is not ready")
 	}
+	if _, isV3 := parseSessionRoute(path); isV3 {
+		page, err := a.resumeCanonicalSessionForTranscript(tab, ctrl, path, limit, includeHistory)
+		if err != nil {
+			phases.Outcome = "v3_rebind_failed"
+			return HistoryPage{}, err
+		}
+		phases.TotalMs = elapsedMs(started)
+		page.Switch = &phases
+		return page, nil
+	}
 	// Resolve the continuation before the first read so the loaded session, the
 	// rebound path, and the returned fingerprint all name the same file.
 	resolveStarted := time.Now()
@@ -132,6 +143,21 @@ func (a *App) resumeSessionForTranscript(tabID, path string, limit int, includeH
 		return HistoryPage{}, err
 	}
 	phases.ResolveMs = elapsedMs(resolveStarted)
+	if identity, ok := ctrl.(control.IdentityLifecycle); ok && identity.UsesExclusiveSession() {
+		migrateStarted := time.Now()
+		page, migrateErr := a.continueLegacySessionForTranscript(tab, ctrl, sessionPath, limit, includeHistory, false)
+		if migrateErr != nil {
+			phases.Outcome = "legacy_migration_failed"
+			return HistoryPage{}, migrateErr
+		}
+		phases.LoadMs = elapsedMs(migrateStarted)
+		phases.LoadedCount = len(ctrl.History())
+		phases.LoadedBytes = sessionFileBytes(sessionPath)
+		phases.DurableReads = 1
+		phases.TotalMs = elapsedMs(started)
+		page.Switch = &phases
+		return page, nil
+	}
 
 	loadStarted := time.Now()
 	phases.DurableReads++

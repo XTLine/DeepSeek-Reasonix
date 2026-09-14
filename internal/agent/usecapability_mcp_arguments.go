@@ -20,6 +20,7 @@ type useCapabilityArgs struct {
 	CapabilityID string          `json:"capability_id"`
 	Query        string          `json:"query"`
 	Limit        int             `json:"limit"`
+	Cursor       string          `json:"cursor"`
 	Arguments    json.RawMessage `json:"arguments"`
 	Reason       string          `json:"reason"`
 }
@@ -31,8 +32,8 @@ func parseUseCapabilityArgs(raw json.RawMessage) (useCapabilityArgs, string, str
 	}
 	action := strings.ToLower(strings.TrimSpace(args.Action))
 	id := strings.TrimSpace(args.CapabilityID)
-	if args.Limit < 0 || args.Limit > 8 {
-		return args, "", "", fmt.Errorf("limit must be between 1 and 8 when provided")
+	if args.Limit < 0 || action == "search" && args.Limit > 8 || action == "list" && args.Limit > 100 {
+		return args, "", "", fmt.Errorf("limit must be 1..8 for search or 1..100 for list when provided")
 	}
 	if action == "call" && strings.HasPrefix(id, "mcp-tool:") {
 		normalized, err := normalizeMCPToolArguments(args.Arguments)

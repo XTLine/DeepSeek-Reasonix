@@ -1,14 +1,21 @@
 package control
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 
 	"reasonix/internal/agent"
 	"reasonix/internal/event"
 	"reasonix/internal/provider"
+	"reasonix/internal/session"
 )
 
 // Fork branches the conversation at the start of turn into a NEW session file,
@@ -42,12 +49,15 @@ func (c *Controller) forkNamed(turn int, name string, switchToFork bool) (string
 	return c.forkNamedReady(turn, name, switchToFork, agent.HeadKindFork)
 }
 
-// forkNamedReady forks at turn's boundary: a schema-2 session that switches
-// gets a new head in its own log (head id returned); every other case still
-// creates a new session file (path returned).
+// forkNamedReady forks at a completed turn boundary into an independent child
+// session. The parent log remains immutable from the child's point of view;
+// switchToFork controls only whether this controller adopts the child.
 func (c *Controller) forkNamedReady(turn int, name string, switchToFork bool, kind string) (string, error) {
 	if c.executor == nil {
 		return "", c.rewindFail(fmt.Errorf("checkpoints unavailable"))
+	}
+	if c.sessionEngineEnabled() {
+		return c.forkNamedSession(turn, name, switchToFork)
 	}
 	if c.sessionDir == "" {
 		return "", c.rewindFail(fmt.Errorf("fork needs session persistence, which is disabled"))
@@ -56,10 +66,6 @@ func (c *Controller) forkNamedReady(turn int, name string, switchToFork bool, ki
 	if !hasBound {
 		return "", c.rewindFail(fmt.Errorf("fork unavailable for turn %d (resumed session)", turn))
 	}
-	if sess := c.headBranchSession(); sess != nil && switchToFork {
-		return c.forkHeadReady(sess, turn, boundary, name, kind)
-	}
-
 	// Persist the current conversation first so the branch point survives, then
 	// seed a fresh session with the messages up to the fork and switch to it.
 	if err := c.Snapshot(); err != nil {
@@ -78,6 +84,10 @@ func (c *Controller) forkNamedReady(turn int, name string, switchToFork bool, ki
 	newPath := agent.NewSessionPath(c.sessionDir, c.label)
 	if err := sess.SaveIfAbsent(newPath); err != nil {
 		return "", c.rewindFail(err)
+	}
+	if err := c.publishSessionChild(newPath, forked); err != nil {
+		_ = os.Remove(newPath)
+		return "", c.rewindFail(fmt.Errorf("publish v3 fork: %w", err))
 	}
 	if _, err := sess.CopyValidContextProjection(parentPath, newPath); err != nil {
 		slog.Warn("controller: fork did not inherit context projection", "err", err)
@@ -153,14 +163,22 @@ func (c *Controller) Branch(name string) (string, error) {
 		return "", c.rewindFail(err)
 	}
 	defer c.endRotation()
+	if c.sessionEngineEnabled() {
+		_, runtime, _ := c.v3Binding()
+		if runtime == nil {
+			return "", c.rewindFail(session.ErrSessionNotRunning)
+		}
+		turns := runtime.Session().ExecutionSnapshot().Projection.Turns
+		if len(turns) == 0 {
+			return "", c.rewindFail(fmt.Errorf("nothing to branch yet"))
+		}
+		return c.forkNamedSession(len(turns), name, true)
+	}
 	if !c.executor.Session().HasContent() {
 		return "", c.rewindFail(fmt.Errorf("nothing to branch yet"))
 	}
 	if err := c.Snapshot(); err != nil {
 		return "", c.rewindFail(err)
-	}
-	if sess := c.headBranchSession(); sess != nil {
-		return c.forkHeadReady(sess, -1, sess.Len(), name, agent.HeadKindFork)
 	}
 	parentPath := c.SessionPath()
 	parentID := agent.BranchID(parentPath)
@@ -172,6 +190,10 @@ func (c *Controller) Branch(name string) (string, error) {
 	newPath := agent.NewSessionPath(c.sessionDir, c.label)
 	if err := sess.SaveIfAbsent(newPath); err != nil {
 		return "", c.rewindFail(err)
+	}
+	if err := c.publishSessionChild(newPath, branched); err != nil {
+		_ = os.Remove(newPath)
+		return "", c.rewindFail(fmt.Errorf("publish v3 branch: %w", err))
 	}
 	if _, err := sess.CopyValidContextProjection(parentPath, newPath); err != nil {
 		slog.Warn("controller: branch did not inherit context projection", "err", err)
@@ -209,6 +231,60 @@ func (c *Controller) Branch(name string) (string, error) {
 	c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo,
 		Text: fmt.Sprintf("created branch %s", agent.BranchID(newPath))})
 	return newPath, nil
+}
+
+// forkNamedSession creates a child from an exact persisted turn boundary. The
+// compatibility integer is resolved only against the typed turn index; no
+// message count, transcript snapshot, or sidecar participates.
+func (c *Controller) forkNamedSession(turn int, name string, switchToFork bool) (string, error) {
+	service, parent, _ := c.v3Binding()
+	if service == nil || parent == nil {
+		return "", session.ErrSessionNotRunning
+	}
+	projection := parent.Session().ExecutionSnapshot().Projection
+	completed := make([]session.TurnBoundary, 0, len(projection.Turns))
+	for _, boundary := range projection.Turns {
+		if boundary.EndSequence != 0 {
+			completed = append(completed, boundary)
+		}
+	}
+	if turn < 1 || turn > len(completed) {
+		return "", fmt.Errorf("fork unavailable for completed turn %d", turn)
+	}
+	child, err := service.Fork(context.Background(), parent.Ref(), completed[turn-1].TurnID, "")
+	if err != nil {
+		return "", err
+	}
+	closeChild := true
+	defer func() {
+		if closeChild {
+			_ = service.Close(context.Background(), child.Ref())
+		}
+	}()
+	if title := strings.TrimSpace(name); title != "" {
+		payload, marshalErr := json.Marshal(map[string]string{"title": title})
+		if marshalErr != nil {
+			return "", marshalErr
+		}
+		if _, appendErr := child.Session().AppendBatch(context.Background(), "fork-title:"+child.Ref().SessionID, []session.Event{{Kind: "session/title", Payload: payload}}); appendErr != nil {
+			return "", appendErr
+		}
+	}
+	if _, err := child.Session().Flush(context.Background()); err != nil {
+		return "", err
+	}
+	if !switchToFork {
+		return child.Ref().SessionID, nil
+	}
+	prepared := agent.NewSession("").CloneWithMessages(child.Session().ExecutionSnapshot().Projection.ModelMessages)
+	_, err = c.publishSessionRuntime(child, prepared, true)
+	if err != nil {
+		return "", err
+	}
+	closeChild = false
+	c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo,
+		Text: fmt.Sprintf("forked conversation at completed turn %d into session %s", turn, child.Ref().SessionID)})
+	return child.Ref().SessionID, nil
 }
 
 // Branches lists saved conversation branches in this controller's session dir.
@@ -254,17 +330,49 @@ func (c *Controller) SwitchBranch(ref string) (agent.BranchInfo, error) {
 	if err := c.ValidateSessionModel(match.Path); err != nil {
 		return agent.BranchInfo{}, c.rewindFail(err)
 	}
-	if match.HeadID != "" && agent.CanonicalSessionPath(match.Path) == agent.CanonicalSessionPath(c.SessionPath()) {
-		return c.switchHeadInPlace(match)
+	if match.HeadID != "" {
+		loadedHead, err := agent.LoadSessionHeadReadOnly(match.Path, match.HeadID)
+		if err != nil {
+			return agent.BranchInfo{}, c.rewindFail(err)
+		}
+		loaded := agent.NewSession("")
+		loaded.Messages = loadedHead.Snapshot()
+		newPath := agent.NewSessionPath(c.sessionDir, c.label)
+		if err := loaded.SaveIfAbsent(newPath); err != nil {
+			return agent.BranchInfo{}, c.rewindFail(err)
+		}
+		if err := c.publishSessionChild(newPath, loaded.Messages); err != nil {
+			_ = os.Remove(newPath)
+			return agent.BranchInfo{}, c.rewindFail(fmt.Errorf("migrate legacy head: %w", err))
+		}
+		preview, turns := agent.SessionPreviewFromMessages(loaded.Messages)
+		if err := agent.SaveBranchMeta(newPath, agent.BranchMeta{
+			Name: strings.TrimSpace(match.Name), ParentID: agent.BranchID(match.Path), ForkTurn: -1,
+			ForkMessageIndex: len(loaded.Messages), Preview: preview, Turns: turns,
+			SchemaVersion: agent.BranchMetaCountsVersion, Model: c.selection.ref, ModelIdentity: c.selection.identity,
+		}); err != nil {
+			return agent.BranchInfo{}, c.rewindFail(err)
+		}
+		match = agent.BranchInfo{BranchMeta: agent.BranchMeta{ID: agent.BranchID(newPath), Name: match.Name, ParentID: agent.BranchID(match.Path)}, Path: newPath, Preview: preview, Turns: turns}
+		commitTransition, err := c.prepareSessionTransition(newPath, "migrate-legacy-head", loaded)
+		if err != nil {
+			return agent.BranchInfo{}, c.rewindFail(fmt.Errorf("bind migrated head: %w", err))
+		}
+		c.snapshotMu.Lock()
+		commitTransition.publish()
+		c.bindExecutorProjection(newPath, true)
+		c.ResetPlannerSession()
+		c.rebindCheckpoints(newPath)
+		c.loadGuardianSession()
+		c.loadRecoveryState(newPath)
+		c.rotateSessionTemp()
+		c.snapshotMu.Unlock()
+		c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: "continued legacy version as an independent session"})
+		return match, nil
 	}
 	loaded, err := agent.LoadSession(match.Path)
 	if err != nil {
 		return agent.BranchInfo{}, c.rewindFail(err)
-	}
-	if match.HeadID != "" {
-		if err := loaded.SwitchHead(match.Path, match.HeadID); err != nil {
-			return agent.BranchInfo{}, c.rewindFail(err)
-		}
 	}
 	commitTransition, err := c.prepareSessionTransition(match.Path, "switch", loaded)
 	if err != nil {
@@ -276,7 +384,6 @@ func (c *Controller) SwitchBranch(ref string) (agent.BranchInfo, error) {
 	c.bindExecutorProjection(match.Path, true)
 	c.ResetPlannerSession()
 	c.rebindCheckpoints(match.Path)
-	c.restoreTerminalGoalTodos(match.Path)
 	c.loadGuardianSession()
 	c.loadRecoveryState(match.Path)
 	c.rotateSessionTemp()
@@ -330,56 +437,6 @@ func branchDisplayName(b agent.BranchInfo) string {
 	return b.ID
 }
 
-// forkHeadReady is the schema-2 fork: a new head starts at the message before
-// boundary and this controller moves onto it without changing session path;
-// checkpoint turns past the boundary stay hidden by CheckpointHasBoundary.
-func (c *Controller) forkHeadReady(sess *agent.Session, turn, boundary int, name, kind string) (string, error) {
-	if err := c.Snapshot(); err != nil {
-		slog.Warn("controller: pre-fork snapshot", "err", err)
-	}
-	path := c.SessionPath()
-	src := sess.Snapshot()
-	if boundary > len(src) {
-		boundary = len(src)
-	}
-	from := ""
-	if boundary > 0 {
-		from = src[boundary-1].ID
-	}
-	c.snapshotMu.Lock()
-	head, err := sess.ForkHead(path, from, kind, name)
-	if err != nil {
-		c.snapshotMu.Unlock()
-		return "", c.rewindFail(fmt.Errorf("fork head: %w", err))
-	}
-	c.afterHeadSwitch(path)
-	c.snapshotMu.Unlock()
-	if turn >= 0 {
-		c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo,
-			Text: fmt.Sprintf("forked conversation at turn %d into a new version", turn)})
-	} else {
-		c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo,
-			Text: fmt.Sprintf("created branch %s", head)})
-	}
-	return head, nil
-}
-
-// switchHeadInPlace moves the live session onto another head of its own log.
-func (c *Controller) switchHeadInPlace(match agent.BranchInfo) (agent.BranchInfo, error) {
-	sess := c.executor.Session()
-	path := c.SessionPath()
-	c.snapshotMu.Lock()
-	if err := sess.SwitchHead(path, match.HeadID); err != nil {
-		c.snapshotMu.Unlock()
-		return agent.BranchInfo{}, c.rewindFail(err)
-	}
-	c.afterHeadSwitch(path)
-	c.snapshotMu.Unlock()
-	c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo,
-		Text: fmt.Sprintf("switched to branch %s", branchDisplayName(match))})
-	return match, nil
-}
-
 // afterHeadSwitch re-derives the per-transcript runtime state after the
 // session moved to another head of the same log. Callers hold snapshotMu.
 func (c *Controller) afterHeadSwitch(path string) {
@@ -400,13 +457,15 @@ func (c *Controller) afterHeadSwitch(path string) {
 // the main head keeps the file's identity so the tree stays rooted at the
 // log, and every other head hangs under its parent head.
 func (c *Controller) withHeadBranches(branches []agent.BranchInfo) []agent.BranchInfo {
-	sess := c.headBranchSession()
+	// Existing heads are exposed for read/navigation only. Selecting one
+	// materializes an independent session before execution.
+	sess := c.loggedTurnSession()
 	if sess == nil {
 		return branches
 	}
 	path := c.SessionPath()
 	heads, err := agent.ListSessionHeads(path)
-	if err != nil || len(heads) == 0 {
+	if err != nil || len(heads) <= 1 {
 		return branches
 	}
 	fileID := agent.BranchID(path)
@@ -454,10 +513,67 @@ type sessionHeadPolicy struct {
 // headBranchSession returns the session when branch operations may create
 // heads inside its schema-2 log, nil when the frontend asked for files.
 func (c *Controller) headBranchSession() *agent.Session {
-	if c.headPolicy.fileBranchesOnly {
-		return nil
+	// New writes always materialize an independent child session. Existing
+	// schema-2 heads remain discoverable through the legacy read adapter, but
+	// they are never extended or used as a second writable head.
+	return nil
+}
+
+// publishSessionChild creates a self-contained child before any UI/session switch.
+// When the selected message prefix is an exact completed-turn boundary it
+// copies the parent's immutable event batches. Legacy or pre-first-turn cuts
+// are imported as history only and carry no activity or authorization state.
+func (c *Controller) publishSessionChild(newPath string, messages []provider.Message) error {
+	childDir := sessionDirectory(newPath)
+	childID := agent.BranchID(newPath)
+	if childDir == "" || childID == "" {
+		return fmt.Errorf("invalid child identity")
 	}
-	return c.loggedTurnSession()
+	if parent := c.sessionEventStore(); parent != nil {
+		if _, err := parent.Flush(context.Background()); err != nil {
+			return err
+		}
+		commits, err := session.Replay(sessionDirectory(c.SessionPath()), nil)
+		if err != nil {
+			return err
+		}
+		for i, v := range slices.Backward(commits) {
+			commit := v
+			if len(commit.Events) == 0 || commit.Events[len(commit.Events)-1].Kind != "turn/end" {
+				continue
+			}
+			projection, projectErr := session.Project(commits[:i+1])
+			if projectErr != nil {
+				return projectErr
+			}
+			if reflect.DeepEqual(projection.Messages, messages) {
+				_, forkErr := parent.Fork(context.Background(), childDir, childID, commit.LastSequence())
+				return forkErr
+			}
+		}
+		projected, projectErr := session.Project(commits)
+		if projectErr != nil {
+			return projectErr
+		}
+		if len(projected.Turns) > 0 {
+			return fmt.Errorf("selected history is not an exact completed v3 turn boundary")
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(childDir), 0o700); err != nil {
+		return err
+	}
+	child, err := session.CreateStore(childDir, childID)
+	if err != nil {
+		return err
+	}
+	payload, marshalErr := json.Marshal(map[string]any{"messages": messages})
+	if marshalErr == nil {
+		_, marshalErr = child.Append(context.Background(), session.Batch{OperationID: "history-import", Events: []session.Event{{Kind: "legacy/import", Payload: payload}}})
+	}
+	if marshalErr == nil {
+		_, marshalErr = child.Flush(context.Background())
+	}
+	return errors.Join(marshalErr, child.Close(context.Background()))
 }
 
 // SessionHead reports the schema-2 head the live session is on; ok is false

@@ -465,13 +465,16 @@ kind = "boot-subagent-test"
 model = "x"
 `)
 
-	ctrl, err := Build(context.Background(), Options{Sink: event.Discard})
+	ctrl, err := Build(context.Background(), withTestSession(t, Options{Sink: event.Discard}))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	defer ctrl.Close()
-	sessionPath := agent.NewSessionPath(ctrl.SessionDir(), ctrl.Label())
-	ctrl.SetSessionPath(sessionPath)
+	ctrl.EnsureSessionPath()
+	parentRef, ok := ctrl.SessionRef()
+	if !ok {
+		t.Fatal("Build did not bind a v3 session")
+	}
 
 	if err := ctrl.Run(context.Background(), "first review"); err != nil {
 		t.Fatalf("first Run: %v", err)
@@ -490,8 +493,8 @@ model = "x"
 	if meta.Status != agent.SubagentFailed {
 		t.Fatalf("status = %q, want failed", meta.Status)
 	}
-	if meta.ParentSession != agent.BranchID(sessionPath) {
-		t.Fatalf("parent session = %q, want %q", meta.ParentSession, agent.BranchID(sessionPath))
+	if meta.ParentSession != parentRef.SessionID {
+		t.Fatalf("parent session = %q, want v3 identity %q", meta.ParentSession, parentRef.SessionID)
 	}
 	sess, err := agent.LoadSession(filepath.Join(config.SessionDir(), "subagents", ref+".jsonl"))
 	if err != nil {
@@ -532,13 +535,16 @@ model = "x"
 `)
 
 	sessionDir := filepath.Join(t.TempDir(), "desktop-workspace-sessions")
-	ctrl, err := Build(context.Background(), Options{Sink: event.Discard, SessionDir: sessionDir})
+	ctrl, err := Build(context.Background(), withTestSession(t, Options{Sink: event.Discard, SessionDir: sessionDir}))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	defer ctrl.Close()
-	sessionPath := agent.NewSessionPath(ctrl.SessionDir(), ctrl.Label())
-	ctrl.SetSessionPath(sessionPath)
+	ctrl.EnsureSessionPath()
+	parentRef, ok := ctrl.SessionRef()
+	if !ok {
+		t.Fatal("Build did not bind a v3 session")
+	}
 
 	if err := ctrl.Run(context.Background(), "first review"); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -553,8 +559,8 @@ model = "x"
 	if err != nil {
 		t.Fatalf("LoadMeta from override dir: %v", err)
 	}
-	if meta.ParentSession != agent.BranchID(sessionPath) {
-		t.Fatalf("parent session = %q, want %q", meta.ParentSession, agent.BranchID(sessionPath))
+	if meta.ParentSession != parentRef.SessionID {
+		t.Fatalf("parent session = %q, want v3 identity %q", meta.ParentSession, parentRef.SessionID)
 	}
 	if _, err := os.Stat(filepath.Join(config.SessionDir(), "subagents", ref+".meta.json")); !os.IsNotExist(err) {
 		t.Fatalf("subagent metadata should not be written to global session dir, stat err = %v", err)
@@ -582,7 +588,7 @@ kind = "boot-subagent-test"
 model = "x"
 `)
 
-	ctrl, err := Build(context.Background(), Options{Sink: event.Discard})
+	ctrl, err := Build(context.Background(), withTestSession(t, Options{Sink: event.Discard}))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1115,18 +1121,22 @@ kind = "boot-headless-test"
 model = "x"
 `)
 
-	ctrl, err := Build(context.Background(), Options{Sink: event.Discard})
+	ctrl, err := Build(context.Background(), withTestSession(t, Options{Sink: event.Discard}))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	defer ctrl.Close()
 
-	// Deliberately NOT calling SetSessionPath — this is the headless run path.
+	// Deliberately do not bind a legacy path. The first run must lazily create
+	// a persistent v3 identity so subagents have a stable parent.
 	if err := ctrl.Run(context.Background(), "use a task subagent"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := ctrl.SessionPath(); got != "" {
-		t.Fatalf("headless run should keep an empty session path, got %q", got)
+		t.Fatalf("headless v3 run must not create a legacy session path, got %q", got)
+	}
+	if _, ok := ctrl.SessionRef(); !ok {
+		t.Fatal("headless run did not create a v3 session identity")
 	}
 
 	var toolContent strings.Builder
@@ -1141,8 +1151,8 @@ model = "x"
 	if !strings.Contains(toolContent.String(), "subagent answer") {
 		t.Fatalf("task tool result = %q, want sub-agent answer", toolContent.String())
 	}
-	if strings.Contains(toolContent.String(), "Subagent reference") {
-		t.Fatalf("ephemeral headless run should not persist a transcript reference: %s", toolContent.String())
+	if !strings.Contains(toolContent.String(), "Subagent reference") {
+		t.Fatalf("persistent v3 headless run should expose a transcript reference: %s", toolContent.String())
 	}
 }
 
@@ -1309,16 +1319,28 @@ model = "x"
 api_key_env = "REASONIX_TEST_KEY_UNSET"
 `)
 
-	ctrl, err := Build(context.Background(), Options{WorkspaceRoot: dir, Sink: event.Discard})
+	ctrl, err := Build(context.Background(), withTestSession(t, Options{WorkspaceRoot: dir, Sink: event.Discard}))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	defer ctrl.Close()
 	// Retired keys do not block construction or fresh-session rotation.
+	ctrl.EnsureSessionPath()
+	before, ok := ctrl.SessionRef()
+	if !ok {
+		t.Fatal("Build did not bind a v3 session")
+	}
 	fresh := filepath.Join(dir, "fresh-session.jsonl")
 	ctrl.SetFreshSessionPath(fresh)
-	if got := ctrl.SessionPath(); got != fresh {
-		t.Fatalf("fresh session path = %q, want %q", got, fresh)
+	after, ok := ctrl.SessionRef()
+	if !ok || after == before {
+		t.Fatalf("fresh session identity = %+v, want a new identity after %+v", after, before)
+	}
+	if got := ctrl.SessionPath(); got != "" {
+		t.Fatalf("fresh v3 session wrote a legacy path %q", got)
+	}
+	if _, err := os.Stat(fresh); !os.IsNotExist(err) {
+		t.Fatalf("fresh v3 rotation created legacy transcript %q: %v", fresh, err)
 	}
 }
 
@@ -2305,7 +2327,9 @@ func unifiedBootToolNames() []string {
 		"bash",
 		"bash_output",
 		"compress",
+		"create_goal",
 		"edit_file",
+		"get_goal",
 		"kill_shell",
 		"read_file",
 		"todo_write",

@@ -350,7 +350,7 @@ func (c *Coordinator) Run(ctx context.Context, input string) error {
 		return c.executor.Run(ctx, input)
 	}
 	c.sink.Emit(event.Event{Kind: event.Phase, Text: c.planner.Name() + " · planning", Detail: routeDetail, Source: event.UsageSourcePlanner})
-	plannerCtx := tool.WithoutGoalTurnRecorder(ctx)
+	plannerCtx := tool.WithoutGoalLifecycle(ctx)
 	plannerInput := plannerTurnInput(input, decision)
 	outcome, err := c.plan(plannerCtx, plannerInput)
 	if err != nil {
@@ -379,7 +379,9 @@ func (c *Coordinator) deliverPlan(ctx context.Context, input string, outcome pla
 	}
 	runWithPlanApproval := func() error {
 		if c.plannerPlanApprover == nil {
-			c.persistExecutorNoOp(ctx, input, plan+"\n\n"+plannerPlanAwaitingApprovalNote, outcome.messageID)
+			if err := c.persistExecutorNoOp(ctx, input, plan+"\n\n"+plannerPlanAwaitingApprovalNote, outcome.messageID); err != nil {
+				return err
+			}
 			c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: i18n.M.PlannerPlanAwaitingApproval, Source: event.UsageSourcePlanner})
 			return nil
 		}
@@ -392,13 +394,17 @@ func (c *Coordinator) deliverPlan(ctx context.Context, input string, outcome pla
 			// The user declined the plan. Persist the exchange like the no-op
 			// path does — a denied turn must survive session save/reload, and
 			// the note tells the next executor turn that nothing ran.
-			c.persistExecutorNoOp(ctx, input, plan+"\n\n"+plannerPlanNotApprovedNote, outcome.messageID)
+			if persistErr := c.persistExecutorNoOp(ctx, input, plan+"\n\n"+plannerPlanNotApprovedNote, outcome.messageID); persistErr != nil {
+				return persistErr
+			}
 			c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: i18n.M.PlannerPlanNotApproved, Source: event.UsageSourcePlanner})
 		}
 		return err
 	}
 	if decision.Route == PlannerRoutePlanOnly {
-		c.persistExecutorNoOp(ctx, input, plan+"\n\n"+plannerPlanOnlyNote, outcome.messageID)
+		if err := c.persistExecutorNoOp(ctx, input, plan+"\n\n"+plannerPlanOnlyNote, outcome.messageID); err != nil {
+			return err
+		}
 		c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: i18n.M.PlannerPlanOnly, Source: event.UsageSourcePlanner})
 		return nil
 	}
@@ -424,9 +430,9 @@ const (
 	plannerPlanSubmittedClosure     = "Plan submitted to the host."
 )
 
-func (c *Coordinator) persistExecutorNoOp(ctx context.Context, input, plan, messageID string) {
+func (c *Coordinator) persistExecutorNoOp(ctx context.Context, input, plan, messageID string) error {
 	if c == nil || c.executor == nil || c.executor.sess.conversation == nil {
-		return
+		return nil
 	}
 	rawInput := RawUserInput(ctx, input)
 	providerContent := c.executor.withTurnPreferences(input)
@@ -434,12 +440,14 @@ func (c *Coordinator) persistExecutorNoOp(ctx context.Context, input, plan, mess
 	if providerContent != rawInput {
 		rawContent = rawInput
 	}
-	c.executor.AppendTurnContextAndUser(ctx, provider.Message{
+	if _, err := c.executor.AppendTurnContextAndUserChecked(ctx, provider.Message{
 		ID:   turnUserMessageID(ctx, c.executor.Session()),
 		Role: provider.RoleUser, Origin: inputMessageOrigin(ctx), Content: providerContent, RawContent: rawContent,
 		Images: userImages(ctx), CreatedAt: time.Now().UnixMilli(),
-	})
-	c.executor.sess.conversation.Add(provider.Message{ID: messageID, Role: provider.RoleAssistant, Content: plan})
+	}); err != nil {
+		return err
+	}
+	return c.executor.appendCommittedMessages(ctx, "planner-noop-assistant", provider.Message{ID: messageID, Role: provider.RoleAssistant, Content: plan})
 }
 
 // plannerOutcome is one planning turn's result. A submitted plan is the

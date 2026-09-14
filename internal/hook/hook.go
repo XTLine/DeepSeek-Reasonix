@@ -703,9 +703,6 @@ func claudeFacingToolInput(toolName string, args json.RawMessage, cwd string) js
 	if toolName == "ask" && fillClaudeAskDefaults(obj) {
 		changed = true
 	}
-	if toolName == "todo_write" && fillClaudeTodoDefaults(obj) {
-		changed = true
-	}
 	// parallel_tasks maps to Claude's Agent tool but carries an array of
 	// sub-tasks where Agent has a single prompt — a structural difference no
 	// key rename bridges. Synthesize "prompt" from every sub-task's prompt
@@ -800,42 +797,6 @@ func fillClaudeAskDefaults(obj map[string]json.RawMessage) bool {
 		return false
 	}
 	obj["questions"] = body
-	return true
-}
-
-// fillClaudeTodoDefaults supplies Claude's required activeForm label from the
-// Reasonix task content when the caller omitted it.
-func fillClaudeTodoDefaults(obj map[string]json.RawMessage) bool {
-	var todos []map[string]json.RawMessage
-	if err := json.Unmarshal(obj["todos"], &todos); err != nil {
-		return false
-	}
-	changed := false
-	for _, todo := range todos {
-		var activeForm string
-		_ = json.Unmarshal(todo["activeForm"], &activeForm)
-		if strings.TrimSpace(activeForm) != "" {
-			continue
-		}
-		var content string
-		if err := json.Unmarshal(todo["content"], &content); err != nil || strings.TrimSpace(content) == "" {
-			continue
-		}
-		body, err := json.Marshal(content)
-		if err != nil {
-			return false
-		}
-		todo["activeForm"] = body
-		changed = true
-	}
-	if !changed {
-		return false
-	}
-	body, err := json.Marshal(todos)
-	if err != nil {
-		return false
-	}
-	obj["todos"] = body
 	return true
 }
 

@@ -54,7 +54,8 @@ func (m *chatTUI) resetFreshContextView(clearTranscript bool) {
 	m.finalizeStreamed()
 	m.pending.Reset()
 	m.reasoning.Reset()
-	m.todoArgs = ""
+	m.todos = nil
+	m.todosDismissed = false
 	m.chooser = nil
 	m.pendingApproval = nil
 	m.bubblePending = false

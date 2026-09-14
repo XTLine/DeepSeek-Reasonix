@@ -50,8 +50,13 @@ test("required desktop aggregate rejects every failed, cancelled or unexpectedly
     for (const value of ["failure", "cancelled", "skipped", ""]) assert.notEqual(run({ ...success, [key]: value }), 0, `${key}=${value}`);
   }
   assert.equal(run({ ...success, PREPARE_REQUIRED: "false", NATIVE_REQUIRED: "false", FRONTEND_REQUIRED: "false", BROWSER_REQUIRED: "false",
-    PREPARE_RESULT: "skipped", GO_RESULT: "skipped", GO_RACE_RESULT: "skipped", FRONTEND_RESULT: "skipped", BROWSER_RESULT: "skipped" }), 0);
-  assert.equal(run({ ...success, FRONTEND_REQUIRED: "false", BROWSER_REQUIRED: "false", FRONTEND_RESULT: "skipped", BROWSER_RESULT: "skipped" }), 0);
+    PREPARE_RESULT: "skipped", GO_RESULT: "skipped", GO_RACE_RESULT: "skipped", FRONTEND_RESULT: "skipped", BROWSER_RESULT: "success" }), 0);
+  assert.equal(run({ ...success, FRONTEND_REQUIRED: "false", BROWSER_REQUIRED: "false", FRONTEND_RESULT: "skipped", BROWSER_RESULT: "success" }), 0);
+  const browserScript = shellStep(job(ci, "desktop-browser"), "Verify desktop browser groups");
+  const browser = spawnSync("bash", ["-e", "-c", browserScript], { env: { ...process.env,
+    CHANGES_RESULT: "success", SHOULD_RUN: "false", PREPARE_RESULT: "skipped", GROUP_RESULT: "skipped" } });
+  assert.equal(browser.status, 0, "an unneeded browser aggregate succeeds after validating skipped groups");
+  assert.notEqual(run({ ...success, BROWSER_REQUIRED: "false", BROWSER_RESULT: "skipped" }), 0);
 });
 
 test("required lint aggregates code lint and the deduplicated frontend suite", () => {

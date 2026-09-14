@@ -626,8 +626,8 @@ func TestAppendRemoteModelSettingsFreshTabStaysPending(t *testing.T) {
 }
 
 // A legacy Serve remains available for history, but cannot execute a new turn
-// until it advertises the permission-presets-v1 contract.
-func TestSubmitRemoteTabRejectsLegacyServeWithoutPermissionPresets(t *testing.T) {
+// until it advertises the runtime and immutable-identity capabilities.
+func TestSubmitRemoteTabRejectsLegacyServeWithoutExecutionProtocol(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	submits := make(chan string, 4)
 	serve := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -662,8 +662,8 @@ func TestSubmitRemoteTabRejectsLegacyServeWithoutPermissionPresets(t *testing.T)
 	app.remoteMu.Unlock()
 
 	err := app.SubmitRemoteTab(tab.id, "first turn")
-	if err == nil || !strings.Contains(err.Error(), "permission-presets-v1") {
-		t.Fatalf("legacy submit error = %v, want permission-presets-v1 upgrade requirement", err)
+	if err == nil || !strings.Contains(err.Error(), "execution-v2") || !strings.Contains(err.Error(), "session-history-v1") || !strings.Contains(err.Error(), "session-identity-v1") || !strings.Contains(err.Error(), "session-ownership-v1") {
+		t.Fatalf("legacy submit error = %v, want runtime protocol upgrade requirement", err)
 	}
 	if kernel.switches != 0 {
 		t.Fatalf("legacy target reached model admission before permission rejection, switches=%d", kernel.switches)

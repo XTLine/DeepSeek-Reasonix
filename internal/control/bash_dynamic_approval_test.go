@@ -55,7 +55,7 @@ func TestDynamicBashUsesTheSamePresetDecisionAsOtherCommands(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			approvals := make(chan event.Approval, 1)
-			c := New(Options{Sink: event.FuncSink(func(e event.Event) {
+			c := newOwnedTestController(t, Options{Sink: event.FuncSink(func(e event.Event) {
 				if e.Kind == event.ApprovalRequest {
 					approvals <- e.Approval
 				}
@@ -91,7 +91,7 @@ func TestExactOnlyBashDoesNotPromptInAutoOrApprovedPlan(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			approvals := make(chan event.Approval, len(commands))
-			c := New(Options{Sink: event.FuncSink(func(e event.Event) {
+			c := newOwnedTestController(t, Options{Sink: event.FuncSink(func(e event.Event) {
 				if e.Kind == event.ApprovalRequest {
 					approvals <- e.Approval
 				}
@@ -119,7 +119,7 @@ func TestExactOnlyBashDoesNotPromptInAutoOrApprovedPlan(t *testing.T) {
 
 func TestPermissionModeChangeDoesNotAutoApprovePendingRequest(t *testing.T) {
 	approvals := make(chan event.Approval, 1)
-	c := New(Options{Sink: event.FuncSink(func(e event.Event) {
+	c := newOwnedTestController(t, Options{Sink: event.FuncSink(func(e event.Event) {
 		if e.Kind == event.ApprovalRequest {
 			approvals <- e.Approval
 		}
@@ -143,7 +143,7 @@ func TestPermissionModeChangeDoesNotAutoApprovePendingRequest(t *testing.T) {
 func TestDynamicBashExactSessionGrantIsNotPersisted(t *testing.T) {
 	approvals := make(chan event.Approval, 2)
 	remembered := make(chan string, 1)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.ApprovalRequest {
 				approvals <- e.Approval
@@ -177,7 +177,7 @@ func TestDynamicBashExactSessionGrantIsNotPersisted(t *testing.T) {
 	}
 
 	old := c.SessionAuthorizations()
-	fresh := New(Options{})
+	fresh := newOwnedTestController(t, Options{})
 	fresh.RestoreSessionAuthorizations(old)
 	allow, _, err = gateApprover{fresh}.Approve(context.Background(), "bash", dynamicBashCommand, nil)
 	if err != nil || !allow {
@@ -218,7 +218,7 @@ func TestDynamicBashSkipsGuardianAllow(t *testing.T) {
 	guardianSess := guardian.NewSession(guardianProv, tool.NewRegistry(), guardian.PolicyPrompt(), "guardian-test", 0, nil, event.Discard)
 	exec := agent.New(&recordingProvider{name: "executor"}, tool.NewRegistry(), agent.NewSession("sys"), agent.Options{}, event.Discard)
 	approvals := make(chan event.Approval, 1)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Executor: exec,
 		Guardian: guardianSess,
 		Sink: event.FuncSink(func(e event.Event) {

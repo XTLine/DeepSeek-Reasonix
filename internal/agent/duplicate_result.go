@@ -10,7 +10,12 @@ import (
 func (a *Agent) boundProviderVisibleResult(raw, toolName, callID string) (body, notice, original string) {
 	summarized := summarizeCIOutput(raw)
 	body, notice = truncateToolOutputFor(summarized, toolName, callID)
-	deduped := a.dedupeProviderVisibleResult(callID, raw, body)
+	deduped := body
+	// todo_write is a state-bearing operation. Its result contains the canonical
+	// replacement list and must never be replaced by presentation deduplication.
+	if toolName != "todo_write" {
+		deduped = a.dedupeProviderVisibleResult(callID, raw, body)
+	}
 	if deduped != body {
 		original = raw
 	}

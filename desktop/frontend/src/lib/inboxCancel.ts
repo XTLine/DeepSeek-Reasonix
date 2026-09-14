@@ -11,6 +11,7 @@ export type CancelOutcome = InboxCancelReceipt & {
 
 type InboxCancelBridge = {
   CancelTab(tabId: string): Promise<void>;
+  CancelSessionForTab?(tabId: string): Promise<{ accepted: boolean; alreadyIdle: boolean; recoveryRequired: boolean }>;
   CancelTabWithInboxItems(tabId: string, itemIds: string[]): Promise<void>;
   CancelTabWithInboxItemsResult?(tabId: string, itemIds: string[]): Promise<InboxCancelReceipt>;
   InterruptTurnForTab?(tabId: string, turnId: string): Promise<void>;
@@ -41,6 +42,10 @@ export async function requestInboxCancel(
   itemIds: string[],
   turnId?: string,
 ): Promise<InboxCancelReceipt> {
+  if (itemIds.length === 0 && typeof app.CancelSessionForTab === "function") {
+    await app.CancelSessionForTab(tabId);
+    return { discardedItemIds: [] };
+  }
   if (turnId && itemIds.length > 0 && typeof app.InterruptTurnWithInboxItemsForTab === "function") {
     const receipt = await app.InterruptTurnWithInboxItemsForTab(tabId, turnId, itemIds);
     return {

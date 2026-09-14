@@ -10,6 +10,7 @@ type desktopRemoteTabEntry struct {
 	Model        string `json:"model,omitempty"`
 	SessionName  string `json:"sessionName,omitempty"`
 	SessionPath  string `json:"sessionPath,omitempty"`
+	SessionID    string `json:"sessionId,omitempty"`
 	SessionReset bool   `json:"sessionReset,omitempty"`
 }
 

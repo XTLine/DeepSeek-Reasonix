@@ -4,7 +4,7 @@ import { buildHelloParams, describeHandshakeFailure, HANDSHAKE_CODES, HandshakeE
 import { RpcError } from "./rpc.js";
 
 const goodResult = {
-  protocolVersion: 1,
+    protocolVersion: 3,
   contractDigest: "sha256:abc",
   service: { version: "v1.30.0", channel: "stable", commit: "abc123", pid: 4242 },
   runtimeGeneration: "g-01J",
@@ -14,6 +14,7 @@ const goodResult = {
 
 test("hello params carry the documented shape", () => {
   const params = buildHelloParams({
+    protocolVersion: 3,
     contractDigest: "sha256:abc",
     version: "v1.30.0",
     channel: "stable",
@@ -26,7 +27,7 @@ test("hello params carry the documented shape", () => {
     dev: false,
   });
   assert.deepEqual(params, {
-    protocolVersion: 1,
+    protocolVersion: 3,
     contractDigest: "sha256:abc",
     build: { version: "v1.30.0", channel: "stable", commit: "abc123" },
     host: { name: "electron", version: "44.2.0", chrome: "152.0.0", platform: "darwin", arch: "arm64" },
@@ -44,6 +45,7 @@ test("a valid hello result is accepted and normalised", () => {
 
 test("invalid hello results are rejected with a precise message", () => {
   assert.throws(() => validateHelloResult({ ...goodResult, protocolVersion: 2 }), (error: unknown) => error instanceof HandshakeError && /protocolVersion 2/.test(error.message));
+  assert.equal(validateHelloResult({ ...goodResult, protocolVersion: 4 }, 4).protocolVersion, 4, "the embedded contract selects the expected protocol");
   assert.throws(() => validateHelloResult({ ...goodResult, resources: { origin: "" } }), /resources\.origin/);
   assert.throws(() => validateHelloResult({ ...goodResult, window: undefined }), /result\.window must be an object/);
   assert.throws(() => validateHelloResult({ ...goodResult, window: { ...goodResult.window, width: 0 } }), /positive/);

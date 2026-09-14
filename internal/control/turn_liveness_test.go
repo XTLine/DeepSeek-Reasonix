@@ -20,7 +20,7 @@ func TestStalledTurnWarnsOncePerSilence(t *testing.T) {
 	})
 
 	notices := make(chan event.Event, 8)
-	c := New(Options{Sink: event.FuncSink(func(e event.Event) {
+	c := newOwnedTestController(t, Options{Sink: event.FuncSink(func(e event.Event) {
 		if e.Kind == event.Notice && e.Code == event.NoticeCodeTurnStalled {
 			notices <- e
 		}
@@ -60,7 +60,7 @@ func TestStalledTurnWarnsOncePerSilence(t *testing.T) {
 
 func TestIdleControllerNeverWarnsAboutStalls(t *testing.T) {
 	notices := 0
-	c := New(Options{Sink: event.FuncSink(func(e event.Event) {
+	c := newOwnedTestController(t, Options{Sink: event.FuncSink(func(e event.Event) {
 		if e.Kind == event.Notice && e.Code == event.NoticeCodeTurnStalled {
 			notices++
 		}

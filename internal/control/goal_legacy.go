@@ -8,7 +8,6 @@ import (
 
 type legacyGoalRestore struct {
 	taskID   string
-	todos    []evidence.TodoItem
 	epoch    uint64
 	explicit bool
 }

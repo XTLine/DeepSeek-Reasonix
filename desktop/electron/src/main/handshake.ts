@@ -1,6 +1,6 @@
 import { RpcError } from "./rpc.js";
 
-export const PROTOCOL_VERSION = 1;
+export const DEFAULT_PROTOCOL_VERSION = 3;
 
 export const HANDSHAKE_CODES = {
   protocol_mismatch: -32001,
@@ -11,6 +11,7 @@ export const HANDSHAKE_CODES = {
 } as const;
 
 export interface HelloIdentity {
+  protocolVersion: number;
   contractDigest: string;
   version: string;
   channel: string;
@@ -66,7 +67,7 @@ export class HandshakeError extends Error {
 
 export function buildHelloParams(identity: HelloIdentity): HelloParams {
   return {
-    protocolVersion: PROTOCOL_VERSION,
+    protocolVersion: identity.protocolVersion,
     contractDigest: identity.contractDigest,
     build: { version: identity.version, channel: identity.channel, commit: identity.commit },
     host: {
@@ -103,11 +104,11 @@ function num(source: Record<string, unknown>, key: string, path: string): number
   return value;
 }
 
-export function validateHelloResult(value: unknown): HelloResult {
+export function validateHelloResult(value: unknown, expectedProtocolVersion = DEFAULT_PROTOCOL_VERSION): HelloResult {
   const root = record(value, "result");
   const protocolVersion = num(root, "protocolVersion", "result");
-  if (protocolVersion !== PROTOCOL_VERSION) {
-    throw new HandshakeError(`hello result: protocolVersion ${protocolVersion} differs from ${PROTOCOL_VERSION}`);
+  if (protocolVersion !== expectedProtocolVersion) {
+    throw new HandshakeError(`hello result: protocolVersion ${protocolVersion} differs from ${expectedProtocolVersion}`);
   }
   const service = record(root.service, "result.service");
   const resources = record(root.resources, "result.resources");

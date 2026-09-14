@@ -225,7 +225,7 @@ func TestStatusFooterThemesKeepIdenticalGeometry(t *testing.T) {
 	defer restoreThemeForTest(activeColorProfile, activeCLITheme)
 
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.label = "deepseek-v4-flash"
 	m.effortLevel = "max"
 	m.balance = "¥12.34"
@@ -324,7 +324,7 @@ func TestStatusFooterUsesReadableLocalizedHintAndWrapsCleanly(t *testing.T) {
 		t.Run(tt.lang, func(t *testing.T) {
 			i18n.DetectLanguage(tt.lang)
 			m := newTestChatTUI()
-			m.ctrl = control.New(control.Options{})
+			m.ctrl = newOwnedTestController(t, control.Options{})
 			m.label = "deepseek-v4-flash"
 			m.effortLevel = "auto"
 
@@ -414,7 +414,7 @@ func TestStatusFooterSwapsModelAndGitGroups(t *testing.T) {
 	i18n.DetectLanguage("en")
 
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.label = "deepseek-v4-flash"
 	m.effortLevel = "auto"
 	m.balance = "¥12.34"
@@ -484,7 +484,7 @@ func TestStatusFooterMediumLayoutLeftAlignsModelWork(t *testing.T) {
 	i18n.DetectLanguage("en")
 
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.label = "deepseek-v4-flash"
 	m.effortLevel = "auto"
 
@@ -528,7 +528,7 @@ func TestStatusFooterNarrowLayoutBreaksBetweenGroups(t *testing.T) {
 	i18n.DetectLanguage("en")
 
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.label = "provider/" + strings.Repeat("long-model-", 8)
 	m.balance = "¥123.45"
 	m.gitStatus = gitStatus{
@@ -558,7 +558,7 @@ func TestStatusFooterCustomLineStillReplacesBuiltInData(t *testing.T) {
 	i18n.DetectLanguage("en")
 
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.label = "deepseek-v4-flash"
 	m.balance = "¥12.34"
 	m.statuslineCmd = "custom-status"
@@ -579,7 +579,7 @@ func TestStatusFooterHeightCountUsesRenderedLayout(t *testing.T) {
 	i18n.DetectLanguage("en")
 
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.width = 34
 	m.label = "provider/" + strings.Repeat("long-model-", 6)
 	m.gitStatus = gitStatus{Repo: "VeryLongWorkspaceName", Branch: strings.Repeat("branch/", 8)}

@@ -85,6 +85,11 @@ func rebuildWithPrevious(ctx context.Context, old *control.Controller, previous 
 	if opts.Owner == nil {
 		opts.Owner = old.RuntimeOwner()
 	}
+	if service, runtime, ok := old.SessionBinding(); ok {
+		opts.SessionService = service
+		opts.SessionRuntime = runtime
+		opts.SessionHostID = runtime.Ref().HostID
+	}
 	// Capture migratable state before building: every accessor returns a
 	// copy, so a slow build cannot observe a half-appended turn.
 	m := runtimeMigration{
@@ -119,6 +124,20 @@ func rebuildWithPrevious(ctx context.Context, old *control.Controller, previous 
 			return res, err
 		}
 	}
+
+	// Freeze the old path-derived event producer before a full replacement can
+	// import it. Failure restores the old producer; successful publication
+	// transfers ownership to the replacement for every host frontend.
+	restoreLegacyEvents, err := old.SuspendLegacyEventStoreForImport(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("boot: suspend legacy session events: %w", err)
+	}
+	replacementPublished := false
+	defer func() {
+		if !replacementPublished {
+			restoreLegacyEvents()
+		}
+	}()
 
 	extension.DefaultLifecycleMetrics.FullRebuilds.Add(1)
 	opts.deferPublish = true
@@ -160,6 +179,7 @@ func rebuildWithPrevious(ctx context.Context, old *control.Controller, previous 
 	// Publish new generation only after Active + state migration. Then drain
 	// Removed/Reloaded clients still held by the previous Manager.
 	publishBuildResult(res)
+	replacementPublished = true
 	if opts.Extensions != nil && res.Plan != nil {
 		opts.Extensions.DrainPlan(res.Plan)
 	}
@@ -184,8 +204,29 @@ type runtimeMigration struct {
 // error return is the fail-atomic seam for steps that gain failure modes.
 func migrateRuntimeState(ctrl, old *control.Controller, m runtimeMigration) error {
 	carried := spliceFreshSystemPrompt(m.carried, ctrl.History())
-	path := agent.ContinueSessionPath(m.prevPath, ctrl.SessionDir(), ctrl.Label())
-	ctrl.AdoptHistory(carried, path)
+	if ctrl.UsesExclusiveSession() {
+		if _, _, ok := ctrl.SessionBinding(); ok {
+			if err := ctrl.AdoptRebuiltModelContext(carried); err != nil {
+				return err
+			}
+		} else if m.prevPath != "" {
+			path := agent.ContinueSessionPath(m.prevPath, ctrl.SessionDir(), ctrl.Label())
+			if _, err := ctrl.ContinueLegacySessionForRebuild(context.Background(), path, ""); err != nil {
+				return err
+			}
+			if err := ctrl.AdoptRebuiltModelContext(carried); err != nil {
+				return err
+			}
+		} else {
+			// A compatibility rebuild can start from an in-memory controller
+			// with no persistent identity. Preserve that state without minting
+			// a new logical session (which would rotate session-private temp).
+			ctrl.AdoptHistory(carried, "")
+		}
+	} else {
+		path := agent.ContinueSessionPath(m.prevPath, ctrl.SessionDir(), ctrl.Label())
+		ctrl.AdoptHistory(carried, path)
+	}
 
 	// Re-apply session axes a rebuild must not reset.
 	ctrl.SetToolApprovalMode(m.toolApprovalMode)
@@ -198,7 +239,9 @@ func migrateRuntimeState(ctrl, old *control.Controller, m runtimeMigration) erro
 		ctrl.CarryRecoveryFrom(old)
 	}
 
-	ctrl.InheritLifecycleFrom(old)
+	if err := ctrl.InheritLifecycleFrom(old); err != nil {
+		return fmt.Errorf("inherit controller lifecycle: %w", err)
+	}
 	ctrl.RestoreSessionAuthorizations(m.authorizations)
 	return nil
 }

@@ -31,7 +31,7 @@ func TestPreloadedPageDoesNotEraseNewlyCommittedTurn(t *testing.T) {
 	}
 	session.Add(provider.Message{Role: provider.RoleUser, Content: "second"})
 	session.Add(provider.Message{Role: provider.RoleAssistant, Content: "completed while switching"})
-	if err := session.Save(path); err != nil {
+	if err := ctrl.Snapshot(); err != nil {
 		t.Fatal(err)
 	}
 	if ctrl.RuntimeStatus().Running || ctrl.SessionHasUnsavedChanges() {
@@ -73,8 +73,11 @@ func TestTranscriptSwitchReportsActualLoadWithoutLegacyPage(t *testing.T) {
 				t.Fatalf("snapshot adoption built a legacy page: %+v", phases)
 			}
 			snapshot, err := app.TranscriptSnapshotForTab(tab.ID, transcript.PageRequest{})
-			if err != nil || snapshot.Identity.SessionID != agent.BranchID(path) || len(snapshot.Records) == 0 {
+			if err != nil || tab.SessionID == "" || snapshot.Identity.SessionID != tab.SessionID || len(snapshot.Records) == 0 {
 				t.Fatalf("snapshot did not adopt target: %v", err)
+			}
+			if tab.currentSessionPath() != "" {
+				t.Fatalf("v3 tab retained legacy execution path %q", tab.currentSessionPath())
 			}
 			if tab.ReadOnly != channel {
 				t.Fatal("switch changed channel write policy")

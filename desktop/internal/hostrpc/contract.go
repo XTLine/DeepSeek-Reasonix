@@ -11,7 +11,7 @@ import (
 )
 
 // ProtocolVersion is the wire revision both sides must agree on in hello.
-const ProtocolVersion = 1
+const ProtocolVersion = 6
 
 // Contract is everything the shell needs to call the service: the accepted
 // commands, the event names it may receive and every DTO shape they use.

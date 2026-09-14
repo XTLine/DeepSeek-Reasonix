@@ -16,6 +16,7 @@ import (
 	"reasonix/internal/plugin"
 	"reasonix/internal/provider"
 	"reasonix/internal/sandbox"
+	"reasonix/internal/session"
 	"reasonix/internal/skill"
 )
 
@@ -43,6 +44,19 @@ type Lifecycle interface {
 	ModelRef() string
 	WorkspaceRoot() string
 	Close()
+}
+
+// IdentityLifecycle is the final session-id based lifecycle. Frontends may
+// type-assert it while legacy read/import DTOs remain available; new execution
+// commands must use this surface instead of manufacturing transcript paths.
+type IdentityLifecycle interface {
+	SessionRef() (session.SessionRef, bool)
+	SessionService() *session.Service
+	UsesExclusiveSession() bool
+	BindFreshSession(context.Context, string) (session.SessionRef, error)
+	OpenSession(context.Context, session.SessionRef) (session.SessionRef, error)
+	ContinueLegacySession(context.Context, string, string) (session.SessionRef, error)
+	ContinuePrototypeSession(context.Context, string) (session.SessionRef, error)
 }
 
 // TurnControl covers driving a model turn and observing its run state: the
@@ -109,6 +123,13 @@ type Goals interface {
 	Goal() string
 	GoalStatus() string
 	SetGoal(goal string)
+	// SetGoalDurable updates the Goal only after its backing session accepts
+	// the lifecycle mutation. Hosts must use this method before publishing UI
+	// metadata or starting a provider turn.
+	SetGoalDurable(goal string) error
+	// EditGoalDurable changes an existing Goal in place. It preserves the Goal
+	// identity and admitted round count while advancing its CAS revision.
+	EditGoalDurable(objective string, maxGoalRounds *uint64) error
 	// SetGoalWithResearchMode is retained for deprecated CLI budget flags. The
 	// mode is translated at the boundary and is not stored in the Goal runtime.
 	SetGoalWithResearchMode(goal string, researchMode GoalResearchMode)
@@ -187,6 +208,7 @@ type Capabilities interface {
 	Skills() []skill.Skill
 	SlashSkills() []skill.Skill
 	AllSkills() []skill.Skill
+	LoadSkill(name string) (skill.Skill, bool)
 	DisabledSkills() []skill.Skill
 	SkillEnabled(name string) bool
 	SetSkillEnabled(name string, enabled bool) error
@@ -297,6 +319,7 @@ type SessionAPI interface {
 // never silently drift from the implementation.
 var (
 	_ Lifecycle          = (*Controller)(nil)
+	_ IdentityLifecycle  = (*Controller)(nil)
 	_ TurnControl        = (*Controller)(nil)
 	_ Approvals          = (*Controller)(nil)
 	_ Goals              = (*Controller)(nil)

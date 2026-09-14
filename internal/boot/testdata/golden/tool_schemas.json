@@ -174,6 +174,36 @@
     }
   },
   {
+    "Name": "create_goal",
+    "Description": "Create one persisted same-session goal when the current direct human request is a long-running objective that should continue across autonomous rounds. You may infer that intent without requiring the user to name goal mode. Do not use this for routine single-turn work.",
+    "ReadOnly": false,
+    "Schema": {
+      "additionalProperties": false,
+      "properties": {
+        "max_goal_rounds": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional positive automatic-round limit; omit or null for unlimited."
+        },
+        "objective": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "objective"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "Name": "edit_file",
     "Description": "Replace an exact string in a file with another. old_string must occur exactly once; add surrounding context to disambiguate. Use for targeted edits instead of rewriting the whole file.",
     "ReadOnly": false,
@@ -197,6 +227,16 @@
         "old_string",
         "path"
       ],
+      "type": "object"
+    }
+  },
+  {
+    "Name": "get_goal",
+    "Description": "Read the current same-session goal, including its exact id/revision, objective, phase, admitted rounds, optional round limit, blocker reason, and live activation. Call this before update_goal.",
+    "ReadOnly": true,
+    "Schema": {
+      "additionalProperties": false,
+      "properties": {},
       "type": "object"
     }
   },
@@ -259,41 +299,27 @@
   },
   {
     "Name": "todo_write",
-    "Description": "Record and update the model's structured task list. Send the complete list every call; it replaces the previous one. Status is model-reported and may be pending, in_progress, or completed. At most one item may be in progress. Optional level 0/1 preserves a two-level display hierarchy, and step_id remains the stable item identity across edits.",
+    "Description": "Replace the current turn's complete task list. Send the full flat list on every call; an empty list clears it. Items may be reordered, removed, replanned, or have any number in progress. Each item contains only content and status (pending|in_progress|completed).",
     "ReadOnly": true,
     "Schema": {
+      "additionalProperties": false,
       "properties": {
         "todos": {
-          "description": "The complete task list, in order. Replaces any previous list.",
+          "description": "The complete flat task list for this turn. Replaces the previous list; [] clears it.",
           "items": {
+            "additionalProperties": false,
             "properties": {
-              "activeForm": {
-                "description": "Present-continuous form shown while the task is in progress (e.g. \"Running tests\").",
-                "type": "string"
-              },
               "content": {
-                "description": "Imperative description of the task.",
+                "description": "Task text. Leading and trailing whitespace is removed.",
+                "minLength": 1,
                 "type": "string"
-              },
-              "level": {
-                "description": "Nesting level: 0 = phase/milestone, 1 = a sub-step of the phase above it. Omit for a flat list.",
-                "enum": [
-                  0,
-                  1
-                ],
-                "type": "integer"
               },
               "status": {
-                "description": "Model-reported task state.",
                 "enum": [
                   "pending",
                   "in_progress",
                   "completed"
                 ],
-                "type": "string"
-              },
-              "step_id": {
-                "description": "Stable identity for this item, e.g. \"plan_step_02\". Copy it verbatim from the item's previous entry so completions stay attached across retitles, insertions, and reordering; use a fresh unique id for a genuinely new item.",
                 "type": "string"
               }
             },
@@ -314,57 +340,56 @@
   },
   {
     "Name": "update_goal",
-    "Description": "Report the active goal status: continue (work remains), complete (you judge the goal complete), or blocked (explain why work cannot continue). The host commits this model declaration at normal turn end, subject to cancellation and resource limits. A missing report keeps the goal active. completion is your account of verified commands, unverified work, and risks; it does not change actual execution records or certify success.",
-    "ReadOnly": true,
+    "Description": "Update the exact current goal revision. edit, pause, and resume require current direct-human authority; complete and blocked are also allowed during the exact autonomous goal round. There is no continue action: leaving an active goal unchanged continues it automatically.",
+    "ReadOnly": false,
     "Schema": {
+      "additionalProperties": false,
       "properties": {
-        "completion": {
-          "description": "Your own account of the finished work.",
-          "properties": {
-            "risks": {
-              "description": "Known risks to carry forward.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "unverified": {
-              "description": "What you did NOT verify. The host cannot infer what you skipped, so stating it is the only way it is known — and it never blocks completion.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "verified": {
-              "description": "Commands you ran as proof, as they actually ran. One that never ran, failed, or predates your latest change is recorded as an unbacked claim.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          "type": "object"
-        },
-        "next_action": {
-          "description": "Optional concrete next step. Recommended for continue so the host can guide the next turn.",
-          "type": "string"
-        },
-        "reason": {
-          "description": "Short explanation. REQUIRED for continue and blocked; optional for complete.",
-          "type": "string"
-        },
-        "status": {
-          "description": "continue = keep working autonomously; complete = you judge the goal complete; blocked = work cannot continue.",
+        "action": {
           "enum": [
-            "continue",
+            "edit",
+            "pause",
+            "resume",
             "complete",
             "blocked"
           ],
           "type": "string"
+        },
+        "blocked_reason": {
+          "description": "Concrete blocker; required only for blocked.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "goal_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "max_goal_rounds": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Replacement limit for edit; null removes the limit."
+        },
+        "objective": {
+          "description": "Replacement objective; valid only for edit.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "required": [
-        "status"
+        "action",
+        "goal_id",
+        "revision"
       ],
       "type": "object"
     }
@@ -395,10 +420,13 @@
           "description": "Capability id such as skill:review, mcp-server:github, or mcp-tool:github/search_issues. Not required for action=list.",
           "type": "string"
         },
+        "cursor": {
+          "description": "Opaque cursor returned by action=list. It is valid only for the same catalog version.",
+          "type": "string"
+        },
         "limit": {
-          "default": 5,
-          "description": "Maximum search results; defaults to 5.",
-          "maximum": 8,
+          "description": "Maximum results. Search defaults to 5 and allows at most 8; list defaults to 50 and allows at most 100.",
+          "maximum": 100,
           "minimum": 1,
           "type": "integer"
         },

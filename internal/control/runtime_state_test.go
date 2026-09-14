@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -48,7 +49,7 @@ func runtimeStateSignal(t *testing.T, signal <-chan struct{}, description string
 
 func assertRuntimeStateSameVersion(t *testing.T, published, current event.RuntimeStateSnapshot) {
 	t.Helper()
-	if published.RuntimeEpoch == current.RuntimeEpoch && published.Revision == current.Revision && published != current {
+	if published.RuntimeEpoch == current.RuntimeEpoch && published.Revision == current.Revision && !reflect.DeepEqual(published, current) {
 		t.Fatalf("same runtime version has different contents: published=%+v current=%+v", published, current)
 	}
 }
@@ -58,14 +59,14 @@ func TestRuntimeStateSnapshotFinishingAndFinalPublication(t *testing.T) {
 	entered, release := make(chan struct{}, 1), make(chan struct{})
 	releaseDone := sync.OnceFunc(func() { close(release) })
 	sink := &runtimeStateTestSink{Sink: holdFinishingWindow(release, entered, nil), states: make(chan event.RuntimeStateSnapshot, 32)}
-	c := New(Options{SessionDir: t.TempDir(), Sink: sink})
+	c := newOwnedTestController(t, Options{SessionDir: t.TempDir(), Sink: sink})
 	defer c.Close()
 	defer releaseDone()
 	initial := c.RuntimeStateSnapshot()
 	if initial.SchemaVersion != 1 || initial.RuntimeEpoch == "" || initial.Revision == 0 || initial.Phase != "idle" {
 		t.Fatalf("invalid initial contract: %+v", initial)
 	}
-	if second := c.RuntimeStateSnapshot(); second != initial {
+	if second := c.RuntimeStateSnapshot(); !reflect.DeepEqual(second, initial) {
 		t.Fatalf("reading runtime state changed the snapshot: first=%+v second=%+v", initial, second)
 	}
 	runRelease := make(chan struct{})
@@ -103,7 +104,7 @@ func TestRuntimeStateQueuedTurnNeverPublishesPreviousIdleOverNext(t *testing.T) 
 	entered, release := make(chan struct{}, 1), make(chan struct{})
 	releaseDone := sync.OnceFunc(func() { close(release) })
 	sink := &runtimeStateTestSink{Sink: holdFinishingWindow(release, entered, nil), states: make(chan event.RuntimeStateSnapshot, 64)}
-	c := New(Options{SessionDir: t.TempDir(), Sink: sink})
+	c := newOwnedTestController(t, Options{SessionDir: t.TempDir(), Sink: sink})
 	defer c.Close()
 	defer releaseDone()
 	c.runGuarded(func(context.Context) error { return nil })
@@ -144,7 +145,7 @@ func TestRuntimeStatePromptCancellationAndClosed(t *testing.T) {
 					requests <- struct{}{}
 				}
 			}), states: make(chan event.RuntimeStateSnapshot, 64)}
-			c := New(Options{SessionDir: t.TempDir(), Sink: sink})
+			c := newOwnedTestController(t, Options{SessionDir: t.TempDir(), Sink: sink})
 			defer c.Close()
 			if kind == "ask" {
 				c.runner = &askBlockingRunner{c: c}
@@ -178,7 +179,7 @@ func TestRuntimeStateCloseDuringFinishingCannotResurrectActivity(t *testing.T) {
 	entered, release := make(chan struct{}, 1), make(chan struct{})
 	releaseDone := sync.OnceFunc(func() { close(release) })
 	sink := &runtimeStateTestSink{Sink: holdFinishingWindow(release, entered, nil), states: make(chan event.RuntimeStateSnapshot, 32)}
-	c := New(Options{SessionDir: t.TempDir(), Sink: sink})
+	c := newOwnedTestController(t, Options{SessionDir: t.TempDir(), Sink: sink})
 	defer c.Close()
 	defer releaseDone()
 	c.runGuarded(func(context.Context) error { return nil })
@@ -204,7 +205,7 @@ func TestRuntimeStateCloseDuringFinishingCannotResurrectActivity(t *testing.T) {
 func TestRuntimeStateStreamingActivityClearsOnCompletion(t *testing.T) {
 	isolateControlConfigHome(t)
 	sink := &runtimeStateTestSink{Sink: event.Discard, states: make(chan event.RuntimeStateSnapshot, 32)}
-	c := New(Options{SessionDir: t.TempDir(), Sink: sink})
+	c := newOwnedTestController(t, Options{SessionDir: t.TempDir(), Sink: sink})
 	defer c.Close()
 	release := make(chan struct{})
 	releaseBody := sync.OnceFunc(func() { close(release) })
@@ -248,7 +249,7 @@ func TestRuntimeStateSlowObserverDoesNotBlockTurnAndRetainsFinalSnapshot(t *test
 	isolateControlConfigHome(t)
 	sink := &runtimeStateSlowTestSink{entered: make(chan struct{}), release: make(chan struct{}), done: make(chan struct{}, 1), states: make(chan event.RuntimeStateSnapshot, 32)}
 	releaseObserver := sync.OnceFunc(func() { close(sink.release) })
-	c := New(Options{SessionDir: t.TempDir(), Sink: sink})
+	c := newOwnedTestController(t, Options{SessionDir: t.TempDir(), Sink: sink})
 	defer c.Close()
 	defer releaseObserver()
 	bodyRelease := make(chan struct{})
@@ -295,7 +296,7 @@ func TestRuntimeStateRunnerFailuresPublishIdleAndPreserveFailure(t *testing.T) {
 				}
 				return errors.New(message)
 			})
-			c := New(Options{SessionDir: t.TempDir(), Sink: sink, Runner: runner})
+			c := newOwnedTestController(t, Options{SessionDir: t.TempDir(), Sink: sink, Runner: runner})
 			defer c.Close()
 			defer releaseRunner()
 			c.Send("exercise isolated runner failure")

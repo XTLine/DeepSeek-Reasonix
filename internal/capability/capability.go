@@ -59,6 +59,7 @@ type Entry struct {
 	Profiles         []string // deprecated frontmatter labels; diagnostics only
 	AutoStart        bool     // MCP: configured auto_start
 	FailureReason    string   // host-proven failure detail
+	SkillRunAs       string   // skill candidate invocation mode; body-independent
 }
 
 type RouteCandidate struct {
@@ -119,6 +120,7 @@ func SkillEntries(skills []skill.Skill, tools []tool.ContractEntry) []Entry {
 			ConnectSource:    connectSource,
 			Requires:         cleanList(sk.Requires),
 			Profiles:         cleanList(sk.Profiles),
+			SkillRunAs:       string(sk.RunAs),
 		})
 	}
 	return out

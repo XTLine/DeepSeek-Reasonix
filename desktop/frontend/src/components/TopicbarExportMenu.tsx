@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { FileDown, FileImage, FileJson, FileText } from "lucide-react";
+import { FileDown, FileImage, FileJson, FileSearch, FileText } from "lucide-react";
 import { t } from "../lib/i18n";
 import type { TopicbarSessionActionsProps } from "./TopicbarSessionActions";
 
@@ -38,6 +38,7 @@ export function TopicbarExportMenu({ initialFocus, exportSession, onClose }: {
         ["json", FileJson, t("topicBar.exportJson")],
         ["pdf", FileDown, t("topicBar.exportPdf")],
         ["image", FileImage, t("topicBar.exportImage")],
+        ["diagnostic", FileSearch, t("topicBar.exportDiagnostic")],
       ] as const).map(([format, Icon, label]) => (
         <button key={format} tabIndex={-1} type="button" role="menuitem" onClick={() => {
           onClose(true);

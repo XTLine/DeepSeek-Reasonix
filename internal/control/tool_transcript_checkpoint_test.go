@@ -44,7 +44,7 @@ func TestToolCheckpointSurvivesReloadWhileNextWriterRuns(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	sink, done, _ := collectSink()
-	c := New(Options{Runner: exec, Executor: exec, Sink: sink, SessionDir: dir, SessionPath: path})
+	c := newOwnedTestController(t, Options{Runner: exec, Executor: exec, Sink: sink, SessionDir: dir, SessionPath: path})
 	t.Cleanup(c.Close)
 	c.Submit("run both")
 	select {
@@ -52,24 +52,18 @@ func TestToolCheckpointSurvivesReloadWhileNextWriterRuns(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("second tool did not start")
 	}
-	loaded, err := agent.LoadSession(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	completed, unknown := false, false
-	for _, m := range loaded.Snapshot() {
+	loaded := loadDurableSessionProjection(t, path)
+	completed := false
+	for _, m := range loaded.Messages {
 		if m.Role != provider.RoleTool {
 			continue
 		}
 		if m.ToolCallID == "c1" {
 			completed = strings.HasPrefix(m.Content, "write completed") && provider.ToolResultRunState(m) == provider.ToolRunCompleted
 		}
-		if m.ToolCallID == "c2" {
-			unknown = provider.ToolResultRunState(m) == provider.ToolRunUnknown
-		}
 	}
-	if !completed || !unknown {
-		t.Fatalf("completed=%v unknown=%v history=%+v", completed, unknown, loaded.Snapshot())
+	if !completed || loaded.ActiveTools["c2"] != "second" {
+		t.Fatalf("completed=%v active=%v history=%+v", completed, loaded.ActiveTools, loaded.Messages)
 	}
 	c.Cancel()
 	waitForDone(t, done)

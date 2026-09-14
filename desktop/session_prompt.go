@@ -170,7 +170,9 @@ func normalizeRestoredControllerRuntime(ctrl control.SessionAPI, requested norma
 	if plan && ctrl.GoalStatus() == control.GoalStatusRunning {
 		// Explicit Plan wins over inconsistent legacy data. Clearing the running
 		// Goal also prevents a stale scope from being executed after approval.
-		ctrl.ClearGoal()
+		if err := ctrl.SetGoalDurable(""); err != nil {
+			return normalizedTabRuntime{}, fmt.Errorf("clear goal for Plan mode: %w", err)
+		}
 	}
 
 	actual := requested

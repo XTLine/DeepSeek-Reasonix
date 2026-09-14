@@ -20,7 +20,7 @@ func TestCheckpointsReturnUserPromptWithoutComposedPrefixes(t *testing.T) {
 	sess := agent.NewSession("sys")
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
 	runner := &recordingSessionRunner{session: sess}
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner:      runner,
 		Executor:    exec,
 		SessionDir:  dir,
@@ -53,7 +53,7 @@ func TestHeadlessRunOpensCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	sess := agent.NewSession("sys")
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner:      &fakeTurnRunner{},
 		Executor:    exec,
 		SessionDir:  dir,
@@ -75,7 +75,7 @@ func TestHeadlessRunStoresRawCheckpointPrompt(t *testing.T) {
 	sess := agent.NewSession("sys")
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
 	runner := &fakeTurnRunner{}
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner:            runner,
 		Executor:          exec,
 		SessionDir:        dir,

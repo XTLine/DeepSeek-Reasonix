@@ -103,36 +103,53 @@ func (a *Agent) AppendTurnContext(ctx context.Context) bool {
 // user message in one Session.AddBatch. This keeps mid-turn autosave from
 // persisting a context-only admission boundary.
 func (a *Agent) AppendTurnContextAndUser(ctx context.Context, user provider.Message) bool {
+	appended, _ := a.AppendTurnContextAndUserChecked(ctx, user)
+	return appended
+}
+
+// AppendTurnContextAndUserChecked is the controller-facing admission path. It
+// reports event-store failures before the legacy transcript is changed.
+func (a *Agent) AppendTurnContextAndUserChecked(ctx context.Context, user provider.Message) (bool, error) {
 	if a == nil || a.sess.session() == nil {
-		return false
+		return false, nil
 	}
 	if user.ID == "" {
 		user.ID = turnUserMessageID(ctx, a.sess.session())
 	}
-	appendedContext := a.appendTurnContextAndMessages(ctx, user)
+	appendedContext, err := a.appendTurnContextAndMessagesChecked(ctx, user)
+	if err != nil {
+		return false, err
+	}
 	emitAdmittedUserMessage(a.svc.sink, user)
-	return appendedContext
+	return appendedContext, nil
 }
 
 func (a *Agent) appendTurnContextAndMessages(ctx context.Context, messages ...provider.Message) bool {
+	appended, _ := a.appendTurnContextAndMessagesChecked(ctx, messages...)
+	return appended
+}
+
+func (a *Agent) appendTurnContextAndMessagesChecked(ctx context.Context, messages ...provider.Message) (bool, error) {
 	if a == nil {
-		return false
+		return false, nil
 	}
 	sess := a.sess.session()
 	if sess == nil {
-		return false
+		return false, nil
 	}
 	contextMessage, appendContext := a.prepareTurnContext(ctx)
 	if !appendContext && len(messages) == 0 {
-		return false
+		return false, nil
 	}
 	batch := make([]provider.Message, 0, len(messages)+1)
 	if appendContext {
 		batch = append(batch, contextMessage)
 	}
 	batch = append(batch, messages...)
-	sess.AddBatch(batch...)
-	return appendContext
+	if err := a.appendCommittedMessages(ctx, "turn-context-and-user", batch...); err != nil {
+		return false, err
+	}
+	return appendContext, nil
 }
 
 func (a *Agent) prepareTurnContext(ctx context.Context) (provider.Message, bool) {

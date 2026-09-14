@@ -623,8 +623,9 @@ func TestLateReclaimSuccessCannotUnlockNewSelection(t *testing.T) {
 	app.remoteTabs = map[string]*remoteTab{}
 	tab := &remoteTab{
 		id: "remote-1", state: "ready", gen: 4, client: srv.Client(), base: srv.URL, selectionRevision: 9,
-		routing: remoteTabSessionRouting{currentPath: "/sessions/old.jsonl"},
-		session: remoteTabSessionState{takenOver: true},
+		routing:      remoteTabSessionRouting{currentPath: "/sessions/old.jsonl"},
+		session:      remoteTabSessionState{takenOver: true},
+		capabilities: map[string]bool{serveCapabilityExecutionV2: true, serveCapabilitySessions: true, serveCapabilitySessionIdentityV1: true, serveCapabilitySessionOwnershipV1: true},
 	}
 	app.remoteTabs[tab.id] = tab
 	done := make(chan error, 1)
@@ -664,8 +665,9 @@ func TestFailedReclaimKeepsSpectatorUntilOwnershipProbeCompletes(t *testing.T) {
 	app.remoteTabs = map[string]*remoteTab{}
 	tab := &remoteTab{
 		id: "remote-1", state: "ready", gen: 4, client: srv.Client(), base: srv.URL, selectionRevision: 9,
-		routing: remoteTabSessionRouting{currentPath: "/sessions/a.jsonl"},
-		session: remoteTabSessionState{takenOver: true},
+		routing:      remoteTabSessionRouting{currentPath: "/sessions/a.jsonl"},
+		session:      remoteTabSessionState{takenOver: true},
+		capabilities: map[string]bool{serveCapabilityExecutionV2: true, serveCapabilitySessions: true, serveCapabilitySessionIdentityV1: true, serveCapabilitySessionOwnershipV1: true},
 	}
 	app.remoteTabs[tab.id] = tab
 	if err := app.ReclaimRemoteTabSession(tab.id); err == nil {

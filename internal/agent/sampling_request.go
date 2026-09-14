@@ -51,12 +51,18 @@ func (a *Agent) streamProviderRequest(ctx context.Context, req provider.Request)
 	if err := provider.ValidateModelTranscript(req.Messages); err != nil {
 		return nil, err
 	}
+	if err := a.checkpointSession(ctx, CheckpointBeforeModel); err != nil {
+		return nil, err
+	}
 	ch, err := a.svc.prov.Stream(ctx, req)
 	if err != nil {
 		if limit := provider.AsOutputLimitError(err); !provider.ManagedRecovery(ctx) && limit != nil && req.MaxTokens > limit.MaxOutputTokens {
 			a.learnOutputBudget(limit.MaxOutputTokens)
 			retryReq := req
 			retryReq.MaxTokens = limit.MaxOutputTokens
+			if checkpointErr := a.checkpointSession(ctx, CheckpointBeforeModel); checkpointErr != nil {
+				return nil, checkpointErr
+			}
 			return a.svc.prov.Stream(ctx, retryReq)
 		}
 		return nil, err

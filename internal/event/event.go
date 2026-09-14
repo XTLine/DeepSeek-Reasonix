@@ -233,6 +233,11 @@ type Tool struct {
 	ID        string
 	Name      string
 	Args      string
+	// Todos is the complete semantic todo replacement committed with a
+	// successful todo_write result. TodoWritten distinguishes an empty list
+	// from an older event with no semantic payload.
+	Todos       []Todo
+	TodoWritten bool
 	// ResolvedName/CapabilityID describe the real target behind a stable proxy
 	// while Name/Args remain the provider-visible call. They are optional local
 	// display metadata and never enter provider requests.
@@ -431,6 +436,9 @@ type Event struct {
 	RuntimeEpoch     string                    // originating controller incarnation
 	SubmissionID     string                    // exact optimistic submit correlation
 	PromptKind       string                    // interactive prompt kind for lifecycle events
+	InteractionState string                    // PromptAnswered: answered | rejected | cancelled | unavailable
+	DomainKind       string                    // host-internal state event committed atomically with this lifecycle event
+	DomainPayload    json.RawMessage           // host-internal payload for DomainKind
 	TurnID           string                    // stable id of the owning top-level turn
 	Sequence         uint64                    // monotonic session-local event sequence
 	Status           TurnStatus                // lifecycle state after this event
@@ -489,6 +497,11 @@ type Event struct {
 	PhaseName TurnPhaseName
 	// Completion is set on CompletionSummary events.
 	Completion *CompletionSummaryInfo
+	// CommittedMessage is the exact provider transcript record paired with a
+	// terminal tool result. It is host-internal and omitted from frontend wire
+	// payloads; the session event store commits it atomically with tool/result
+	// and any todo/write state transition.
+	CommittedMessage *provider.Message
 }
 
 type WorkspaceWatchState string

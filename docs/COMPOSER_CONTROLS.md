@@ -9,6 +9,11 @@ reasoning effort have independent selectors; unsupported models hide effort.
 The status bar no longer repeats the model name. Its turn cost uses two decimal
 places; detailed cost values retain their existing precision.
 
+An active Goal can be edited from the **+** menu without replacing its identity
+or resetting admitted rounds. The optional maximum-round field is blank for
+unlimited execution. The same menu remains available during an automatic Goal
+round so the user can pause immediately.
+
 The context ring opens usage details. **Turn time** excludes waits on the user,
 whether an approval, an answer, or an MCP interaction, and stops at the
 controller's completion timestamp. Retry time remains part of the turn. Turn

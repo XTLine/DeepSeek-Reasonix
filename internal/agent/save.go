@@ -1371,10 +1371,25 @@ func LoadSession(path string) (*Session, error) {
 }
 
 func loadSessionUnlocked(path string) (*Session, error) {
+	return loadSessionUnlockedWithContext(context.Background(), path, defaultSessionReplayLimits)
+}
+
+func loadSessionUnlockedWithLimits(path string, limits sessionReplayLimits) (*Session, error) {
+	return loadSessionUnlockedWithContext(context.Background(), path, limits)
+}
+
+func loadSessionUnlockedWithContext(ctx context.Context, path string, limits sessionReplayLimits) (*Session, error) {
+	return loadSessionUnlockedWithContextMode(ctx, path, limits, false)
+}
+
+func loadSessionUnlockedWithContextMode(ctx context.Context, path string, limits sessionReplayLimits, rejectDamage bool) (*Session, error) {
 	hasher := newSessionTranscriptHasher()
-	res, err := loadSessionTranscript(context.Background(), path, defaultSessionReplayLimits, hasher)
+	res, err := loadSessionTranscript(ctx, path, limits, hasher)
 	if err != nil {
 		return nil, err
+	}
+	if rejectDamage && res.damaged {
+		return nil, fmt.Errorf("%w: authoritative event log has no complete recoverable prefix", ErrSessionHistoryDamaged)
 	}
 	msgs := res.msgs
 	s := &Session{Messages: msgs, eventLogDamaged: res.damaged, head: sessionHeadState{ref: res.head, dag: res.dag, headCount: res.headCount, state: res.state, openTurn: res.openTurn, events: res.events}}
@@ -1433,6 +1448,19 @@ func loadSessionUnlocked(path string) (*Session, error) {
 		}
 	}
 	return s, nil
+}
+
+// LoadSessionForMigration reads a frozen legacy transcript without applying
+// the interactive 128 MiB/record-count replay budgets. Callers must first stop
+// writers and freeze the source bytes; ordinary UI and runtime opens must keep
+// using LoadSession so an untrusted or corrupt live file cannot exhaust memory.
+func LoadSessionForMigration(ctx context.Context, path string) (*Session, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	unlock := lockSessionSavePath(path)
+	defer unlock()
+	return loadSessionUnlockedWithContextMode(ctx, path, migrationSessionReplayLimits(), true)
 }
 
 // SessionInfo summarises a saved session for the --resume picker: where it is on

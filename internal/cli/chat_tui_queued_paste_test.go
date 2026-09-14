@@ -15,7 +15,7 @@ func TestQueuedFoldedPasteExpandsBeforeInterjectSend(t *testing.T) {
 	events := make(chan event.Event, 8)
 	dir := t.TempDir()
 	var ctrl *control.Controller
-	ctrl = control.New(control.Options{
+	ctrl = newOwnedTestController(t, control.Options{
 		Runner: runner,
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.TurnDone {

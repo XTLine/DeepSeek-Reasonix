@@ -167,14 +167,8 @@ func (s *updateSink) Emit(e event.Event) {
 			return
 		}
 		// Full dispatches only arrive after a committed sampling attempt (or from
-		// nested sub-agents). Never mark them speculative.
-		// todo_write is the agent's task list; mirror it as an ACP plan update so
-		// the client renders structured progress alongside the tool_call.
-		if e.Tool.Name == "todo_write" {
-			if entries, ok := planEntriesFromTodoArgs(e.Tool.Args); ok {
-				s.send(planUpdate{SessionUpdate: "plan", Entries: entries})
-			}
-		}
+		// nested sub-agents). Never mark them speculative. A dispatch is still
+		// intent, so it cannot update the current todo projection.
 		s.send(toolCall{
 			SessionUpdate: "tool_call",
 			ToolCallID:    e.Tool.ID,
@@ -186,6 +180,9 @@ func (s *updateSink) Emit(e event.Event) {
 		})
 
 	case event.ToolResult:
+		if e.Tool.TodoWritten {
+			s.send(planUpdate{SessionUpdate: "plan", Entries: planEntriesFromTodos(e.Tool.Todos)})
+		}
 		status := "completed"
 		text := e.Tool.Output
 		if e.Tool.Err != "" {
@@ -375,13 +372,6 @@ func (s *updateSink) replay(msgs []provider.Message) {
 					RawInput:      rawJSON(tc.Arguments),
 					Locations:     s.toolLocations(tc.Name, tc.Arguments),
 				})
-				// Replaying the latest plan keeps the client's plan view in sync
-				// with the restored conversation; each update replaces the last.
-				if tc.Name == "todo_write" {
-					if entries, ok := planEntriesFromTodoArgs(tc.Arguments); ok {
-						s.send(planUpdate{SessionUpdate: "plan", Entries: entries})
-					}
-				}
 			}
 		case provider.RoleTool:
 			s.send(toolCallUpdateMsg{
@@ -712,22 +702,11 @@ func (s *updateSink) absPath(p string) string {
 	return filepath.Join(s.cwd, p)
 }
 
-// planEntriesFromTodoArgs maps a todo_write argument payload onto ACP plan
-// entries. Phase items (level 0) rank high, sub-steps medium; unknown statuses
-// degrade to pending so a malformed item cannot poison the whole update.
-func planEntriesFromTodoArgs(rawArgs string) ([]PlanEntry, bool) {
-	var p struct {
-		Todos []struct {
-			Content string `json:"content"`
-			Status  string `json:"status"`
-			Level   int    `json:"level"`
-		} `json:"todos"`
-	}
-	if json.Unmarshal([]byte(rawArgs), &p) != nil || len(p.Todos) == 0 {
-		return nil, false
-	}
-	entries := make([]PlanEntry, 0, len(p.Todos))
-	for _, t := range p.Todos {
+// planEntriesFromTodos maps the committed host projection onto ACP's complete
+// replacement plan. Empty input deliberately clears the client plan.
+func planEntriesFromTodos(todos []event.Todo) []PlanEntry {
+	entries := make([]PlanEntry, 0, len(todos))
+	for _, t := range todos {
 		if strings.TrimSpace(t.Content) == "" {
 			continue
 		}
@@ -737,14 +716,7 @@ func planEntriesFromTodoArgs(rawArgs string) ([]PlanEntry, bool) {
 		default:
 			status = "pending"
 		}
-		priority := "medium"
-		if t.Level == 0 {
-			priority = "high"
-		}
-		entries = append(entries, PlanEntry{Content: t.Content, Priority: priority, Status: status})
+		entries = append(entries, PlanEntry{Content: t.Content, Priority: "medium", Status: status})
 	}
-	if len(entries) == 0 {
-		return nil, false
-	}
-	return entries, true
+	return entries
 }

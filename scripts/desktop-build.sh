@@ -429,7 +429,11 @@ linux)
 esac
 
 case "$os" in
-darwin) report_bundle="$app" ;;
+# The staging directory is intentionally removed after the signed app is
+# copied into build/candidate.  Reports must inspect that published candidate,
+# otherwise every successful macOS package build fails after artifact
+# verification with ENOENT.
+darwin) report_bundle="$ROOT/desktop/build/candidate/darwin-${arch}/${APPNAME}.app" ;;
 windows) report_bundle="$ROOT/desktop/build/windows/signing-payload" ;;
 linux) report_bundle="$ROOT/desktop/build/bin" ;;
 esac

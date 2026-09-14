@@ -90,21 +90,21 @@ async function openExport(key?: string) {
   return Array.from(rootElement.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
 }
 let items = await openExport();
-ok(items.length === 4 && document.activeElement === items[0], "one export click opens all four formats and focuses the first");
+ok(items.length === 5 && document.activeElement === items[0], "one export click opens all five formats and focuses the first");
 await act(async () => { press(items[0]!, "ArrowUp"); });
-ok(document.activeElement === items[3], "ArrowUp wraps to the last format");
-await act(async () => { press(items[3]!, "Home"); });
+ok(document.activeElement === items[4], "ArrowUp wraps to the last format");
+await act(async () => { press(items[4]!, "Home"); });
 ok(document.activeElement === items[0], "Home focuses the first format");
 await act(async () => { press(items[0]!, "ArrowDown"); });
 ok(document.activeElement === items[1], "ArrowDown advances to the next format");
 await act(async () => { press(items[1]!, "End"); });
-ok(document.activeElement === items[3], "End focuses the last format");
-await act(async () => { press(items[3]!, "Escape"); });
+ok(document.activeElement === items[4], "End focuses the last format");
+await act(async () => { press(items[4]!, "Escape"); });
 ok(!rootElement.querySelector('[role="menu"]') && document.activeElement === trigger, "Escape closes export and restores trigger focus");
 items = await openExport("ArrowUp");
-ok(document.activeElement === items[3], "ArrowUp on the export trigger opens at the final format");
-await act(async () => { items[3]!.click(); });
-ok(calls.includes("export:image") && !rootElement.querySelector('[role="menu"]') && document.activeElement === trigger, "format selection dispatches export, closes the menu, and restores focus");
+ok(document.activeElement === items[4], "ArrowUp on the export trigger opens at the final format");
+await act(async () => { items[4]!.click(); });
+ok(calls.includes("export:diagnostic") && !rootElement.querySelector('[role="menu"]') && document.activeElement === trigger, "format selection dispatches diagnostic export, closes the menu, and restores focus");
 for (const [index, format] of ["markdown", "json", "pdf"].entries()) {
   items = await openExport("ArrowDown");
   await act(async () => { items[index]!.click(); });

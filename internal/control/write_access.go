@@ -234,9 +234,6 @@ func (c *Controller) requestWriteAccess(ctx context.Context, req agent.WriteAcce
 }
 
 func (c *Controller) requestWriteAccessDecision(ctx context.Context, toolName, subject string, args []byte, reason string, payload *event.WriteAccessApproval) (approvalReply, error) {
-	c.approval.promptMu.Lock()
-	defer c.approval.promptMu.Unlock()
-
 	c.approval.promptEmitMu.Lock()
 	id, reply := c.approval.registerWriteAccess(toolName, subject, reason, args, payload)
 	c.registerOwnedPrompt(id, PromptApproval)
@@ -250,7 +247,11 @@ func (c *Controller) requestWriteAccessDecision(ctx context.Context, toolName, s
 		Kind:        writeAccessKind,
 		WriteAccess: payload,
 	}
-	c.sink.Emit(c.approvalRequestEvent(approval))
+	if err := event.EmitChecked(c.sink, c.approvalRequestEvent(approval)); err != nil {
+		c.approval.promptEmitMu.Unlock()
+		c.cancelOwnedPrompt(id)
+		return approvalReply{}, fmt.Errorf("persist write access request: %w", err)
+	}
 	c.approval.promptEmitMu.Unlock()
 	go c.hooks.Notification(ctx, approvalNotificationText(toolName, subject), "permission_prompt")
 
@@ -268,8 +269,6 @@ func (c *Controller) requestWriteAccessDecision(ctx context.Context, toolName, s
 // ResolveApproval answers a pending approval with an explicit scope.
 func (c *Controller) ResolveApproval(id string, allow bool, scope sandbox.ApprovalScope) error {
 	defer c.refreshRuntimeState(event.Event{})
-	c.promptResolveMu.Lock()
-	defer c.promptResolveMu.Unlock()
 	return c.resolveApprovalLocked(id, allow, scope)
 }
 
@@ -311,7 +310,11 @@ func (c *Controller) resolveApprovalLocked(id string, allow bool, scope sandbox.
 		var ok bool
 		var err error
 		pending, ok, err = c.approval.resolveAfter(id, func(p pendingApproval) error {
-			return c.emitTurnEventChecked(event.Event{Kind: event.PromptAnswered, ItemID: id, Status: event.TurnInProgress})
+			state := PromptRejected
+			if allow {
+				state = PromptAnswered
+			}
+			return c.emitTurnEventChecked(event.Event{Kind: event.PromptAnswered, ItemID: id, InteractionState: string(state), Status: event.TurnInProgress})
 		})
 		if err != nil {
 			return err
@@ -319,7 +322,11 @@ func (c *Controller) resolveApprovalLocked(id string, allow bool, scope sandbox.
 		if !ok {
 			return fmt.Errorf("approval %q is no longer pending", id)
 		}
-		c.promptOwner.Remove(id)
+		terminal := PromptRejected
+		if allow {
+			terminal = PromptAnswered
+		}
+		c.promptOwner.MarkIDTerminal(id, terminal)
 		return c.resolveWriteAccess(pending, allow, scope)
 	}
 	session := allow && scope == sandbox.ApprovalScopeSession

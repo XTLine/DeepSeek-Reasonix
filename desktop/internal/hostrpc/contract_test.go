@@ -34,7 +34,7 @@ func TestContractDigestIsStableAndSensitiveToCommands(t *testing.T) {
 	if !strings.HasPrefix(small.Digest(), "sha256:") || len(small.Digest()) != len("sha256:")+64 {
 		t.Fatalf("digest format = %q", small.Digest())
 	}
-	if small.ProtocolVersion != 1 {
+	if small.ProtocolVersion != ProtocolVersion {
 		t.Fatalf("protocol version = %d", small.ProtocolVersion)
 	}
 	if strings.Join(small.Events, ",") != "a:event,b:event" {

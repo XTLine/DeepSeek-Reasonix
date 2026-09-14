@@ -1,11 +1,6 @@
 package agent
 
-import (
-	"context"
-
-	"reasonix/internal/evidence"
-	"reasonix/internal/plancontract"
-)
+import "reasonix/internal/plancontract"
 
 // SetPlanContract records the approved plan this turn executes, or clears it
 // when the turn runs without one. The coordinator sets it before every executor
@@ -35,10 +30,4 @@ func (a *Agent) planContractSnapshot() *plancontract.Plan {
 	}
 	copied := *a.planContract
 	return &copied
-}
-
-// withContractState supplies the current task list to compatibility tools.
-// Acceptance and verification text stays in the approved plan's model context.
-func (a *Agent) withContractState(ctx context.Context) context.Context {
-	return evidence.WithTodoState(ctx, a.CanonicalTodoState())
 }

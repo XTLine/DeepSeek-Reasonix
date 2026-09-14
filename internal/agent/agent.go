@@ -772,7 +772,7 @@ func (a *Agent) RecordUnappliedSteer(text string, itemID ...string) {
 	if len(itemID) > 0 {
 		id = itemID[0]
 	}
-	a.sess.conversation.Add(provider.Message{
+	_ = a.appendCommittedMessages(context.Background(), "unapplied-steer", provider.Message{
 		Role:       provider.RoleTool,
 		Content:    a.withTurnPreferences(midTurnSteerMessage(text)),
 		ToolCallID: provider.LocalOnlyToolID,
@@ -988,6 +988,10 @@ type Options struct {
 	// (or cloned for) sub-agents. nil disables v2 capture. Does not affect
 	// provider-visible tool schemas or prompts.
 	MutationObserver *checkpoint.MutationObserver
+
+	// SessionCheckpointer flushes the accepted session event prefix at semantic
+	// boundaries before model and top-level tool side effects.
+	SessionCheckpointer SessionCheckpointer
 }
 
 // New constructs an Agent. MaxSteps <= 0 means no cap — the run loop continues
@@ -1219,7 +1223,10 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 	if err != nil {
 		return err
 	}
-	_, state := a.beginRunTurn(ctx, input, pinned)
+	_, state, err := a.beginRunTurn(ctx, input, pinned)
+	if err != nil {
+		return err
+	}
 	if a.pending.forkRestore != nil {
 		a.pending.forkRestore(state)
 	}
@@ -1299,68 +1306,8 @@ func (a *Agent) updateDeliveryCheckpoint(runErr error) {
 func (a *Agent) setTodoState(todos []evidence.TodoItem) {
 	a.sess.todoMu.Lock()
 	a.sess.todoState = append([]evidence.TodoItem(nil), todos...)
+	a.sess.todoWritten = true
 	a.sess.todoMu.Unlock()
-}
-
-// RebuildTodoState re-derives canonical task state from the current session
-// transcript. Call after externally truncating the session (e.g. after a
-// user-cancel strip) so Agent.todoState stays consistent with the messages.
-func (a *Agent) RebuildTodoState() {
-	a.rebuildTodoState(a.Session().Snapshot())
-}
-
-// rebuildTodoState reconstructs the canonical task list from the latest
-// successful todo_write. Retired completion tools are historical facts only and
-// never mutate the current todo projection.
-// Empty after compaction drops the todo_write — no worse than no canonical list.
-func (a *Agent) rebuildTodoState(msgs []provider.Message) {
-	successful := successfulToolCallIDs(msgs)
-	outputs := make(map[string]string)
-	for _, msg := range msgs {
-		if msg.Role == provider.RoleTool {
-			outputs[msg.ToolCallID] = msg.Content
-		}
-	}
-	var todos []evidence.TodoItem
-	baseIdx := -1
-	for i, msg := range msgs {
-		for _, tc := range msg.ToolCalls {
-			if tc.Name != "todo_write" || !successful[tc.ID] {
-				continue
-			}
-			rec := evidence.ReceiptFromToolCall(tc.Name, json.RawMessage(tc.Arguments), true, true)
-			// A successful empty todo_write is an explicit clear. Preserve it as the
-			// latest base so history reloads do not resurrect an older non-empty list.
-			todos = evidence.ReplayTodoList(rec.Todos, outputs[tc.ID])
-			baseIdx = i
-		}
-	}
-	if baseIdx < 0 {
-		a.setTodoState(nil)
-		return
-	}
-	a.setTodoState(todos)
-}
-
-func successfulToolCallIDs(msgs []provider.Message) map[string]bool {
-	successful := map[string]bool{}
-	for _, msg := range msgs {
-		if msg.Role != provider.RoleTool || msg.ToolCallID == "" {
-			continue
-		}
-		if !toolResultFailed(msg.Content) {
-			successful[msg.ToolCallID] = true
-		}
-	}
-	return successful
-}
-
-func toolResultFailed(content string) bool {
-	content = strings.TrimSpace(content)
-	return strings.HasPrefix(content, "error:") ||
-		strings.HasPrefix(content, "blocked:") ||
-		strings.HasPrefix(content, "Error:") ||
-		strings.HasPrefix(content, "[error")
 }
 
 func executorHandoffRetryMessage() string {
@@ -1705,7 +1652,7 @@ func (a *Agent) recordInterruptedDisplay(text, reasoning string, calls []provide
 		terminalStatus = "failed"
 		failureDiagnostic = provider.DiagnoseFailure(terminalErr)
 	}
-	a.sess.conversation.Add(provider.Message{
+	_ = a.appendCommittedMessages(context.Background(), "interrupted-attempt", provider.Message{
 		Role:             provider.RoleTool,
 		Content:          text,
 		ReasoningContent: reasoning,

@@ -15,7 +15,7 @@ func TestControllerModelSelectionPersistsAndBranches(t *testing.T) {
 	s := agent.NewSession("fixture system")
 	s.Add(provider.Message{Role: provider.RoleUser, Content: "keep this"})
 	exec := agent.New(nil, nil, s, agent.Options{}, event.Discard)
-	ctrl := New(Options{Executor: exec, Sink: event.Discard, SessionDir: dir, ModelRef: "go/model", ModelIdentity: "accepted"})
+	ctrl := newOwnedTestController(t, Options{Executor: exec, Sink: event.Discard, SessionDir: dir, ModelRef: "go/model", ModelIdentity: "accepted"})
 	defer ctrl.Close()
 	ctrl.SetFreshSessionPath(path)
 	if err := ctrl.Snapshot(); err != nil {
@@ -45,7 +45,7 @@ func TestControllerRejectsHistoricalBranchBeforeTransition(t *testing.T) {
 		t.Fatal(err)
 	}
 	blocked := errors.New("MIGRATED_MODEL_UNAVAILABLE")
-	ctrl := New(Options{SessionDir: dir, ResolveSessionModel: func(model, identity string) (string, error) {
+	ctrl := newOwnedTestController(t, Options{SessionDir: dir, ResolveSessionModel: func(model, identity string) (string, error) {
 		if model != "go/model" || identity != "old" {
 			t.Fatal("branch did not pass the saved selection to the validator")
 		}

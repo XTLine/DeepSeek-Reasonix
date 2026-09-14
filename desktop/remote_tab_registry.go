@@ -106,6 +106,7 @@ func (a *App) remoteTabsFileEntries(localIDs []string) ([]desktopRemoteTabEntry,
 			Model:        tab.model,
 			SessionName:  tab.session.name,
 			SessionPath:  tab.session.path,
+			SessionID:    tab.session.sessionID,
 			SessionReset: tab.session.reset,
 		})
 	}

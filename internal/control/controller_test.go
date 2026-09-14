@@ -55,7 +55,7 @@ func TestResolvePlanDecisionRecordsDistinctOutcomes(t *testing.T) {
 			session := agent.NewSession("sys")
 			session.Add(provider.Message{Role: provider.RoleAssistant, Content: "proposed plan"})
 			exec := agent.New(nil, nil, session, agent.Options{}, event.Discard)
-			c := New(Options{Executor: exec})
+			c := newOwnedTestController(t, Options{Executor: exec})
 			id, reply := c.approval.registerDecisionKind(planApprovalTool, "", "", true, false, "plan", nil)
 
 			if err := c.ResolvePlanDecision(id, tt.action); err != nil {
@@ -150,7 +150,7 @@ func TestContextSnapshotMeasuresTheTriggerInput(t *testing.T) {
 		{Type: provider.ChunkDone},
 	}}}
 	ag := agent.New(prov, tool.NewRegistry(), agent.NewSession("sys"), agent.Options{ContextWindow: 1_000_000}, event.Discard)
-	c := New(Options{Runner: ag, Executor: ag})
+	c := newOwnedTestController(t, Options{Runner: ag, Executor: ag})
 
 	if err := c.Run(context.Background(), "hello"); err != nil {
 		t.Fatal(err)
@@ -187,8 +187,8 @@ func TestCancelJobCannotCrossSessionBoundary(t *testing.T) {
 	t.Cleanup(manager.Close)
 	pathA := filepath.Join(t.TempDir(), "session-a.jsonl")
 	pathB := filepath.Join(t.TempDir(), "session-b.jsonl")
-	controllerA := New(Options{Jobs: manager, SessionPath: pathA})
-	controllerB := New(Options{Jobs: manager, SessionPath: pathB})
+	controllerA := newOwnedTestController(t, Options{Jobs: manager, SessionPath: pathA})
+	controllerB := newOwnedTestController(t, Options{Jobs: manager, SessionPath: pathB})
 	t.Cleanup(controllerA.Close)
 	t.Cleanup(controllerB.Close)
 
@@ -283,7 +283,7 @@ func lastUserMessage(messages []provider.Message) string {
 
 func TestNewTreatsTypedNilSinkAsDiscard(t *testing.T) {
 	var sink *typedNilControllerSink
-	c := New(Options{Sink: sink})
+	c := newOwnedTestController(t, Options{Sink: sink})
 
 	c.notice("typed nil sink should not panic")
 }
@@ -317,7 +317,7 @@ func TestClearSessionMarksCleanupPendingBeforeReturningForRunningJobs(t *testing
 		t.Fatal("background job never started")
 	}
 
-	ctrl := New(Options{Executor: exec, SessionDir: dir, SessionPath: oldPath, Label: "test", Jobs: jm})
+	ctrl := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: oldPath, Label: "test", Jobs: jm})
 	if err := ctrl.ClearSession(); err != nil {
 		t.Fatalf("ClearSession: %v", err)
 	}
@@ -354,7 +354,7 @@ func TestClearSessionQueuesSessionStartHookContext(t *testing.T) {
 	}}, dir, func(context.Context, hook.SpawnInput) hook.SpawnResult {
 		return hook.SpawnResult{ExitCode: 0, Stdout: "clear session context"}
 	}, nil)
-	c := New(Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: oldPath, Label: "test", Hooks: hooks})
+	c := newOwnedTestController(t, Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: oldPath, Label: "test", Hooks: hooks})
 
 	if err := c.ClearSession(); err != nil {
 		t.Fatalf("ClearSession: %v", err)
@@ -412,7 +412,7 @@ func TestRunTurnSnapshotsActivityWhenTranscriptChanges(t *testing.T) {
 	sess := agent.NewSession("sys")
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
 	path := filepath.Join(dir, "session.jsonl")
-	c := New(Options{Runner: appendingRunner{session: sess}, Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Runner: appendingRunner{session: sess}, Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 
 	if err := c.runTurn(context.Background(), "hello"); err != nil {
 		t.Fatal(err)
@@ -439,7 +439,7 @@ func TestFinishInFlightTurnKeepsMarkerUntilSnapshotSucceeds(t *testing.T) {
 	path := filepath.Join(dir, "session.jsonl")
 	sess := agent.NewSession("sys")
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 
 	start := sess.Len()
 	marker := c.markInFlightTurn(start, true)
@@ -488,7 +488,7 @@ func TestResumePreservesTranscriptWhenCrashFollowsFinalSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 	marker := c.markInFlightTurn(sess.Len(), true)
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "completed prompt"})
 	sess.Add(provider.Message{Role: provider.RoleAssistant, Content: "completed answer"})
@@ -509,7 +509,7 @@ func TestResumePreservesTranscriptWhenCrashFollowsFinalSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	recoveredExec := agent.New(nil, nil, loaded, agent.Options{}, event.Discard)
-	recovered := New(Options{Executor: recoveredExec, SessionDir: dir, SessionPath: path, Label: "test"})
+	recovered := newOwnedTestController(t, Options{Executor: recoveredExec, SessionDir: dir, SessionPath: path, Label: "test"})
 	recovered.recoverInterruptedTurn(path)
 	msgs := recoveredExec.Session().Snapshot()
 	if len(msgs) != 3 || msgs[2].Content != "completed answer" || msgs[2].LocalOnly {
@@ -530,7 +530,8 @@ func TestRunInjectsParentSessionForJobs(t *testing.T) {
 	runner := &sessionContextRunner{}
 	sess := agent.NewSession("sys")
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	c := New(Options{Runner: runner, Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Runner: runner, Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	t.Cleanup(c.Close)
 
 	if err := c.Run(context.Background(), "hello"); err != nil {
 		t.Fatal(err)
@@ -557,10 +558,11 @@ func TestRunStopHookIgnoresCanceledCallerContext(t *testing.T) {
 		stopErr = ctx.Err()
 		return hook.SpawnResult{ExitCode: 0}
 	}, nil)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner: cancelingRunner{cancel: cancel},
 		Hooks:  hooks,
 	})
+	t.Cleanup(c.Close)
 
 	if err := c.Run(runCtx, "hello"); err != nil {
 		t.Fatal(err)
@@ -590,7 +592,7 @@ func TestSetSessionPathAdoptsTemporaryBackgroundJobs(t *testing.T) {
 		textTurn("done"),
 	}}
 	ag := agent.New(prov, reg, agent.NewSession("sys"), agent.Options{Jobs: jm}, event.Discard)
-	c := New(Options{Runner: ag, Executor: ag, SessionDir: dir, Label: "test", Jobs: jm})
+	c := newOwnedTestController(t, Options{Runner: ag, Executor: ag, SessionDir: dir, Label: "test", Jobs: jm})
 	defer c.Close()
 
 	if err := c.Run(context.Background(), "start background job"); err != nil && !errors.As(err, new(*agent.FinalReadinessError)) {
@@ -615,7 +617,7 @@ func TestGoalStatePersistsNextToSessionPath(t *testing.T) {
 	path := filepath.Join(dir, "session.jsonl")
 	sess := agent.NewSession("sys")
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 
 	c.SetGoalWithResearchMode("fix the typo", GoalResearchOn)
 	c.GoalStrict(true)
@@ -638,7 +640,7 @@ func TestSetGoalDurableRestoresInMemoryStateWhenSidecarWriteFails(t *testing.T) 
 	path := filepath.Join(dir, "session.jsonl")
 	sess := agent.NewSession("sys")
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 
 	c.SetGoal("keep the old goal")
 	oldStatus := c.GoalStatus()
@@ -664,7 +666,7 @@ func TestSetGoalDurableNeverCreatesLegacyArchive(t *testing.T) {
 	path := filepath.Join(root, "session.jsonl")
 	sink := &noticeSink{}
 	exec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Executor:      exec,
 		SessionDir:    root,
 		SessionPath:   path,
@@ -694,7 +696,7 @@ func TestSetGoalDurableNeverCreatesLegacyArchive(t *testing.T) {
 	}
 }
 
-func TestResumeRestoresTerminalGoalTodosFromSidecar(t *testing.T) {
+func TestResumeDoesNotActivateLegacyTranscriptOrTerminalGoalTodos(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	loaded := agent.NewSession("sys")
@@ -717,16 +719,15 @@ func TestResumeRestoresTerminalGoalTodosFromSidecar(t *testing.T) {
 	}
 
 	exec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, Label: "test"})
 	c.Resume(loaded, path)
 
-	got := c.Todos()
-	if len(got) != 1 || got[0].Content != "Step 1" || got[0].Status != "completed" {
-		t.Fatalf("Todos() after resume = %+v, want completed todos from goal-state sidecar", got)
+	if got := c.Todos(); len(got) != 0 {
+		t.Fatalf("Todos() after legacy resume = %+v, want archival todo data inactive", got)
 	}
 }
 
-func TestResumeKeepsTranscriptTodosForRunningGoalSidecar(t *testing.T) {
+func TestResumeDoesNotActivateLegacyTranscriptOrRunningGoalTodos(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	loaded := agent.NewSession("sys")
@@ -749,12 +750,11 @@ func TestResumeKeepsTranscriptTodosForRunningGoalSidecar(t *testing.T) {
 	}
 
 	exec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, Label: "test"})
 	c.Resume(loaded, path)
 
-	got := c.Todos()
-	if len(got) != 1 || got[0].Content != "Step 1" || got[0].Status != "in_progress" {
-		t.Fatalf("Todos() after resume = %+v, want transcript todos while goal state is running", got)
+	if got := c.Todos(); len(got) != 0 {
+		t.Fatalf("Todos() after legacy resume = %+v, want running goal todos inactive", got)
 	}
 }
 
@@ -792,7 +792,7 @@ func TestResumeRestoresRunningAutoResearchGoalFromSidecar(t *testing.T) {
 
 	loaded := agent.NewSession("sys")
 	exec := agent.New(nil, nil, loaded, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, WorkspaceRoot: root, SessionDir: root, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, WorkspaceRoot: root, SessionDir: root, Label: "test"})
 	c.Resume(loaded, path)
 
 	if got := c.Goal(); got != "investigate runtime resume" {
@@ -812,7 +812,7 @@ func TestResumeRestoresRunningAutoResearchGoalFromSidecar(t *testing.T) {
 func TestRunTurnRecordsDisplayForPersistedUserMessage(t *testing.T) {
 	sess := agent.NewSession("sys")
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	c := New(Options{Runner: handoffRunner{session: sess}, Executor: exec})
+	c := newOwnedTestController(t, Options{Runner: handoffRunner{session: sess}, Executor: exec})
 	var gotContent, gotDisplay string
 	c.SetDisplayRecorder(func(content, display string) {
 		gotContent = content
@@ -836,7 +836,7 @@ func TestSnapshotDoesNotRefreshSessionActivity(t *testing.T) {
 	sess := agent.NewSession("sys")
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "first"})
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, Label: "test", ModelRef: "provider/model-a"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, Label: "test", ModelRef: "provider/model-a"})
 	c.SetSessionPath(filepath.Join(dir, "session.jsonl"))
 
 	if err := c.SnapshotActivity(); err != nil {
@@ -873,7 +873,7 @@ func TestSnapshotAdoptsNewerDiskForPureStalePrefix(t *testing.T) {
 	staleSess.Add(provider.Message{Role: provider.RoleAssistant, Content: "one"})
 	staleExec := agent.New(nil, nil, staleSess, agent.Options{}, event.Discard)
 	sink := &noticeSink{}
-	stale := New(Options{Executor: staleExec, SessionDir: dir, SessionPath: path, Label: "test", Sink: sink})
+	stale := newOwnedTestController(t, Options{Executor: staleExec, SessionDir: dir, SessionPath: path, Label: "test", Sink: sink})
 
 	currentSess := agent.NewSession("sys")
 	currentSess.Add(provider.Message{Role: provider.RoleUser, Content: "first"})
@@ -881,7 +881,7 @@ func TestSnapshotAdoptsNewerDiskForPureStalePrefix(t *testing.T) {
 	currentSess.Add(provider.Message{Role: provider.RoleUser, Content: "second"})
 	currentSess.Add(provider.Message{Role: provider.RoleAssistant, Content: "two"})
 	currentExec := agent.New(nil, nil, currentSess, agent.Options{}, event.Discard)
-	current := New(Options{Executor: currentExec, SessionDir: dir, SessionPath: path, Label: "test"})
+	current := newOwnedTestController(t, Options{Executor: currentExec, SessionDir: dir, SessionPath: path, Label: "test"})
 	if err := current.SnapshotActivity(); err != nil {
 		t.Fatalf("SnapshotActivity current: %v", err)
 	}
@@ -918,14 +918,14 @@ func TestSnapshotRecoversDivergedControllerTranscript(t *testing.T) {
 	staleSess.Add(provider.Message{Role: provider.RoleAssistant, Content: "one"})
 	staleSess.Add(provider.Message{Role: provider.RoleUser, Content: "local second"})
 	staleExec := agent.New(nil, nil, staleSess, agent.Options{}, event.Discard)
-	stale := New(Options{Executor: staleExec, SessionDir: dir, SessionPath: path, Label: "test"})
+	stale := newOwnedTestController(t, Options{Executor: staleExec, SessionDir: dir, SessionPath: path, Label: "test"})
 
 	currentSess := agent.NewSession("sys")
 	currentSess.Add(provider.Message{Role: provider.RoleUser, Content: "first"})
 	currentSess.Add(provider.Message{Role: provider.RoleAssistant, Content: "one"})
 	currentSess.Add(provider.Message{Role: provider.RoleUser, Content: "disk second"})
 	currentExec := agent.New(nil, nil, currentSess, agent.Options{}, event.Discard)
-	current := New(Options{Executor: currentExec, SessionDir: dir, SessionPath: path, Label: "test"})
+	current := newOwnedTestController(t, Options{Executor: currentExec, SessionDir: dir, SessionPath: path, Label: "test"})
 	if err := current.SnapshotActivity(); err != nil {
 		t.Fatalf("SnapshotActivity current: %v", err)
 	}
@@ -967,14 +967,14 @@ func TestSnapshotConflictRecoveryTransplantsInFlightTurnMarker(t *testing.T) {
 	staleSess.Add(provider.Message{Role: provider.RoleAssistant, Content: "one"})
 	staleSess.Add(provider.Message{Role: provider.RoleUser, Content: "local second"})
 	staleExec := agent.New(nil, nil, staleSess, agent.Options{}, event.Discard)
-	stale := New(Options{Executor: staleExec, SessionDir: dir, SessionPath: path, Label: "test"})
+	stale := newOwnedTestController(t, Options{Executor: staleExec, SessionDir: dir, SessionPath: path, Label: "test"})
 
 	currentSess := agent.NewSession("sys")
 	currentSess.Add(provider.Message{Role: provider.RoleUser, Content: "first"})
 	currentSess.Add(provider.Message{Role: provider.RoleAssistant, Content: "one"})
 	currentSess.Add(provider.Message{Role: provider.RoleUser, Content: "disk second"})
 	currentExec := agent.New(nil, nil, currentSess, agent.Options{}, event.Discard)
-	current := New(Options{Executor: currentExec, SessionDir: dir, SessionPath: path, Label: "test"})
+	current := newOwnedTestController(t, Options{Executor: currentExec, SessionDir: dir, SessionPath: path, Label: "test"})
 	if err := current.SnapshotActivity(); err != nil {
 		t.Fatalf("SnapshotActivity current: %v", err)
 	}
@@ -1051,7 +1051,7 @@ func TestRecoverInterruptedTurnSparesTurnContinuedOnRecoveryBranch(t *testing.T)
 		t.Fatalf("LoadSession: %v", err)
 	}
 	exec := agent.New(nil, nil, loaded, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 	c.recoverInterruptedTurn(path)
 
 	if got := c.executor.Session().Len(); got != 3 {
@@ -1089,7 +1089,7 @@ func TestRecoverInterruptedTurnPreservesGenuineCrashDisplay(t *testing.T) {
 		t.Fatalf("LoadSession: %v", err)
 	}
 	exec := agent.New(nil, nil, loaded, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 	c.recoverInterruptedTurn(path)
 
 	if got := c.executor.Session().Len(); got != 3 {
@@ -1155,7 +1155,7 @@ func TestRecoverInterruptedTurnAfterCompactionRelocatesVisibleTurn(t *testing.T)
 		t.Fatalf("LoadSession: %v", err)
 	}
 	exec := agent.New(nil, nil, loaded, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 	c.recoverInterruptedTurn(path)
 
 	msgs := exec.Session().Snapshot()
@@ -1245,7 +1245,7 @@ func TestResumePreservesNewerWALAfterStaleMarker(t *testing.T) {
 		t.Fatalf("WAL replay length = %d, want 1315", loaded.Len())
 	}
 	exec := agent.New(nil, nil, loaded, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 	c.recoverInterruptedTurn(path)
 
 	if got := exec.Session().Len(); got != 1315 {
@@ -1271,7 +1271,7 @@ func TestSnapshotRewriteRecoversStaleControllerTranscript(t *testing.T) {
 	staleSess.Add(provider.Message{Role: provider.RoleUser, Content: "first"})
 	staleSess.Add(provider.Message{Role: provider.RoleAssistant, Content: "one"})
 	staleExec := agent.New(nil, nil, staleSess, agent.Options{}, event.Discard)
-	stale := New(Options{Executor: staleExec, SessionDir: dir, SessionPath: path, Label: "test"})
+	stale := newOwnedTestController(t, Options{Executor: staleExec, SessionDir: dir, SessionPath: path, Label: "test"})
 
 	currentSess := agent.NewSession("sys")
 	currentSess.Add(provider.Message{Role: provider.RoleUser, Content: "first"})
@@ -1279,7 +1279,7 @@ func TestSnapshotRewriteRecoversStaleControllerTranscript(t *testing.T) {
 	currentSess.Add(provider.Message{Role: provider.RoleUser, Content: "second"})
 	currentSess.Add(provider.Message{Role: provider.RoleAssistant, Content: "two"})
 	currentExec := agent.New(nil, nil, currentSess, agent.Options{}, event.Discard)
-	current := New(Options{Executor: currentExec, SessionDir: dir, SessionPath: path, Label: "test"})
+	current := newOwnedTestController(t, Options{Executor: currentExec, SessionDir: dir, SessionPath: path, Label: "test"})
 	if err := current.SnapshotActivity(); err != nil {
 		t.Fatalf("SnapshotActivity current: %v", err)
 	}
@@ -1338,7 +1338,7 @@ func TestSnapshotActivityPersistsOwnedCompactionRewrite(t *testing.T) {
 		t.Fatalf("LoadSession: %v", err)
 	}
 	exec := agent.New(nil, nil, loaded, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 
 	// A mid-turn autosave can persist the pre-compaction prefix. Auto-compaction
 	// then rewrites older history inside the same turn; the final activity
@@ -1389,7 +1389,7 @@ func TestEditedPromptMetadataAfterMidTurnSnapshotStaysOnOwnedSession(t *testing.
 	// local inline-edit metadata to the already-persisted user message.
 	sess.Add(provider.Message{Role: provider.RoleAssistant, Content: "final"})
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	ctrl := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	ctrl := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 	ctrl.markEditedForNewUser(1, "original prompt")
 
 	if err := ctrl.SnapshotActivity(); err != nil {
@@ -1430,7 +1430,7 @@ func TestRecoveryBranchPersistsLaterOwnedCompactionRewrite(t *testing.T) {
 	localSess.Add(provider.Message{Role: provider.RoleAssistant, Content: "local"})
 	localExec := agent.New(nil, nil, localSess, agent.Options{}, event.Discard)
 	sink := &noticeSink{}
-	c := New(Options{Executor: localExec, SessionDir: dir, SessionPath: path, Label: "test", Sink: sink})
+	c := newOwnedTestController(t, Options{Executor: localExec, SessionDir: dir, SessionPath: path, Label: "test", Sink: sink})
 
 	if err := c.Snapshot(); err != nil {
 		t.Fatalf("Snapshot initial recovery: %v", err)
@@ -1501,7 +1501,7 @@ func TestConcurrentSnapshotsShareSingleRecoveryHandoff(t *testing.T) {
 
 	entered := make(chan controlRecoveryInfo, 16)
 	release := make(chan struct{})
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Executor:    localExec,
 		SessionDir:  dir,
 		SessionPath: path,
@@ -1581,7 +1581,7 @@ func TestRecoverShutdownSnapshotPersistsAndReanchorsSession(t *testing.T) {
 	exec := agent.New(nil, nil, current, agent.Options{}, event.Discard)
 	var handoff SessionRecoveryInfo
 	sink := &noticeSink{}
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Executor:    exec,
 		SessionDir:  dir,
 		SessionPath: path,
@@ -1668,7 +1668,7 @@ func startBlockedRecoveryHandoff(t *testing.T) *blockedRecoveryHandoff {
 
 	entered := make(chan controlRecoveryInfo, 1)
 	release := make(chan struct{})
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Executor:    localExec,
 		SessionDir:  dir,
 		SessionPath: path,
@@ -1835,7 +1835,7 @@ func TestSnapshotConflictAdoptionResetsRewriteBaseline(t *testing.T) {
 	}
 
 	exec := agent.New(nil, nil, stale, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 	// Rewrites the stale controller never persisted before it noticed the
 	// newer transcript; adoption must discard this counter with the session.
 	for range 3 {
@@ -1890,7 +1890,7 @@ func TestConcurrentCompactionAndAutosaveNeverBranch(t *testing.T) {
 	sess := agent.NewSession("sys")
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "turn-0"})
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 	if err := c.Snapshot(); err != nil {
 		t.Fatalf("initial snapshot: %v", err)
 	}
@@ -1959,7 +1959,7 @@ func TestAdoptHistoryPreservesRewriteBaseline(t *testing.T) {
 	msgs[0].Content = "new sys"
 
 	exec := agent.New(nil, nil, agent.NewSession("new sys"), agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, Label: "test", DisableColdResumePrune: true})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, Label: "test", DisableColdResumePrune: true})
 	c.AdoptHistory(msgs, path)
 	rewrite := exec.Session().Snapshot()
 	rewrite[3].Content = "[elided tool result]"
@@ -1994,12 +1994,12 @@ func TestAdoptEmptyHistoryRestoresPersistedGoalState(t *testing.T) {
 	}
 
 	oldExec := agent.New(nil, nil, agent.NewSession(""), agent.Options{}, event.Discard)
-	old := New(Options{Executor: oldExec, SessionDir: dir, SessionPath: path, Label: "old"})
+	old := newOwnedTestController(t, Options{Executor: oldExec, SessionDir: dir, SessionPath: path, Label: "old"})
 	old.SetGoal("preserve the zero-turn goal")
 	old.stopGoal(GoalStatusBlocked)
 
 	newExec := agent.New(nil, nil, agent.NewSession(""), agent.Options{}, event.Discard)
-	replacement := New(Options{Executor: newExec, SessionDir: dir, Label: "replacement", DisableColdResumePrune: true})
+	replacement := newOwnedTestController(t, Options{Executor: newExec, SessionDir: dir, Label: "replacement", DisableColdResumePrune: true})
 	replacement.AdoptHistory(nil, path)
 
 	if got := replacement.Goal(); got != "preserve the zero-turn goal" {
@@ -2029,7 +2029,7 @@ func TestAdoptHistoryRejectsStaleCarriedHistoryBaseline(t *testing.T) {
 		{Role: provider.RoleAssistant, Content: "one"},
 	}
 	exec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, Label: "test", DisableColdResumePrune: true})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, Label: "test", DisableColdResumePrune: true})
 	c.AdoptHistory(stale, path)
 	if err := c.SnapshotRewrite(); err != nil {
 		t.Fatalf("SnapshotRewrite stale adopted history: %v", err)
@@ -2059,7 +2059,7 @@ func TestCancelFlushRejectsStaleControllerOverwrite(t *testing.T) {
 	staleSess.Add(provider.Message{Role: provider.RoleAssistant, Content: "one"})
 	staleSess.Add(provider.Message{Role: provider.RoleUser, Content: "partial"})
 	staleExec := agent.New(nil, nil, staleSess, agent.Options{}, event.Discard)
-	stale := New(Options{Executor: staleExec, SessionDir: dir, SessionPath: path, Label: "test"})
+	stale := newOwnedTestController(t, Options{Executor: staleExec, SessionDir: dir, SessionPath: path, Label: "test"})
 
 	currentSess := agent.NewSession("sys")
 	currentSess.Add(provider.Message{Role: provider.RoleUser, Content: "first"})
@@ -2067,7 +2067,7 @@ func TestCancelFlushRejectsStaleControllerOverwrite(t *testing.T) {
 	currentSess.Add(provider.Message{Role: provider.RoleUser, Content: "second"})
 	currentSess.Add(provider.Message{Role: provider.RoleAssistant, Content: "two"})
 	currentExec := agent.New(nil, nil, currentSess, agent.Options{}, event.Discard)
-	current := New(Options{Executor: currentExec, SessionDir: dir, SessionPath: path, Label: "test"})
+	current := newOwnedTestController(t, Options{Executor: currentExec, SessionDir: dir, SessionPath: path, Label: "test"})
 	if err := current.SnapshotActivity(); err != nil {
 		t.Fatalf("SnapshotActivity current: %v", err)
 	}
@@ -2094,7 +2094,7 @@ func TestSnapshotActivityRefreshesSessionActivity(t *testing.T) {
 	sess := agent.NewSession("sys")
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "first"})
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, Label: "test"})
 	c.SetSessionPath(filepath.Join(dir, "session.jsonl"))
 
 	if err := c.SnapshotActivity(); err != nil {
@@ -2125,7 +2125,7 @@ func TestSnapshotActivitySavesTranscriptBeforeModelMeta(t *testing.T) {
 	sess := agent.NewSession("sys")
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "must persist"})
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test", ModelRef: "provider/model-a"})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test", ModelRef: "provider/model-a"})
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -2151,7 +2151,7 @@ func TestNewSessionStartsFreshContextAndSavesTranscript(t *testing.T) {
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "old context"})
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
 	path := filepath.Join(dir, "session.jsonl")
-	c := New(Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: path, Label: "test"})
 
 	if err := c.NewSession(); err != nil {
 		t.Fatal(err)
@@ -2294,7 +2294,7 @@ func TestSnapshotConflictAtRecoveryDepthCapIsolatesCurrentBranch(t *testing.T) {
 	stale.Add(provider.Message{Role: provider.RoleUser, Content: "local second"})
 	exec := agent.New(nil, nil, stale, agent.Options{}, event.Discard)
 	sink := &noticeSink{}
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test", Sink: sink})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test", Sink: sink})
 	stale.IncrementRewrite()
 
 	if err := c.Snapshot(); err != nil {
@@ -2360,7 +2360,7 @@ func TestNewSessionRefusesWhileTurnRunning(t *testing.T) {
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "old context"})
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
 	path := filepath.Join(dir, "session.jsonl")
-	c := New(Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: path, Label: "test"})
 
 	c.mu.Lock()
 	c.running = true
@@ -2410,7 +2410,7 @@ func TestNewSessionRefusesTurnStartedDuringSnapshot(t *testing.T) {
 
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Executor:     localExec,
 		SystemPrompt: "sys",
 		SessionDir:   dir,
@@ -2479,7 +2479,7 @@ func TestSessionMutationsRefuseWhileRotating(t *testing.T) {
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "hi"})
 	sess.Add(provider.Message{Role: provider.RoleAssistant, Content: "there"})
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: path, Label: "test"})
 
 	// Simulate a rotation already in progress (as NewSession/ClearSession hold
 	// it across their snapshot-then-swap window).
@@ -2554,7 +2554,7 @@ func TestNewSessionQueuesSessionStartHookContext(t *testing.T) {
 	}}, dir, func(context.Context, hook.SpawnInput) hook.SpawnResult {
 		return hook.SpawnResult{ExitCode: 0, Stdout: "new session context"}
 	}, nil)
-	c := New(Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: path, Label: "test", Hooks: hooks})
+	c := newOwnedTestController(t, Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: path, Label: "test", Hooks: hooks})
 
 	if err := c.NewSession(); err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -2579,7 +2579,8 @@ func TestNewSessionResetsTwoModelPlannerContext(t *testing.T) {
 	plannerSess := agent.NewSession("planner sys")
 	coord := agent.NewCoordinator(planner, plannerSess, nil, agent.PlannerToolRegistry(tool.NewRegistry()), agent.Options{}, exec, 0, event.Discard, nil)
 	path := filepath.Join(dir, "session.jsonl")
-	c := New(Options{Runner: coord, Executor: exec, SystemPrompt: "exec sys", SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Runner: coord, Executor: exec, SystemPrompt: "exec sys", SessionDir: dir, SessionPath: path, Label: "test"})
+	t.Cleanup(c.Close)
 
 	if err := c.Run(context.Background(), "old task alpha"); err != nil {
 		t.Fatal(err)
@@ -2616,7 +2617,7 @@ func TestTwoModelPlannerApprovalUsesHostGate(t *testing.T) {
 
 	ids := make(chan string, 1)
 	var prompts int
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner:       coord,
 		Executor:     exec,
 		SystemPrompt: "exec sys",
@@ -2681,7 +2682,8 @@ func TestResumeResetsTwoModelPlannerContext(t *testing.T) {
 	exec := agent.New(execProv, tool.NewRegistry(), agent.NewSession("exec sys"), agent.Options{}, event.Discard)
 	plannerSess := agent.NewSession("planner sys")
 	coord := agent.NewCoordinator(planner, plannerSess, nil, agent.PlannerToolRegistry(tool.NewRegistry()), agent.Options{}, exec, 0, event.Discard, nil)
-	c := New(Options{Runner: coord, Executor: exec, SystemPrompt: "exec sys", SessionDir: dir, SessionPath: filepath.Join(dir, "old.jsonl"), Label: "test"})
+	c := newOwnedTestController(t, Options{Runner: coord, Executor: exec, SystemPrompt: "exec sys", SessionDir: dir, SessionPath: filepath.Join(dir, "old.jsonl"), Label: "test"})
+	t.Cleanup(c.Close)
 
 	if err := c.Run(context.Background(), "old task alpha"); err != nil {
 		t.Fatal(err)
@@ -2719,7 +2721,7 @@ func TestResetPlannerSessionClearsPlannerHistory(t *testing.T) {
 	plannerSess := agent.NewSession("planner sys")
 	coord := agent.NewCoordinator(planner, plannerSess, nil, agent.PlannerToolRegistry(tool.NewRegistry()), agent.Options{}, exec, 0, event.Discard, nil)
 	path := filepath.Join(dir, "session.jsonl")
-	c := New(Options{Runner: coord, Executor: exec, SystemPrompt: "exec sys", SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Runner: coord, Executor: exec, SystemPrompt: "exec sys", SessionDir: dir, SessionPath: path, Label: "test"})
 
 	if err := c.Run(context.Background(), "first task"); err != nil {
 		t.Fatal(err)
@@ -2755,7 +2757,7 @@ func TestTwoModelShortChoiceReplySkipsPlanner(t *testing.T) {
 	execSess.Add(provider.Message{Role: provider.RoleAssistant, Content: "两个执行方式可选：\n\n1. Subagent-Driven（推荐）\n2. 当前会话执行\n\n你选哪种？"})
 	exec := agent.New(execProv, tool.NewRegistry(), execSess, agent.Options{}, event.Discard)
 	coord := agent.NewCoordinator(planner, agent.NewSession("planner sys"), nil, agent.PlannerToolRegistry(tool.NewRegistry()), agent.Options{}, exec, 0, event.Discard, NewPlannerGate())
-	c := New(Options{Runner: coord, Executor: exec, SystemPrompt: "exec sys", SessionDir: dir, SessionPath: filepath.Join(dir, "session.jsonl"), Label: "test"})
+	c := newOwnedTestController(t, Options{Runner: coord, Executor: exec, SystemPrompt: "exec sys", SessionDir: dir, SessionPath: filepath.Join(dir, "session.jsonl"), Label: "test"})
 
 	if err := c.Run(context.Background(), "1"); err != nil {
 		t.Fatal(err)
@@ -2791,7 +2793,7 @@ func TestSubmitClearDiscardsCurrentContextWithoutSavingTranscript(t *testing.T) 
 			close(cleared)
 		}
 	})
-	c := New(Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: path, Label: "test", Sink: sink})
+	c := newOwnedTestController(t, Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: path, Label: "test", Sink: sink})
 	if err := c.Snapshot(); err != nil {
 		t.Fatal(err)
 	}
@@ -2829,7 +2831,7 @@ func TestSubmitClearDiscardsCurrentContextWithoutSavingTranscript(t *testing.T) 
 func TestDisconnectMCPServerRemovesLazyPlaceholder(t *testing.T) {
 	reg := tool.NewRegistry()
 	reg.Add(fakeControlTool{name: "mcp__mock__connect"})
-	c := New(Options{Host: plugin.NewHost(), Registry: reg})
+	c := newOwnedTestController(t, Options{Host: plugin.NewHost(), Registry: reg})
 
 	if ok := c.DisconnectMCPServer("mock"); !ok {
 		t.Fatal("DisconnectMCPServer returned false for a registered lazy placeholder")
@@ -2886,7 +2888,7 @@ func TestRegisterMCPServerOnDemandDefersConnectionUntilFirstUse(t *testing.T) {
 	host := plugin.NewHost()
 	defer host.Close()
 	reg := tool.NewRegistry()
-	ctrl := New(Options{Host: host, Registry: reg, PluginCtx: context.Background()})
+	ctrl := newOwnedTestController(t, Options{Host: host, Registry: reg, PluginCtx: context.Background()})
 	entry := config.PluginEntry{Name: "on-demand", Type: "http", URL: server.URL, Source: config.MCPSourceUserConfig}
 	if _, err := ctrl.RegisterMCPServerOnDemand(entry); err != nil {
 		t.Fatalf("RegisterMCPServerOnDemand: %v", err)
@@ -2919,7 +2921,7 @@ func TestControllerMCPHotLifecycleUpdatesCapabilityRuntime(t *testing.T) {
 	defer host.Close()
 	reg := tool.NewRegistry()
 	runtime := agent.NewMCPCapabilityRuntime(context.Background(), host, nil, reg, nil)
-	ctrl := New(Options{
+	ctrl := newOwnedTestController(t, Options{
 		Host: host, Registry: reg, PluginCtx: context.Background(), CapabilityRuntime: runtime,
 	})
 	frontend := runtime.NewFrontend(nil, nil)
@@ -2957,7 +2959,7 @@ func TestControllerMCPHotLifecycleUpdatesCapabilityRuntime(t *testing.T) {
 
 func TestAddMCPServerAuthorizesExplicitUserAddBeforeConnecting(t *testing.T) {
 	var configured plugin.Spec
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		WorkspaceRoot:    "/workspace",
 		MCPConfigureSpec: func(spec *plugin.Spec) { configured = *spec },
 	})
@@ -3016,7 +3018,7 @@ command = "project-only"
 
 	host := plugin.NewHost()
 	defer host.Close()
-	ctrl := New(Options{Host: host, Registry: tool.NewRegistry(), PluginCtx: context.Background(), WorkspaceRoot: workspace})
+	ctrl := newOwnedTestController(t, Options{Host: host, Registry: tool.NewRegistry(), PluginCtx: context.Background(), WorkspaceRoot: workspace})
 	if n, err := ctrl.AddMCPServer(config.PluginEntry{Name: "global-docs", Type: "http", URL: server.URL}); err != nil || n != 1 {
 		t.Fatalf("AddMCPServer(global-docs) = (%d, %v), want one connected tool", n, err)
 	}
@@ -3044,7 +3046,7 @@ command = "project-shared"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ctrl := New(Options{Host: plugin.NewHost(), WorkspaceRoot: workspace})
+	ctrl := newOwnedTestController(t, Options{Host: plugin.NewHost(), WorkspaceRoot: workspace})
 	defer ctrl.Close()
 	if _, err := ctrl.AddMCPServer(config.PluginEntry{Name: "shared", Command: "global-shared"}); err == nil || !strings.Contains(err.Error(), "already configured") {
 		t.Fatalf("AddMCPServer(shared) error = %v, want project collision", err)
@@ -3107,7 +3109,7 @@ url = %q
 	defer host.Close()
 	reg := tool.NewRegistry()
 	var configured plugin.Spec
-	ctrl := New(Options{
+	ctrl := newOwnedTestController(t, Options{
 		Host:          host,
 		Registry:      reg,
 		PluginCtx:     context.Background(),
@@ -3133,7 +3135,7 @@ url = %q
 
 	nextHost := plugin.NewHost()
 	defer nextHost.Close()
-	nextCtrl := New(Options{
+	nextCtrl := newOwnedTestController(t, Options{
 		Host:          nextHost,
 		Registry:      tool.NewRegistry(),
 		PluginCtx:     context.Background(),
@@ -3214,7 +3216,7 @@ func TestConnectMCPServerAppliesConfiguredCallTimeouts(t *testing.T) {
 			host := plugin.NewHost()
 			defer host.Close()
 			reg := tool.NewRegistry()
-			ctrl := New(Options{
+			ctrl := newOwnedTestController(t, Options{
 				Host:                  host,
 				Registry:              reg,
 				MCPDefaultCallTimeout: tc.defaultTimeout,
@@ -3246,7 +3248,7 @@ func TestConnectMCPServerAppliesConfiguredCallTimeouts(t *testing.T) {
 func TestUnregisterMCPServerToolsBlocksLateSharedHostSwap(t *testing.T) {
 	reg := tool.NewRegistry()
 	reg.Add(fakeControlTool{name: "mcp__mock__connect"})
-	c := New(Options{Host: plugin.NewHost(), Registry: reg})
+	c := newOwnedTestController(t, Options{Host: plugin.NewHost(), Registry: reg})
 
 	if ok := c.UnregisterMCPServerTools("mock"); !ok {
 		t.Fatal("UnregisterMCPServerTools returned false")
@@ -3286,7 +3288,7 @@ tier = "lazy"
 	spec := plugin.Spec{Name: "mock", Command: "mock-mcp", Authorized: true}
 	runtime := agent.NewMCPCapabilityRuntime(context.Background(), host, []plugin.Spec{spec}, reg, nil)
 	runtime.ConfigureServers([]config.PluginEntry{{Name: "mock", Command: "mock-mcp"}}, []plugin.Spec{spec}, map[string]bool{"mock": true})
-	c := New(Options{Host: host, Registry: reg, CapabilityRuntime: runtime, WorkspaceRoot: dir})
+	c := newOwnedTestController(t, Options{Host: host, Registry: reg, CapabilityRuntime: runtime, WorkspaceRoot: dir})
 
 	disconnected, err := c.RemoveMCPServer("mock")
 	if err != nil {
@@ -3321,7 +3323,7 @@ command = "workspace-mcp"
 		t.Fatal(err)
 	}
 
-	c := New(Options{WorkspaceRoot: workspace, Host: plugin.NewHost()})
+	c := newOwnedTestController(t, Options{WorkspaceRoot: workspace, Host: plugin.NewHost()})
 	defer c.Close()
 	if got := c.ConfiguredMCPNames(); !reflect.DeepEqual(got, []string{"workspace-mcp"}) {
 		t.Fatalf("ConfiguredMCPNames() = %v, want workspace-mcp from %s", got, workspace)
@@ -3335,7 +3337,7 @@ func TestRemoveMCPServerKeepsRuntimeOnlyToolsWhenPersistenceRemovalFails(t *test
 	isolateControlConfigHome(t)
 	reg := tool.NewRegistry()
 	reg.Add(fakeControlTool{name: "mcp__runtime_only__echo"})
-	c := New(Options{Host: plugin.NewHost(), Registry: reg})
+	c := newOwnedTestController(t, Options{Host: plugin.NewHost(), Registry: reg})
 
 	if disconnected, err := c.RemoveMCPServer("runtime_only"); err == nil || disconnected || !strings.Contains(err.Error(), "no removable MCP server") {
 		t.Fatalf("RemoveMCPServer(runtime_only) = (%v, %v)", disconnected, err)
@@ -3368,7 +3370,7 @@ func TestRemoveMCPServerRejectsPluginManagedTools(t *testing.T) {
 
 	reg := tool.NewRegistry()
 	reg.Add(fakeControlTool{name: "mcp__helper__echo"})
-	c := New(Options{Host: plugin.NewHost(), Registry: reg})
+	c := newOwnedTestController(t, Options{Host: plugin.NewHost(), Registry: reg})
 	disconnected, err := c.RemoveMCPServer("helper")
 	if err == nil || disconnected || !strings.Contains(err.Error(), "managed by plugin") || !strings.Contains(err.Error(), "superpowers") {
 		t.Fatalf("RemoveMCPServer(plugin-managed) = (%v, %v)", disconnected, err)
@@ -3397,7 +3399,7 @@ func TestRemoveMCPServerDeletesProjectMCPJSONSource(t *testing.T) {
 
 	reg := tool.NewRegistry()
 	reg.Add(fakeControlTool{name: "mcp__mock__connect"})
-	c := New(Options{Host: plugin.NewHost(), Registry: reg})
+	c := newOwnedTestController(t, Options{Host: plugin.NewHost(), Registry: reg})
 	disconnected, err := c.RemoveMCPServer("mock")
 	if err != nil {
 		t.Fatalf("RemoveMCPServer(.mcp.json): %v", err)
@@ -3419,10 +3421,10 @@ func TestRemoveMCPServerDeletesProjectMCPJSONSource(t *testing.T) {
 
 // approvalIDs returns a Controller whose Sink forwards each ApprovalRequest's ID
 // onto the channel, plus a counter of how many requests it emitted.
-func approvalIDs() (*Controller, chan string, *int) {
+func approvalIDs(t *testing.T) (*Controller, chan string, *int) {
 	ids := make(chan string, 8)
 	prompts := 0
-	c := New(Options{Sink: event.FuncSink(func(e event.Event) {
+	c := newOwnedTestController(t, Options{Sink: event.FuncSink(func(e event.Event) {
 		if e.Kind == event.ApprovalRequest {
 			prompts++
 			ids <- e.Approval.ID
@@ -3443,7 +3445,7 @@ func permissionHookController(t *testing.T, match string) (*Controller, chan str
 		payloads <- payload
 		return hook.SpawnResult{ExitCode: 0}
 	}
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.ApprovalRequest {
 				ids <- e.Approval.ID
@@ -3468,7 +3470,7 @@ func claudePermissionHookController(t *testing.T, exitCode int, stdout string) (
 	spawner := func(_ context.Context, in hook.SpawnInput) hook.SpawnResult {
 		return hook.SpawnResult{ExitCode: exitCode, Stdout: stdout}
 	}
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.ApprovalRequest {
 				ids <- e.Approval.ID
@@ -3525,7 +3527,7 @@ func wildcardClaudePermissionHookController(t *testing.T, exitCode int, stdout s
 	spawner := func(_ context.Context, in hook.SpawnInput) hook.SpawnResult {
 		return hook.SpawnResult{ExitCode: exitCode, Stdout: stdout}
 	}
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.ApprovalRequest {
 				ids <- e.Approval.ID
@@ -3660,7 +3662,7 @@ func assertNoPermissionHook(t *testing.T, payloads <-chan hook.Payload) {
 // TestApprovalAllowOnce drives the happy path: the gate emits an ApprovalRequest,
 // the (fake) frontend answers allow, and the gate returns allow with no grant.
 func TestApprovalAllowOnce(t *testing.T) {
-	c, ids, _ := approvalIDs()
+	c, ids, _ := approvalIDs(t)
 	go func() { c.Approve(<-ids, true, false, false) }()
 
 	allow, remember, err := gateApprover{c}.Approve(context.Background(), "bash", "go test", nil)
@@ -3671,7 +3673,7 @@ func TestApprovalAllowOnce(t *testing.T) {
 
 func TestMemoryApprovalRequestShowsRememberPayload(t *testing.T) {
 	approvals := make(chan event.Approval, 1)
-	c := New(Options{Sink: event.FuncSink(func(e event.Event) {
+	c := newOwnedTestController(t, Options{Sink: event.FuncSink(func(e event.Event) {
 		if e.Kind == event.ApprovalRequest {
 			approvals <- e.Approval
 		}
@@ -3738,7 +3740,7 @@ func TestFreshHumanApprovalToolsBypassGuardianAndWaitForUser(t *testing.T) {
 	exec := agent.New(&recordingProvider{name: "executor"}, tool.NewRegistry(), agent.NewSession("sys"), agent.Options{}, event.Discard)
 
 	approvals := make(chan event.Approval, 1)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Executor: exec,
 		Guardian: guardianSess,
 		Sink: event.FuncSink(func(e event.Event) {
@@ -3792,7 +3794,7 @@ func TestFreshHumanApprovalToolsBypassGuardianAndWaitForUser(t *testing.T) {
 func TestLowRiskProjectMemoryCreateSkipsApprovalPrompt(t *testing.T) {
 	store := memory.Store{Dir: t.TempDir()}
 	approvals := 0
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Memory: &memory.Set{Store: store},
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.ApprovalRequest {
@@ -3817,7 +3819,7 @@ func TestLowRiskProjectMemoryCreateSkipsApprovalPrompt(t *testing.T) {
 
 func TestExistingMemoryRevokesAbandonedAutomaticCreateClaim(t *testing.T) {
 	store := memory.Store{Dir: t.TempDir()}
-	c := New(Options{Memory: &memory.Set{Store: store}})
+	c := newOwnedTestController(t, Options{Memory: &memory.Set{Store: store}})
 	args := json.RawMessage(`{"name":"release-target","description":"Project release target","type":"project","body":"Release from main-v2."}`)
 
 	if assessment := memory.AssessRememberWrite(store, args); !assessment.AutoAllow {
@@ -3847,7 +3849,7 @@ func TestSessionGrantShortCircuitsGuardianReview(t *testing.T) {
 	guardianSess := guardian.NewSession(guardianProv, tool.NewRegistry(), guardian.PolicyPrompt(), "guardian-test", 0, nil, event.Discard)
 	exec := agent.New(&recordingProvider{name: "executor"}, tool.NewRegistry(), agent.NewSession("sys"), agent.Options{}, event.Discard)
 	prompts := 0
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Executor: exec,
 		Guardian: guardianSess,
 		Sink: event.FuncSink(func(e event.Event) {
@@ -3985,11 +3987,11 @@ func TestPermissionRequestHookDoesNotFireForSessionGrant(t *testing.T) {
 // who had already granted a tool this session was asked again after any
 // switch.
 func TestSessionAuthorizationsCarryAcrossRebuild(t *testing.T) {
-	old := New(Options{})
+	old := newOwnedTestController(t, Options{})
 	old.approval.grantSession("bash", "go test ./...")
 	old.approval.grantPlanModeReadOnlyCommand("go test ./...")
 
-	fresh := New(Options{})
+	fresh := newOwnedTestController(t, Options{})
 	fresh.RestoreSessionAuthorizations(old.SessionAuthorizations())
 
 	allow, _, err := fresh.requestApproval(context.Background(), "bash", "go test ./...", nil)
@@ -4099,7 +4101,7 @@ func TestPermissionRequestHookRedactsMemoryApprovalPayload(t *testing.T) {
 
 // TestApprovalDeny confirms a declined call returns allow=false.
 func TestApprovalDeny(t *testing.T) {
-	c, ids, _ := approvalIDs()
+	c, ids, _ := approvalIDs(t)
 	go func() { c.Approve(<-ids, false, false, false) }()
 
 	allow, _, err := gateApprover{c}.Approve(context.Background(), "bash", "rm -rf /", nil)
@@ -4112,7 +4114,7 @@ func TestApprovalDeny(t *testing.T) {
 // answer short-circuits later prompts for the same bash command, but a different
 // command still reaches the frontend.
 func TestApprovalSessionGrantScopesBashToCommand(t *testing.T) {
-	c, ids, prompts := approvalIDs()
+	c, ids, prompts := approvalIDs(t)
 	go func() {
 		c.Approve(<-ids, true, true, false) // grant go build for this session
 		c.Approve(<-ids, true, false, false)
@@ -4130,7 +4132,7 @@ func TestApprovalSessionGrantScopesBashToCommand(t *testing.T) {
 }
 
 func TestApprovalSessionGrantCanScopeBashToCommandPrefix(t *testing.T) {
-	c, ids, prompts := approvalIDs()
+	c, ids, prompts := approvalIDs(t)
 	go func() {
 		c.Approve(<-ids, true, true, false) // grant bash session (prefix preferred)
 		c.Approve(<-ids, true, false, false)
@@ -4149,7 +4151,7 @@ func TestApprovalSessionGrantCanScopeBashToCommandPrefix(t *testing.T) {
 
 func TestApprovalRejectsPersistentScopeAndAcceptsSessionScope(t *testing.T) {
 	ids := make(chan string, 1)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.ApprovalRequest {
 				ids <- e.Approval.ID
@@ -4180,7 +4182,7 @@ func TestApprovalSessionScopeDoesNotPersistRules(t *testing.T) {
 	ids := make(chan string, 2)
 	prompts := 0
 	remembered := false
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.ApprovalRequest {
 				prompts++
@@ -4214,7 +4216,7 @@ func TestPlanModeReadOnlyTrustApprovalGrantsSessionCommandTrust(t *testing.T) {
 	ids := make(chan string, 2)
 	var approval event.Approval
 	prompts := 0
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.ApprovalRequest {
 				prompts++
@@ -4272,7 +4274,7 @@ func TestPlanModeReadOnlyTrustApprovalUsesChineseCatalog(t *testing.T) {
 	t.Cleanup(func() { i18n.DetectLanguage("en") })
 
 	approvalRequests := make(chan event.Approval, 1)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.ApprovalRequest {
 				approvalRequests <- e.Approval
@@ -4325,7 +4327,7 @@ func TestPlanModeReadOnlyTrustApprovalUsesChineseCatalog(t *testing.T) {
 
 func TestPlanModeReadOnlyCommandTrustApprovalIgnoresToolAutoApproval(t *testing.T) {
 	approvalRequests := make(chan event.Approval, 1)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.ApprovalRequest {
 				approvalRequests <- e.Approval
@@ -4383,7 +4385,7 @@ func TestPlanModeReadOnlyCommandTrustApprovalIgnoresToolAutoApproval(t *testing.
 }
 
 func TestApprovalSessionGrantGroupsFileMutationTools(t *testing.T) {
-	c, ids, prompts := approvalIDs()
+	c, ids, prompts := approvalIDs(t)
 	go func() { c.Approve(<-ids, true, true, false) }()
 
 	for i, call := range []struct {
@@ -4406,7 +4408,7 @@ func TestApprovalSessionGrantGroupsFileMutationTools(t *testing.T) {
 }
 
 func TestApprovalSessionGrantKeepsPolicyDenyPrecedence(t *testing.T) {
-	c, ids, prompts := approvalIDs()
+	c, ids, prompts := approvalIDs(t)
 	g := permission.NewGate(permission.New("ask", nil, nil, []string{"bash(rm*)"}), gateApprover{c})
 	go func() { c.Approve(<-ids, true, true, false) }()
 
@@ -4430,7 +4432,7 @@ func TestApprovalSessionGrantKeepsPolicyDenyPrecedence(t *testing.T) {
 // TestApprovalCtxCancel ensures a cancelled turn unblocks the gate with an error
 // (rather than hanging) when no one answers.
 func TestApprovalCtxCancel(t *testing.T) {
-	c := New(Options{Sink: event.Discard})
+	c := newOwnedTestController(t, Options{Sink: event.Discard})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -4486,7 +4488,7 @@ func TestParseRewindEmptyCheckpoints(t *testing.T) {
 func TestRunGuardedPanicEmitsTurnDone(t *testing.T) {
 	sess := agent.NewSession("sys")
 	events := make(chan event.Event, 4)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner: appendingRunner{session: sess},
 		Sink:   event.FuncSink(func(e event.Event) { events <- e }),
 	})
@@ -4537,7 +4539,7 @@ func TestRunGuardedParksReplacementUntilTurnDoneReturns(t *testing.T) {
 	firstBodyDone := make(chan struct{})
 	secondBodyRan := make(chan struct{}, 2)
 	var turnDones atomic.Int32
-	c := New(Options{Sink: event.FuncSink(func(e event.Event) {
+	c := newOwnedTestController(t, Options{Sink: event.FuncSink(func(e event.Event) {
 		if e.Kind == event.TurnDone {
 			if turnDones.Add(1) == 1 {
 				close(firstTurnDone)
@@ -4600,7 +4602,7 @@ func TestRunGuardedPanicDoesNotDoubleEmitTurnDone(t *testing.T) {
 	sess := agent.NewSession("sys")
 	var count atomic.Int32
 	events := make(chan event.Event, 8)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner: appendingRunner{session: sess},
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.TurnDone {
@@ -4649,7 +4651,7 @@ func (r blockingRunner) Run(_ context.Context, input string) error {
 func TestRunTurnReportsErrTurnRunning(t *testing.T) {
 	sess := agent.NewSession("sys")
 	release := make(chan struct{})
-	c := New(Options{Runner: blockingRunner{session: sess, release: release}})
+	c := newOwnedTestController(t, Options{Runner: blockingRunner{session: sess, release: release}})
 
 	done := make(chan error, 1)
 	go func() {
@@ -4676,7 +4678,7 @@ func TestSendWhileRunningDoesNotInterleaveTurns(t *testing.T) {
 	sess := agent.NewSession("sys")
 	release := make(chan struct{})
 	events := make(chan event.Event, 4)
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner: blockingRunner{session: sess, release: release},
 		Sink: event.FuncSink(func(e event.Event) {
 			events <- e
@@ -4723,7 +4725,7 @@ func TestMidTurnAutosavePersistsDuringLongTurn(t *testing.T) {
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
 	path := filepath.Join(dir, "session.jsonl")
 	release := make(chan struct{})
-	c := New(Options{Runner: blockingRunner{session: sess, release: release}, Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+	c := newOwnedTestController(t, Options{Runner: blockingRunner{session: sess, release: release}, Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
 	// Unblock the turn and wait for the autosaver to exit before TempDir
 	// cleanup, which fails on Windows while a snapshot tmp write is in flight.
 	defer c.autosaveWG.Wait()
@@ -4773,7 +4775,7 @@ func TestApprovedPlanAutoApproveEndsWithExecutionTurn(t *testing.T) {
 		}
 		go c.Approve(e.Approval.ID, false, false, false)
 	})
-	c = New(Options{Runner: runner, Executor: exec, Sink: sink})
+	c = newOwnedTestController(t, Options{Runner: runner, Executor: exec, Sink: sink})
 	c.SetPlanMode(true)
 
 	runner.scripts = append(runner.scripts,
@@ -4832,7 +4834,7 @@ func TestApprovedPlanDoesNotAutoApproveNonContinuationTurn(t *testing.T) {
 		}
 		go c.Approve(e.Approval.ID, false, false, false)
 	})
-	c = New(Options{Runner: runner, Executor: exec, Sink: sink})
+	c = newOwnedTestController(t, Options{Runner: runner, Executor: exec, Sink: sink})
 	c.SetPlanMode(true)
 
 	runner.scripts = append(runner.scripts,
@@ -4885,7 +4887,7 @@ func TestCommandsAtomicPointer(t *testing.T) {
 		{Name: "review", Description: "Review code", Body: "Review $1"},
 		{Name: "test", Description: "Run tests", Body: "Test $1"},
 	}
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Commands: cmds,
 		Sink:     &typedNilControllerSink{},
 		Registry: tool.NewRegistry(),
@@ -4940,7 +4942,7 @@ func TestReloadCommandsFromFilesystem(t *testing.T) {
 	}
 
 	reg := tool.NewRegistry()
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink:          &typedNilControllerSink{},
 		Registry:      reg,
 		WorkspaceRoot: wsRoot,
@@ -5031,7 +5033,7 @@ func TestReloadCommandsDeleteFile(t *testing.T) {
 	writeCmdFile(t, cmdDir, "beta", "Beta cmd", "Beta $1")
 
 	reg := tool.NewRegistry()
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink:          &typedNilControllerSink{},
 		Registry:      reg,
 		WorkspaceRoot: wsRoot,
@@ -5094,7 +5096,7 @@ func TestReloadCommandsMalformedFile(t *testing.T) {
 	}
 
 	reg := tool.NewRegistry()
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink:          &typedNilControllerSink{},
 		Registry:      reg,
 		WorkspaceRoot: wsRoot,
@@ -5143,7 +5145,7 @@ func TestReloadCommandsSameNameAcrossDirs(t *testing.T) {
 	writeCmdFile(t, reasonixDir, "greet", "Reasonix greet", "Hello from Reasonix: $1")
 
 	reg := tool.NewRegistry()
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink:          &typedNilControllerSink{},
 		Registry:      reg,
 		WorkspaceRoot: wsRoot,
@@ -5199,7 +5201,7 @@ func TestReloadCommandsUsesCanonicalPluginNameAlongsideProjectShortName(t *testi
 
 	workspace := t.TempDir()
 	writeCmdFile(t, filepath.Join(workspace, ".reasonix", "commands"), "plan", "Project plan", "PROJECT $1")
-	c := New(Options{Sink: &typedNilControllerSink{}, Registry: tool.NewRegistry(), WorkspaceRoot: workspace})
+	c := newOwnedTestController(t, Options{Sink: &typedNilControllerSink{}, Registry: tool.NewRegistry(), WorkspaceRoot: workspace})
 	if err := c.ReloadCommands(context.Background()); err != nil {
 		t.Fatalf("ReloadCommands: %v", err)
 	}
@@ -5253,7 +5255,7 @@ func TestReloadCommandsEmptySet(t *testing.T) {
 	}
 
 	reg := tool.NewRegistry()
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink:          &typedNilControllerSink{},
 		Registry:      reg,
 		WorkspaceRoot: wsRoot,
@@ -5318,7 +5320,7 @@ func TestReloadCommandsDesktopManagementNotice(t *testing.T) {
 	})
 
 	reg := tool.NewRegistry()
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Sink:          sink,
 		Registry:      reg,
 		WorkspaceRoot: wsRoot,
@@ -5390,7 +5392,7 @@ func cmdNames(cmds []command.Command) []string {
 // TestCacheColdAfterFailureFallsBackTo24h：配置加载失败/模型解析失败时
 // 保守回退 24h（评审 #7168 第 4 点）——不得用 10m 提前触发 prune。
 func TestCacheColdAfterFailureFallsBackTo24h(t *testing.T) {
-	c := New(Options{})
+	c := newOwnedTestController(t, Options{})
 	orig := c.workspaceRoot
 	c.workspaceRoot = "/nonexistent/definitely-missing-root"
 	defer func() { c.workspaceRoot = orig }()
@@ -5398,7 +5400,7 @@ func TestCacheColdAfterFailureFallsBackTo24h(t *testing.T) {
 		t.Fatalf("load failure must fall back to 24h, got %v", got)
 	}
 	// 未知模型同样 24h
-	c2 := New(Options{})
+	c2 := newOwnedTestController(t, Options{})
 	c2.selection.ref = "definitely-not-a-real-model-xyz"
 	if got := c2.cacheColdAfter(); got != 24*time.Hour {
 		t.Fatalf("ResolveModel failure must fall back to 24h, got %v", got)

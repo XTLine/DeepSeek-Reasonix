@@ -1,4 +1,6 @@
-import { lazy, Suspense, useSyncExternalStore, type ComponentProps, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { lazy, Suspense, useLayoutEffect, useSyncExternalStore, type ComponentProps, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { cancelFileNavigation } from "../lib/fileNavigationLifetime";
+import type { DockNavigation } from "./dockNavigation";
 import type { Translator } from "../lib/i18n";
 import type { RightDockMode } from "../store/layout";
 import type { TabItem } from "../store/activityBar";
@@ -24,6 +26,7 @@ const WorkspacePanel = lazy(async () => {
 });
 
 export type WorkspaceDockRegionProps = {
+  navigation?: DockNavigation;
   visible: boolean;
   overlay: boolean;
   mode: RightDockMode;
@@ -53,11 +56,17 @@ export function WorkspaceDockRegion(props: WorkspaceDockRegionProps) {
   const firstFileTabId = useActivityBarStore(state => state.tabs.find(tab => tab.type === "file")?.id);
   const loadedRoot = useActivityBarStore(state => state.workspaceRoot);
   const activeTabId = useActivityBarStore(state => state.activeTabId);
+  const tabs = useActivityBarStore(state => state.tabs);
+  useLayoutEffect(() => () => cancelFileNavigation(), [props.workspace.tabId, props.workspaceKey]);
   const projectReady = loadedRoot === (props.workspaceRoot ?? props.workspace.cwd ?? "");
   const presentedRequest = useSyncExternalStore(subscribePresentedFileRequest, presentedFileRequestSnapshot, presentedFileRequestSnapshot);
-  const presentedReveal = presentedRequest && presentedRequest.ref.tabId === props.workspace.tabId
+  const presentedReveal = presentedRequest && !presentedRequest.signal.aborted
+    && presentedRequest.ref.hostId === "local" && presentedRequest.dockTabId === activeTabId
+    && presentedRequest.ref.tabId === props.workspace.tabId
     ? {
         id: presentedRequest.id,
+        navigationSource: "file-resource",
+        navigationCancellation: presentedRequest.signal,
         path: presentedRequest.ref.path,
         toolCallId: presentedRequest.ref.source === "presented" ? presentedRequest.ref.toolCallId : undefined,
         source: presentedRequest.action === "source",
@@ -65,7 +74,7 @@ export function WorkspaceDockRegion(props: WorkspaceDockRegionProps) {
       }
     : null;
   const incomingWorkspace = presentedReveal ? { ...props.workspace, revealPathRequest: presentedReveal } : props.workspace;
-  const requests = useDockViewRequests(props.workspaceKey, visible && projectReady ? activeTabId : null, incomingWorkspace);
+  const requests = useDockViewRequests(`${props.workspaceKey}::${props.workspace.tabId ?? ""}`, visible && projectReady ? activeTabId : null, incomingWorkspace, props.navigation, tabs.map(tab => tab.id));
 
   const renderTab = (tab: TabItem): ReactNode => {
     if (!projectReady) return null;
@@ -76,7 +85,7 @@ export function WorkspaceDockRegion(props: WorkspaceDockRegionProps) {
         return <WorkspacePanel key={`${props.workspaceKey}::${tab.id}`} {...props.workspace} {...requests}
           workspaceMemoryKey={workspaceViewMemoryKey(props.workspaceKey, tab.id)} workspaceMemoryVisitId={0} />;
       case "remote":
-        return <RemotePanel {...props.remote} />;
+        return <RemotePanel key={`${props.workspaceKey}::${props.workspace.tabId}::${tab.id}`} {...props.remote} tabId={props.workspace.tabId} dockTabId={tab.id} navigationSignal={requests.navigationSignal} />;
       case "browser":
         return <BrowserSurface surface="panel" taskId={props.workspace.tabId} />;
       default:

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"reasonix/internal/agent"
 	"reasonix/internal/event"
 	"reasonix/internal/sessioninbox"
+	"reasonix/internal/sessiontemp"
 )
 
 // TurnAdmission is the exported classification of TrySubmitInboxItem /
@@ -79,7 +81,10 @@ type inboxState struct {
 	scanMu sync.Mutex
 	mu     sync.Mutex
 	store  *sessioninbox.Store
-	closed bool // seals new sidecar opens when controller teardown starts
+	// tempLease pins the process-local inbox used by an exclusive v3 Runtime.
+	// It is not recovery state and is deleted with the session temp generation.
+	tempLease *sessiontemp.Lease
+	closed    bool // seals new sidecar opens when controller teardown starts
 	// activeItemIDs includes the running follow-up and every accepted steer.
 	// TurnDone durable-acks the set so multi-steer rounds leave no orphans.
 	activeItemIDs map[string]struct{}
@@ -200,11 +205,21 @@ func (c *Controller) bindInboxStoreNotifications(st *sessioninbox.Store) {
 
 func (c *Controller) ensureInbox() (*sessioninbox.Store, error) {
 	path := c.SessionPath()
-	if path == "" {
-		return nil, fmt.Errorf("inbox requires a persisted session path")
-	}
 	c.inbox.mu.Lock()
 	defer c.inbox.mu.Unlock()
+	if path == "" && c.sessionEngineEnabled() {
+		if c.inbox.tempLease == nil {
+			lease, err := c.sessionTemp.Acquire()
+			if err != nil {
+				return nil, fmt.Errorf("open v3 runtime inbox: %w", err)
+			}
+			c.inbox.tempLease = lease
+		}
+		path = filepath.Join(c.inbox.tempLease.Dir(), "runtime-inbox.jsonl")
+	}
+	if path == "" {
+		return nil, fmt.Errorf("inbox requires a session identity")
+	}
 	if c.inbox.store != nil && c.inbox.store.SessionPath() == path {
 		return c.inbox.store, nil
 	}
@@ -252,6 +267,19 @@ func (c *Controller) rebindInbox() {
 		c.inbox.store.Close()
 		c.inbox.store = nil
 		c.inbox.clearActive()
+	}
+	if c.inbox.tempLease != nil {
+		c.inbox.tempLease.Release()
+		c.inbox.tempLease = nil
+	}
+	if path == "" && c.sessionEngineEnabled() {
+		lease, err := c.sessionTemp.Acquire()
+		if err != nil {
+			slog.Warn("controller: open v3 runtime inbox", "err", err)
+			return
+		}
+		c.inbox.tempLease = lease
+		path = filepath.Join(lease.Dir(), "runtime-inbox.jsonl")
 	}
 	if path == "" {
 		return

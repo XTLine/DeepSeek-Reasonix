@@ -8,7 +8,7 @@ import (
 )
 
 func TestSetQualityFloorNormalizesVocabulary(t *testing.T) {
-	c := New(Options{Label: "floor"})
+	c := newOwnedTestController(t, Options{Label: "floor"})
 	cases := map[string]string{
 		"":           QualityFloorStandard,
 		"standard":   QualityFloorStandard,
@@ -44,7 +44,7 @@ func TestSetQualityFloorNormalizesVocabulary(t *testing.T) {
 }
 
 func TestRetiredQualityFloorNeverReachesTurnConstraints(t *testing.T) {
-	c := New(Options{Label: "floor"})
+	c := newOwnedTestController(t, Options{Label: "floor"})
 	if got := c.qualityFloorConstraint(); got != taskcontract.PolicyFloorNone {
 		t.Fatalf("default floor constraint = %v, want none", got)
 	}
@@ -57,7 +57,7 @@ func TestRetiredQualityFloorNeverReachesTurnConstraints(t *testing.T) {
 }
 
 func TestSetQualityFloorConcurrentWithReads(t *testing.T) {
-	c := New(Options{Label: "floor"})
+	c := newOwnedTestController(t, Options{Label: "floor"})
 	var wg sync.WaitGroup
 	for i := range 8 {
 		wg.Add(2)

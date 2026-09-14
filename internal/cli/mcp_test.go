@@ -615,7 +615,7 @@ command = "project-only"
 		t.Fatal(err)
 	}
 
-	ctrl := control.New(control.Options{WorkspaceRoot: workspace, Host: plugin.NewHost()})
+	ctrl := newOwnedTestController(t, control.Options{WorkspaceRoot: workspace, Host: plugin.NewHost()})
 	defer ctrl.Close()
 	m := newTestChatTUI()
 	m.ctrl = ctrl
@@ -1117,7 +1117,7 @@ func TestApplyMCPModeRecordsPluginConnectFailure(t *testing.T) {
 	}
 
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{Host: plugin.NewHost()})
+	m.ctrl = newOwnedTestController(t, control.Options{Host: plugin.NewHost()})
 	defer m.ctrl.Close()
 	m.host = m.ctrl.Host()
 	m.mcp = &mcpManager{

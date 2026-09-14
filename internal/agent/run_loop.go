@@ -53,7 +53,7 @@ func (s streamedTurn) assistantMessage() provider.Message {
 // evidence re-lease, and the initial user-turn persistence. Callers still own
 // all Run-level defers (workspace lease, evidence commit, delivery checkpoint,
 // steer queue, active-turn timestamp).
-func (a *Agent) beginRunTurn(ctx context.Context, input string, pinned pinnedRevisionPlan) (rawInput string, state *turnRuntime) {
+func (a *Agent) beginRunTurn(ctx context.Context, input string, pinned pinnedRevisionPlan) (rawInput string, state *turnRuntime, err error) {
 	rawInput = RawUserInput(ctx, input)
 	providerInput := input
 	// A fresh user turn starts from zeroed per-turn host state; the new turn's
@@ -136,7 +136,9 @@ func (a *Agent) beginRunTurn(ctx context.Context, input string, pinned pinnedRev
 		Role: provider.RoleUser, Origin: inputMessageOrigin(ctx), Content: input, RawContent: rawContent,
 		Images: userImages(ctx), VisionSummary: VisionSummaryFromContext(ctx), CreatedAt: userCreatedAt,
 	}
-	a.appendPinnedRevisionAndUser(ctx, pinned, userMessage)
+	if err := a.appendPinnedRevisionAndUser(ctx, pinned, userMessage); err != nil {
+		return rawInput, nil, err
+	}
 	emitAdmittedUserMessage(a.svc.sink, userMessage)
 
 	// The loop fields join the classification computed above rather than
@@ -145,7 +147,7 @@ func (a *Agent) beginRunTurn(ctx context.Context, input string, pinned pinnedRev
 	state = &a.turn
 	state.input = input
 	state.budget = runBudget{started: time.Now()}
-	return rawInput, state
+	return rawInput, state, nil
 }
 
 // runToolLoop owns the main tool-round budget and dispatches each streamed
@@ -161,10 +163,13 @@ func (a *Agent) runToolLoop(ctx context.Context, state *turnRuntime) (runErr err
 		// guidance (with a prefix), not a new task. One cache miss per
 		// steer is unavoidable — the model must see the new instruction.
 		if text, itemID, ok := a.consumeSteer(); ok {
-			a.sess.conversation.Add(provider.Message{
+			steerMessage := provider.Message{
 				Role: provider.RoleUser, Origin: provider.MessageOriginUser,
 				Content: a.withTurnPreferences(midTurnSteerMessage(text)), RawContent: text,
-			})
+			}
+			if err := a.appendCommittedMessages(ctx, "mid-turn-steer", steerMessage); err != nil {
+				return err
+			}
 			a.svc.sink.Emit(event.Event{Kind: event.Steer, Text: text, ItemID: itemID})
 		} else if itemID != "" {
 			// Loader failed after dequeue: durable entry stays for inspection
@@ -225,7 +230,9 @@ func (a *Agent) runToolLoop(ctx context.Context, state *turnRuntime) (runErr err
 		assistant := streamed.assistantMessage()
 		assistant.ToolCalls = calls
 		assistant.WorkDurationMs = state.workDurationMs()
-		a.sess.conversation.Add(assistant)
+		if err := a.appendCommittedMessages(ctx, "assistant-attempt", assistant); err != nil {
+			return err
+		}
 
 		if len(calls) == 0 {
 			cont, ferr := a.handleFinalResponse(ctx, state, text, reasoning, usage)
@@ -337,7 +344,9 @@ func (a *Agent) handleFinalResponse(ctx context.Context, state *turnRuntime, tex
 				return false, fmt.Errorf("model finished without a visible final answer %d times", state.terminal.emptyFinalBlocks)
 			}
 			a.svc.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Code: event.NoticeCodeEmptyFinal, Text: emptyFinalNotice(), Detail: emptyFinalNoticeDetail(a.svc.prov.Name(), usage, len(reasoning))})
-			a.sess.conversation.Add(HostGeneratedUserMessage(a.withTurnPreferences(emptyFinalRetryMessage())))
+			if err := a.appendCommittedMessages(ctx, "empty-final-retry", HostGeneratedUserMessage(a.withTurnPreferences(emptyFinalRetryMessage()))); err != nil {
+				return false, err
+			}
 			a.contextManager().ObserveUsage(usage)
 			return true, nil
 		}
@@ -399,18 +408,24 @@ func (a *Agent) handleToolRound(ctx context.Context, state *turnRuntime, step in
 	// Spend is checked before rounds: it is the axis a runaway is actually
 	// reported in, so on the turns both would catch it should be the one named.
 	if axis, detail := a.task.budget.exceeded(a.taskBudgetLimit(ctx)); axis != "" {
-		a.armFinalizationRound(ctx, state, landCause{kind: "task_budget", axis: axis, detail: detail})
+		if err := a.armFinalizationRound(ctx, state, landCause{kind: "task_budget", axis: axis, detail: detail}); err != nil {
+			return false, err
+		}
 		return true, nil
 	}
 	if state.runMaxSteps > 0 && step+1 >= state.runMaxSteps {
-		a.armFinalizationRound(ctx, state, landCause{kind: "max_steps", detail: fmt.Sprintf(
-			"budget (%s=%d) exhausted: one grace round to finalize", state.runMaxStepsKey, state.runMaxSteps)})
+		if err := a.armFinalizationRound(ctx, state, landCause{kind: "max_steps", detail: fmt.Sprintf(
+			"budget (%s=%d) exhausted: one grace round to finalize", state.runMaxStepsKey, state.runMaxSteps)}); err != nil {
+			return false, err
+		}
 	}
 	return true, nil
 }
 
-func (a *Agent) pairUnexecutedGraceCalls(calls []provider.ToolCall, msg string) {
+func (a *Agent) pairUnexecutedGraceCalls(ctx context.Context, calls []provider.ToolCall, msg string) error {
+	messages := make([]provider.Message, 0, len(calls))
 	for _, call := range calls {
-		a.sess.conversation.Add(provider.Message{Role: provider.RoleTool, Content: msg, ToolCallID: call.ID, Name: call.Name})
+		messages = append(messages, provider.Message{Role: provider.RoleTool, Content: msg, ToolCallID: call.ID, Name: call.Name})
 	}
+	return a.appendCommittedMessages(ctx, "unexecuted-grace-tools", messages...)
 }

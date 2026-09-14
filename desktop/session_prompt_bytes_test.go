@@ -107,7 +107,7 @@ func TestRebindReproducesRequestBytes(t *testing.T) {
 
 	prov := &capturingProvider{}
 	exec := agent.New(prov, tool.NewRegistry(), agent.NewSession(systemPrompt), agent.Options{}, event.Discard)
-	ctrl := control.New(control.Options{Runner: exec, Executor: exec, SystemPrompt: systemPrompt, SessionDir: dir, SessionPath: path, Label: "test", Sink: event.Discard})
+	ctrl := newFixtureController(t, control.Options{Runner: exec, Executor: exec, SystemPrompt: systemPrompt, SessionDir: dir, SessionPath: path, Label: "test", Sink: event.Discard})
 
 	if err := ctrl.RunTurn(context.Background(), "first question"); err != nil {
 		t.Fatalf("first turn: %v", err)
@@ -138,7 +138,7 @@ func TestRebindReproducesRequestBytes(t *testing.T) {
 	// then sends the same follow-up.
 	prov2 := &capturingProvider{}
 	exec2 := agent.New(prov2, tool.NewRegistry(), agent.NewSession(systemPrompt), agent.Options{}, event.Discard)
-	ctrl2 := control.New(control.Options{Runner: exec2, Executor: exec2, SystemPrompt: systemPrompt, SessionDir: dir, SessionPath: rebindPath, Label: "test", Sink: event.Discard})
+	ctrl2 := newFixtureController(t, control.Options{Runner: exec2, Executor: exec2, SystemPrompt: systemPrompt, SessionDir: dir, SessionPath: rebindPath, Label: "test", Sink: event.Discard})
 	loaded, err := agent.LoadSession(rebindPath)
 	if err != nil {
 		t.Fatalf("LoadSession: %v", err)
@@ -169,7 +169,7 @@ func TestRebindWithDriftedPromptBreaksRequestPrefix(t *testing.T) {
 
 	prov := &capturingProvider{}
 	exec := agent.New(prov, tool.NewRegistry(), agent.NewSession("SYSPROMPT v1"), agent.Options{}, event.Discard)
-	ctrl := control.New(control.Options{Runner: exec, Executor: exec, SystemPrompt: "SYSPROMPT v1", SessionDir: dir, SessionPath: path, Label: "test", Sink: event.Discard})
+	ctrl := newFixtureController(t, control.Options{Runner: exec, Executor: exec, SystemPrompt: "SYSPROMPT v1", SessionDir: dir, SessionPath: path, Label: "test", Sink: event.Discard})
 	if err := ctrl.RunTurn(context.Background(), "first question"); err != nil {
 		t.Fatalf("first turn: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestRebindWithDriftedPromptBreaksRequestPrefix(t *testing.T) {
 
 	prov2 := &capturingProvider{}
 	exec2 := agent.New(prov2, tool.NewRegistry(), agent.NewSession("SYSPROMPT v2 drifted"), agent.Options{}, event.Discard)
-	ctrl2 := control.New(control.Options{Runner: exec2, Executor: exec2, SystemPrompt: "SYSPROMPT v2 drifted", SessionDir: dir, SessionPath: rebindPath, Label: "test", Sink: event.Discard})
+	ctrl2 := newFixtureController(t, control.Options{Runner: exec2, Executor: exec2, SystemPrompt: "SYSPROMPT v2 drifted", SessionDir: dir, SessionPath: rebindPath, Label: "test", Sink: event.Discard})
 	loaded, err := agent.LoadSession(rebindPath)
 	if err != nil {
 		t.Fatalf("LoadSession: %v", err)

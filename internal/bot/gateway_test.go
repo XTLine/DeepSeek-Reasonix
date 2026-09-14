@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"reasonix/internal/agent"
-	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/event"
 	"reasonix/internal/provider"
@@ -2467,17 +2466,17 @@ func TestSessionProfileConsumesPersistedMapping(t *testing.T) {
 		t.Fatal("mapping-derived path must be optional (degradable), not an attach-style hard binding")
 	}
 
-	// A missing target falls back to the deterministic per-chat path instead of
-	// a fresh timestamp session, keeping the chat on one stable file.
+	// A missing legacy target falls back to the deterministic per-chat v3
+	// identity instead of manufacturing another transcript path.
 	if err := os.Remove(mapped); err != nil {
 		t.Fatal(err)
 	}
 	profile = gw.sessionProfileForMessage(msg)
-	if profile.sessionPath == "" {
-		t.Fatal("missing mapped file should fall back to a stable chat path, got empty")
+	if profile.sessionRef.SessionID == "" || profile.sessionPath != "" {
+		t.Fatalf("missing mapped file fallback = ref %+v path %q", profile.sessionRef, profile.sessionPath)
 	}
-	if !profile.sessionPathOptional {
-		t.Fatal("stable fallback must stay optional (degradable)")
+	if !profile.sessionRefOptional {
+		t.Fatal("stable v3 fallback must stay optional (degradable)")
 	}
 
 	// An /attach override outranks the mapping.
@@ -2489,8 +2488,8 @@ func TestSessionProfileConsumesPersistedMapping(t *testing.T) {
 }
 
 // Without any persisted mapping or /attach binding, the session profile must
-// resolve to a deterministic per-chat file so the same chat reuses one
-// conversation across restarts instead of spawning a fresh timestamp session
+// resolve to a deterministic per-chat v3 identity so the same chat reuses one
+// conversation across restarts instead of spawning a fresh session
 // per message (the chat-side analogue of dsh-dingtalk-channel's `ding-<chatId>`).
 func TestSessionProfileFallsBackToStableChatPath(t *testing.T) {
 	dir := t.TempDir()
@@ -2507,50 +2506,38 @@ func TestSessionProfileFallsBackToStableChatPath(t *testing.T) {
 	}
 	dm := InboundMessage{Platform: PlatformFeishu, ConnectionID: "conn-1", ChatID: "oc_abc", ChatType: ChatDM}
 	dmProfile := gw.sessionProfileForMessage(dm)
-	if dmProfile.sessionPath == "" {
-		t.Fatal("DM without a mapping must resolve to a stable session path")
+	if dmProfile.sessionRef.SessionID == "" || dmProfile.sessionPath != "" {
+		t.Fatalf("DM without a mapping resolved to ref %+v path %q", dmProfile.sessionRef, dmProfile.sessionPath)
 	}
-	if !dmProfile.sessionPathOptional {
-		t.Fatal("stable fallback path must be optional (degradable), like a mapping")
+	if !dmProfile.sessionRefOptional {
+		t.Fatal("stable fallback identity must be optional (degradable), like a mapping")
 	}
-	// Same chat, repeated messages: identical path.
-	if again := gw.sessionProfileForMessage(dm); canonicalBotPath(again.sessionPath) != canonicalBotPath(dmProfile.sessionPath) {
-		t.Fatalf("same DM chat must map to one stable file: first=%q second=%q", dmProfile.sessionPath, again.sessionPath)
+	// Same chat, repeated messages: identical identity.
+	if again := gw.sessionProfileForMessage(dm); again.sessionRef.SessionID != dmProfile.sessionRef.SessionID {
+		t.Fatalf("same DM chat must map to one stable identity: first=%q second=%q", dmProfile.sessionRef.SessionID, again.sessionRef.SessionID)
 	}
-	// Different chat: different file.
+	// Different chat: different identity.
 	other := InboundMessage{Platform: PlatformFeishu, ConnectionID: "conn-1", ChatID: "oc_xyz", ChatType: ChatDM}
 	otherProfile := gw.sessionProfileForMessage(other)
-	if canonicalBotPath(otherProfile.sessionPath) == canonicalBotPath(dmProfile.sessionPath) {
-		t.Fatalf("different chats must map to different files, both=%q", otherProfile.sessionPath)
+	if otherProfile.sessionRef.SessionID == dmProfile.sessionRef.SessionID {
+		t.Fatalf("different chats must map to different identities, both=%q", otherProfile.sessionRef.SessionID)
 	}
 	// Group chat scopes per sender, mirroring BuildSessionKey.
 	groupA := InboundMessage{Platform: PlatformFeishu, ConnectionID: "conn-1", ChatID: "oc_grp", ChatType: ChatGroup, UserID: "ou_a"}
 	groupB := InboundMessage{Platform: PlatformFeishu, ConnectionID: "conn-1", ChatID: "oc_grp", ChatType: ChatGroup, UserID: "ou_b"}
 	pa := gw.sessionProfileForMessage(groupA)
 	pb := gw.sessionProfileForMessage(groupB)
-	if pa.sessionPath == "" || pb.sessionPath == "" {
-		t.Fatal("group messages must resolve to stable session paths")
+	if pa.sessionRef.SessionID == "" || pb.sessionRef.SessionID == "" {
+		t.Fatal("group messages must resolve to stable session identities")
 	}
-	if canonicalBotPath(pa.sessionPath) == canonicalBotPath(pb.sessionPath) {
-		t.Fatalf("different group senders must map to different files, both=%q", pa.sessionPath)
+	if pa.sessionRef.SessionID == pb.sessionRef.SessionID {
+		t.Fatalf("different group senders must map to different identities, both=%q", pa.sessionRef.SessionID)
 	}
-	if again := gw.sessionProfileForMessage(groupA); canonicalBotPath(again.sessionPath) != canonicalBotPath(pa.sessionPath) {
-		t.Fatalf("same group sender must map to one stable file: first=%q second=%q", pa.sessionPath, again.sessionPath)
+	if again := gw.sessionProfileForMessage(groupA); again.sessionRef.SessionID != pa.sessionRef.SessionID {
+		t.Fatalf("same group sender must map to one stable identity: first=%q second=%q", pa.sessionRef.SessionID, again.sessionRef.SessionID)
 	}
-	// The stable path must live under the resolved session dir and carry a
-	// readable, bot-scoped name.
-	projectDir := config.ProjectSessionDir(dir)
-	if projectDir == "" {
-		t.Fatal("ProjectSessionDir must resolve for the test workspace root")
-	}
-	if !strings.HasPrefix(filepath.Base(dmProfile.sessionPath), "bot-") {
-		t.Fatalf("stable path name should be bot-scoped, got %q", filepath.Base(dmProfile.sessionPath))
-	}
-	if !strings.HasSuffix(dmProfile.sessionPath, ".jsonl") {
-		t.Fatalf("stable path must end in .jsonl, got %q", dmProfile.sessionPath)
-	}
-	if !strings.HasPrefix(dmProfile.sessionPath, projectDir+string(filepath.Separator)) {
-		t.Fatalf("stable path must live under the resolved session dir, got %q (want prefix %q)", dmProfile.sessionPath, projectDir)
+	if !strings.HasPrefix(dmProfile.sessionRef.SessionID, "bot-") {
+		t.Fatalf("stable identity should be bot-scoped, got %q", dmProfile.sessionRef.SessionID)
 	}
 }
 

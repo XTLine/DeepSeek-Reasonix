@@ -58,17 +58,22 @@ func (t *UseCapabilityTool) searchCapabilities(query string, limit int) (string,
 		}
 		return results[i].CapabilityID < results[j].CapabilityID
 	})
-	if len(results) > limit {
+	total := len(results)
+	if total > limit {
 		results = results[:limit]
 	}
 	payload := struct {
-		Query   string                   `json:"query"`
-		Results []capabilitySearchResult `json:"results"`
-		Note    string                   `json:"note"`
+		Query          string                   `json:"query"`
+		Results        []capabilitySearchResult `json:"results"`
+		CatalogVersion string                   `json:"catalog_version"`
+		Truncated      bool                     `json:"truncated"`
+		SnapshotStale  bool                     `json:"snapshot_stale"`
+		Incomplete     bool                     `json:"incomplete"`
+		Note           string                   `json:"note"`
 	}{
-		Query:   query,
-		Results: results,
-		Note:    "Local catalog search only; no MCP process, network request, or tools/list call was made. Inspect one exact capability_id before calling when its argument contract is unfamiliar.",
+		Query: query, Results: results, CatalogVersion: cat.Fingerprint,
+		Truncated: total > len(results), SnapshotStale: cat.Stale, Incomplete: cat.Incomplete,
+		Note: "Local catalog search only; no MCP process, network request, or tools/list call was made. Inspect one exact capability_id before calling when its argument contract is unfamiliar.",
 	}
 	b, err := json.MarshalIndent(payload, "", "  ")
 	return string(b), len(results), err
@@ -117,7 +122,7 @@ func (t *UseCapabilityTool) capabilitySchemaSearchData(entry capability.Entry, m
 			}
 		}
 	} else if strings.HasPrefix(entry.ID, "skill:") {
-		if contract, ok := t.capabilityArgumentContract(entry.ID); ok {
+		if contract, ok := capabilityArgumentContract(entry); ok {
 			schema = contract.Schema
 		}
 	} else if t.registry != nil {
@@ -164,6 +169,11 @@ func (t *UseCapabilityTool) mcpSearchSchemaIndex() map[string]plugin.CachedTool 
 				}
 			}
 		}
+		for _, spec := range t.specs {
+			if cached, ok := plugin.LoadCachedSchemaForSpecProfile(spec, t.hostProfileFor()); ok {
+				add(spec.Name, cached.Tools)
+			}
+		}
 	}
 	if t.registry != nil {
 		for _, name := range t.registry.AllNames() {
@@ -179,11 +189,6 @@ func (t *UseCapabilityTool) mcpSearchSchemaIndex() map[string]plugin.CachedTool 
 				Name: metadata.MCPRawToolName(), Description: target.Description(),
 				Schema: target.Schema(), ReadOnly: target.ReadOnly(),
 			}})
-		}
-	}
-	for _, spec := range t.specs {
-		if cached, ok := plugin.LoadCachedSchemaForSpecProfile(spec, t.hostProfileFor()); ok {
-			add(spec.Name, cached.Tools)
 		}
 	}
 	return index
@@ -212,24 +217,20 @@ func schemaSearchData(raw json.RawMessage) ([]string, string) {
 	return names, strings.Join(parts, " ")
 }
 
-func (t *UseCapabilityTool) capabilityArgumentContract(id string) (tool.CapabilityArgumentContract, bool) {
-	if t.registry == nil {
+func capabilityArgumentContract(entry capability.Entry) (tool.CapabilityArgumentContract, bool) {
+	if entry.Kind != capability.KindSkill || !strings.HasPrefix(entry.ID, "skill:") {
 		return tool.CapabilityArgumentContract{}, false
 	}
-	for _, name := range []string{"run_skill", "read_only_skill", "read_skill"} {
-		target, ok := t.registry.Get(name)
-		if !ok {
-			continue
-		}
-		provider, ok := target.(tool.CapabilityArgumentProvider)
-		if !ok {
-			continue
-		}
-		if contract, ok := provider.CapabilityArguments(id); ok {
-			return contract, true
-		}
+	required := ""
+	if entry.SkillRunAs == "subagent" {
+		required = `,"required":["arguments"]`
 	}
-	return tool.CapabilityArgumentContract{}, false
+	schema := json.RawMessage(`{"type":"object","properties":{"arguments":{"type":"string","description":"Concrete task or inline skill arguments."},"continue_from":{"type":"string","description":"Optional compatible subagent reference."}}` + required + `}`)
+	example, _ := json.Marshal(map[string]any{
+		"action": "call", "capability_id": entry.ID,
+		"arguments": map[string]any{"arguments": "specific task for " + entry.Name},
+	})
+	return tool.CapabilityArgumentContract{Schema: schema, Example: example}, true
 }
 
 // localMCPTools returns live/shared-host metadata first, then the already

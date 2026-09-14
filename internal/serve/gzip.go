@@ -78,6 +78,12 @@ func (g *gzipBufferedWriter) WriteHeader(code int) {
 }
 
 func (g *gzipBufferedWriter) Write(p []byte) (int, error) {
+	// Establish the response type at the byte-write boundary, including writes
+	// after Flush. Explicit handler types (JSON, HTML, downloads) are preserved.
+	if g.ResponseWriter.Header().Get("Content-Type") == "" {
+		g.ResponseWriter.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	}
+	g.ResponseWriter.Header().Set("X-Content-Type-Options", "nosniff")
 	if g.gz != nil {
 		return g.gz.Write(p)
 	}
@@ -110,6 +116,7 @@ func (g *gzipBufferedWriter) start() {
 		return
 	}
 	h := g.Header()
+	setSafeDefaultContentType(h)
 	h.Set("Content-Encoding", "gzip")
 	h.Add("Vary", "Accept-Encoding")
 	h.Del("Content-Length")
@@ -127,6 +134,9 @@ func (g *gzipBufferedWriter) startPlain() {
 	if g.status == 0 {
 		g.status = http.StatusOK
 	}
+	if !responseHasNoBody(g.status) {
+		setSafeDefaultContentType(g.Header())
+	}
 	g.ResponseWriter.WriteHeader(g.status)
 	g.started = true
 	g.plain = true
@@ -134,6 +144,15 @@ func (g *gzipBufferedWriter) startPlain() {
 		_, _ = g.buf.WriteTo(g.ResponseWriter)
 	} else {
 		g.buf.Reset()
+	}
+}
+
+func setSafeDefaultContentType(header http.Header) {
+	if header.Get("Content-Type") == "" {
+		header.Set("Content-Type", "text/plain; charset=utf-8")
+	}
+	if header.Get("X-Content-Type-Options") == "" {
+		header.Set("X-Content-Type-Options", "nosniff")
 	}
 }
 

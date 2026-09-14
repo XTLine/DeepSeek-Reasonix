@@ -27,6 +27,7 @@ export interface RemoteProjectBindings {
   SetRemoteTabComposerProfile(tabId: string, collaborationMode: string, toolApprovalMode: string, goal: string): Promise<string[]>;
   SetRemoteTabToolApprovalMode(tabId: string, mode: string): Promise<void>;
   SetRemoteTabGoal(tabId: string, goal: string): Promise<void>;
+  EditRemoteTabGoal(tabId: string, objective: string, maxGoalRounds: number | null): Promise<void>;
   RemoteTabSnapshot(tabId: string): Promise<RemoteTabSnapshot>;
   RemoteTabMetadata?(tabId: string): Promise<RemoteTabSnapshot>;
   RemoteTabStatus(tabId: string): Promise<unknown>;

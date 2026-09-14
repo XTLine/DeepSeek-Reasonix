@@ -245,7 +245,7 @@ func TestSessionLeaseKeeperRetiresDetachedSourceWithoutClearingReplacementAuthor
 		t.Fatal(err)
 	}
 	exec := agent.New(nil, nil, currentSession, agent.Options{}, event.Discard)
-	ctrl := New(Options{Executor: exec, SessionPath: current, Sink: event.Discard})
+	ctrl := newOwnedTestController(t, Options{Executor: exec, SessionPath: current, Sink: event.Discard})
 	defer ctrl.Close()
 	k := NewSessionLeaseKeeper()
 	defer k.Release()
@@ -317,7 +317,7 @@ func TestSessionLeaseKeeperRecoveryRebindsControllerBeforeReturning(t *testing.T
 	b := filepath.Join(dir, "b.jsonl")
 	sess := agent.NewSession("sys")
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	ctrl := New(Options{Executor: exec, SessionPath: a, Sink: event.Discard})
+	ctrl := newOwnedTestController(t, Options{Executor: exec, SessionPath: a, Sink: event.Discard})
 
 	k := NewSessionLeaseKeeper()
 	defer k.Release()
@@ -347,7 +347,7 @@ func TestSessionLeaseKeeperBindsPrivateResumeCandidate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "target.jsonl")
 	outgoing := agent.NewSession("outgoing")
-	ctrl := New(Options{Executor: agent.New(nil, nil, outgoing, agent.Options{}, event.Discard), SessionPath: path, Sink: event.Discard})
+	ctrl := newOwnedTestController(t, Options{Executor: agent.New(nil, nil, outgoing, agent.Options{}, event.Discard), SessionPath: path, Sink: event.Discard})
 	keeper := NewSessionLeaseKeeper()
 	defer keeper.Release()
 	if err := keeper.Rebind(path); err != nil {
@@ -378,7 +378,7 @@ func TestSessionLeaseKeeperRebindDetachingTransfersRecoveryCallback(t *testing.T
 	a := filepath.Join(dir, "a.jsonl")
 	b := filepath.Join(dir, "b.jsonl")
 	c := filepath.Join(dir, "c.jsonl")
-	ctrl := New(Options{Executor: agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard), SessionPath: a, Sink: event.Discard})
+	ctrl := newOwnedTestController(t, Options{Executor: agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard), SessionPath: a, Sink: event.Discard})
 	keeper := NewSessionLeaseKeeper()
 	if err := keeper.Rebind(a); err != nil {
 		t.Fatal(err)
@@ -414,7 +414,7 @@ func TestSessionLeaseKeeperTransitionBindsCandidateBeforeMove(t *testing.T) {
 	b := filepath.Join(dir, "b.jsonl")
 	current := agent.NewSession("sys")
 	exec := agent.New(nil, nil, current, agent.Options{}, event.Discard)
-	ctrl := New(Options{Executor: exec, SessionPath: a, Sink: event.Discard})
+	ctrl := newOwnedTestController(t, Options{Executor: exec, SessionPath: a, Sink: event.Discard})
 	k := NewSessionLeaseKeeper()
 	defer k.Release()
 	if err := k.Rebind(a); err != nil {

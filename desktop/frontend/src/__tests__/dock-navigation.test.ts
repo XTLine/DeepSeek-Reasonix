@@ -1,0 +1,51 @@
+import assert from "node:assert/strict";
+import { DockNavigation, requestKeys, type DockRequests } from "../app-shell/dockNavigation";
+
+for (const key of requestKeys) {
+  const navigation = new DockNavigation();
+  const request = { id: 1, path: "a", paths: ["a"], changes: [], tabId: "session", summary: {} };
+  const incoming = { [key]: request } as DockRequests;
+  navigation.commit("project/session", "one", incoming, ["one", "two"]);
+  const snapshot = navigation.getSnapshot();
+  assert.equal(snapshot[key]?.acceptNavigation?.(), true);
+  navigation.commit("project/session", "one", { [key]: { ...request } } as DockRequests, ["one", "two"]);
+  assert.equal(navigation.getSnapshot(), snapshot, `${key}: equivalent input must preserve snapshot`);
+  assert.equal(snapshot[key]?.acceptNavigation?.(), false);
+  navigation.commit("project/session", "one", { [key]: { ...request, navigationSource: "another-producer" } } as DockRequests, ["one", "two"]);
+  assert.equal(navigation.getSnapshot()[key]?.acceptNavigation?.(), true, "producer identities cannot collide");
+  navigation.commit("project/session", "one", incoming, ["one", "two"]);
+  navigation.commit("project/session", "two", incoming, ["one", "two"]);
+  assert.equal(navigation.getSnapshot()[key], null);
+  navigation.commit("project/session", "one", incoming, ["one", "two"]);
+  assert.equal(navigation.getSnapshot()[key], null);
+  navigation.commit("project/session", "one", { [key]: { ...request, id: 2 } } as DockRequests, ["one"]);
+  const pending = navigation.getSnapshot()[key];
+  navigation.commit("project/session", null, {}, []);
+  assert.equal(pending?.acceptNavigation?.(), false, "closed occurrence cannot accept a late request");
+  navigation.commit("project/session", "one", { [key]: { ...request, id: 2 } } as DockRequests, ["one"]);
+  assert.equal(navigation.getSnapshot()[key], null, "reopening same ID does not replay");
+  const cancellation = new AbortController();
+  navigation.commit("project/session", "one", { [key]: { ...request, id: 3, navigationCancellation: cancellation.signal } } as DockRequests, ["one"]);
+  cancellation.abort();
+  assert.equal(navigation.getSnapshot()[key]?.acceptNavigation?.(), false, "cancelled navigation cannot be accepted before reconciliation");
+  const lifetime = navigation.getSnapshot().navigationSignal!;
+  navigation.dispose();
+  assert(lifetime.aborted);
+}
+console.log("PASS five Dock request kinds: stable revision, once-only acceptance, view isolation and close/reopen");
+
+const navigation = new DockNavigation();
+navigation.commit("project/session", "one", { revealPathRequest: { id: 1, path: "report.md", toolCallId: "tool", source: true } }, ["one", "two"]);
+const original = navigation.getSnapshot();
+navigation.commit("project/session", "two", {}, ["one", "two"]);
+const restored = navigation.restoredView("project/session", "one");
+assert.equal(restored.navigationSignal, original.navigationSignal);
+assert.deepEqual(restored.navigationResources, { "report.md": { toolCallId: "tool", source: true } });
+for (const key of requestKeys) assert.equal(restored[key], null, "restoration exposes resources, never old commands");
+assert.equal(navigation.getSnapshot().navigationResources, undefined, "reading restoration does not activate the view");
+assert.equal(navigation.restoredView("project/other-session", "one").navigationResources, undefined);
+navigation.reconcile(["two"]);
+assert.equal(navigation.restoredView("project/session", "one").navigationResources, undefined);
+assert(original.navigationSignal?.aborted);
+navigation.dispose();
+console.log("PASS retained resources restore before commit without activating, replaying or crossing lifetime boundaries");

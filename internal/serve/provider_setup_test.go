@@ -23,6 +23,7 @@ const providerSetupTestKeyEnv = "REASONIX_REMOTE_SETUP_TEST_KEY"
 
 func TestProviderSetupStoresRemoteCredentialAndRebuildsController(t *testing.T) {
 	s, secret := newProviderSetupTestServer(t)
+	defer s.Close()
 	if !s.EnableProviderSetupForListener("127.0.0.1:8787") {
 		t.Fatal("loopback listener did not enable Provider setup")
 	}
@@ -126,6 +127,7 @@ func TestProviderSetupStoresRemoteCredentialAndRebuildsController(t *testing.T) 
 
 func TestProviderSetupActivationFailureKeepsCredentialAndHidesDetails(t *testing.T) {
 	s, secret := newProviderSetupTestServer(t)
+	defer s.Close()
 	s.EnableProviderSetupForListener("127.0.0.1:8787")
 	built := 0
 	s.buildController = func(_ context.Context, ref string) (*control.Controller, error) {
@@ -187,6 +189,7 @@ func TestProviderSetupActivationFailureKeepsCredentialAndHidesDetails(t *testing
 
 func TestProviderSetupActivationRetryReturnsToMissingWhenCredentialWasRemoved(t *testing.T) {
 	s, secret := newProviderSetupTestServer(t)
+	defer s.Close()
 	s.EnableProviderSetupForListener("127.0.0.1:8787")
 	built := 0
 	s.buildController = func(context.Context, string) (*control.Controller, error) {
@@ -220,6 +223,7 @@ func TestProviderSetupActivationRetryReturnsToMissingWhenCredentialWasRemoved(t 
 
 func TestProviderSetupRejectsCredentialSavedByAnotherProcess(t *testing.T) {
 	s, _ := newProviderSetupTestServer(t)
+	defer s.Close()
 	s.EnableProviderSetupForListener("127.0.0.1:8787")
 	state, ok := s.providerSetupSnapshot()
 	if !ok || !state.Required || state.CredentialRevision == "" {
@@ -252,6 +256,7 @@ func TestProviderSetupRejectsCredentialSavedByAnotherProcess(t *testing.T) {
 
 func TestProviderSetupRefreshDoesNotAcquireConfigEditLock(t *testing.T) {
 	s, _ := newProviderSetupTestServer(t)
+	defer s.Close()
 	s.EnableProviderSetupForListener("127.0.0.1:8787")
 
 	// Config+credential writers take the config lock first. Holding it here
@@ -276,6 +281,7 @@ func TestProviderSetupRefreshDoesNotAcquireConfigEditLock(t *testing.T) {
 
 func TestProviderSetupIsLoopbackOnlyAndAuthenticated(t *testing.T) {
 	s, _ := newProviderSetupTestServer(t)
+	defer s.Close()
 	if s.EnableProviderSetupForListener("0.0.0.0:8787") {
 		t.Fatal("non-loopback listener enabled Provider setup")
 	}
@@ -306,6 +312,7 @@ func TestProviderSetupIsLoopbackOnlyAndAuthenticated(t *testing.T) {
 
 func TestProviderSetupRejectsUnsafeOrAmbiguousRequests(t *testing.T) {
 	s, _ := newProviderSetupTestServer(t)
+	defer s.Close()
 	s.EnableProviderSetupForListener("127.0.0.1:8787")
 	httpServer := httptest.NewServer(s.Handler())
 	defer httpServer.Close()
@@ -383,7 +390,7 @@ api_key_env = "` + providerSetupTestKeyEnv + `"
 		ModelRef:   "remote-demo/model-a",
 		SessionDir: t.TempDir(),
 	})
-	return New(ctrl, bc, config.ServeConfig{}), "remote-secret-for-test"
+	return newLifecycleTestServer(t, ctrl, bc, config.ServeConfig{}), "remote-secret-for-test"
 }
 
 func postProviderSetup(t *testing.T, baseURL, body string) *http.Response {

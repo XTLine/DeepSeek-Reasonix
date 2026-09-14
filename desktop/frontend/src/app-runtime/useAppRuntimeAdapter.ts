@@ -28,6 +28,7 @@ export function useAppRuntimeAdapter() {
       setToolApprovalModeForTab: controller.setToolApprovalModeForTab,
       setComposerProfileForTab: controller.setComposerProfileForTab,
       setGoalForTab: controller.setGoalForTab,
+      editGoalForTab: controller.editGoalForTab,
       resumeGoalForTab: controller.resumeGoalForTab,
       pauseGoalForTab: controller.pauseGoalForTab,
       clearGoal: controller.clearGoal,

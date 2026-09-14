@@ -29,17 +29,6 @@ export async function executeTerminalOutputInsertion(
   return true;
 }
 
-export async function executeTodoDismissal(
-  target: SessionResource,
-  batchKey: string,
-  port: (tabId: string, batchKey: string) => Promise<void>,
-  authority: SessionOperationAuthority,
-): Promise<void> {
-  authority.checkpoint();
-  await port(target.tabId, batchKey);
-  authority.checkpoint();
-}
-
 export type ClearSessionPorts = {
   clearSession: () => Promise<void>;
   clearRemoteSession: (tabId: string) => Promise<void>;

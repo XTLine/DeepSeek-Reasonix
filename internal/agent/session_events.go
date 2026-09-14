@@ -48,6 +48,11 @@ const (
 // fall back to an older checkpoint: the event log may contain newer turns.
 var ErrSessionReplayLimitExceeded = errors.New("session history exceeds safe replay limits")
 
+// ErrSessionHistoryDamaged marks a frozen source whose authoritative event
+// log cannot be proven complete. Migration must fail closed instead of falling
+// back to an older checkpoint and silently dropping newer turns.
+var ErrSessionHistoryDamaged = errors.New("session history is damaged")
+
 // SessionReplayLimitError carries machine-readable diagnostics while keeping
 // Error free of local paths for Desktop surfaces that display startup errors.
 type SessionReplayLimitError struct {
@@ -81,6 +86,20 @@ var defaultSessionReplayLimits = sessionReplayLimits{
 	maxRecords:         sessionEventReplayMaxRecords,
 	maxMessages:        sessionEventReplayMaxMessages,
 	maxCollectionItems: sessionEventReplayMaxCollectionItems,
+}
+
+// migrationSessionReplayLimits removes cumulative interactive-history caps for
+// an already frozen migration source. The migration path is still expected to
+// move large payloads into its target store as it reads them; these values only
+// keep the legacy decoder from rejecting valid historical totals before that
+// conversion can happen.
+func migrationSessionReplayLimits() sessionReplayLimits {
+	return sessionReplayLimits{
+		maxBytes:           int64(^uint64(0)>>1) - 1,
+		maxRecords:         int(^uint(0) >> 1),
+		maxMessages:        int(^uint(0) >> 1),
+		maxCollectionItems: int(^uint(0) >> 1),
+	}
 }
 
 func sessionReplayLimitError(path, resource string, value, limit int64) error {

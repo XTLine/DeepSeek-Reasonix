@@ -161,14 +161,14 @@ func (a *App) resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPat
 			}
 		}
 	}
-	if target.Path != "" {
-		body, _ := json.Marshal(map[string]string{"path": target.Path})
+	if targetRoute := remoteSessionRoute(target); targetRoute != "" {
+		body, _ := json.Marshal(map[string]string{"path": target.Path, "hostId": target.HostID, "sessionId": target.SessionID})
 		// /resume may reattach a controller already producing frames. Route them
 		// before the request returns so the all-session pump does not discard its
 		// handoff output or prompt replay as background work.
-		route := a.beginRemoteTabProvisionalResume(tabID, tab, client, gen, target.Path)
+		route := a.beginRemoteTabProvisionalResume(tabID, tab, client, gen, targetRoute)
 		route.previousSelection = previous
-		mountedPath, err := servePostSessionPath(ctx, client, serveURL(base, "/resume"), body)
+		mounted, err := servePostSessionIdentityForSession(ctx, client, serveURL(base, "/resume"), body, "")
 		if err != nil {
 			var statusErr *serveHTTPStatusError
 			if errors.As(err, &statusErr) {
@@ -184,7 +184,7 @@ func (a *App) resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPat
 			reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), 3*time.Second)
 			current, reconcileErr := serveCurrentSession(reconcileCtx, client, base)
 			reconcileCancel()
-			if reconcileErr != nil || current.Path == "" {
+			if reconcileErr != nil || remoteSessionRoute(current) == "" {
 				// Do not publish either transcript from an unconfirmed generation.
 				// A fresh attach resolves Serve's current session before ready.
 				if startRetry := a.reconnectRemoteTabGeneration(tabID, gen); startRetry {
@@ -192,7 +192,7 @@ func (a *App) resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPat
 				}
 				return true
 			}
-			if current.Path != target.Path {
+			if remoteSessionRoute(current) != targetRoute {
 				return a.reconcileRemoteTabRejectedResume(tabID, tab, client, gen, route, current, err)
 			}
 			if target.Name == "" {
@@ -204,7 +204,10 @@ func (a *App) resumeRemoteTabSessionPathForOpenSelection(tabID, name, sessionPat
 			target.Running = target.Running || current.Running
 			target.TakenOver = current.TakenOver
 		} else {
-			target.TakenOver = strings.TrimSpace(mountedPath) != ""
+			if mounted.SessionID != "" {
+				target.SessionID = mounted.SessionID
+			}
+			target.TakenOver = strings.TrimSpace(mounted.Path) != ""
 		}
 		title := strings.TrimSpace(target.Title)
 		if title == "" {
@@ -251,6 +254,9 @@ func (a *App) DeleteRemoteProjectSession(hostID, workspace, name string) error {
 }
 
 func (a *App) remoteTabPost(tabID, path string, body map[string]any) error {
+	if err := a.requireRemoteExecutionProtocol(tabID); err != nil {
+		return err
+	}
 	gated := path == "/goal/resume" || path == "/compact" || path == "/summarize"
 	for {
 		revision, admittedGen := "", uint64(0)
@@ -436,10 +442,16 @@ func (a *App) SetRemoteTabEffort(tabID, level string) error {
 }
 
 func (a *App) PauseRemoteTabGoal(tabID string) error {
+	if err := a.requireRemoteGoalLifecycle(tabID); err != nil {
+		return err
+	}
 	return a.remoteTabPost(tabID, "/goal/pause", nil)
 }
 
 func (a *App) ResumeRemoteTabGoal(tabID string) error {
+	if err := a.requireRemoteGoalLifecycle(tabID); err != nil {
+		return err
+	}
 	return a.remoteTabPost(tabID, "/goal/resume", nil)
 }
 
@@ -557,7 +569,7 @@ func (a *App) adoptRemoteTabTitleListing(tabID string, tab *remoteTab, client *h
 	// preferences. Preference I/O runs later without either application lock.
 	title := strings.TrimSpace(entry.Title)
 	changed := title != "" && current.topicTitle != title
-	identityChanged := current.session.name != entry.Name || current.session.path != entry.Path || current.session.reset || current.session.newSession
+	identityChanged := current.session.name != entry.Name || current.session.path != entry.Path || current.session.sessionID != entry.SessionID || current.session.reset || current.session.newSession
 	if changed {
 		current.topicTitle = title
 	}
@@ -565,8 +577,10 @@ func (a *App) adoptRemoteTabTitleListing(tabID string, tab *remoteTab, client *h
 	current.session.newSession = false
 	current.session.name = entry.Name
 	current.session.path = entry.Path
-	if current.routing.currentPath != entry.Path {
-		current.routing.currentPath = entry.Path
+	current.session.sessionID = entry.SessionID
+	route := remoteSessionRoute(entry)
+	if current.routing.currentPath != route {
+		current.routing.currentPath = route
 		current.routing.pathRevision++
 		current.routing.revision++
 	}
@@ -585,8 +599,8 @@ func (a *App) applyRemoteTabTitleOverride(tabID string, tab *remoteTab, client *
 	a.remoteTabMu.Lock()
 	current := a.remoteTabs[tabID]
 	if current != tab || current.client != client || current.gen != gen ||
-		current.session.name != entry.Name || current.session.path != entry.Path ||
-		current.routing.currentPath != entry.Path {
+		current.session.name != entry.Name || current.session.path != entry.Path || current.session.sessionID != entry.SessionID ||
+		current.routing.currentPath != remoteSessionRoute(entry) {
 		a.remoteTabMu.Unlock()
 		return
 	}
@@ -651,14 +665,15 @@ func (a *App) rotateRemoteTabSession(tabID, path string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	rotatedPath, err := servePostSessionPathForSession(ctx, client, serveURL(base, path), nil, requestPath)
+	identity, err := servePostSessionIdentityForSession(ctx, client, serveURL(base, path), nil, requestPath)
 	if err != nil {
 		// Session rotation can be rejected while the current remote turn is active.
 		// That does not invalidate the attached session or its event pump, so
 		// return an action error while leaving the tab ready and observable.
 		return err
 	}
-	target := serveSessionEntry{Path: rotatedPath, Current: true}
+	target := serveSessionEntry{Path: identity.Path, SessionID: identity.SessionID, Current: true}
+	targetRoute := remoteSessionRoute(target)
 	title := a.localizedDefaultTopicTitle()
 	tab.routeEventMu.Lock()
 	defer tab.routeEventMu.Unlock()
@@ -668,7 +683,7 @@ func (a *App) rotateRemoteTabSession(tabID, path string) error {
 		return fmt.Errorf("remote tab %q changed while starting a new session", tabID)
 	}
 	if tab.routing.pathRevision != requestPathRevision || tab.routing.currentPath != requestPath {
-		alreadyAdopted := tab.routing.currentPath == target.Path
+		alreadyAdopted := tab.routing.currentPath == targetRoute
 		a.remoteTabMu.Unlock()
 		if alreadyAdopted {
 			a.saveTabsFromRemote()
@@ -682,7 +697,8 @@ func (a *App) rotateRemoteTabSession(tabID, path string) error {
 	tab.session.newSession = true
 	tab.session.name = target.Name
 	tab.session.path = target.Path
-	tab.routing.currentPath = target.Path
+	tab.session.sessionID = target.SessionID
+	tab.routing.currentPath = targetRoute
 	tab.routing.pathRevision++
 	tab.routing.revision++
 	tab.pendingEvents = nil

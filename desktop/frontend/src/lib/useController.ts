@@ -56,15 +56,16 @@ import { hydrateIdentityCurrent } from "./sessionIdentity";
 import { historyPageRequestBudget } from "./historyPaging";
 import { withRemoteProviderUnreachable, withRemoteTurnInterrupted } from "./remoteTurnState";
 import type { NavigationResult, SurfaceDataCommit, SurfaceDataOutcome } from "./navigationSurfaceTransition";
-import { sameStringList, sameTodoList } from "./todoVisibility";
+import { sameTodoList } from "./todoVisibility";
 import { resolveSnapshotTurnStartedAt, resolveTurnStartedAt, snapshotPredatesTurnLifecycle } from "./turnTiming";
 import { TurnEventProjector } from "./turnEventProjection";
 import { useStaleTurnWatchdog } from "./useStaleTurnWatchdog";
 import { useRemoteTabSwitch } from "./useRemoteTabSwitch";
 import { useNavigationIntentFence } from "./useNavigationIntentFence";
+import { useGoalControllerActions } from "./useGoalControllerActions";
 import type { SearchSource } from "./searchSources";
 import { attachWebSearchOutput } from "./searchTranscript";
-import { fileDiffFromWire, parseTodos, summarize, summarizeFileDiff, type ToolFileDiff } from "./tools";
+import { fileDiffFromWire, summarize, summarizeFileDiff, type ToolFileDiff } from "./tools";
 import type { QualityFloor } from "./types";
 import type {
   BalanceInfo,
@@ -707,7 +708,7 @@ export function sameMeta(a?: Meta, b?: Meta): boolean {
     a.floorInferred === b.floorInferred &&
     a.goal === b.goal &&
     a.goalStatus === b.goalStatus &&
-    sameTodoList(a.canonicalTodos, b.canonicalTodos) && sameStringList(a.dismissedTodoBatches, b.dismissedTodoBatches)
+    sameTodoList(a.canonicalTodos, b.canonicalTodos)
   );
 }
 
@@ -739,8 +740,8 @@ export function composerProfileApplicationKey(
 }
 
 function metaWithoutCanonicalTodos(meta?: Meta): Meta | undefined {
-  if (!meta || (meta.canonicalTodos === undefined && meta.dismissedTodoBatches === undefined)) return meta;
-  return { ...meta, canonicalTodos: undefined, dismissedTodoBatches: undefined };
+  if (!meta || meta.canonicalTodos === undefined) return meta;
+  return { ...meta, canonicalTodos: undefined };
 }
 
 const CANCEL_RECONCILE_DELAYS_MS = [0, 100, 300, 1_000] as const;
@@ -1338,6 +1339,7 @@ function applyEvent(s: State, e: WireEvent, preserveToolPayloads = false): State
         activeTurnId: e.turnId ?? s.activeTurnId,
         assistantSegmentOrdinal: startsNewTurn ? 0 : s.assistantSegmentOrdinal,
         pendingSearchSources: undefined,
+        meta: s.meta ? { ...s.meta, canonicalTodos: [] } : s.meta,
       };
       if (fresh.items.some((it) => it.id === "provider-unreachable")) {
         fresh.items = fresh.items.filter((it) => it.id !== "provider-unreachable");
@@ -1584,7 +1586,13 @@ function applyEvent(s: State, e: WireEvent, preserveToolPayloads = false): State
       // A nested result refreshes its sub-agent parent's recent activity.
       if (t.parentId) touchSubagentParent(next, t.parentId);
       const items = preserveToolPayloads ? next : compactArchivedToolItems(next);
-      return withRunningChecks(attachWebSearchOutput({ ...s, items }, t.name, t.output, t.err, idx >= 0 && next[idx]?.kind === "tool" ? next[idx].id : t.id));
+      const committedTodos = e.kind === "tool_result" && !t.err && t.todoWritten && Array.isArray(t.todos)
+        ? t.todos.map((todo) => ({ content: todo.content, status: todo.status }))
+        : undefined;
+      const updated = committedTodos !== undefined && s.meta
+        ? { ...s, items, meta: { ...s.meta, canonicalTodos: committedTodos } }
+        : { ...s, items };
+      return withRunningChecks(attachWebSearchOutput(updated, t.name, t.output, t.err, idx >= 0 && next[idx]?.kind === "tool" ? next[idx].id : t.id));
     }
     case "tool_progress": {
       const t = e.tool;
@@ -1773,15 +1781,10 @@ function applyEvent(s: State, e: WireEvent, preserveToolPayloads = false): State
             }
           : it,
       );
-      // A todo-only readiness card is retracted once the turn's own items
-      // show an all-complete todo list (the panel is already green).
-      const todoGapResolved = !e.err && latestTodosAllComplete(finalized);
-      let items: Item[] = finalized;
-      if (s.deliveryRecoveryActive && !e.err) {
-        items = finalized.filter((item) => item.kind !== "notice" || item.variant !== "delivery");
-      } else if (todoGapResolved) {
-        items = finalized.filter((item) => item.kind !== "notice" || item.variant !== "delivery" || !todoOnlyMissing(item.missing));
-      }
+	  let items: Item[] = finalized;
+	  if (s.deliveryRecoveryActive && !e.err) {
+		items = finalized.filter((item) => item.kind !== "notice" || item.variant !== "delivery");
+	  }
       if (e.outcome === "incomplete_read") {
         items = upsertReadPause(items, e.readPause, `read-pause-${e.turnId ?? s.seq}`);
       } else if (e.outcome === "final_readiness") {
@@ -2308,23 +2311,6 @@ type TabStates = Map<string, State>;
 function getOrCreateState(states: TabStates, tabId: string): State {
   if (!states.has(tabId)) states.set(tabId, { ...initialState });
   return states.get(tabId)!;
-}
-
-// A delivery notice whose only gap was unfinished todos becomes stale the
-// moment the list shows every item completed.
-function todoOnlyMissing(missing: string[] | undefined): boolean {
-  return Array.isArray(missing) && missing.length > 0 && missing.every((id) => id === "todo");
-}
-
-function latestTodosAllComplete(items: Item[]): boolean {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const item = items[i];
-    if (item.kind === "tool" && item.name === "todo_write" && !item.parentId && item.status === "done" && !item.error) {
-      const todos = parseTodos(item.args);
-      return todos.length > 0 && todos.every((todo) => String(todo.status ?? "").trim() === "completed");
-    }
-  }
-  return false;
 }
 
 function appendNoticeToState(s: State, level: "info" | "warn", text: string, detail?: string, code?: string, decisionReceipt?: WireDecisionReceipt): State {
@@ -4083,67 +4069,10 @@ export function useController() {
     }
   }, [dispatchTo, refreshMetaForTab]);
 
-  const setGoalForTab = useCallback(async (tabId: string, goal: string): Promise<void> => {
-    if (!tabId) return;
-    // Propagate activation failures so the first Goal turn (especially structured
-    // Skill submit) can abort instead of executing without an active Goal.
-    try {
-      await app.SetGoalForTab(tabId, goal);
-    } finally {
-      await refreshMetaForTab(tabId);
-    }
-  }, [refreshMetaForTab]);
-
-  const setGoal = useCallback(async (goal: string): Promise<void> => {
-    if (!activeTabId) return;
-    await setGoalForTab(activeTabId, goal);
-  }, [activeTabId, setGoalForTab]);
-
-  const clearGoalForTab = useCallback(async (tabId: string): Promise<void> => {
-    if (!tabId) return;
-    try {
-      await app.ClearGoalForTab(tabId);
-    } finally {
-      await refreshMetaForTab(tabId);
-    }
-  }, [refreshMetaForTab]);
-
-  const clearGoal = useCallback(async (): Promise<void> => {
-    if (!activeTabId) return;
-    await clearGoalForTab(activeTabId);
-  }, [activeTabId, clearGoalForTab]);
-
-  const resumeGoalForTab = useCallback(async (tabId: string): Promise<boolean> => {
-    if (!tabId) return false;
-    try {
-      const resumed = await app.ResumeGoalForTab(tabId);
-      await refreshMetaForTab(tabId);
-      return resumed;
-    } catch {
-      return false;
-    }
-  }, [refreshMetaForTab]);
-
-  const resumeGoal = useCallback(async (): Promise<boolean> => {
-    if (!activeTabId) return false;
-    return resumeGoalForTab(activeTabId);
-  }, [activeTabId, resumeGoalForTab]);
-
-  const pauseGoalForTab = useCallback(async (tabId: string): Promise<boolean> => {
-    if (!tabId) return false;
-    try {
-      const paused = await app.PauseGoalForTab(tabId);
-      await refreshMetaForTab(tabId);
-      return paused;
-    } catch {
-      return false;
-    }
-  }, [refreshMetaForTab]);
-
-  const pauseGoal = useCallback(async (): Promise<boolean> => {
-    if (!activeTabId) return false;
-    return pauseGoalForTab(activeTabId);
-  }, [activeTabId, pauseGoalForTab]);
+  const {
+    setGoalForTab, setGoal, editGoalForTab, clearGoalForTab, clearGoal,
+    resumeGoalForTab, resumeGoal, pauseGoalForTab, pauseGoal,
+  } = useGoalControllerActions(activeTabId, refreshMetaForTab);
 
   const newSession = useCallback(async () => {
     const tabId = activeTabId;
@@ -5001,7 +4930,17 @@ export function useController() {
     } catch { /* ignore */ }
   }, []);
 
-  const projectedState = useMemo(() => runtimeState.known ? { ...activeState, running: runtimeState.running ?? activeState.running } : activeState, [activeState, runtimeState.known, runtimeState.running]);
+  const projectedState = useMemo(() => {
+    if (!runtimeState.known) return activeState;
+    const runtimeTodos = runtimeState.state?.todos;
+    return {
+      ...activeState,
+      running: runtimeState.running ?? activeState.running,
+      meta: runtimeTodos !== undefined && activeState.meta
+        ? { ...activeState.meta, canonicalTodos: runtimeTodos }
+        : activeState.meta,
+    };
+  }, [activeState, runtimeState.known, runtimeState.running, runtimeState.state?.todos]);
   return {
     state: projectedState,
     liveStore,
@@ -5011,7 +4950,7 @@ export function useController() {
     resolveRecovery, resolveRecoveryForTab, answerQuestion, answerQuestionForTab,
     answerMCPInteraction, answerMCPInteractionForTab, setControllerMode, setControllerModeForTab,
     dismissExtensionForm, drainExtensionNotifications,
-    setCollaborationMode, setCollaborationModeForTab, setToolApprovalMode, setToolApprovalModeForTab, setQualityFloor, setComposerProfileForTab, setGoal, setGoalForTab, clearGoal, clearGoalForTab, resumeGoal, resumeGoalForTab, pauseGoal, pauseGoalForTab,
+    setCollaborationMode, setCollaborationModeForTab, setToolApprovalMode, setToolApprovalModeForTab, setQualityFloor, setComposerProfileForTab, setGoal, setGoalForTab, editGoalForTab, clearGoal, clearGoalForTab, resumeGoal, resumeGoalForTab, pauseGoal, pauseGoalForTab,
     newSession, clearSession, listSessions, listTrashedSessions, retrySessionHistory, resumeSession, openChannelSession, previewSession, deleteSession, restoreSession, purgeTrashedSession, renameSession,
     loadOlderHistory,
     requestHistoryFullContent,

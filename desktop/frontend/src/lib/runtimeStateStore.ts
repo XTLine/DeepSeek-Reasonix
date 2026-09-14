@@ -1,25 +1,40 @@
 import type { ProjectRuntimeTopic } from "./types";
+import type { PendingInteraction, RecoveryStatus, Todo } from "../generated/desktopContract.generated";
 
 export interface RuntimeState {
   schemaVersion: number;
+  hostId?: string;
+  sessionId?: string;
+  sessionCodec?: string;
   runtimeEpoch: string;
+  activityRevision: number;
   revision: number;
-  phase: "idle" | "executing" | "finishing" | "closed";
+  phase: "idle" | "executing" | "finishing" | "cancelling" | "recovery_required" | "closed";
   running: boolean;
   turnId: string;
   turnStatus: string;
   turnEventSeq: number;
+  committedEventSeq?: number;
+  durableEventSeq?: number;
+  persistenceStatus?: "ready" | "pending" | "failed" | "uncertain" | "unavailable";
+  persistenceError?: string;
+  headId?: string;
   pendingPrompt: boolean;
+  pendingInteractions?: PendingInteraction[];
+  todos?: Todo[];
+  todoWritten?: boolean;
   cancelRequested: boolean;
   cancellable: boolean;
   backgroundJobs: number;
   activity: string;
+  recovery?: RecoveryStatus | null;
 }
 export interface RuntimeSession {
   tabId: string;
   scope: string;
   workspaceRoot: string;
   topicId: string;
+  sessionId?: string;
   sessionPath: string;
   sessionGeneration: number;
   open: boolean;
@@ -41,7 +56,8 @@ export function selectRuntime(session?: RuntimeSession, failed = false) {
   const unknown = Boolean(session && (failed || session.freshness !== "synced"));
   const finishing = known && state.phase === "finishing";
   const kind = unknown ? "unknown" : !known ? "legacy" : finishing ? "finishing"
-    : state.cancelRequested ? "cancelling" : state.pendingPrompt ? "waiting_confirmation"
+    : state.phase === "recovery_required" ? "recovery_required"
+    : state.cancelRequested || state.phase === "cancelling" ? "cancelling" : state.pendingPrompt ? "waiting_confirmation"
     : state.phase === "executing" ? state.activity === "streaming" ? "streaming" : "thinking"
     : state.backgroundJobs > 0 ? "background_job" : "idle";
   return { kind, known, unknown, finishing, state,

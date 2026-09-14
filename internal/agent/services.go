@@ -99,6 +99,9 @@ type agentServices struct {
 	// just-made memory change into the next turn, so it applies this session
 	// without touching the cache-stable prefix.
 	memQueue memory.Queue
+	// sessionCheckpointer flushes the accepted event prefix immediately before
+	// model and top-level tool side effects.
+	sessionCheckpointer SessionCheckpointer
 }
 
 func (s *agentServices) gateSnapshot() Gate {
@@ -134,6 +137,7 @@ func newAgentServices(
 		hooks:                 hooks,
 		jobs:                  opts.Jobs,
 		memQueue:              opts.MemoryQueue,
+		sessionCheckpointer:   opts.SessionCheckpointer,
 		writeScheduler:        opts.WriteScheduler,
 		workspaceLease:        opts.WorkspaceLease,
 		warnState:             missingReasoningWarnStateFor(opts.MissingReasoningWarnStateDir),

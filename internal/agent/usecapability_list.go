@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 
 	"reasonix/internal/capability"
@@ -19,11 +21,10 @@ type listServerInfo struct {
 	Connected    bool   `json:"connected"`
 }
 
-// listCapabilities returns non-MCP catalog entries plus compact MCP server
-// summaries. Concrete MCP directories stay behind action=inspect so one global
-// list cannot grow with every cached tool description. The top-level "servers"
-// key stays compatible with restricted subagent list filtering.
-func (t *UseCapabilityTool) listCapabilities() (string, error) {
+func (t *UseCapabilityTool) listCapabilitiesPage(limit int, cursor string) (string, error) {
+	if limit == 0 {
+		limit = 50
+	}
 	type capInfo struct {
 		ID          string `json:"id"`
 		Kind        string `json:"kind"`
@@ -39,8 +40,9 @@ func (t *UseCapabilityTool) listCapabilities() (string, error) {
 			Description: "Read one bounded page from a complete tool result retained in this agent's current session.",
 		})
 	}
-	if t.catalog != nil {
-		for _, e := range t.catalog().Entries {
+	catalog := t.currentCatalog()
+	if len(catalog.Entries) > 0 {
+		for _, e := range catalog.Entries {
 			// Servers already have a compact representation below. Keep concrete
 			// MCP tools in the internal catalog for routing, inspect, and known-ID
 			// calls, but do not inject every cached directory into model context.
@@ -70,10 +72,38 @@ func (t *UseCapabilityTool) listCapabilities() (string, error) {
 		Note    string           `json:"note"`
 	}
 	_ = json.Unmarshal([]byte(serversJSON), &serversPayload)
+	total := len(caps) + len(serversPayload.Servers)
+	offset := 0
+	if strings.TrimSpace(cursor) != "" {
+		version, rawOffset, ok := strings.Cut(cursor, ":")
+		if !ok || version != catalog.Fingerprint {
+			return "", fmt.Errorf("list cursor expired because the capability catalog changed; restart without cursor")
+		}
+		parsed, err := strconv.Atoi(rawOffset)
+		if err != nil || parsed < 0 || parsed > total {
+			return "", fmt.Errorf("invalid list cursor; restart without cursor")
+		}
+		offset = parsed
+	}
+	end := min(offset+limit, total)
+	capStart, capEnd := min(offset, len(caps)), min(end, len(caps))
+	page := caps[capStart:capEnd]
+	serverStart := max(0, offset-len(caps))
+	serverEnd := max(0, end-len(caps))
+	serverPage := serversPayload.Servers[serverStart:serverEnd]
+	nextCursor := ""
+	if end < total {
+		nextCursor = catalog.Fingerprint + ":" + strconv.Itoa(end)
+	}
 	payload := map[string]any{
-		"capabilities": caps,
-		"servers":      serversPayload.Servers,
-		"note":         "MCP servers are summarized below. Call action=inspect with capability_id=mcp-server:<name> to list one enabled server's tools without starting it, or action=call with a concrete capability_id to invoke a non-core tool, skill, MCP tool, or other catalog entry without changing the provider tool schema.",
+		"capabilities":    page,
+		"servers":         serverPage,
+		"catalog_version": catalog.Fingerprint,
+		"next_cursor":     nextCursor,
+		"truncated":       nextCursor != "",
+		"snapshot_stale":  catalog.Stale,
+		"incomplete":      catalog.Incomplete,
+		"note":            "This page contains at most limit entries across capabilities and MCP server summaries. Call action=inspect with capability_id=mcp-server:<name> to list one enabled server's tools without starting it, or action=call with a concrete capability_id to invoke a non-core tool, skill, MCP tool, or other catalog entry without changing the provider tool schema.",
 	}
 	if serversPayload.Note != "" {
 		payload["note"] = payload["note"].(string) + " " + serversPayload.Note

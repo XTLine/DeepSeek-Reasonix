@@ -33,7 +33,7 @@ func TestResolveRefsInjectsOnlyNewNestedInstructionsOnce(t *testing.T) {
 		}
 	}
 
-	c := New(Options{WorkspaceRoot: root, Memory: memory.Load(memory.Options{CWD: root})})
+	c := newOwnedTestController(t, Options{WorkspaceRoot: root, Memory: memory.Load(memory.Options{CWD: root})})
 	block, errs := c.ResolveRefs(context.Background(), "review @services/api/handler.go and @services/api/handler_test.go")
 	if len(errs) != 0 {
 		t.Fatalf("ResolveRefs errors = %v", errs)
@@ -838,7 +838,7 @@ func TestResolveRefsWithoutWorkspaceDoesNotClaimImageAttachment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	block, errs := New(Options{}).ResolveRefs(context.Background(), "see @"+imagePath)
+	block, errs := newOwnedTestController(t, Options{}).ResolveRefs(context.Background(), "see @"+imagePath)
 	if len(errs) != 0 {
 		t.Fatalf("ResolveRefs errors = %v", errs)
 	}

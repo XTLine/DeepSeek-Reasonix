@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -226,35 +225,5 @@ func TestStopTaskForTabKeepsSourceWorkspaceAfterActiveTabSwitch(t *testing.T) {
 	projectBTask, err := app.taskStore().GetTask(app.ctx, projectB, monitorID)
 	if err != nil || projectBTask == nil || projectBTask.State != taskmonitor.TaskStateRunning {
 		t.Fatalf("project B task mutated by project A control: task=%+v err=%v", projectBTask, err)
-	}
-}
-
-func TestListSessionsForTabKeepsSourceDirectoryAfterActiveTabSwitch(t *testing.T) {
-	dirA := t.TempDir()
-	dirB := t.TempDir()
-	pathA := filepath.Join(dirA, "a.jsonl")
-	pathB := filepath.Join(dirB, "b.jsonl")
-	if err := os.WriteFile(pathA, []byte(`{"role":"user","content":"workspace A"}`+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(pathB, []byte(`{"role":"user","content":"workspace B"}`+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	ctrlA := control.New(control.Options{SessionDir: dirA, SessionPath: pathA, Label: "a"})
-	ctrlB := control.New(control.Options{SessionDir: dirB, SessionPath: pathB, Label: "b"})
-	defer ctrlA.Close()
-	defer ctrlB.Close()
-	app := &App{
-		tabs: map[string]*WorkspaceTab{
-			"tab-a": {ID: "tab-a", Scope: "project", WorkspaceRoot: t.TempDir(), SessionPath: pathA, Ctrl: ctrlA},
-			"tab-b": {ID: "tab-b", Scope: "project", WorkspaceRoot: t.TempDir(), SessionPath: pathB, Ctrl: ctrlB},
-		},
-		activeTabID: "tab-b",
-	}
-	installSessionCatalogForTest(t, app, dirA, "project", app.tabs["tab-a"].WorkspaceRoot)
-
-	sessions := app.ListSessionsForTab("tab-a")
-	if len(sessions) != 1 || sessions[0].Path != pathA || sessions[0].TurnsState != "unknown" {
-		t.Fatalf("ListSessionsForTab(tab-a) = %+v", sessions)
 	}
 }

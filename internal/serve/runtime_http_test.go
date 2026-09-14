@@ -3,6 +3,7 @@ package serve
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +13,15 @@ import (
 	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/jobs"
+	"reasonix/internal/session"
 )
+
+type rejectingGoalAPI struct {
+	control.SessionAPI
+	err error
+}
+
+func (a *rejectingGoalAPI) SetGoalDurable(string) error { return a.err }
 
 func postRuntimeJSON(t *testing.T, url, body string) *http.Response {
 	t.Helper()
@@ -44,6 +53,58 @@ func TestGoalPauseAndResumeRoutes(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent || ctrl.GoalStatus() != control.GoalStatusRunning {
 		t.Fatalf("resume status/goal = %d/%q", resp.StatusCode, ctrl.GoalStatus())
+	}
+}
+
+func TestGoalRouteReportsPersistenceFailureBeforeChangingPlanMode(t *testing.T) {
+	bc := NewBroadcaster()
+	base := control.New(control.Options{Sink: bc})
+	base.SetPlanMode(true)
+	api := &rejectingGoalAPI{SessionAPI: base, err: errors.New("disk full")}
+	srv := httptest.NewServer(New(api, bc, config.ServeConfig{}).Handler())
+	defer srv.Close()
+	defer base.Close()
+
+	resp := postRuntimeJSON(t, srv.URL+"/goal", `{"goal":"ship it"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("goal status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+	if !base.PlanMode() || base.Goal() != "" {
+		t.Fatalf("failed goal mutation changed runtime: plan=%v goal=%q", base.PlanMode(), base.Goal())
+	}
+}
+
+func TestGoalEditRoutePreservesGoalIdentity(t *testing.T) {
+	bc := NewBroadcaster()
+	service, err := session.NewService("serve", session.NewFilesystemPersistence(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := service.Create(t.Context(), session.CreateOptions{SessionID: "goal-edit-route"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctrl := control.New(control.Options{Sink: bc, SessionService: service, SessionRuntime: runtime, ExclusiveSession: true})
+	defer ctrl.ReleaseResources()
+	if err := ctrl.SetGoalDurable("original"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := ctrl.GetGoal(t.Context())
+	if err != nil || before == nil {
+		t.Fatalf("goal before edit = %+v, %v", before, err)
+	}
+	srv := httptest.NewServer(New(ctrl, bc, config.ServeConfig{}).Handler())
+	defer srv.Close()
+
+	resp := postRuntimeJSON(t, srv.URL+"/goal/edit", `{"objective":"revised","maxGoalRounds":12}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("edit status = %d", resp.StatusCode)
+	}
+	after, _ := ctrl.GetGoal(t.Context())
+	if after == nil || after.ID != before.ID || after.Revision != before.Revision+1 || after.Objective != "revised" || after.MaxGoalRounds == nil || *after.MaxGoalRounds != 12 {
+		t.Fatalf("goal after edit = %+v, before = %+v", after, before)
 	}
 }
 

@@ -26,7 +26,7 @@ func TestDesktopBranchTransitionMovesLeaseAndTabAtomically(t *testing.T) {
 		detachedSessions: map[string]*WorkspaceTab{},
 	}
 	tab := &WorkspaceTab{ID: "tab", SessionPath: originalPath, Ready: true}
-	ctrl := control.New(control.Options{
+	ctrl := newFixtureController(t, control.Options{
 		Runner:              ag,
 		Executor:            ag,
 		SessionDir:          dir,

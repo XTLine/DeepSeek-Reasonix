@@ -39,7 +39,7 @@ func TestSteerEventFollowsDurableConsumedTransition(t *testing.T) {
 			}
 		}
 	})
-	c = New(Options{
+	c = newOwnedTestController(t, Options{
 		Runner:      exec,
 		Executor:    exec,
 		Sink:        sink,
@@ -83,7 +83,7 @@ func TestCancelWithInboxItemsResultRestoresOnlyUnconsumedItems(t *testing.T) {
 	dir := t.TempDir()
 	session := filepath.Join(dir, "s.jsonl")
 	_ = os.WriteFile(session, []byte("{}\n"), 0o644)
-	c := New(Options{SessionPath: session, SessionDir: dir, Sink: event.Discard})
+	c := newOwnedTestController(t, Options{SessionPath: session, SessionDir: dir, Sink: event.Discard})
 	accepted, err := c.EnqueueInbox(InboxRequest{Submit: "accepted", Source: "desktop"})
 	if err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func TestDeleteInboxItemDoesNotOverwriteConsumedSteer(t *testing.T) {
 	dir := t.TempDir()
 	session := filepath.Join(dir, "s.jsonl")
 	_ = os.WriteFile(session, []byte("{}\n"), 0o644)
-	c := New(Options{SessionPath: session, SessionDir: dir, Sink: event.Discard})
+	c := newOwnedTestController(t, Options{SessionPath: session, SessionDir: dir, Sink: event.Discard})
 	rec, err := c.EnqueueInbox(InboxRequest{Intent: sessioninbox.IntentSteer, Submit: "consumed"})
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +163,7 @@ func (s *inboxChangedCapture) InboxChanged(snap sessioninbox.InboxSnapshot) {
 func TestInboxStoreChangesReachOptionalSink(t *testing.T) {
 	dir := t.TempDir()
 	sink := &inboxChangedCapture{changed: make(chan sessioninbox.InboxSnapshot, 1)}
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		SessionPath: filepath.Join(dir, "s.jsonl"),
 		SessionDir:  dir,
 		Sink:        sink,

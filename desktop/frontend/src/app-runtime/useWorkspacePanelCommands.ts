@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { cancelFileNavigation } from "../lib/fileNavigationLifetime";
 import { useCommittedCommand } from "../lib/useCommittedCommand";
 import { DOCK_ENTRIES } from "../lib/dockEntries";
 import { resolveLauncherCardState, type SpaceMode } from "../lib/launcherCardState";
@@ -97,6 +98,7 @@ export function useWorkspacePanelCommands(input: Input) {
     saveWorkspacePanelOpen(true, input.workspaceRoot);
   });
   const closeWorkspacePanel = useCommittedCommand(() => {
+    cancelFileNavigation();
     input.closeOverlays();
     const layout = useLayoutStore.getState();
     if (!layout.workspacePanelOpen) return;
@@ -123,6 +125,7 @@ export function useWorkspacePanelCommands(input: Input) {
   });
   // Opening a launcher entry expands the dock to that entry's tab.
   const openDockEntry = useCommittedCommand((entryId: string) => {
+    cancelFileNavigation();
     const entry = DOCK_ENTRIES.find(candidate => candidate.id === entryId);
     if (!entry) return;
     openRightDockMode(dockModeForTab(entry.defaultTab));

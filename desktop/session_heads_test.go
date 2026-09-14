@@ -146,28 +146,28 @@ func TestForkForTabCreatesIndependentTabFromSchemaTwo(t *testing.T) {
 	}
 }
 
-func TestCommitRewindForTabSwitchesSchemaTwoTabInPlace(t *testing.T) {
+func TestCommitRewindForTabOpensIndependentChild(t *testing.T) {
 	fx := newSchemaTwoTabFixture(t)
 	plan := fx.app.PreviewRewindForTab("test", 1, "both")
 	if !plan.OK || !plan.CanFiles || !plan.CanConversation {
 		t.Fatalf("preview = %+v", plan)
 	}
 	result := fx.app.CommitRewindForTab("test", plan.PlanID, 1, "both")
-	if !result.OK || !result.ConversationForked || result.Branch == "" || strings.HasSuffix(result.Branch, ".jsonl") {
-		t.Fatalf("commit = %+v, want a head id as the branch", result)
+	if !result.OK || !result.ConversationForked || result.Branch == "" || !strings.HasSuffix(result.Branch, ".jsonl") {
+		t.Fatalf("commit = %+v, want an independent session path", result)
 	}
-	if result.TabID != "test" || result.Tab == nil || result.Tab.ID != "test" || result.Tab.SessionGeneration != 1 {
-		t.Fatalf("commit tab wiring = tab %q meta %+v, want the source tab", result.TabID, result.Tab)
+	if result.TabID == "" || result.TabID == "test" || result.Tab == nil || result.Tab.ID != result.TabID {
+		t.Fatalf("commit tab wiring = tab %q meta %+v, want the child tab", result.TabID, result.Tab)
 	}
 	if got, err := os.ReadFile(fx.filePath); err != nil || string(got) != "before" {
 		t.Fatalf("file after commit = %q err=%v", got, err)
 	}
-	if got := len(fx.ctrl.History()); got != 3 || fx.ctrl.SessionPath() != fx.path || len(fx.app.tabs) != 1 {
+	if got := len(fx.ctrl.History()); got != 5 || fx.ctrl.SessionPath() != fx.path || len(fx.app.tabs) != 2 {
 		t.Fatalf("after commit: history %d path %q tabs %d", got, fx.ctrl.SessionPath(), len(fx.app.tabs))
 	}
-	heads, err := agent.ListSessionHeads(fx.path)
-	if err != nil || len(heads) != 2 || heads[1].ID != result.Branch || heads[1].Kind != agent.HeadKindRewind || !heads[1].Selected {
-		t.Fatalf("heads = %+v err=%v", heads, err)
+	childSession, err := agent.LoadSession(result.Branch)
+	if err != nil || childSession == nil || len(childSession.Messages) != 3 {
+		t.Fatalf("rewind child = %+v err=%v", childSession, err)
 	}
 	undo := fx.app.UndoRewindForTab("test", result.TransactionID)
 	if !undo.OK {
@@ -179,45 +179,32 @@ func TestCommitRewindForTabSwitchesSchemaTwoTabInPlace(t *testing.T) {
 	if got := fx.ctrl.History(); len(got) != 5 || got[4].Content != "done" {
 		t.Fatalf("history after undo = %d messages, want the rewound turn back", len(got))
 	}
-	if undo.TabID != "test" || undo.Tab == nil || undo.Tab.SessionGeneration != 2 {
-		t.Fatalf("undo tab wiring = tab %q meta %+v, want the source tab rehydrated again", undo.TabID, undo.Tab)
-	}
-	heads, err = agent.ListSessionHeads(fx.path)
-	if err != nil || len(heads) != 2 || !heads[0].Selected || !heads[1].Retired {
-		t.Fatalf("heads after undo = %+v err=%v, want main current and the empty rewind head retired", heads, err)
-	}
 	reloaded, err := agent.LoadSession(fx.path)
 	if err != nil || len(reloaded.Messages) != 5 {
 		t.Fatalf("reload after undo = %d messages err=%v, want the parent head persisted as current", len(reloaded.Messages), err)
 	}
 }
 
-func TestChooseRecoveryBranchSwitchesOpenTabHeadInPlace(t *testing.T) {
+func TestChooseLegacyRecoveryHeadMaterializesIndependentSession(t *testing.T) {
 	fx := newSchemaTwoTabFixture(t)
-	// Recovery-head navigation remains an in-log operation. Create that fixture
-	// directly through the controller; the user-facing chat fork now creates an
-	// independent session and is covered above.
-	if _, err := fx.ctrl.ForkNamed(1, ""); err != nil {
+	from := fx.session.Snapshot()[2].ID
+	fork, err := fx.session.ForkHead(fx.path, from, agent.HeadKindFork, "alternative")
+	if err != nil {
 		t.Fatal(err)
 	}
-	heads, _ := agent.ListSessionHeads(fx.path)
-	fork := heads[1].ID
 	req := RecoveryPreferenceRequest{Scope: "global", TopicID: "topic", Path: fx.path, HeadID: agent.SessionMainHead}
 	if err := fx.app.ChooseRecoveryBranch(req); err != nil {
 		t.Fatalf("ChooseRecoveryBranch(main): %v", err)
 	}
-	if got := len(fx.ctrl.History()); got != 5 || fx.ctrl.SessionPath() != fx.path {
+	if got := len(fx.ctrl.History()); got != 5 || fx.ctrl.SessionPath() == fx.path {
 		t.Fatalf("after choosing main: history %d path %q", got, fx.ctrl.SessionPath())
 	}
 	if gen := fx.app.tabs["test"].SessionGeneration; gen != 1 {
-		t.Fatalf("session generation = %d, want a bump per head switch", gen)
-	}
-	if err := fx.app.RenameSessionHead(fx.path, fork, "alternative"); err != nil {
-		t.Fatalf("RenameSessionHead: %v", err)
+		t.Fatalf("session generation = %d, want one materialization bump", gen)
 	}
 	heads, err := agent.ListSessionHeads(fx.path)
-	if err != nil || heads[1].Name != "alternative" || !heads[0].Selected {
-		t.Fatalf("heads after rename = %+v err=%v", heads, err)
+	if err != nil || len(heads) != 2 || heads[1].ID != fork || !heads[1].Selected {
+		t.Fatalf("legacy source was modified while materializing: %+v err=%v", heads, err)
 	}
 	if err := fx.app.ChooseRecoveryBranch(RecoveryPreferenceRequest{Scope: "global", TopicID: "topic", Path: fx.path, HeadID: "missing"}); err == nil {
 		t.Fatal("choosing an unknown head must fail")

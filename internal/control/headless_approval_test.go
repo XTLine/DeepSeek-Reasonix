@@ -32,7 +32,7 @@ func runHeadlessWriteOnce(t *testing.T, mode string, askRules []string) (prompts
 	}}
 	ag := agent.New(prov, reg, agent.NewSession(""), agent.Options{}, event.Discard)
 
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner:   ag,
 		Executor: ag,
 		Policy:   permission.New("ask", nil, askRules, nil),
@@ -124,7 +124,7 @@ func TestApplyHeadlessApprovalModeDontAskDeniesWithoutPrompting(t *testing.T) {
 	ag := agent.New(prov, reg, agent.NewSession(""), agent.Options{}, event.Discard)
 
 	prompts := 0
-	c := New(Options{
+	c := newOwnedTestController(t, Options{
 		Runner:   ag,
 		Executor: ag,
 		Policy:   permission.New("ask", nil, []string{"write_file"}, nil),
@@ -179,7 +179,7 @@ func TestApplyHeadlessApprovalModeAllowsOnlyLowRiskProjectMemoryCreate(t *testin
 			}}
 			ag := agent.New(prov, reg, agent.NewSession(""), agent.Options{}, event.Discard)
 			prompts := 0
-			c := New(Options{
+			c := newOwnedTestController(t, Options{
 				Runner:   ag,
 				Executor: ag,
 				Memory:   &memory.Set{Store: store},
@@ -284,7 +284,7 @@ func TestBuildHeadlessApprovalGateMatchesParentExecutorContract(t *testing.T) {
 func TestSetToolApprovalModePropagatesToSubagentGate(t *testing.T) {
 	policy := permission.New("ask", nil, []string{"write_file"}, nil)
 	subagentGate := NewSharedHeadlessGate(policy, ToolApprovalAsk)
-	c := New(Options{Policy: policy, SubagentGate: subagentGate})
+	c := newOwnedTestController(t, Options{Policy: policy, SubagentGate: subagentGate})
 
 	runSubagentWriteOnce := func(t *testing.T) []string {
 		t.Helper()
@@ -335,7 +335,7 @@ func TestSetToolApprovalModePropagatesToSubagentGate(t *testing.T) {
 func TestInteractiveGateIgnoresSessionAllowForFreshHumanTools(t *testing.T) {
 	policy := permission.New("ask", nil, nil, nil).
 		WithSessionAllow([]string{"remember", "forget", "write_file"})
-	c := New(Options{Policy: policy})
+	c := newOwnedTestController(t, Options{Policy: policy})
 
 	gate := c.newInteractiveGate()
 	for _, name := range []string{memoryRememberTool, memoryForgetTool} {

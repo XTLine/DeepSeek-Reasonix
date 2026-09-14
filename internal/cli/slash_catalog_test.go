@@ -16,7 +16,7 @@ import (
 )
 
 func TestSlashCatalogCachesAcrossKeystrokes(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m.skills = make([]skill.Skill, 0, 50)
 	for i := range 50 {
@@ -51,7 +51,7 @@ func TestSlashCatalogCachesAcrossKeystrokes(t *testing.T) {
 }
 
 func TestCtrlDForwardDeletesWhenComposerNonEmpty(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = m0.(chatTUI)
@@ -73,7 +73,7 @@ func TestCtrlDForwardDeletesWhenComposerNonEmpty(t *testing.T) {
 }
 
 func TestCtrlDForwardDeletesWhitespaceOnly(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = m0.(chatTUI)
@@ -94,7 +94,7 @@ func TestCtrlDForwardDeletesWhitespaceOnly(t *testing.T) {
 }
 
 func TestCtrlDQuitsWhenIdleAndEmpty(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = m0.(chatTUI)
@@ -120,7 +120,7 @@ func TestActiveAtTokenFullSpanAndMidCursor(t *testing.T) {
 }
 
 func TestMCPSurfaceReadyInvalidatesSlashCatalog(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m.skills = []skill.Skill{{Name: "warm", Description: "warm"}}
 	_ = m.slashItems()
@@ -157,7 +157,7 @@ func TestAcceptAtCompletionReplacesFullToken(t *testing.T) {
 }
 
 func TestInputCursorByteOffsetSubtractsPrompt(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = m0.(chatTUI)
@@ -173,7 +173,7 @@ func TestInputCursorByteOffsetSubtractsPrompt(t *testing.T) {
 }
 
 func TestShiftTabAndBacktabBothAccepted(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = m0.(chatTUI)
@@ -219,7 +219,7 @@ func TestShiftTabAndBacktabBothAccepted(t *testing.T) {
 // catalog (1000 skills). Catalog is warmed once; per-op cost must stay low and
 // allocation-stable (no fingerprint rebuild).
 func BenchmarkSlashCompletionKeystroke(b *testing.B) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(b, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m.skills = make([]skill.Skill, 0, 1000)
 	for i := range 1000 {
@@ -247,7 +247,7 @@ func BenchmarkSlashCompletionKeystroke(b *testing.B) {
 
 func TestSlashArgDataSnapshotsAcrossKeystrokes(t *testing.T) {
 	isolateUserConfig(t)
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m.skills = []skill.Skill{{Name: "warm", Description: "warm"}}
 	m.modelRef = "prov/model"
@@ -287,7 +287,7 @@ func TestSlashArgDataRebuildsWhenPopupReopens(t *testing.T) {
 	if _, err := store.Save(memory.Memory{Name: "warm", Title: "Warm", Body: "first", Type: memory.TypeProject}); err != nil {
 		t.Fatal(err)
 	}
-	ctrl := control.New(control.Options{Memory: &memory.Set{Store: store}})
+	ctrl := newOwnedTestController(t, control.Options{Memory: &memory.Set{Store: store}})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m.input.SetValue("/memory revisions war")
 	m.updateCompletion()
@@ -314,7 +314,7 @@ func BenchmarkSlashArgCompletionKeystroke(b *testing.B) {
 	b.Setenv("REASONIX_CREDENTIALS_STORE", "file")
 	b.Setenv("XDG_CONFIG_HOME", root+"/config")
 	b.Chdir(root)
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(b, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m.modelRef = "prov/model"
 	m.skills = make([]skill.Skill, 0, 1000)
@@ -344,7 +344,7 @@ func BenchmarkSlashEffortArgCompletionKeystroke(b *testing.B) {
 	b.Setenv("REASONIX_CREDENTIALS_STORE", "file")
 	b.Setenv("XDG_CONFIG_HOME", root+"/config")
 	b.Chdir(root)
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(b, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m.modelRef = "deepseek-flash/deepseek-v4-flash"
 	m.input.SetValue("/effort ")

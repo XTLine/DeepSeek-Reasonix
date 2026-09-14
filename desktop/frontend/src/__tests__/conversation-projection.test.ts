@@ -14,9 +14,11 @@ const local = { ...initialState, running: true, activeTurnId: "local-turn", turn
   meta: { ready: true, eventChannel: "local-events", cwd: "local-cwd", label: "local-model", workspaceName: "local-project", gitBranch: "local-branch",
     imageInputEnabled: true, visionFallbackEnabled: true, pinnedFiles: [{ path: "local-file", sizeBytes: 10, tokenEstimate: 5 }] },
 } as typeof initialState;
-const remote: Pick<RemoteSessionApi, "transcript" | "running" | "modelLabel" | "commands" | "composerProfile" | "goalRuntime" | "effort"> = {
+const remote: Pick<RemoteSessionApi, "transcript" | "running" | "modelLabel" | "commands" | "composerProfile" | "goalView" | "goalRuntime" | "effort"> = {
   transcript: { ...initialState, turnTokens: 7, turnStartAt: 222, sessionTokens: 8, sessionCost: 2, sessionCurrency: "CNY" },
   running: false, modelLabel: "remote-model", commands: [],
+  goalView: { id: "goal-remote", revision: 3, objective: "resume remote work", phase: "active", maxGoalRounds: null,
+    roundsStarted: 7, createdAt: "2026-09-13T10:00:00Z", updatedAt: "2026-09-13T10:10:00Z", activation: "disarmed" },
 };
 const tab = { id: "remote", label: "remote-tab", remote: { hostId: "fixture", workspace: "remote-cwd" }, workspaceName: "remote-project" };
 const background = [{ id: "local-runtime" }] as unknown as BackgroundRuntimeView[];
@@ -28,6 +30,7 @@ assert.equal(view.composer.modelLabel, "remote-model");
 assert.equal(view.composer.cwd, "remote-cwd");
 assert.equal(view.composer.turnTokens, 7);
 assert.equal(view.composer.turnStartAt, 222);
+assert.equal(view.composer.goalView?.id, "goal-remote");
 assert.equal(view.composer.currency, "CNY");
 assert.equal(view.composer.pinnedFiles, undefined);
 assert.equal(view.composer.attachmentInputEnabled, false);

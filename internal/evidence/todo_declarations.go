@@ -1,6 +1,9 @@
 package evidence
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // MatchStep resolves a step citation against the existing task list.
 func MatchStep(step string, todos []TodoItem) (TodoStepMatch, bool) {
@@ -11,6 +14,19 @@ func MatchStep(step string, todos []TodoItem) (TodoStepMatch, bool) {
 // ReplayTodoList leaves new model states intact and reads legacy lists with
 // their original serial normalization. Neither path rewrites stored messages.
 func ReplayTodoList(todos []TodoItem, output string) []TodoItem {
+	var result struct {
+		Todos []struct {
+			Content string `json:"content"`
+			Status  string `json:"status"`
+		} `json:"todos"`
+	}
+	if json.Unmarshal([]byte(output), &result) == nil && result.Todos != nil {
+		canonical := make([]TodoItem, len(result.Todos))
+		for i, item := range result.Todos {
+			canonical[i] = TodoItem{Content: item.Content, Status: item.Status}
+		}
+		return canonical
+	}
 	if strings.HasPrefix(output, "Model task list updated:") {
 		return append([]TodoItem(nil), todos...)
 	}

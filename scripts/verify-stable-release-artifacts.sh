@@ -50,6 +50,15 @@ jq -e '
      all(. as $required | ($names | index($required)) and ($names | index($required + ".minisig")))))
 ' "$tmp_dir/desktop.json" >/dev/null
 
+if [ "${DESKTOP_MANUAL_ONLY:-false}" = "true" ]; then
+	[ "$version" = "1.38.8" ] || exit 1
+	# Both updater entry points must still serve the prior signed release.
+	gh api "repos/$repository/releases/latest" --jq .tag_name | grep -Fx 'desktop-v1.38.7'
+	curl -fsSL https://dl.reasonix.io/latest/latest.json > "$tmp_dir/desktop-pointer.json"
+	jq -e '.version == "v1.38.7"' "$tmp_dir/desktop-pointer.json" >/dev/null
+	gh release view "$desktop_tag" --repo "$repository" --json body --jq .body | grep -F 'manual-download only'
+fi
+
 for attempt in $(seq 1 "$attempts"); do
 	latest="$(npm view reasonix dist-tags.latest 2>/dev/null || true)"
 	if [ "$latest" = "$version" ]; then

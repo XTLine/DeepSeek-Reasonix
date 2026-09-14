@@ -50,6 +50,9 @@ func (a *App) remoteInboxSnapshot(tabID string) (InboxSnapshotView, error) {
 // enqueueRemoteFollowup preserves the route, rich input and caller's stable
 // key. An uncertain POST is reconciled by reading its receipt, never replayed.
 func (a *App) enqueueRemoteFollowup(tabID, display, submit string, invocations []InvocationRequest, idempotency string) (InboxReceiptView, error) {
+	if err := a.requireRemoteExecutionProtocol(tabID); err != nil {
+		return InboxReceiptView{}, err
+	}
 	client, base, path, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return InboxReceiptView{}, err

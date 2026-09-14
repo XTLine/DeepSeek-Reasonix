@@ -71,7 +71,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	// Resolve every non-new target before opening the all-session pump. A
 	// detached controller may replay pending prompts as soon as /resume starts;
 	// publishing its route first keeps those frames on the foreground surface.
-	focusOnly := !opts.NewSession && strings.TrimSpace(opts.SessionName) == "" && strings.TrimSpace(opts.SessionPath) == ""
+	focusOnly := !opts.NewSession && strings.TrimSpace(opts.SessionName) == "" && strings.TrimSpace(opts.SessionPath) == "" && strings.TrimSpace(opts.SessionID) == ""
 	var target serveSessionEntry
 	if !opts.NewSession {
 		target, err = preflightRemoteSessionTarget(callCtx, client, base, opts)
@@ -80,7 +80,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 		}
 	}
 
-	pumpCtx, gen, attachPathRevision, err := a.installRemoteTabAttachPump(ctx, tabID, tab, client, base, token, target.Path, !opts.NewSession)
+	pumpCtx, gen, attachPathRevision, err := a.installRemoteTabAttachPump(ctx, tabID, tab, client, base, token, remoteSessionRoute(target), !opts.NewSession)
 	if err != nil {
 		return false, err
 	}
@@ -101,7 +101,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 	if !focusOnly {
 		enterOpts := opts
 		if !opts.NewSession {
-			enterOpts.SessionName, enterOpts.SessionPath, enterOpts.SessionTitle = target.Name, target.Path, target.Title
+			enterOpts.SessionName, enterOpts.SessionPath, enterOpts.SessionID, enterOpts.SessionTitle = target.Name, target.Path, target.SessionID, target.Title
 		}
 		target, err = enterRemoteSessionTarget(callCtx, client, base, enterOpts)
 		entered = err == nil
@@ -121,7 +121,7 @@ func (a *App) attachRemoteTabServe(ctx context.Context, tabID, base, token, inst
 			// ran, but the tab must stay attached to render the mirror.
 			log.Printf("[remote] attachRemoteTabServe: enterRemoteSession TAKEN OVER (read-only spectator) tab=%s session=%q err=%v", tabID, target.Path, err)
 			entered = false
-			if strings.TrimSpace(target.Path) == "" {
+			if remoteSessionRoute(target) == "" {
 				current, _ := serveCurrentSession(callCtx, client, base)
 				target = current
 			}
@@ -261,14 +261,17 @@ func (a *App) commitRemoteTabAttachResponse(tabID string, tab *remoteTab, gen, r
 		return false
 	}
 	target.Path = strings.TrimSpace(target.Path)
-	if current.routing.pathRevision != requestPathRevision && current.routing.currentPath != target.Path {
+	route := remoteSessionRoute(target)
+	if current.routing.pathRevision != requestPathRevision && current.routing.currentPath != route {
 		return false
 	}
 	alreadyAdopted := current.routing.pathRevision != requestPathRevision
 	if !alreadyAdopted {
-		commitRemoteTabAttachRoute(current, target.Path, reset)
+		commitRemoteTabAttachRoute(current, route, reset)
 	}
 	current.session.takenOver = target.TakenOver
+	current.session.path = target.Path
+	current.session.sessionID = target.SessionID
 	if name := strings.TrimSpace(target.Name); name != "" {
 		current.session.name = name
 	}
@@ -636,6 +639,9 @@ func (a *App) remoteTabCurrentModel(tabID string) (string, bool) {
 // runtime that took it over. Serve long-polls until the local writer yields,
 // so this call can outlast a normal command timeout.
 func (a *App) ReclaimRemoteTabSession(tabID string) error {
+	if err := a.requireRemoteExecutionProtocol(tabID); err != nil {
+		return err
+	}
 	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
@@ -729,6 +735,9 @@ func (a *App) SubmitRemoteTabWithSubmission(tabID, text, submissionID string) er
 	if _, _, _, err := a.remoteTabCommandTarget(tabID); err != nil {
 		return err
 	}
+	if err := a.requireRemoteExecutionProtocol(tabID); err != nil {
+		return err
+	}
 	if err := a.requireRemotePermissionPresets(tabID); err != nil {
 		return err
 	}
@@ -757,6 +766,9 @@ func (a *App) SubmitRemoteTabWithSubmission(tabID, text, submissionID string) er
 }
 
 func (a *App) CancelRemoteTab(tabID string) error {
+	if err := a.requireRemoteExecutionProtocol(tabID); err != nil {
+		return err
+	}
 	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
@@ -770,6 +782,9 @@ func (a *App) CancelRemoteTab(tabID string) error {
 // session grants are supported; durable approval rules were intentionally
 // removed from the permission model.
 func (a *App) ApproveRemoteTab(tabID, callID, decision string) error {
+	if err := a.requireRemoteExecutionProtocol(tabID); err != nil {
+		return err
+	}
 	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
@@ -803,6 +818,9 @@ func (a *App) ApproveRemoteTab(tabID, callID, decision string) error {
 // before resolving the approval; a tunnel failure can no longer split the
 // decision from the requested revision.
 func (a *App) ResolveRemoteTabPlanDecision(tabID, callID, action, feedback string) error {
+	if err := a.requireRemoteExecutionProtocol(tabID); err != nil {
+		return err
+	}
 	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
@@ -831,6 +849,9 @@ type RemoteAskAnswer struct {
 // AnswerRemoteTab preserves the batch ask id at the top level and sends every
 // question's own id/selections in the Serve AskAnswer wire shape.
 func (a *App) AnswerRemoteTab(tabID, callID string, answers []RemoteAskAnswer) error {
+	if err := a.requireRemoteExecutionProtocol(tabID); err != nil {
+		return err
+	}
 	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
@@ -861,6 +882,9 @@ func (a *App) SubmitRemoteTabExtensionForm(tabID, pluginID, surfaceID string, va
 // RewindRemoteTab rewinds to a checkpoint. Serve identifies checkpoints by
 // TURN index and takes {turn, scope}; the checkpointID string is that turn.
 func (a *App) RewindRemoteTab(tabID, checkpointID, scope string) error {
+	if err := a.requireRemoteExecutionProtocol(tabID); err != nil {
+		return err
+	}
 	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
@@ -882,6 +906,9 @@ func (a *App) RewindRemoteTab(tabID, checkpointID, scope string) error {
 }
 
 func (a *App) SetRemoteTabToolApprovalMode(tabID, mode string) error {
+	if err := a.requireRemoteExecutionProtocol(tabID); err != nil {
+		return err
+	}
 	if err := a.requireRemotePermissionPresets(tabID); err != nil {
 		return err
 	}
@@ -921,8 +948,16 @@ func setRemotePermissionPresetAt(ctx context.Context, client *http.Client, base,
 }
 
 func (a *App) SetRemoteTabComposerProfile(tabID, collaborationMode, toolApprovalMode, goal string) ([]string, error) {
+	if err := a.requireRemoteExecutionProtocol(tabID); err != nil {
+		return nil, err
+	}
 	if err := a.requireRemotePermissionPresets(tabID); err != nil {
 		return nil, err
+	}
+	if strings.EqualFold(strings.TrimSpace(collaborationMode), "goal") || strings.TrimSpace(goal) != "" {
+		if err := a.requireRemoteGoalLifecycle(tabID); err != nil {
+			return nil, err
+		}
 	}
 	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
@@ -1013,7 +1048,30 @@ func (a *App) requireRemotePermissionPresets(tabID string) error {
 	return nil
 }
 
+// requireRemoteExecutionProtocol fences every state-changing command at the
+// authenticated Serve capability boundary. A legacy Serve remains usable for
+// history reads, but Desktop never emulates the v3 runtime over older RPCs.
+func (a *App) requireRemoteExecutionProtocol(tabID string) error {
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	supported := tab != nil && tab.capabilities[serveCapabilityExecutionV2] && tab.capabilities[serveCapabilitySessions] && tab.capabilities[serveCapabilitySessionIdentityV1] && tab.capabilities[serveCapabilitySessionOwnershipV1]
+	a.remoteTabMu.Unlock()
+	if tab == nil {
+		return fmt.Errorf("remote tab %q is not open", tabID)
+	}
+	if !supported {
+		return fmt.Errorf("this remote Reasonix Serve is read-only because it does not support %s, %s, %s, and %s; upgrade the remote service to execute or control a session", serveCapabilityExecutionV2, serveCapabilitySessions, serveCapabilitySessionIdentityV1, serveCapabilitySessionOwnershipV1)
+	}
+	return nil
+}
+
 func (a *App) SetRemoteTabGoal(tabID, goal string) error {
+	if err := a.requireRemoteExecutionProtocol(tabID); err != nil {
+		return err
+	}
+	if err := a.requireRemoteGoalLifecycle(tabID); err != nil {
+		return err
+	}
 	client, base, expectedPath, err := a.remoteTabCommandTarget(tabID)
 	if err != nil {
 		return err
@@ -1022,6 +1080,20 @@ func (a *App) SetRemoteTabGoal(tabID, goal string) error {
 	defer cancel()
 	body, _ := json.Marshal(map[string]string{"goal": goal})
 	return servePostForSession(ctx, client, serveURL(base, "/goal"), body, expectedPath)
+}
+
+func (a *App) requireRemoteGoalLifecycle(tabID string) error {
+	a.remoteTabMu.Lock()
+	tab := a.remoteTabs[tabID]
+	supported := tab != nil && tab.capabilities[serveCapabilityGoalLifecycleV2]
+	a.remoteTabMu.Unlock()
+	if tab == nil {
+		return fmt.Errorf("remote tab %q is not open", tabID)
+	}
+	if !supported {
+		return fmt.Errorf("this remote Reasonix Serve does not support %s; upgrade it before creating or controlling goals", serveCapabilityGoalLifecycleV2)
+	}
+	return nil
 }
 
 func (a *App) SetRemoteTabQualityFloor(tabID, floor string) error {

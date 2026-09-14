@@ -1162,9 +1162,7 @@ func (l *Ledger) hasSuccessfulPaths(paths []string, accept func(Receipt) bool) b
 }
 
 type contextKey struct{}
-type sessionMessagesKey struct{}
 type closedLoopKey struct{}
-type todoStateKey struct{}
 
 func WithLedger(ctx context.Context, ledger *Ledger) context.Context {
 	if ledger == nil {
@@ -1187,39 +1185,6 @@ func WithClosedLoopExecution(ctx context.Context) context.Context {
 func ClosedLoopExecutionFromContext(ctx context.Context) bool {
 	enabled, _ := ctx.Value(closedLoopKey{}).(bool)
 	return enabled
-}
-
-// WithSessionMessages attaches a lazy transcript accessor so verifyStepEvidence
-// can fall back to scanning the conversation when the per-turn ledger misses a
-// command (cross-turn references, non-bash tool calls, truncated command
-// strings). The context carries the capability, not the data: snapshot is
-// called only when a consumer (complete_step) actually needs the history, so
-// ordinary tool calls never pay for a full transcript copy.
-func WithSessionMessages(ctx context.Context, snapshot func() []provider.Message) context.Context {
-	return context.WithValue(ctx, sessionMessagesKey{}, snapshot)
-}
-
-// SessionMessagesFromContext resolves the transcript accessor attached by
-// WithSessionMessages, taking the snapshot at call time.
-func SessionMessagesFromContext(ctx context.Context) ([]provider.Message, bool) {
-	snapshot, ok := ctx.Value(sessionMessagesKey{}).(func() []provider.Message)
-	if !ok || snapshot == nil {
-		return nil, false
-	}
-	return snapshot(), true
-}
-
-// WithTodoState attaches the host's canonical task list to a tool call. The
-// per-turn ledger resets between user messages, while unfinished tasks remain
-// active across those turns.
-func WithTodoState(ctx context.Context, todos []TodoItem) context.Context {
-	return context.WithValue(ctx, todoStateKey{}, append([]TodoItem(nil), todos...))
-}
-
-// TodoStateFromContext returns a copy of the host's canonical task list.
-func TodoStateFromContext(ctx context.Context) ([]TodoItem, bool) {
-	todos, ok := ctx.Value(todoStateKey{}).([]TodoItem)
-	return append([]TodoItem(nil), todos...), ok
 }
 
 // PathsProvenInSession reports whether every path is covered by a successful

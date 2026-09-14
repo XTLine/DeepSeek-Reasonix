@@ -23,6 +23,7 @@ import (
 	"reasonix/internal/fileutil"
 	"reasonix/internal/notify"
 	"reasonix/internal/provider"
+	"reasonix/internal/session"
 	"reasonix/internal/sessiontitle"
 	"reasonix/internal/store"
 	"reasonix/internal/turnevent"
@@ -76,6 +77,7 @@ type WorkspaceTab struct {
 	TopicTitle          string                   // display title
 	topicTitleSource    string                   // auto or manual; controls localization at API boundaries
 	SessionPath         string                   // exact .jsonl file this tab continues
+	SessionID           string                   // immutable v3 identity; empty for legacy/read-only tabs
 	SessionGeneration   uint64                   // bumps on session rotation (clear/new); frontend hydrate identity
 	ReadOnly            bool                     // true for external channel transcripts opened for browsing
 	Takeover            struct{ Spectator bool } // handoff state grouped by its cross-runtime lifetime
@@ -342,6 +344,16 @@ func (t *WorkspaceTab) currentSessionPath() string {
 	return tabPath
 }
 
+func (t *WorkspaceTab) currentSessionIdentity() string {
+	if t == nil {
+		return ""
+	}
+	if id := strings.TrimSpace(t.SessionID); id != "" {
+		return remoteSessionIDRoutePrefix + id
+	}
+	return t.currentSessionPath()
+}
+
 func (t *WorkspaceTab) hasActiveRuntimeWork() bool {
 	if t == nil || t.Ctrl == nil {
 		return false
@@ -357,6 +369,9 @@ func (t *WorkspaceTab) hasActiveRuntimeWork() bool {
 // every rebuild on Windows look like a foreign holder (self-lock, #5999).
 // Keys are identities only — never use them as display or file paths.
 func sessionRuntimeKey(path string) string {
+	if id, ok := strings.CutPrefix(strings.TrimSpace(path), remoteSessionIDRoutePrefix); ok {
+		return remoteSessionIDRoutePrefix + strings.TrimSpace(id)
+	}
 	return agent.CanonicalSessionPath(canonicalTabSessionPath(path))
 }
 
@@ -543,16 +558,16 @@ func (a *App) detachSessionRuntime(tab *WorkspaceTab) bool {
 	}
 	a.mu.RLock()
 	ctrl := tab.Ctrl
-	fallbackPath := strings.TrimSpace(tab.SessionPath)
+	fallbackIdentity := strings.TrimSpace(tab.currentSessionIdentity())
 	sink := tab.sink
 	a.mu.RUnlock()
-	path := fallbackPath
-	if ctrl != nil {
+	identity := fallbackIdentity
+	if ctrl != nil && tab.SessionID == "" {
 		if p := strings.TrimSpace(ctrl.SessionPath()); p != "" {
-			path = p
+			identity = p
 		}
 	}
-	key := sessionRuntimeKey(path)
+	key := sessionRuntimeKey(identity)
 	if key == "" {
 		return false
 	}
@@ -561,11 +576,24 @@ func (a *App) detachSessionRuntime(tab *WorkspaceTab) bool {
 	}
 	a.mu.Lock()
 	a.ensureDetachedSessionsLocked()
-	tab.SessionPath = canonicalTabSessionPath(path)
-	a.bindSessionRuntimeKeyLocked(tab, path)
+	setTabSessionIdentity(tab, identity)
+	a.bindSessionRuntimeKeyLocked(tab, identity)
 	a.detachedSessions[key] = tab
 	a.mu.Unlock()
 	return true
+}
+
+func setTabSessionIdentity(tab *WorkspaceTab, identity string) {
+	if tab == nil {
+		return
+	}
+	if id, ok := parseSessionRoute(identity); ok {
+		tab.SessionID = id
+		tab.SessionPath = ""
+		return
+	}
+	tab.SessionID = ""
+	tab.SessionPath = canonicalTabSessionPath(identity)
 }
 
 // cloneDetachedRuntimeTab copies a running tab's runtime state into a fresh
@@ -595,6 +623,7 @@ func cloneDetachedRuntimeTab(tab *WorkspaceTab, key, path string) *WorkspaceTab 
 		TopicID:                  tab.TopicID,
 		TopicTitle:               tab.TopicTitle,
 		topicTitleSource:         tab.topicTitleSource,
+		SessionID:                tab.SessionID,
 		SessionPath:              canonicalTabSessionPath(path),
 		Ctrl:                     tab.Ctrl,
 		Label:                    tab.Label,
@@ -654,12 +683,12 @@ func (a *App) detachRuntimeForReplacementLocked(tab *WorkspaceTab) bool {
 	if tab.removed || a.tabs[tab.ID] != tab {
 		return false
 	}
-	sourcePath := tab.currentSessionPath()
-	key := sessionRuntimeKey(sourcePath)
+	sourceIdentity := tab.currentSessionIdentity()
+	key := sessionRuntimeKey(sourceIdentity)
 	if key == "" {
 		return false
 	}
-	detached := cloneDetachedRuntimeTab(tab, key, sourcePath)
+	detached := cloneDetachedRuntimeTab(tab, key, tab.currentSessionPath())
 	if detached == nil {
 		return false
 	}
@@ -714,7 +743,13 @@ func applyRuntimeTab(target, source *WorkspaceTab, path string, appCtx context.C
 	target.lastBuildResult = source.lastBuildResult
 	target.sink = source.sink
 	target.adoptSessionLease(source.takeSessionLease())
-	target.SessionPath = canonicalTabSessionPath(path)
+	if source.SessionID != "" {
+		target.SessionID = source.SessionID
+		target.SessionPath = ""
+	} else {
+		target.SessionID = ""
+		target.SessionPath = canonicalTabSessionPath(path)
+	}
 	target.SharedHostKey = source.SharedHostKey
 	target.Label = source.Label
 	target.Ready = source.Ready && source.Ctrl != nil
@@ -2082,6 +2117,7 @@ func (a *App) tabMeta(tab *WorkspaceTab, active bool) TabMeta {
 		TopicID:           tab.TopicID,
 		TopicTitle:        a.localizedTopicTitle(tab.TopicTitle, tab.topicTitleSource),
 		SessionPath:       sessionPath,
+		SessionID:         tab.SessionID,
 		SessionRevision:   sessionRevision,
 		SessionDigest:     sessionDigest,
 		SessionGeneration: tab.SessionGeneration,
@@ -2114,6 +2150,9 @@ func (a *App) tabMeta(tab *WorkspaceTab, active bool) TabMeta {
 	}
 	if tab.Ctrl != nil {
 		status := tab.Ctrl.RuntimeStatus()
+		if reader, ok := tab.Ctrl.(control.RuntimeStateReader); ok {
+			m.GoalView = reader.RuntimeStateSnapshot().Goal
+		}
 		m.Running = status.Running || status.PendingPrompt || status.BackgroundJobs > 0
 		m.PendingPrompt = status.PendingPrompt
 		m.BackgroundJobs = status.BackgroundJobs
@@ -2294,19 +2333,13 @@ func (a *App) openTopicTabWithActivation(scope, workspaceRoot, topicID, sessionP
 		_ = setTopicTitleWithSource(workspaceRoot, topicID, t, source)
 	}
 
-	if sessionPath == "" {
-		var err error
-		sessionPath, err = createEmptySessionFile(desktopSessionDir(actualRoot), "")
-		if err != nil {
-			a.mu.Unlock()
-			return TabMeta{}, err
-		}
-		if err := pinNewEmptySessionBranchMeta(sessionPath, scope, actualRoot, topicID, topicTitle); err != nil {
-			a.mu.Unlock()
-			return TabMeta{}, err
-		}
+	// A new topic receives its immutable v3 identity when the controller build
+	// publishes. Do not pre-create an empty legacy transcript as an identity
+	// placeholder.
+	profile := defaultTabSessionProfile()
+	if sessionPath != "" {
+		profile = loadTabSessionProfile(sessionPath)
 	}
-	profile := loadTabSessionProfile(sessionPath)
 	tab := &WorkspaceTab{
 		ID:               tabID,
 		Scope:            scope,
@@ -2577,27 +2610,13 @@ func (a *App) ensureBlankTab(scope, workspaceRoot string) (TabMeta, error) {
 		a.tabs[tabID] = created
 		a.tabOrder = append(a.tabOrder, tabID)
 		a.activeTabID = tabID
-		prePath, err := createEmptySessionFile(desktopSessionDir(actualRoot), inheritedModel)
-		if err != nil {
-			delete(a.tabs, tabID)
-			a.removeTabOrderLocked(tabID)
-			a.mu.Unlock()
-			return TabMeta{}, err
-		}
-		if err := pinNewEmptySessionBranchMeta(prePath, scope, actualRoot, topicID, topicTitle); err != nil {
-			delete(a.tabs, tabID)
-			a.removeTabOrderLocked(tabID)
-			a.mu.Unlock()
-			return TabMeta{}, err
-		}
-		created.SessionPath = prePath
 		a.saveTabsLocked()
-		meta := a.tabMeta(created, true)
 		a.mu.Unlock()
 
-		a.startTabControllerBuild(created)
-		a.emitProjectTreeChangedForSessionDirs(sessionDirectoryForPath(prePath))
-		return enrichTabMeta(meta), nil
+		// A new-session command returns an executable immutable identity. Build
+		// and publish it before returning instead of exposing a pathless tab whose
+		// eventual asynchronous startup could race a second create/delete action.
+		return a.startCreatedSessionTab(created, actualRoot)
 	}
 
 	topicID := newTopicID()
@@ -2629,26 +2648,23 @@ func (a *App) ensureBlankTab(scope, workspaceRoot string) (TabMeta, error) {
 	a.tabs[tabID] = created
 	a.tabOrder = append(a.tabOrder, tabID)
 	a.activeTabID = tabID
-	prePath, err := createEmptySessionFile(desktopSessionDir(actualRoot), inheritedModel)
-	if err != nil {
-		delete(a.tabs, tabID)
-		a.removeTabOrderLocked(tabID)
-		a.mu.Unlock()
-		return TabMeta{}, err
-	}
-	if err := pinNewEmptySessionBranchMeta(prePath, scope, actualRoot, topicID, topicTitle); err != nil {
-		delete(a.tabs, tabID)
-		a.removeTabOrderLocked(tabID)
-		a.mu.Unlock()
-		return TabMeta{}, err
-	}
-	created.SessionPath = prePath
 	a.saveTabsLocked()
-	meta := a.tabMeta(created, true)
 	a.mu.Unlock()
 
-	a.startTabControllerBuild(created)
-	a.emitProjectTreeChangedForSessionDirs(sessionDirectoryForPath(prePath))
+	return a.startCreatedSessionTab(created, actualRoot)
+}
+
+func (a *App) startCreatedSessionTab(created *WorkspaceTab, actualRoot string) (TabMeta, error) {
+	a.buildTabController(created)
+	a.mu.RLock()
+	meta := a.tabMeta(created, true)
+	startupErr := created.StartupErr
+	ready := created.Ctrl != nil && created.SessionID != ""
+	a.mu.RUnlock()
+	if !ready {
+		return TabMeta{}, fmt.Errorf("create session runtime: %s", startupErr)
+	}
+	a.emitProjectTreeChangedForSessionDirs(desktopSessionDir(actualRoot))
 	return enrichTabMeta(meta), nil
 }
 
@@ -2670,39 +2686,21 @@ func (a *App) alignReusableBlankTabModel(tab *WorkspaceTab, model string) error 
 	}
 	currentModel := strings.TrimSpace(tab.model)
 	ctrl := tab.Ctrl
-	path := strings.TrimSpace(tab.SessionPath)
 	a.mu.RUnlock()
-
-	storedModel, hasStoredModel := agent.LoadSessionModel(path)
-	storedModelChanged := path != "" && (!hasStoredModel || strings.TrimSpace(storedModel) != model)
 
 	if ctrl != nil {
 		if currentModel != model {
 			if err := a.SetModelForTab(tab.ID, model); err != nil {
 				return err
 			}
-		} else if storedModelChanged {
-			return a.persistTabModelIfCurrent(tab, model)
 		}
 		return nil
-	}
-
-	if currentModel == model && !storedModelChanged {
-		return nil
-	}
-	if storedModelChanged {
-		// With no published controller there is nothing to swap atomically. Fix
-		// the empty session metadata first so the replacement startup cannot
-		// prefer the outgoing provider over the corrected tab model.
-		if err := agent.SetBranchModelPreserveUpdated(path, model); err != nil {
-			return fmt.Errorf("persist default model for blank session: %w", err)
-		}
 	}
 
 	// A startup build may already have read the old sidecar model. Fence and
-	// cancel that generation before publishing the corrected tab model, then
-	// start a replacement build. The generation check prevents the cancelled
-	// build from overwriting the replacement if it completes late.
+	// cancel that generation before publishing the corrected tab model. The
+	// legacy source remains read-only; the selected model is committed as a
+	// session/config event when the replacement publishes its v3 identity.
 	a.mu.Lock()
 	if tab.removed || a.tabs[tab.ID] != tab {
 		a.mu.Unlock()
@@ -2719,7 +2717,14 @@ func (a *App) alignReusableBlankTabModel(tab *WorkspaceTab, model string) error 
 	clearTabStartupError(tab)
 	a.saveTabsLocked()
 	a.mu.Unlock()
-	a.startTabControllerBuild(tab)
+	a.buildTabController(tab)
+	a.mu.RLock()
+	ready := tab.Ctrl != nil && tab.SessionID != ""
+	startupErr := tab.StartupErr
+	a.mu.RUnlock()
+	if !ready {
+		return fmt.Errorf("create session runtime: %s", startupErr)
+	}
 	return nil
 }
 
@@ -3553,6 +3558,7 @@ func (a *App) buildTabControllerWithContextCore(tab *WorkspaceTab, loadedSession
 	tabScope := tab.Scope
 	tabTopicID := tab.TopicID
 	tabSessionPath := tab.SessionPath
+	tabSessionID := tab.SessionID
 	tabModel := tab.model
 	tabSink := tab.sink
 	a.mu.RUnlock()
@@ -3614,10 +3620,23 @@ func (a *App) buildTabControllerWithContextCore(tab *WorkspaceTab, loadedSession
 	}
 	prepareStartupPinnedContext(tab, startupSessionPath, tabSessionPath)
 	model := strings.TrimSpace(tabModel)
-	if sessionModel, ok := agent.LoadSessionModel(startupSessionPath); ok {
-		config.NormalizeLegacyMimoCustomProvidersForRefs(cfg, sessionModel)
-		if _, ok := cfg.ResolveModel(sessionModel); ok {
-			model = sessionModel
+	// The v3 event projection owns model selection. desktop-tabs.json only
+	// remembers which immutable session to open, so stale UI state cannot select
+	// a different provider when the process restarts.
+	if strings.TrimSpace(tabSessionID) != "" {
+		service := a.desktopSessionService(sessionDir)
+		ref := session.SessionRef{HostID: service.HostID(), SessionID: strings.TrimSpace(tabSessionID)}
+		if snapshot, snapshotErr := service.Query().Snapshot(buildCtx, ref); snapshotErr == nil && strings.TrimSpace(snapshot.Projection.ModelRef) != "" {
+			model = strings.TrimSpace(snapshot.Projection.ModelRef)
+		}
+	} else if model == "" {
+		// A legacy sidecar is an import hint only. An explicit tab selection wins,
+		// and migration never writes the source metadata back.
+		if sessionModel, ok := agent.LoadSessionModel(startupSessionPath); ok {
+			config.NormalizeLegacyMimoCustomProvidersForRefs(cfg, sessionModel)
+			if _, ok := cfg.ResolveModel(sessionModel); ok {
+				model = sessionModel
+			}
 		}
 	}
 	if model == "" {
@@ -3730,7 +3749,46 @@ func (a *App) buildTabControllerWithContextCore(tab *WorkspaceTab, loadedSession
 
 	acquiredLeaseKey := ""
 	restoredRuntime := buildRuntime
-	if dir := ctrl.SessionDir(); dir != "" {
+	identity, usesExclusiveV3 := ctrl.(control.IdentityLifecycle)
+	if usesExclusiveV3 && identity.UsesExclusiveSession() {
+		var ref session.SessionRef
+		var bindErr error
+		switch {
+		case strings.TrimSpace(tabSessionID) != "":
+			service := identity.SessionService()
+			if service == nil {
+				bindErr = errors.New("v3 session service is unavailable")
+			} else {
+				ref, bindErr = identity.OpenSession(buildCtx, session.SessionRef{HostID: service.HostID(), SessionID: strings.TrimSpace(tabSessionID)})
+			}
+		case strings.TrimSpace(startupSessionPath) != "":
+			if _, statErr := os.Stat(startupSessionPath); statErr == nil {
+				ref, bindErr = identity.ContinueLegacySession(buildCtx, startupSessionPath, "")
+			} else if !os.IsNotExist(statErr) {
+				bindErr = statErr
+			} else {
+				ref, bindErr = identity.BindFreshSession(buildCtx, "")
+			}
+		default:
+			ref, bindErr = identity.BindFreshSession(buildCtx, "")
+		}
+		if bindErr != nil {
+			a.recordTabStartupFailure(tab, buildGeneration, appCtx, friendlySessionLoadError(bindErr))
+			ctrl.Close()
+			a.releaseSharedHost(rootKey)
+			return
+		}
+		a.mu.Lock()
+		if a.tabBuildSupersededLocked(tab, buildGeneration) {
+			a.mu.Unlock()
+			a.abandonSupersededBuild(tab, ctrl, rootKey, "")
+			return
+		}
+		tab.SessionID = ref.SessionID
+		tab.SessionPath = ""
+		a.mu.Unlock()
+		tab.replaceTelemetry(tabTelemetrySnapshot{}, sessionRuntimeKey(remoteSessionIDRoutePrefix+ref.SessionID))
+	} else if dir := ctrl.SessionDir(); dir != "" {
 		// Refresh the topic/session locals under the lock: a rebind or the
 		// recovery callback may have rewritten them since the early snapshot.
 		a.mu.RLock()
@@ -3917,7 +3975,7 @@ func (a *App) buildTabControllerWithContextCore(tab *WorkspaceTab, loadedSession
 	applyNormalizedRuntimeToTabLocked(tab, restoredRuntime)
 	tab.Ready = true
 	clearTabStartupError(tab)
-	a.bindSessionRuntimeKeyLocked(tab, tab.currentSessionPath())
+	a.bindSessionRuntimeKeyLocked(tab, tab.currentSessionIdentity())
 	a.advanceSessionRuntimeEpochLocked(tab)
 	keepBuildContext = true
 	a.mu.Unlock()
@@ -7004,6 +7062,7 @@ type tabRuntimeSnapshot struct {
 	scope                         string
 	workspaceRoot                 string
 	sessionPath                   string
+	sessionID                     string
 	topicID                       string
 	topicTitle                    string
 	sharedHostKey                 string
@@ -7037,6 +7096,7 @@ func snapshotTabRuntimeLocked(tab *WorkspaceTab) tabRuntimeSnapshot {
 		scope:            tab.Scope,
 		workspaceRoot:    tab.WorkspaceRoot,
 		sessionPath:      tab.SessionPath,
+		sessionID:        tab.SessionID,
 		topicID:          tab.TopicID,
 		topicTitle:       tab.TopicTitle,
 		sharedHostKey:    tab.SharedHostKey,

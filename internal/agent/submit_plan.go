@@ -97,9 +97,9 @@ func (*SubmitPlanTool) Schema() json.RawMessage {
 // ReadOnly is true: submitting a plan records a proposal and touches nothing.
 func (*SubmitPlanTool) ReadOnly() bool { return true }
 
-// ProviderVisible gates on the host having armed a planning turn, mirroring
-// complete_step's phase opt-out: the schema stays constant for cache stability
-// and availability is decided when the call runs.
+// ProviderVisible gates on the host having armed a planning turn. The schema
+// stays constant for cache stability and availability is decided when the call
+// runs.
 func (*SubmitPlanTool) ProviderVisible(ctx context.Context) bool {
 	_, ok := planSubmissionFromContext(ctx)
 	return ok

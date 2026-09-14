@@ -1,170 +1,132 @@
-# Goal 模式 — 连续执行与结构化完成协议
+# Goal 模式：统一运行时生命周期与空闲续轮
 
-Goal 将状态、续跑和模型报告分开。模型规划、验证并判断完成；宿主负责权限、可靠执行、持久化和显式资源限制，不生成质量门禁，也不调用独立完成 evaluator。
-权限（仅可查看／工作区内修改／完全权限及沙箱）与 Goal 正交，工具权限和沙箱不受 Goal 开关影响。
+Goal 模式按三个职责边界实现：版本化目标状态、模型目标工具、运行时空闲驱动器。它复用
+`reasonix.session.linear/v3`、Session Service、Runtime、Activity 和统一顶层回合接纳；没有第二个
+执行循环，也不再用每轮 `continue` 报告维持运行。
 
-## 功能一览
+## 状态模型
 
-| 功能 | 行为 |
+每个会话最多有一个当前目标。持久状态由 `goal/state` 事件保存：
+
+| 字段 | 含义 |
 | --- | --- |
-| `update_goal(complete)` | 正常结束边界提交模型完成声明，保留真实失败和未完成待办 |
-| `update_goal(blocked)` | 记录原因并立即停止续跑 |
-| `continue` 或漏报 | 正常结束后继续活动目标，不解析自然语言完成标记 |
-| 取消、错误、权限或预算暂停 | 不解释为正常完成，不自动重启 |
-| 恢复、分叉 | 只加载状态，显式启动或恢复后才允许续跑 |
-| 实际检查记录 | 展示退出码、失败、中断和检查后的修改，不认证总体质量 |
+| `id` | 当前目标身份；替换目标时生成新 ID |
+| `revision` | 生命周期 CAS 版本；创建从 1 开始 |
+| `objective` | 完整长期目标文本 |
+| `phase` | `active`、`paused`、`blocked` 或 `complete` |
+| `maxGoalRounds` | 正整数上限；`null` 表示不限轮数 |
+| `roundsStarted` | 已被统一入口接纳的自动目标轮数 |
+| `blockedReason` | blocked 的机器原因码和说明 |
+| `createdAt` / `updatedAt` | 创建和生命周期修改时间 |
 
-## 使用方式
+`activation` 只有 `armed` / `disarmed`，属于当前进程的运行授权，不写入会话，也不随冷启动、
+导入或 fork 恢复。轮次计数和资源统计不会增加生命周期 revision。
 
-### 默认模式
+目标的唯一事实来源是 v3 投影。旧 Goal sidecar 与 AutoResearch 文件只在显式导入／兼容升级时
+读取，运行时不会再写它们，也不会从它们恢复旧执行器。
 
-```bash
-/goal 实现一个 CLI 计算器
-```
+## 模型工具
 
-模型在每个目标 turn 结束时调用 `update_goal`：
+模型可见的稳定工具协议为：
 
-- `continue`（附 `reason` 与可选 `next_action`）— 继续推进；
-- `complete`（仅在请求完成、输出格式与约束满足、验证已尝试或声明不可用时）— 正常结束时提交模型声明，不附加宿主验收门槛；
-- `blocked`（仅当下一步需要用户独有信息、不可逆或对外可见操作、或范围变化时）— 立即停止。
+- `get_goal()`：读取统一 GoalView；没有当前目标时返回 `goal: null`。
+- `create_goal(objective, max_goal_rounds?)`：在直接人类回合创建并激活长期目标。省略或传
+  `null` 表示不限轮数；不会覆盖未完成目标。
+- `update_goal(goal_id, revision, action, ...)`：对读取所得的确切版本执行 `edit`、`pause`、
+  `resume`、`complete` 或 `blocked`。
 
-`complete` 还可以附一份自述 `completion`：
+`continue` 已删除。目标保持 `active + armed` 就会在运行时空闲后自动进入下一轮；阶段总结、
+普通 final 或未调用 `update_goal` 都不会让未完成目标自然停跑。旧
+`update_goal(status=continue)` 会返回明确的协议退役错误。
 
-```json
-{"status":"complete","completion":{
-  "verified":["go test ./..."],
-  "unverified":["desktop UI 未实际操作验证"],
-  "risks":["迁移不可逆"]
-}}
-```
+编辑轮数上限时，字段省略表示不修改，`null` 表示取消上限，正整数表示新上限；零、负数、
+非整数以及小于已接纳轮数的值都会被拒绝。编辑目标不会清零累计轮数。
 
-模型自述和真实命令回执分别展示。未执行、失败或早于最新修改的命令不能因自述变成验证通过；这种差异不会阻断 Goal。未完成的 todos 保持原状。
+## 权限与恢复
 
-`update_goal` 只在活动 Goal turn 中可用；普通聊天调用会收到结构化错误且不改变任何状态。同值重复调用幂等，`continue` 可升级为 `complete`/`blocked`，终态后冲突调用被拒绝；目标被替换或清除后，迟到的报告/用量一律按 scope+epoch 拒绝。
+目标工具权限由宿主签发的执行身份决定，不从消息文本、历史 `user` 消息、导入文档或工具输出
+推断：
 
-### 统计、显式预算与暂停
+- `create` / `edit` / `pause` / `resume` 只允许当前直接人类顶层回合。
+- `complete` / `blocked` 额外允许当前目标的确切自动轮次。
+- 自动轮权限同时绑定会话、runtime epoch、Activity revision、目标 ID/revision 和轮次。
+- Planner、子 Agent 和迟到的旧 Activity 均拿不到父目标的修改权限。
 
-旧的 simple/write/research 类别和 `/goal --simple`、`--research` 参数只为 sidecar/CLI 兼容保留，
-不再改变执行额度。executor、planner、subagent、compaction、router、reviewer等计费用量
-累计到 `tokensUsed`，真实 HTTP 请求（含重试）累计到 `requestsUsed`，Goal Run 的实际工作时间累计到
-`workDurationMs`。默认情况下这些字段与 `turnsUsed` 都只做统计：
+冷恢复后的 active 目标和 blocked 目标可以在用户提出继续请求后，由模型
+`get_goal → resume` 恢复。用户明确暂停产生的 paused 目标只能通过 UI 或命令恢复，模型不能自行
+解除。complete 不能恢复；新长期任务应创建新目标。
 
-- 未配置 `goal_token_budget` 时 `tokensLimit` 为 `0`；配置正数后只表示用户选择的累计 token 阈值；
-- 没有 provider 请求前的 token 预留/准入；
-- 未配置对应预算时，累计 turn/token/request/work time 再大也不会单独暂停 Goal；
-- `turnsLimit`、`noProgressLimit`、`budgetExtensions` 继续对外保留为 deprecated 兼容字段，固定返回 `0`。
+## 自动续轮
 
-可停止连续执行的条件：完成、模型通过 `update_goal(blocked)` 报告真实用户/外部阻塞、用户主动 pause/stop/clear、Provider/权限/宿主不可恢复错误，以及用户显式设置的
-正数 token/步数/时间/成本预算。`task_time_budget_minutes = 0`（以及兼容读取的负数）关闭时间边界，
-只有正数才启用。结构化卡死检测、Todo stall 与 `noProgressTurns` 只注入策略纠偏，不改变 Goal 状态。
-**轮数不再是任何停止条件。** `/goal status` 在未设置 token 预算时显示纯统计：
+Goal Round Driver 是空闲状态的轻量调度器，不持有跨轮 Activity。每次自动轮都走正常顶层回合
+入口并拥有自己的 Activity：
 
-```
-runtime: turns 57 · requests 143 · tokens 2800000 · work time 42m
-```
+1. 检查目标 `active + armed`、无待处理用户输入／交互、Controller 与 Runtime 均真正空闲。
+2. 对当前会话、runtime epoch、Activity revision 和目标版本建立至多一个进程内预留。
+3. 先执行 v3 `Flush` 检查点；失败时不调用模型并解除自动激活。
+4. Flush 后重新检查身份、用户输入、取消和目标状态。
+5. 通过统一接纳入口，把 `turn/start` 与新的 `goal/state` 写入同一逻辑 Batch。
+6. 只有接纳成功才增加 `roundsStarted`。
+7. 本轮正常收尾；目标仍 active + armed 时，新的空闲通知再驱动下一轮。
 
-配置 `goal_token_budget` 时 token 统计会显示当前显式阈值；`/goal resume` 从 `budget_spend` 暂停
-恢复时授予一个新的完整预算切片，但 turns、tokens、requests 与 work time 继续累计。旧版本因 `budget_turns`、`budget_tokens`、
-`goal_run_budget`、`goal_stuck` 或 `no_progress` 暂停的 sidecar 在内存中归一化为可继续状态，正常保存时才写入，
-但加载本身不会发送模型请求。活动 Goal 在磁盘写 `turnsLimit: -1` 作为旧 reader 的无限制哨兵；
-新 API 将其解释为 `0`。新的 `budget_spend`（用户显式预算）不会被自动迁移；manual pause、legacy archive block 和真实 blocker 同样不自动解锁。
+重复 idle 通知会合并。若用户消息在自动轮接纳前进入队列，自动预留失效并优先处理用户消息；
+自动轮已开始则沿用现有 steer／cancel 行为。finishing、cancelling、recovery、Ask／审批等待阶段
+都不能启动下一轮。
 
-上下文压缩继续使用全局既有策略：仅由 `compact_ratio`（默认 80%）触发 Harness 风格的 prune/摘要维护，不另设 soft/snip/force 多阈值。Goal 开启本身不额外触发 summarizer，也不改变工具 Schema 或稳定 prompt 前缀。
+默认没有隐藏轮数上限，并用超过 256 轮的测试固定该差异。显式达到 `maxGoalRounds` 时进入
+`blocked`，原因码 `round-limit`；必须提高或取消上限后才能恢复，累计轮数不重置。
 
-### 任务合约
+自动轮的模型 `blocked` 至少要求已经接纳 3 个目标轮次；模型负责判断是否为同一持续阻碍，
+宿主只执行轮数和权限硬校验。模型可在第一轮 `complete`，不依赖 todo 比例、额外评审模型或
+readiness 门禁。
 
-复杂目标可以直接写成 Context / Request / Output format / Constraints /
-Pause policy。Goal 模式会把这些段落当作执行边界：满足请求、输出格式、约束和必要验证后才结束；
-除非下一步涉及不可逆或对外可见操作、范围变化，或必须由用户提供信息，否则继续采用合理默认值推进。
+## 停止与资源边界
 
-### 并行子任务
+- 用户暂停会先 disarm，再取消当前自动目标 Activity；已接纳的自动轮取消后目标进入 paused。
+- 模型／Provider 错误、持久化错误或结果不确定会停止自动调度，不伪装成 complete，也不自动
+  重复副作用工具。
+- 超时未收敛沿用统一 Runtime 的 `recovery_required`；旧代结果不能写入新代。
+- 配置的正数 Goal token 预算由宿主统计自动轮真实用量；达到后进入 blocked，原因码
+  `resource-budget`。恢复会增加一个配置的预算切片，不清空累计统计。
+- 未配置目标轮数或 token 预算时没有对应的隐藏停止阈值。
 
-```bash
-/goal 研究 Go 的三个标准库并写示例
-```
+Todo 是回合内规划工具：每个真正接纳的顶层回合开始时清空，同一回合的工具调用、压缩、steer
+和交互回答不会清空；结束后保留最后一份供展示。新目标轮重新规划，长期进度来自目标、会话历史
+和工作区成果。
 
-Agent 可以调用 `parallel_tasks` 工具同时派发多个独立子任务：
+## 持久化、迁移与能力
 
-```
-parallel_tasks(tasks=[
-  {prompt: "研究 encoding/json，写示例", description: "json research"},
-  {prompt: "研究 net/http，写示例", description: "http research"},
-  {prompt: "研究 sync，写示例", description: "sync research"},
-])
-```
+目标创建、修改、轮次接纳和 clear 都通过当前 Activity 或宿主串行控制 Activity 写入
+`goal/state`。Append 表示 live projection 已接纳，Flush 才表示 durable；目标更新和回合结束
+不额外逐次 fsync。模型调用与顶层副作用前继续使用统一 Flush 检查点。
 
-每个子任务在独立 goroutine 中运行，工具调用会嵌套显示为独立卡片，结果聚合返回。
+旧会话继续工作时导入独立的 `sessions-v4` 副本，原件不变；旧版与新版不双写。未知必需目标
+版本或损坏的必要数据会阻止自动运行。历史 activation 仅用于诊断展示，永远不会恢复执行授权。
 
-### 任务依赖
+RPC 能力目录使用 `goal-lifecycle-v2`。缺少该能力的远端明确拒绝目标操作，不回退旧 Goal API。
+CLI、ACP 和 Bot 的运行观察器等待目标完成、阻塞、暂停、解除激活或宿主错误，不会把第一轮
+`TurnDone` 当作整个目标完成。
 
-如果子任务之间有依赖关系，可以用 `depends_on` 指定：
+## UI 与诊断
 
-```
-parallel_tasks(tasks=[
-  {prompt: "写一个加法函数到 add.py", description: "add"},
-  {prompt: "写一个乘法函数到 mul.py", description: "mul"},
-  {prompt: "在 main.py 中调用 add 和 mul", description: "main", depends_on: [0, 1]},
-])
-```
+目标面板直接读取 GoalView，区分正在执行、已激活等待下一轮、未完成等待恢复、用户暂停、阻塞、
+完成和持久化／运行时故障。UI 的创建、替换、编辑、暂停、恢复和清除都走统一目标服务；清除保留
+历史墓碑并先收敛运行中的旧 Activity。
 
-独立任务（add、mul）先并发执行；main 等前两个完成后再启动。
+用户主动选择“诊断导出”时，桌面端本地读取或远端 `/goal-diagnostics` 都直接冻结并导出 v3
+后端事件，而不是只导出前端已加载的列表。导出包含构建和协议信息、GoalView、运行时代次、
+accepted／durable 序号、可推导的 activation 变化、续轮停跑原因，以及记录中完整的工具参数、
+结果与错误；凭据和其他敏感内容按诊断导出隐私规则脱敏，无法取得的字段会明确标记。即使
+Flush 失败，导出仍保留已接纳前缀并分别报告持久化状态和 durable 序号。
 
-## Prometheus 规划面试
+## 主要实现
 
-在写代码前，先让 AI 帮你理清需求：
+- `internal/goal/domain.go`：版本化领域状态、CAS 转换、恢复与墓碑。
+- `internal/goal/prompt.go`：每轮动态、JSON 转义的目标输入；不改变系统 prompt 前缀。
+- `internal/tool/goal_lifecycle.go`：宿主签发的目标工具权限。
+- `internal/tool/builtin/getgoal.go`、`creategoal.go`、`updategoal.go`：模型协议。
+- `internal/control/goal_lifecycle_owner.go`：目标服务与 v3 Activity 提交。
+- `internal/control/goal_driver.go`：空闲续轮、Flush、统一接纳与竞争处理。
+- `internal/control/goal_diagnostics.go`：v3 诊断导出。
 
-```
-/prometheus 重构用户认证模块，改成 JWT
-```
-
-Prometheus 会逐个问澄清问题：
-
-```
-1. 用户模块当前是 session 还是 token 认证？
-2. 需要支持 refresh token 吗？
-3. 现有用户表结构是什么样的？
-```
-
-回答完问题后，Prometheus 自动生成可执行的计划。然后你可以用 `/plan-exec` 来执行。
-
-## 实现细节
-
-### 每轮决策顺序
-
-1. 执行当前模型回合，保留实际用量和执行结果。
-2. 校验报告所属会话、Goal scope 和执行 epoch；拒绝迟到报告。
-3. 取消、错误、权限等待和资源边界优先处理。
-4. 正常结束时提交模型的完成或阻塞声明；否则保持活动。
-5. 没有优先用户输入且允许续跑时，追加下一回合。
-
-### 事实与历史
-
-不再生成风险评分、验收比例或总体质量判定。新结果用 `assessmentKind: "facts"` 和
-`verdict: "unknown"` 区分历史评估；unknown 不表示失败。旧回执和缺项不被清空或改写通过。
-历史检查点不再阻塞当前任务；旧 `/continue-checks` 恢复动作返回稳定的退役错误，
-不会消费检查点或重放操作。
-
-待办由 `todo_write` 更新。退役的 `complete_step` 兼容调用只返回
-`tool_retired`，不会修改待办。Goal 或 Plan 结束均不会批量完成待办。
-
-### 并行调度架构
-
-```
-parallel_tasks Execute()
-  ├─ 对每个子任务:
-  │   ├─ 发射 ToolDispatch 事件（前端渲染卡片）
-  │   ├─ 创建嵌套 sink（subSinkFor）
-  │   ├─ 启动 goroutine 运行 RunSubAgentWithSession
-  │   └─ 子任务工具调用自动嵌套显示
-  ├─ WaitGroup 等待全部完成
-  └─ 聚合结果返回
-```
-
-## 相关代码
-
-- `internal/control/goal.go` — Goal FSM、turn recorder、兼容迁移、暂停/恢复与运行统计
-- `internal/control/turn_orchestrator.go` — 正常结束边界、用户输入优先和续跑驱动
-- `internal/control/input.go` — `/goal` 命令解析与任务合约注入
-- `internal/control/goal_start.go` — 显式激活与错误后停止续跑
-- `internal/tool/builtin/updategoal.go` — `update_goal` 工具
-- `internal/boot/boot.go` — 工具注册与权限装配
+旧 `GoalTurnRecorder`、Controller 内部 continuation 循环和 `continue` 工具协议已经删除。

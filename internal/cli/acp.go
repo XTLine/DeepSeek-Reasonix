@@ -162,6 +162,7 @@ func (f *acpFactory) sessionBootOptions(p acp.SessionParams) (boot.Options, erro
 	if f.bashOverride == "enforce" {
 		bashOverride = "enforce"
 	}
+	sessionDir := f.SessionDir()
 	return boot.Options{
 		Model:                    firstNonEmpty(p.Model, f.model),
 		RequireKey:               true,
@@ -170,6 +171,9 @@ func (f *acpFactory) sessionBootOptions(p acp.SessionParams) (boot.Options, erro
 		EffortOverride:           p.EffortOverride,
 		Stderr:                   os.Stderr,
 		WorkspaceRoot:            root,
+		SessionDir:               sessionDir,
+		SessionService:           cliSessionService(sessionDir),
+		SessionHostID:            "local",
 		ExtraPlugins:             p.MCPServers,
 		MCPHostProfile:           plugin.HostProfileForInteractive(p.MCPInteractions),
 		CleanupPendingReconciler: acp.ReconcileCleanupPending,

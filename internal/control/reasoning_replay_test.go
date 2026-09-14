@@ -29,7 +29,7 @@ func TestInterruptedRecoveryExcludesStructurallyCompleteButUnreplayableToolTurn(
 	}}})
 	sess.Add(provider.Message{Role: provider.RoleTool, ToolCallID: "c1", Name: "write_file", Content: "wrote a.txt"})
 	exec := agent.New(strictReplayControlProvider{}, tool.NewRegistry(), sess, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec})
+	c := newOwnedTestController(t, Options{Executor: exec})
 
 	c.stripCancelledVisibleTurnMessagesAfterWithFallback(1, user)
 
@@ -58,7 +58,7 @@ func TestInterruptedPartialBatchKeepsCompletedAndUnknownSeparate(t *testing.T) {
 	sess.Add(provider.Message{Role: provider.RoleTool, ToolCallID: "done", Name: "write_file", Content: "wrote a.txt", ToolRunState: provider.ToolRunCompleted})
 	sess.Add(provider.Message{Role: provider.RoleTool, ToolCallID: "pending", Name: "read_file", Content: "cancelled: context cancelled before execution", ToolRunState: provider.ToolRunNotStarted})
 	exec := agent.New(strictReplayControlProvider{}, tool.NewRegistry(), sess, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec})
+	c := newOwnedTestController(t, Options{Executor: exec})
 	c.stripCancelledVisibleTurnMessagesAfterWithFallback(1, user)
 	msgs := sess.Snapshot()
 	r := msgs[len(msgs)-1].InterruptedTurn

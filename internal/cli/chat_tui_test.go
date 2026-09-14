@@ -163,7 +163,7 @@ func saveTestImageAttachment(t *testing.T, root string) string {
 // cancel branch, while Ctrl+C — not in the completion switch — fell through.
 func TestEscCancelsRunningTurnWithCompletionOpen(t *testing.T) {
 	r := &blockingTurnRunner{started: make(chan struct{})}
-	ctrl := control.New(control.Options{Runner: r, Sink: event.Discard, SessionDir: t.TempDir(), Label: "test"})
+	ctrl := newOwnedTestController(t, control.Options{Runner: r, Sink: event.Discard, SessionDir: t.TempDir(), Label: "test"})
 	ctrl.Send("hi")
 	<-r.started // the turn is in flight and cancellable
 
@@ -222,7 +222,7 @@ func TestTermuxNativeScrollbackDefaultsToExpandedReasoning(t *testing.T) {
 	detectTermuxTerminal = func() bool { return true }
 	t.Cleanup(func() { detectTermuxTerminal = old })
 
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	if !m.nativeScrollback {
 		t.Fatal("Termux should use native scrollback")
@@ -244,7 +244,7 @@ func TestTermuxNativeScrollbackDefaultsToExpandedReasoning(t *testing.T) {
 // line (items + footer) to m.width so delta rendering always writes exactly the
 // same column count — no trailing characters for \033[K to leave behind.
 func TestCompletionMenuFixedWidth(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m.width = 80
 	m.completion.active = true
@@ -273,7 +273,7 @@ func TestCompletionMenuFixedWidth(t *testing.T) {
 // clearable cells and may emit EL/ECH erase sequences; mintty can leave stale
 // halves of CJK glyphs when those sequences clear Chinese skill descriptions.
 func TestCompletionMenuPadsWithNonBreakingSpaces(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m.width = 80
 	m.completion.active = true
@@ -303,7 +303,7 @@ func TestCompletionMenuPadsWithNonBreakingSpaces(t *testing.T) {
 // available information row = 4 with an empty 1-line composer and no Git or
 // telemetry), and is fed the committed transcript.
 func TestTranscriptViewportSizing(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -328,7 +328,7 @@ func TestTranscriptViewportSizing(t *testing.T) {
 // bottomRows reserves the right height so the viewport fills the screen without
 // overlap.
 func TestStatusLineWrapAccounting(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 30)
 
 	// Narrow terminal: mode+state line and data line will both wrap.
@@ -383,7 +383,7 @@ func TestStatusLineWrapAccounting(t *testing.T) {
 // specifically at the CJK 2-char-overflow boundary where an off-by-one would
 // hide the bottom row of the viewport.
 func TestStatusLineRenderedHeightMatchesBudget(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 46)
 
 	// Manually set a long git repo/branch so the status line contains CJK.
@@ -431,7 +431,7 @@ func TestStatusLineRenderedHeightMatchesBudget(t *testing.T) {
 }
 
 func TestManualNewlineGrowsComposerWithoutHidingFirstLine(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 40)
 
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
@@ -450,7 +450,7 @@ func TestManualNewlineGrowsComposerWithoutHidingFirstLine(t *testing.T) {
 }
 
 func TestEmptyComposerShowsOnlyPrompt(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 60)
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
 	m = m0.(chatTUI)
@@ -462,7 +462,7 @@ func TestEmptyComposerShowsOnlyPrompt(t *testing.T) {
 }
 
 func TestManualNewlineCanExceedVisibleComposerRows(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 40)
 
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
@@ -493,7 +493,7 @@ func TestManualNewlineCanExceedVisibleComposerRows(t *testing.T) {
 }
 
 func TestComposerHeightReflowsWhenTerminalShrinksAndGrows(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
@@ -531,7 +531,7 @@ func TestComposerHeightReflowsWhenTerminalShrinksAndGrows(t *testing.T) {
 }
 
 func TestTranscriptResizeRerendersCommittedMarkdownAtNewWidth(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 40)
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 14})
 	m = m0.(chatTUI)
@@ -569,7 +569,7 @@ func TestTranscriptResizeRerendersCommittedMarkdownAtNewWidth(t *testing.T) {
 }
 
 func TestTranscriptResizeKeepsScrolledReaderOnSameBlock(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 40)
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
 	m = m0.(chatTUI)
@@ -604,7 +604,7 @@ func TestTranscriptResizeKeepsScrolledReaderOnSameBlock(t *testing.T) {
 }
 
 func TestSoftWrappedInputGrowsComposerAndShrinksTranscript(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 24)
 
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 24, Height: 12})
@@ -623,7 +623,7 @@ func TestSoftWrappedInputGrowsComposerAndShrinksTranscript(t *testing.T) {
 }
 
 func TestComposerPromptReservesWidthAndOffsetsCJKCursor(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 40)
 
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
@@ -647,7 +647,7 @@ func TestComposerPromptReservesWidthAndOffsetsCJKCursor(t *testing.T) {
 }
 
 func TestComposerPromptDoesNotRepeatOnWrappedRows(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 16)
 
 	// Give this prompt-gutter test enough vertical space for the responsive
@@ -668,7 +668,7 @@ func TestComposerPromptDoesNotRepeatOnWrappedRows(t *testing.T) {
 }
 
 func TestMCPManagerHidesComposerBox(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m.mcp = &mcpManager{stage: mcpStageList, snapshot: mcpSnapshot{servers: []mcpServerView{
 		{Name: "github", Transport: "stdio", Status: "deferred", Configured: true, Tier: "background"},
@@ -702,7 +702,7 @@ func TestClearCommandRequiresConfirmationAndDiscardsSession(t *testing.T) {
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "old context"})
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
 	path := filepath.Join(dir, "session.jsonl")
-	ctrl := control.New(control.Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: path, Label: "test"})
+	ctrl := newOwnedTestController(t, control.Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: path, Label: "test"})
 	if err := ctrl.Snapshot(); err != nil {
 		t.Fatal(err)
 	}
@@ -786,7 +786,7 @@ func TestClearCommandInYOLOModeSkipsConfirmation(t *testing.T) {
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "old context"})
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
 	path := filepath.Join(dir, "session.jsonl")
-	ctrl := control.New(control.Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: path, Label: "test"})
+	ctrl := newOwnedTestController(t, control.Options{Executor: exec, SystemPrompt: "sys", SessionDir: dir, SessionPath: path, Label: "test"})
 	ctrl.SetToolApprovalMode(control.ToolApprovalYolo)
 	if err := ctrl.Snapshot(); err != nil {
 		t.Fatal(err)
@@ -818,7 +818,7 @@ func TestClearCommandFailureKeepsDisplayAndDoesNotClearScreen(t *testing.T) {
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
 	path := filepath.Join(dir, "session.jsonl")
 	runner := &blockingTurnRunner{started: make(chan struct{})}
-	ctrl := control.New(control.Options{
+	ctrl := newOwnedTestController(t, control.Options{
 		Runner: runner, Executor: exec, SystemPrompt: "sys",
 		SessionDir: dir, SessionPath: path, Label: "test", Sink: event.Discard,
 	})
@@ -903,7 +903,7 @@ func TestClsClearsTranscriptDisplayState(t *testing.T) {
 }
 
 func TestMainManagerFollowsTranscriptWithoutTopPadding(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	m = m0.(chatTUI)
@@ -926,7 +926,7 @@ func TestMainManagerFollowsTranscriptWithoutTopPadding(t *testing.T) {
 }
 
 func TestMarkdownDividerFitsTranscriptContentWidth(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	m = m0.(chatTUI)
@@ -1012,7 +1012,7 @@ func TestModalPanelsHideComposerBox(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctrl := control.New(control.Options{})
+			ctrl := newOwnedTestController(t, control.Options{})
 			m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 			tt.setup(&m)
 
@@ -1036,7 +1036,7 @@ func TestModalPanelsHideComposerBox(t *testing.T) {
 // at most quickPickerMaxVisible rows render, with ↑/↓ more markers pointing at
 // the hidden turns and the window following the selection.
 func TestRewindPickerWindowsLongSession(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = m0.(chatTUI)
@@ -1170,7 +1170,7 @@ func TestPlanApprovalActionsSynchronizeTUIAndControllerMode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctrl := control.New(control.Options{})
+			ctrl := newOwnedTestController(t, control.Options{})
 			t.Cleanup(ctrl.Close)
 			m := newTestChatTUI()
 			m.ctrl = ctrl
@@ -1271,7 +1271,7 @@ func TestApprovalArrowKeysMoveVisibleSelection(t *testing.T) {
 func TestApprovalLegacyFourAlwaysDenies(t *testing.T) {
 	for _, tool := range []string{"remember", control.SandboxEscapeApprovalTool, "bash"} {
 		m := newTestChatTUI()
-		m.ctrl = control.New(control.Options{})
+		m.ctrl = newOwnedTestController(t, control.Options{})
 		m.pendingApproval = &event.Approval{ID: "a", Tool: tool, Subject: "echo hi"}
 		m.approvalSelection = 0
 		next, _ := m.handleApprovalKey(tea.KeyPressMsg{Code: '4'})
@@ -1350,7 +1350,7 @@ func TestInputOwnedOverlaysKeepComposerBox(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctrl := control.New(control.Options{})
+			ctrl := newOwnedTestController(t, control.Options{})
 			m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 			tt.setup(&m)
 
@@ -1577,7 +1577,7 @@ func TestAnswerTextStartingWithBracketStaysInAnswer(t *testing.T) {
 // into the textarea's InsertNewline binding (plain Enter submits, so a newline
 // needs a modifier). It exercises the real constructor, not a hand-built binding.
 func TestInsertNewlineKeyBinding(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	keys := m.input.KeyMap.InsertNewline.Keys()
 	found := slices.Contains(keys, "shift+enter")
@@ -1587,7 +1587,7 @@ func TestInsertNewlineKeyBinding(t *testing.T) {
 }
 
 func TestCtrlHomeEndScrollKeyBindings(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	ch := make(chan event.Event, 1)
 	notice := agentEventMsg(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: "line"})
 	adv := func(m chatTUI, msg tea.Msg) chatTUI {
@@ -1618,7 +1618,7 @@ func TestCtrlHomeEndScrollKeyBindings(t *testing.T) {
 }
 
 func TestMouseWheelAndPageKeysScrollTranscript(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	ch := make(chan event.Event, 1)
 	notice := agentEventMsg(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: "line"})
 	adv := func(m chatTUI, msg tea.Msg) chatTUI {
@@ -1662,7 +1662,7 @@ func TestMouseWheelAndPageKeysScrollTranscript(t *testing.T) {
 }
 
 func TestRunningStreamPreservesScrolledReadingPosition(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	ch := make(chan event.Event, 1)
 	notice := agentEventMsg(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: "line"})
 	adv := func(m chatTUI, msg tea.Msg) chatTUI {
@@ -1699,7 +1699,7 @@ func TestRunningStreamPreservesScrolledReadingPosition(t *testing.T) {
 }
 
 func TestTranscriptScrollbarClickAndDrag(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	ch := make(chan event.Event, 1)
 	notice := agentEventMsg(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: "line"})
 	adv := func(m chatTUI, msg tea.Msg) chatTUI {
@@ -2327,7 +2327,7 @@ func TestClipboardCopyFallbackDoesNotClaimNativeSuccess(t *testing.T) {
 }
 
 func TestImagePastePendingAppearsInFooter(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
 	m = next.(chatTUI)
@@ -2375,7 +2375,7 @@ func TestToggleMouseCaptureFlipsModeAndClearsGestures(t *testing.T) {
 // mouseCaptureOff is set, and MouseModeCellMotion (in-app selection/scrollbar/
 // wheel-scroll) otherwise.
 func TestViewMouseModeFollowsCapture(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 60)
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
 	m = m0.(chatTUI)
@@ -2420,10 +2420,10 @@ func TestEffortCommandWritesCurrentDeepSeekProvider(t *testing.T) {
 	isolateUserConfig(t)
 
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{Label: "deepseek-flash"})
+	m.ctrl = newOwnedTestController(t, control.Options{Label: "deepseek-flash"})
 	m.modelRef = "deepseek-flash/deepseek-v4-flash"
 	m.buildController = func(_ controllerBuildSpec, _ []provider.Message, _ string, _ control.SessionAPI) (*control.Controller, error) {
-		return control.New(control.Options{Label: "deepseek-flash"}), nil
+		return newOwnedTestController(t, control.Options{Label: "deepseek-flash"}), nil
 	}
 
 	cmd := m.runEffortCommand("/effort max")
@@ -2445,10 +2445,10 @@ func TestEffortCommandRejectsUnsupportedProvider(t *testing.T) {
 	isolateUserConfig(t)
 
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{Label: "mimo-pro"})
+	m.ctrl = newOwnedTestController(t, control.Options{Label: "mimo-pro"})
 	m.modelRef = "mimo-pro/mimo-v2.5-pro"
 	m.buildController = func(_ controllerBuildSpec, _ []provider.Message, _ string, _ control.SessionAPI) (*control.Controller, error) {
-		return control.New(control.Options{Label: "mimo-pro"}), nil
+		return newOwnedTestController(t, control.Options{Label: "mimo-pro"}), nil
 	}
 
 	if cmd := m.runEffortCommand("/effort max"); cmd != nil {
@@ -2463,10 +2463,10 @@ func TestEffortCommandAutoClearsProviderEffort(t *testing.T) {
 	isolateUserConfig(t)
 
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{Label: "deepseek-flash"})
+	m.ctrl = newOwnedTestController(t, control.Options{Label: "deepseek-flash"})
 	m.modelRef = "deepseek-flash/deepseek-v4-flash"
 	m.buildController = func(_ controllerBuildSpec, _ []provider.Message, _ string, _ control.SessionAPI) (*control.Controller, error) {
-		return control.New(control.Options{Label: "deepseek-flash"}), nil
+		return newOwnedTestController(t, control.Options{Label: "deepseek-flash"}), nil
 	}
 
 	cmd := m.runEffortCommand("/effort max")
@@ -2491,7 +2491,7 @@ func TestEffortCommandAutoClearsProviderEffort(t *testing.T) {
 func TestReasoningLanguageCommandPersistsAndUpdatesController(t *testing.T) {
 	isolateUserConfig(t)
 
-	ctrl := control.New(control.Options{ReasoningLanguage: "auto"})
+	ctrl := newOwnedTestController(t, control.Options{ReasoningLanguage: "auto"})
 	m := newTestChatTUI()
 	m.ctrl = ctrl
 
@@ -2518,7 +2518,7 @@ func TestReasoningLanguageCommandWritesUserConfigNotProjectConfig(t *testing.T) 
 	}
 
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{ReasoningLanguage: "en"})
+	m.ctrl = newOwnedTestController(t, control.Options{ReasoningLanguage: "en"})
 	m.runReasoningLanguageCommand("/reasoning-language zh")
 
 	userBody, err := os.ReadFile(config.UserConfigPath())
@@ -2565,7 +2565,7 @@ func TestLanguageCommandRefreshesCurrentController(t *testing.T) {
 	i18n.DetectLanguage("en")
 	t.Cleanup(func() { i18n.DetectLanguage("en") })
 
-	oldCtrl := control.New(control.Options{Label: "deepseek-flash"})
+	oldCtrl := newOwnedTestController(t, control.Options{Label: "deepseek-flash"})
 	t.Cleanup(oldCtrl.Close)
 	m := newTestChatTUI()
 	m.ctrl = oldCtrl
@@ -2573,7 +2573,7 @@ func TestLanguageCommandRefreshesCurrentController(t *testing.T) {
 	var gotSpec controllerBuildSpec
 	m.buildController = func(spec controllerBuildSpec, _ []provider.Message, _ string, _ control.SessionAPI) (*control.Controller, error) {
 		gotSpec = spec
-		return control.New(control.Options{Label: "deepseek-flash"}), nil
+		return newOwnedTestController(t, control.Options{Label: "deepseek-flash"}), nil
 	}
 
 	cmd := m.runSlashCommand("/language zh")
@@ -2596,7 +2596,7 @@ func TestCurrencyCommandPersistsAndRefreshesCurrentController(t *testing.T) {
 	i18n.DetectLanguage("en")
 	t.Cleanup(func() { i18n.DetectLanguage("en") })
 
-	oldCtrl := control.New(control.Options{Label: "deepseek-flash"})
+	oldCtrl := newOwnedTestController(t, control.Options{Label: "deepseek-flash"})
 	t.Cleanup(oldCtrl.Close)
 	m := newTestChatTUI()
 	m.ctrl = oldCtrl
@@ -2604,7 +2604,7 @@ func TestCurrencyCommandPersistsAndRefreshesCurrentController(t *testing.T) {
 	var gotSpec controllerBuildSpec
 	m.buildController = func(spec controllerBuildSpec, _ []provider.Message, _ string, _ control.SessionAPI) (*control.Controller, error) {
 		gotSpec = spec
-		return control.New(control.Options{Label: "deepseek-flash"}), nil
+		return newOwnedTestController(t, control.Options{Label: "deepseek-flash"}), nil
 	}
 
 	cmd := m.runSlashCommand("/currency CNY")
@@ -2628,7 +2628,7 @@ func TestCurrencyCommandPersistsAndRefreshesCurrentController(t *testing.T) {
 
 func TestCurrencyRefreshFailureKeepsCurrentController(t *testing.T) {
 	isolateUserConfig(t)
-	oldCtrl := control.New(control.Options{Label: "deepseek-flash"})
+	oldCtrl := newOwnedTestController(t, control.Options{Label: "deepseek-flash"})
 	t.Cleanup(oldCtrl.Close)
 	m := newTestChatTUI()
 	m.ctrl = oldCtrl
@@ -3005,7 +3005,7 @@ func TestQueueIndicatorHiddenWhenIdle(t *testing.T) {
 // selection, and the frame is exactly the terminal height (the transcript
 // viewport pads to fill above the pinned bottom region).
 func TestViewAltScreenFillsHeight(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m.nativeScrollback = false
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -3023,7 +3023,7 @@ func TestViewAltScreenFillsHeight(t *testing.T) {
 }
 
 func TestViewTermuxUsesNativeScrollback(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	m.nativeScrollback = true
 	m0, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -3043,7 +3043,7 @@ func TestViewTermuxUsesNativeScrollback(t *testing.T) {
 // TestTranscriptTailFollow proves the viewport pins to newest output while the
 // user is at the bottom, and stops yanking once the user scrolls up.
 func TestTranscriptTailFollow(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	adv := func(m chatTUI, msg tea.Msg) chatTUI {
 		n, _ := m.Update(msg)
 		return n.(chatTUI)
@@ -3073,7 +3073,7 @@ func TestTranscriptTailFollow(t *testing.T) {
 // scrolls the viewport to the bottom in both idle and running states, so the user
 // can quickly tail-follow after scrolling up to read history.
 func TestEmptyEnterScrollsToBottom(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	ch := make(chan event.Event, 1)
 	notice := agentEventMsg(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: "line"})
 	adv := func(m chatTUI, msg tea.Msg) chatTUI {
@@ -3120,7 +3120,7 @@ func TestEmptyEnterScrollsToBottom(t *testing.T) {
 // TestForceGotoBottomScrollsWithoutTranscriptChange keeps the force-bottom
 // contract independent from transcript length, width, or dirty-state changes.
 func TestForceGotoBottomScrollsWithoutTranscriptChange(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	ch := make(chan event.Event, 1)
 	notice := agentEventMsg(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: "line"})
 	adv := func(m chatTUI, msg tea.Msg) (chatTUI, tea.Cmd) {
@@ -3159,7 +3159,7 @@ func TestForceGotoBottomScrollsWithoutTranscriptChange(t *testing.T) {
 }
 
 func TestSessionSwitchSuppressesOneWarpClearScreen(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	ch := make(chan event.Event, 1)
 	notice := agentEventMsg(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: "line"})
 	adv := func(m chatTUI, msg tea.Msg) (chatTUI, tea.Cmd) {
@@ -3263,7 +3263,7 @@ func TestChooserFreeTextWideInputChangeRequestsClearScreen(t *testing.T) {
 
 func TestReplayActiveBranchClearsPlanModeAndMarksSessionSwitch(t *testing.T) {
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.planMode = true
 	m.ctrl.SetPlanMode(true)
 	m.sessionSwitch = false
@@ -3311,7 +3311,7 @@ func TestTextOnlyModelSendsPastedImageRefsForToolUse(t *testing.T) {
 	runner := &recordingTurnRunner{}
 	events := make(chan event.Event, 8)
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{
+	m.ctrl = newOwnedTestController(t, control.Options{
 		Runner: runner,
 		Sink: event.FuncSink(func(e event.Event) {
 			events <- e
@@ -3357,7 +3357,7 @@ func TestVisionModelAllowsSendingPastedImageRefs(t *testing.T) {
 	runner := &recordingTurnRunner{}
 	events := make(chan event.Event, 8)
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{
+	m.ctrl = newOwnedTestController(t, control.Options{
 		Runner: runner,
 		Sink: event.FuncSink(func(e event.Event) {
 			events <- e
@@ -3398,7 +3398,7 @@ func TestVisionModelAllowsSendingPastedImageRefs(t *testing.T) {
 func TestPasteFoldExpandOnSubmit(t *testing.T) {
 	r := &recordingTurnRunner{}
 	events := make(chan event.Event, 64)
-	ctrl := control.New(control.Options{
+	ctrl := newOwnedTestController(t, control.Options{
 		Runner:     r,
 		Sink:       event.FuncSink(func(e event.Event) { events <- e }),
 		SessionDir: t.TempDir(),
@@ -3451,7 +3451,7 @@ func TestPasteFoldExpandOnSubmit(t *testing.T) {
 func TestStrongResearchPromptStaysInOrdinaryMode(t *testing.T) {
 	r := &recordingTurnRunner{}
 	events := make(chan event.Event, 8)
-	ctrl := control.New(control.Options{
+	ctrl := newOwnedTestController(t, control.Options{
 		Runner: r,
 		Sink:   event.FuncSink(func(e event.Event) { events <- e }),
 	})
@@ -3483,7 +3483,7 @@ func TestSlashCodeCommentSubmitStartsTurn(t *testing.T) {
 		t.Run(input, func(t *testing.T) {
 			r := &recordingTurnRunner{}
 			events := make(chan event.Event, 8)
-			ctrl := control.New(control.Options{
+			ctrl := newOwnedTestController(t, control.Options{
 				Runner: r,
 				Sink:   event.FuncSink(func(e event.Event) { events <- e }),
 			})
@@ -3505,7 +3505,7 @@ func TestSlashCodeCommentSubmitStartsTurn(t *testing.T) {
 func TestUnknownSlashCommandStartsOrdinaryTurnWithNotice(t *testing.T) {
 	r := &recordingTurnRunner{}
 	events := make(chan event.Event, 8)
-	ctrl := control.New(control.Options{
+	ctrl := newOwnedTestController(t, control.Options{
 		Runner: r,
 		Sink:   event.FuncSink(func(e event.Event) { events <- e }),
 	})
@@ -3528,7 +3528,7 @@ func TestUnknownSlashCommandStartsOrdinaryTurnWithNotice(t *testing.T) {
 
 func TestSlashDocsShowsLocalOverviewWithoutStartingTurn(t *testing.T) {
 	r := &recordingTurnRunner{}
-	ctrl := control.New(control.Options{
+	ctrl := newOwnedTestController(t, control.Options{
 		Runner: r,
 		Sink:   event.FuncSink(func(event.Event) {}),
 	})
@@ -3552,7 +3552,7 @@ func TestQualifiedSlashDocsBypassesConflictingCustomCommand(t *testing.T) {
 	commands := []command.Command{
 		{Name: "docs", Body: "legacy docs"},
 	}
-	ctrl := control.New(control.Options{
+	ctrl := newOwnedTestController(t, control.Options{
 		Runner:   r,
 		Commands: commands,
 		Sink:     event.FuncSink(func(event.Event) {}),
@@ -3587,7 +3587,7 @@ func TestPasteMsgFoldsBeforeTextareaConsumesNewlines(t *testing.T) {
 
 func TestUnsendRestoresFoldedPastePlaceholder(t *testing.T) {
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.bubbleStartIdx = len(m.transcript)
 	m.commitLine("")
 	m.commitLine(renderUserBubble("expanded JSON", m.width, m.planMode))
@@ -3734,7 +3734,7 @@ func TestSlashQuitExit(t *testing.T) {
 }
 
 func TestSlashSubagentWithoutTaskStaysIdleWithUsageHint(t *testing.T) {
-	ctrl := control.New(control.Options{Skills: []skill.Skill{{
+	ctrl := newOwnedTestController(t, control.Options{Skills: []skill.Skill{{
 		Name: "helper", RunAs: skill.RunSubagent, Invocation: "manual", Scope: skill.ScopeGlobal,
 	}}})
 	m := newTestChatTUI()
@@ -3803,7 +3803,7 @@ func TestSlashMigrateFromImportsExplicitSessions(t *testing.T) {
 // within the 1.5s window to actually quit. A single press shows a hint; a
 // second press within the window returns tea.Quit.
 func TestDoubleCtrlCQuit(t *testing.T) {
-	ctrl := control.New(control.Options{})
+	ctrl := newOwnedTestController(t, control.Options{})
 	m := newChatTUI(ctrl, "", make(chan event.Event, 1), 80)
 	ctrlC := tea.KeyPressMsg{Code: 'c', Mod: 4} // 4 = ModCtrl
 
@@ -3841,7 +3841,7 @@ func TestDoubleCtrlCQuit(t *testing.T) {
 
 func TestSecondCtrlCQuitsAfterCancelIsAlreadyRequested(t *testing.T) {
 	r := &stubbornTurnRunner{started: make(chan struct{}), release: make(chan struct{})}
-	ctrl := control.New(control.Options{Runner: r, Sink: event.Discard, SessionDir: t.TempDir(), Label: "test"})
+	ctrl := newOwnedTestController(t, control.Options{Runner: r, Sink: event.Discard, SessionDir: t.TempDir(), Label: "test"})
 	ctrl.Send("hi")
 	<-r.started
 	defer close(r.release)
@@ -3870,7 +3870,7 @@ func TestSecondCtrlCQuitsAfterCancelIsAlreadyRequested(t *testing.T) {
 
 func TestRunningStatusShowsCancelRequested(t *testing.T) {
 	r := &stubbornTurnRunner{started: make(chan struct{}), release: make(chan struct{})}
-	ctrl := control.New(control.Options{Runner: r, Sink: event.Discard, SessionDir: t.TempDir(), Label: "test"})
+	ctrl := newOwnedTestController(t, control.Options{Runner: r, Sink: event.Discard, SessionDir: t.TempDir(), Label: "test"})
 	ctrl.Send("hi")
 	<-r.started
 	defer close(r.release)
@@ -4134,7 +4134,7 @@ func TestEscInPlanModeDoesNotExitPlan(t *testing.T) {
 
 func TestDesktopShortcutLayoutShiftTabCyclesSafeModes(t *testing.T) {
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.ctrl.SetToolApprovalMode(control.ToolApprovalAuto)
 	m.cfg = config.Default()
 	if err := m.cfg.SetUIShortcutLayout("desktop"); err != nil {
@@ -4169,7 +4169,7 @@ func TestDesktopShortcutLayoutShiftTabCyclesSafeModes(t *testing.T) {
 
 func TestDesktopShortcutLayoutShiftTabClearsGoalWhenEnteringPlan(t *testing.T) {
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.ctrl.SetGoal("ship the shortcut redesign")
 	m.cfg = config.Default()
 	if err := m.cfg.SetUIShortcutLayout("desktop"); err != nil {
@@ -4191,7 +4191,7 @@ func TestDesktopShortcutLayoutShiftTabClearsGoalWhenEnteringPlan(t *testing.T) {
 
 func TestDesktopShortcutLayoutCtrlYDoesNotChangePermission(t *testing.T) {
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.cfg = config.Default()
 	if err := m.cfg.SetUIShortcutLayout("desktop"); err != nil {
 		t.Fatal(err)
@@ -4207,7 +4207,7 @@ func TestDesktopShortcutLayoutCtrlYDoesNotChangePermission(t *testing.T) {
 
 func TestDesktopShortcutLayoutCtrlYPreservesWorkspacePermission(t *testing.T) {
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.ctrl.SetToolApprovalMode(control.ToolApprovalAuto)
 	m.cfg = config.Default()
 	if err := m.cfg.SetUIShortcutLayout("desktop"); err != nil {
@@ -4224,7 +4224,7 @@ func TestDesktopShortcutLayoutCtrlYPreservesWorkspacePermission(t *testing.T) {
 
 func TestClassicShortcutLayoutCtrlYDoesNotChangePermission(t *testing.T) {
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.cfg = config.Default()
 	if err := m.cfg.SetUIShortcutLayout("classic"); err != nil {
 		t.Fatal(err)
@@ -4240,7 +4240,7 @@ func TestClassicShortcutLayoutCtrlYDoesNotChangePermission(t *testing.T) {
 
 func TestPrimaryYShortcutPreservesWorkspacePermission(t *testing.T) {
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.ctrl.SetToolApprovalMode(control.ToolApprovalAuto)
 	m.cfg = config.Default()
 	if err := m.cfg.SetUIShortcutLayout("classic"); err != nil {
@@ -4257,7 +4257,7 @@ func TestPrimaryYShortcutPreservesWorkspacePermission(t *testing.T) {
 
 func TestDesktopShortcutLayoutDoesNotStealCompletionTab(t *testing.T) {
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.cfg = config.Default()
 	if err := m.cfg.SetUIShortcutLayout("desktop"); err != nil {
 		t.Fatal(err)
@@ -4283,7 +4283,7 @@ func TestDesktopShortcutLayoutDoesNotStealCompletionTab(t *testing.T) {
 
 func TestShiftTabCyclesSafeModesUnderClassicShortcutLayout(t *testing.T) {
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.cfg = config.Default()
 	if err := m.cfg.SetUIShortcutLayout("classic"); err != nil {
 		t.Fatal(err)
@@ -4303,7 +4303,7 @@ func TestShiftTabCyclesSafeModesUnderClassicShortcutLayout(t *testing.T) {
 
 func TestLegacyDontAskDisplaysAndCyclesAsReadOnly(t *testing.T) {
 	m := newTestChatTUI()
-	m.ctrl = control.New(control.Options{})
+	m.ctrl = newOwnedTestController(t, control.Options{})
 	m.ctrl.SetToolApprovalMode(control.ToolApprovalDontAsk)
 	m.cfg = config.Default()
 	if err := m.cfg.SetUIShortcutLayout("desktop"); err != nil {

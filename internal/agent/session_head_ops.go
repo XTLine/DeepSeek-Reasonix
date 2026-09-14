@@ -84,6 +84,54 @@ func (s *Session) SwitchHead(path, headID string) error {
 	return nil
 }
 
+// LoadSessionHeadReadOnly materializes one legacy schema-2 head without
+// appending a select marker or changing the source log's default head. New
+// runtimes use it to migrate historical heads into independent v3 sessions.
+func LoadSessionHeadReadOnly(path, headID string) (*Session, error) {
+	return loadSessionHeadReadOnlyWithLimits(context.Background(), path, headID, defaultSessionReplayLimits)
+}
+
+// LoadSessionHeadForMigration materializes one head from a frozen legacy DAG
+// without applying cumulative interactive-history replay budgets.
+func LoadSessionHeadForMigration(ctx context.Context, path, headID string) (*Session, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return loadSessionHeadReadOnlyWithLimits(ctx, path, headID, migrationSessionReplayLimits())
+}
+
+func loadSessionHeadReadOnlyWithLimits(ctx context.Context, path, headID string, limits sessionReplayLimits) (*Session, error) {
+	st, err := replayDAGForHeadOpReadOnlyWithLimits(ctx, path, limits)
+	if err != nil {
+		return nil, err
+	}
+	head := st.heads[headID]
+	if head == nil || head.retired {
+		return nil, fmt.Errorf("load head %s: %w", headID, ErrSessionHeadUnknown)
+	}
+	s := NewSession("")
+	s.adoptHead(st, headID, path)
+	return s, nil
+}
+
+func replayDAGForHeadOpReadOnlyWithLimits(ctx context.Context, path string, limits sessionReplayLimits) (*sessionDAGState, error) {
+	probe, err := probeSessionEventLog(path)
+	if err != nil {
+		return nil, err
+	}
+	if !probe.dag {
+		return nil, ErrSessionNotDAG
+	}
+	st, err := replaySessionDAG(ctx, store.SessionEventLog(path), limits)
+	if err != nil {
+		return nil, err
+	}
+	if st.damaged {
+		return nil, fmt.Errorf("legacy session has an incomplete tail and is read-only")
+	}
+	return st, nil
+}
+
 // SelectSessionHead records the default head of a session that is not open
 // in this process (the versions UI acting on a closed conversation).
 func SelectSessionHead(path, headID string) error {

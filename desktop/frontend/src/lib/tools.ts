@@ -129,18 +129,6 @@ export type TodoStatus = "pending" | "in_progress" | "completed";
 export interface Todo {
   content: string;
   status: TodoStatus | string;
-  activeForm?: string;
-  level?: number; // 0 = phase, 1 = sub-step of the phase above it
-}
-
-// parseTodos pulls the task list out of a todo_write call's args.
-export function parseTodos(args: string): Todo[] {
-  try {
-    const a = JSON.parse(args) as { todos?: Todo[] };
-    return Array.isArray(a.todos) ? a.todos : [];
-  } catch {
-    return [];
-  }
 }
 
 function plusMinus(original: string, modified: string): { add: number; del: number } {

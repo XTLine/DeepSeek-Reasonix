@@ -5,6 +5,10 @@ import "reasonix/internal/agent"
 // SessionMeta summarises one saved session for the history panel.
 type SessionMeta struct {
 	Path           string `json:"path"`
+	SessionID      string `json:"sessionId,omitempty"`
+	HostID         string `json:"hostId,omitempty"`
+	Codec          string `json:"codec,omitempty"`
+	Error          string `json:"error,omitempty"`
 	Preview        string `json:"preview"`         // first user message
 	Title          string `json:"title,omitempty"` // user-chosen name, when set (overrides preview)
 	Turns          int    `json:"turns"`

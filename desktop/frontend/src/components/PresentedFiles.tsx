@@ -7,7 +7,7 @@ import type { PresentedFileView } from "../lib/chatViewSource";
 import type { TurnFileView } from "../lib/turnFiles";
 import { useT } from "../lib/i18n";
 import {
-  invalidateFileResourceNavigation, openResource, performResourceAction, resolveFileResourcePath,
+  openResource, performResourceAction, resolveFileResourcePath,
   type FileResourceRef, type PresentedFileAction,
 } from "../lib/presentedFileNavigation";
 import { fileResourceCapabilities } from "../lib/fileResource";
@@ -30,7 +30,6 @@ function iconFor(path: string) {
 export function PresentedFiles({ files, tabId, hostId }: { files: readonly PresentedFileView[]; tabId?: string; hostId?: string }) {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
-  useEffect(() => invalidateFileResourceNavigation, []);
   const shown = expanded ? files : files.slice(0, 4);
   if (!files.length) return null;
   return <section className="presented-files" aria-label={t("present.files")}>
@@ -48,7 +47,6 @@ export function PresentedFiles({ files, tabId, hostId }: { files: readonly Prese
 export function ModifiedFiles({ files, tabId, hostId }: { files: readonly TurnFileView[]; tabId?: string; hostId?: string }) {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
-  useEffect(() => invalidateFileResourceNavigation, []);
   const shown = expanded ? files : files.slice(0, 6);
   if (!files.length) return null;
   return <section className="turn-files" aria-label={t("present.modifiedFiles")}>

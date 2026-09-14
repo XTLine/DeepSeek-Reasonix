@@ -216,12 +216,6 @@ type readerExecutionIntentKey struct{}
 // drift returns a retryable error with zero execution.
 type nonDestructiveMCPExecutionIntentKey struct{}
 
-// planReplacementAuthorizationKey carries a one-call authorization from the
-// host's Auto plan gate. It lets todo_write replace the current in_progress
-// step after the plan transition has been reviewed, without weakening ordinary
-// todo continuity or exposing an authorization bit in the model-visible schema.
-type planReplacementAuthorizationKey struct{}
-
 // WithReaderExecutionIntent marks ctx as a reader-authorized MCP invocation.
 func WithReaderExecutionIntent(ctx context.Context) context.Context {
 	return context.WithValue(ctx, readerExecutionIntentKey{}, true)
@@ -246,20 +240,6 @@ func WithNonDestructiveMCPExecutionIntent(ctx context.Context) context.Context {
 func HasNonDestructiveMCPExecutionIntent(ctx context.Context) bool {
 	intent, _ := ctx.Value(nonDestructiveMCPExecutionIntentKey{}).(bool)
 	return intent
-}
-
-// WithPlanReplacementAuthorization marks one reviewed todo_write invocation as
-// allowed to replace its current step. Callers must not reuse the returned
-// context for unrelated tool calls.
-func WithPlanReplacementAuthorization(ctx context.Context) context.Context {
-	return context.WithValue(ctx, planReplacementAuthorizationKey{}, true)
-}
-
-// HasPlanReplacementAuthorization reports whether the host approved replacing
-// the active step for this exact tool invocation.
-func HasPlanReplacementAuthorization(ctx context.Context) bool {
-	authorized, _ := ctx.Value(planReplacementAuthorizationKey{}).(bool)
-	return authorized
 }
 
 // SnipHint describes how context maintenance should shorten a stale, oversized

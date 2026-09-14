@@ -8,14 +8,27 @@ import (
 	"strings"
 
 	"reasonix/internal/agent"
+	"reasonix/internal/control"
 )
 
 const (
 	sessionPathHeader           = "X-Reasonix-Session-Path"
+	sessionIDHeader             = "X-Reasonix-Session-ID"
 	expectedSessionPathHeader   = "X-Reasonix-Expected-Session-Path"
+	expectedSessionIDHeader     = "X-Reasonix-Expected-Session-ID"
 	expectedModelSettingsHeader = "X-Reasonix-Expected-Model-Settings"
 	foregroundMutationMaxBody   = 8 << 20
 )
+
+func writeSessionIDHeader(w http.ResponseWriter, ctrl control.SessionAPI) {
+	identity, ok := ctrl.(control.IdentityLifecycle)
+	if !ok {
+		return
+	}
+	if ref, bound := identity.SessionRef(); bound {
+		w.Header().Set(sessionIDHeader, ref.SessionID)
+	}
+}
 
 var errExpectedSessionChanged = errors.New("active session changed; retry on the current session")
 
@@ -24,6 +37,17 @@ var errExpectedSessionChanged = errors.New("active session changed; retry on the
 // compatibility with browser clients and older Desktop builds. bindMu must be
 // held so validation and controller use share one publication epoch.
 func (s *Server) expectedSessionErrorLocked(r *http.Request) error {
+	if expectedID := strings.TrimSpace(r.Header.Get(expectedSessionIDHeader)); expectedID != "" {
+		identity, ok := s.ctl().(control.IdentityLifecycle)
+		if !ok {
+			return errExpectedSessionChanged
+		}
+		ref, ok := identity.SessionRef()
+		if !ok || ref.SessionID != expectedID {
+			return errExpectedSessionChanged
+		}
+		return nil
+	}
 	return s.expectedSessionPathErrorLocked(r.Header.Get(expectedSessionPathHeader))
 }
 

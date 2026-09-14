@@ -1,23 +1,61 @@
 package event
 
-import "reasonix/internal/nilutil"
+import (
+	goaldomain "reasonix/internal/goal"
+	"reasonix/internal/nilutil"
+)
+
+// Todo is the v2 execution protocol's complete current-turn todo item. It is
+// intentionally flat; legacy hierarchy and sign-off fields never enter this
+// runtime projection.
+type Todo struct {
+	Content string `json:"content"`
+	Status  string `json:"status"`
+}
+
+// PendingInteraction is an immutable identity from the controller's shared
+// interaction registry. Answer content and authorization are never exposed in
+// the replaceable runtime snapshot.
+type PendingInteraction struct {
+	RequestID    string `json:"requestId"`
+	ToolCallID   string `json:"toolCallId,omitempty"`
+	Kind         string `json:"kind"`
+	HeadID       string `json:"headId"`
+	TurnID       string `json:"turnId"`
+	RuntimeEpoch string `json:"runtimeEpoch"`
+}
 
 // RuntimeStateSnapshot is a host-only, replaceable observation. It is never a
 // transcript or durable turn record. Running retains the legacy admission gate.
 type RuntimeStateSnapshot struct {
-	SchemaVersion   int        `json:"schemaVersion"`
-	RuntimeEpoch    string     `json:"runtimeEpoch"`
-	Revision        uint64     `json:"revision"`
-	Phase           string     `json:"phase"`
-	Running         bool       `json:"running"`
-	TurnID          string     `json:"turnId"`
-	TurnStatus      TurnStatus `json:"turnStatus"`
-	TurnEventSeq    uint64     `json:"turnEventSeq"`
-	PendingPrompt   bool       `json:"pendingPrompt"`
-	CancelRequested bool       `json:"cancelRequested"`
-	Cancellable     bool       `json:"cancellable"`
-	BackgroundJobs  int        `json:"backgroundJobs"`
-	Activity        string     `json:"activity"`
+	SchemaVersion    int                  `json:"schemaVersion"`
+	HostID           string               `json:"hostId,omitempty"`
+	SessionID        string               `json:"sessionId,omitempty"`
+	SessionCodec     string               `json:"sessionCodec,omitempty"`
+	RuntimeEpoch     string               `json:"runtimeEpoch"`
+	ActivityRevision uint64               `json:"activityRevision"`
+	Revision         uint64               `json:"revision"`
+	Phase            string               `json:"phase"`
+	Running          bool                 `json:"running"`
+	TurnID           string               `json:"turnId"`
+	TurnStatus       TurnStatus           `json:"turnStatus"`
+	TurnEventSeq     uint64               `json:"turnEventSeq"`
+	CommittedSeq     uint64               `json:"committedEventSeq"`
+	DurableSeq       uint64               `json:"durableEventSeq"`
+	Persistence      string               `json:"persistenceStatus"`
+	PersistenceErr   string               `json:"persistenceError,omitempty"`
+	HeadID           string               `json:"headId"`
+	PendingPrompt    bool                 `json:"pendingPrompt"`
+	Interactions     []PendingInteraction `json:"pendingInteractions"`
+	Todos            []Todo               `json:"todos"`
+	TodoWritten      bool                 `json:"todoWritten"`
+	CancelRequested  bool                 `json:"cancelRequested"`
+	Cancellable      bool                 `json:"cancellable"`
+	BackgroundJobs   int                  `json:"backgroundJobs"`
+	Activity         string               `json:"activity"`
+	Recovery         *RecoveryStatus      `json:"recovery,omitempty"`
+	Goal             *goaldomain.View     `json:"goal,omitempty"`
+	GoalError        string               `json:"goalError,omitempty"`
 }
 
 func (s RuntimeStateSnapshot) ActiveWork() bool {

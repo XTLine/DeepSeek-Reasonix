@@ -1607,7 +1607,7 @@ es.onmessage=ev=>{setConnState('connected');
     case 'text': currentReasoning=null; appendText(e.text||''); break;
     case 'message': finalizeMsg(); break;
     case 'tool_dispatch': if(e.tool)renderToolDispatch(e.tool); break;
-    case 'tool_result': if(e.tool){renderToolResult(e.tool);if(e.tool.name==='todo_write'&&!e.tool.parentId&&!e.tool.err){try{const ts=parseTodos(e.tool.args);if(ts.length){todosState=ts;renderTodoPanel();}}catch{}}} break;
+    case 'tool_result': if(e.tool){renderToolResult(e.tool);if(!e.tool.parentId&&!e.tool.err&&e.tool.todoWritten&&Array.isArray(e.tool.todos)){todosState=e.tool.todos;renderTodoPanel();}} break;
     case 'tool_progress': if(e.tool)renderToolProgress(e.tool); break;
     case 'usage':
       if(e.usage){turnTokens=e.usage.completionTokens||0;
@@ -1940,10 +1940,6 @@ function toggleGoalMode(){
 
 // ── todo panel ──
 let todosState=[],todosDismissed=false;
-function parseTodos(args){
-  try{const a=JSON.parse(args);return Array.isArray(a.todos)?a.todos:[];}
-  catch{return[];}
-}
 function todoStatusLabel(s){
   switch(String(s||'').trim()){
     case'completed':return '✓';
@@ -1962,14 +1958,14 @@ function renderTodoPanel(){
   const current=todosState.find(t=>String(t.status||'').trim()==='in_progress');
   const allDone=done===total;
   badge.textContent=done+'/'+total;
-  summary.textContent=(current?.activeForm||current?.content||todosState[todosState.length-1]?.content||'').slice(0,60);
+  summary.textContent=(current?.content||todosState[todosState.length-1]?.content||'').slice(0,60);
   dismiss.style.display=allDone?'':'none';
   if(allDone)panel.classList.add('todos--collapsed');
   list.innerHTML='';
   todosState.forEach((t,i)=>{
     const st=String(t.status||'').trim();
-    const li=el('li','todos__item todos__item--'+st+(t.level?' todos__item--sub':''));
-    li.innerHTML='<span class="todos__status todos__status--'+st+'">'+todoStatusLabel(st)+'</span><span class="todos__text">'+escHtml((st==='in_progress'&&t.activeForm)?t.activeForm:t.content)+'</span>';
+    const li=el('li','todos__item todos__item--'+st);
+    li.innerHTML='<span class="todos__status todos__status--'+st+'">'+todoStatusLabel(st)+'</span><span class="todos__text">'+escHtml(t.content)+'</span>';
     list.appendChild(li);
   });
   panel.classList.add('todos--visible');

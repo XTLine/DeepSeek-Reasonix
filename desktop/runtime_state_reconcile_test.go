@@ -25,7 +25,7 @@ func TestRemoteRuntimeMissingSelectedSessionRequiresOwnConfirmation(t *testing.T
 		t.Fatal(err)
 	}
 	view := a.GetRuntimeStateSnapshot().Sessions[0]
-	if view.Freshness != "unknown" || view.State != old {
+	if view.Freshness != "unknown" || !reflect.DeepEqual(view.State, old) {
 		t.Fatalf("missing runtime became authoritative: %+v", view)
 	}
 	other := remoteRuntimeTestSnapshot("other", 1, "idle")
@@ -38,7 +38,7 @@ func TestRemoteRuntimeMissingSelectedSessionRequiresOwnConfirmation(t *testing.T
 		t.Fatal(err)
 	}
 	view = a.GetRuntimeStateSnapshot().Sessions[0]
-	if view.Freshness != "synced" || view.State != old {
+	if view.Freshness != "synced" || !reflect.DeepEqual(view.State, old) {
 		t.Fatalf("identical authority did not confirm: %+v", view)
 	}
 }
@@ -171,7 +171,7 @@ func TestRemoteRuntimeInvalidFullSnapshotCannotPrune(t *testing.T) {
 	if _, err := a.SyncRuntimeState(); err == nil {
 		t.Fatal("invalid payload accepted")
 	}
-	if len(tab.runtimeStates) != 2 || tab.runtimeStates[runtimeRemoteTestPath] != old {
+	if len(tab.runtimeStates) != 2 || !reflect.DeepEqual(tab.runtimeStates[runtimeRemoteTestPath], old) {
 		t.Fatal("invalid full GET replaced or pruned facts")
 	}
 	for _, view := range a.GetRuntimeStateSnapshot().Sessions {
@@ -180,7 +180,7 @@ func TestRemoteRuntimeInvalidFullSnapshotCannotPrune(t *testing.T) {
 		}
 	}
 	a.acceptRemoteRuntimeFrame(tab.id, tab.gen, runtimeRemoteTestPath, json.RawMessage(`{"runtimeState":{"schemaVersion":1,"runtimeEpoch":"controller","revision":2,"phase":"idle"}}`))
-	if tab.runtimeStates[runtimeRemoteTestPath] != old {
+	if !reflect.DeepEqual(tab.runtimeStates[runtimeRemoteTestPath], old) {
 		t.Fatal("invalid SSE replaced facts")
 	}
 }

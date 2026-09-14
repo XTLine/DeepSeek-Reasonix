@@ -81,6 +81,7 @@ func (s *Server) clearSessionCommand(w http.ResponseWriter, r *http.Request, emi
 	}
 	path := s.ctl().SessionPath()
 	w.Header().Set(sessionPathHeader, path)
+	writeSessionIDHeader(w, s.ctl())
 	s.announceSessionChanged(path, true)
 	if emitNotice {
 		s.bc.Emit(event.Event{Kind: event.Notice, Text: "context cleared", SessionPath: path})
@@ -107,6 +108,7 @@ func (s *Server) mirroredForegroundReplacement(w http.ResponseWriter, r *http.Re
 	}
 	path := s.ctl().SessionPath()
 	w.Header().Set(sessionPathHeader, path)
+	writeSessionIDHeader(w, s.ctl())
 	s.announceSessionChanged(path, true)
 	if emitNotice {
 		s.bc.Emit(event.Event{Kind: event.Notice, Text: noticeText, SessionPath: path})
@@ -141,6 +143,7 @@ func (s *Server) newSessionCommand(w http.ResponseWriter, r *http.Request, emitN
 		}
 		path := s.ctl().SessionPath()
 		w.Header().Set(sessionPathHeader, path)
+		writeSessionIDHeader(w, s.ctl())
 		s.announceSessionChanged(path, true)
 		if emitNotice {
 			s.bc.Emit(event.Event{Kind: event.Notice, Text: "new session", SessionPath: path})
@@ -174,6 +177,7 @@ func (s *Server) newSessionCommand(w http.ResponseWriter, r *http.Request, emitN
 	}
 	path := cur.SessionPath()
 	w.Header().Set(sessionPathHeader, path)
+	writeSessionIDHeader(w, cur)
 	s.announceSessionChanged(path, true)
 	if emitNotice {
 		s.bc.Emit(event.Event{Kind: event.Notice, Text: "new session", SessionPath: path})

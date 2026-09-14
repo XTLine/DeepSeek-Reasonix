@@ -18,7 +18,7 @@ func TestDeleteSessionValidatesLocalBasenameBeforeCleanup(t *testing.T) {
 	dir := t.TempDir()
 	bc := NewBroadcaster()
 	ctrl := control.New(control.Options{Sink: bc, SessionDir: dir, SessionPath: filepath.Join(dir, "active.jsonl")})
-	handler := New(ctrl, bc, config.ServeConfig{}).Handler()
+	handler := newLifecycleTestServer(t, ctrl, bc, config.ServeConfig{}).Handler()
 	post := func(name string) *httptest.ResponseRecorder {
 		t.Helper()
 		body, err := json.Marshal(map[string]string{"name": name})

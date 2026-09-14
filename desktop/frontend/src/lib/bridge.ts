@@ -1,7 +1,14 @@
 import { makeMockModelSettingsBindings, type ModelSettingsBindings } from "./modelSettingsBridge";
 import { mockProviderTemplate, mockPreset, mockBundlePreset, mockKimiAPIModels, mockLongCatModels, mockTokenRhythmModels, mockTokenRhythmModelOverrides, mockMiMoV25Models, mockMiniMaxModels, mockGLMAPIModels, mockGLMCodingModels, mockGLMAnthropicModels, mockQwenAPIModels, mockQwenPlanModels, mockQwenPlanVisionModels, mockStepFunModels, mockOpenCodeGoModels, mockNovitaModels, mockGMIModels, mockVercelModels, mockOllamaCloudModels } from "./mockProviderTemplates";
 // The Electron host and the browser mock share this React-to-Go contract.
-import type { DesktopCommandName } from "../generated/desktopContract.generated";
+import type {
+  CancelReceipt,
+  DesktopCommandName,
+  MessageHistoryPage,
+  Ref as SessionContentRef,
+  SearchHistoryPage,
+  SessionHistoryContentChunk,
+} from "../generated/desktopContract.generated";
 import type { InvocationRequest } from "./invocationDisplay";
 import type { FollowupBindings } from "./pendingFollowup";
 import { addBreadcrumb } from "./breadcrumbs";
@@ -156,6 +163,7 @@ import type {
   WorkspaceView,
   SessionClearResult,
 } from "./types";
+import { editMockGoalTab } from "./mockGoalLifecycle";
 import { browserPreviewShellSupport } from "./shellSupportPreview";
 import { desktopHost } from "./desktopHost";
 export * from "./remoteTabEvents";
@@ -283,6 +291,7 @@ export interface AppBindings extends ToolRecoveryBindings, ModelSettingsBindings
   InboxHasItems(tabID: string): Promise<boolean>;
   Cancel(): Promise<void>;
   CancelTab(tabID: string): Promise<void>;
+  CancelSessionForTab?(tabID: string): Promise<CancelReceipt>;
   CancelTabWithInboxItems(tabID: string, itemIDs: string[]): Promise<void>;
   CancelTabWithInboxItemsResult?(tabID: string, itemIDs: string[]): Promise<{ discardedItemIds: string[]; warning?: string }>;
   InterruptTurnForTab?(tabID: string, turnID: string): Promise<void>;
@@ -337,6 +346,7 @@ export interface AppBindings extends ToolRecoveryBindings, ModelSettingsBindings
   SetComposerProfileForTab(tabID: string, collaborationMode: string, toolApprovalMode: string, goal: string): Promise<string[] | void>;
   SetGoal(goal: string): Promise<void>;
   SetGoalForTab(tabID: string, goal: string): Promise<void>;
+  EditGoalForTab(tabID: string, objective: string, maxGoalRounds: number | null): Promise<void>;
   ResumeGoalForTab(tabID: string): Promise<boolean>;
   PauseGoalForTab(tabID: string): Promise<boolean>;
   ClearGoalForTab(tabID: string): Promise<void>;
@@ -353,6 +363,12 @@ export interface AppBindings extends ToolRecoveryBindings, ModelSettingsBindings
   // Windowed history paging (supersedes HistoryPageForTab for tab history).
   HistorySliceForTab(tabID: string, req: HistorySliceRequest): Promise<HistorySlice>;
   HistoryContentForTab(tabID: string, ref: HistoryContentRef, chunkIndex: number): Promise<HistoryContentChunk>;
+  SessionHistoryPageForTab(tabID: string, cursor: string, limit: number): Promise<MessageHistoryPage>;
+  SessionHistoryContentForTab(tabID: string, ref: SessionContentRef, offset: number): Promise<SessionHistoryContentChunk>;
+  RemoteSessionHistoryPageForTab(tabID: string, cursor: string, limit: number): Promise<MessageHistoryPage>;
+  RemoteSessionHistoryContentForTab(tabID: string, ref: SessionContentRef, offset: number): Promise<SessionHistoryContentChunk>;
+  SearchSessionHistoryForTab(tabID: string, textQuery: string, cursor: string, limit: number): Promise<SearchHistoryPage>;
+  RemoteSearchSessionHistoryForTab(tabID: string, textQuery: string, cursor: string, limit: number): Promise<SearchHistoryPage>;
   HistoryCheckpointTurnsForTab(tabID: string): Promise<number[]>;
   Checkpoints(): Promise<CheckpointMeta[]>;
   CheckpointsForTab(tabID: string): Promise<CheckpointMeta[]>;
@@ -430,7 +446,7 @@ export interface AppBindings extends ToolRecoveryBindings, ModelSettingsBindings
   CloseTabWithPolicy(tabID: string, policy: "keep_running" | "stop_and_close"): Promise<void>;
   ToolResultForTab(tabID: string, toolID: string): Promise<{ name?: string; args: string; output: string; execution?: import("./types").WireShellExecution; mcpApp?: import("./types").MCPAppPresentation; presentedFiles?: import("./types").PresentedFile[] } | null>;
   Meta(): Promise<Meta>;
-  MetaForTab(tabID: string): Promise<Meta>; DismissTodoBatchForTab(tabID: string, batchKey: string): Promise<void>;
+  MetaForTab(tabID: string): Promise<Meta>;
   Commands(): Promise<CommandInfo[]>;
   Capabilities(): Promise<CapabilitiesView>;
   MCPServers(): Promise<ServerView[]>;
@@ -534,6 +550,7 @@ export interface AppBindings extends ToolRecoveryBindings, ModelSettingsBindings
   SaveClipboardImage(): Promise<string>;
   SavePastedFile(name: string, dataUrl: string): Promise<string>;
   PickExportFile(defaultFilename: string, mimeType: string): Promise<string>;
+  ExportGoalDiagnostics(): Promise<string>;
   SaveExportFile(path: string, payload: string, base64Encoded: boolean): Promise<void>;
   SaveExportImageFiles(path: string, payloads: string[]): Promise<void>;
   AttachDropped(path: string): Promise<DroppedItem>;
@@ -2593,7 +2610,7 @@ function makeMockApp(): AppBindings {
             args: JSON.stringify({
               todos: [
                 { content: t("mock.todo1"), status: "completed" },
-                { content: t("mock.todo2"), activeForm: t("mock.todo2ActiveForm"), status: "in_progress" },
+                { content: t("mock.todo2"), status: "in_progress" },
                 { content: t("mock.todo3"), status: "pending" },
               ],
             }),
@@ -2609,7 +2626,7 @@ function makeMockApp(): AppBindings {
             args: JSON.stringify({
               todos: [
                 { content: t("mock.todo1"), status: "completed" },
-                { content: t("mock.todo2"), activeForm: t("mock.todo2ActiveForm"), status: "in_progress" },
+                { content: t("mock.todo2"), status: "in_progress" },
                 { content: t("mock.todo3"), status: "pending" },
               ],
             }),
@@ -2879,6 +2896,10 @@ function makeMockApp(): AppBindings {
         async CancelTab(_tabID) {
           await withMockTabScope(_tabID, () => this.Cancel());
         },
+        async CancelSessionForTab(_tabID) {
+          await withMockTabScope(_tabID, () => this.Cancel());
+          return { sessionRef: "", headId: "", runtimeEpoch: "mock", accepted: true, alreadyIdle: false, recoveryRequired: false };
+        },
         async CancelTabWithInboxItems(_tabID, _itemIDs) {
           await withMockTabScope(_tabID, () => this.Cancel());
         },
@@ -3072,10 +3093,7 @@ function makeMockApp(): AppBindings {
           });
           return drainMockApprovalPreviews(nextToolApproval);
         },
-        async SetGoal(goal) {
-          const active = mockTabs.find((tab) => tab.active);
-          if (active) await this.SetGoalForTab(active.id, goal);
-        },
+        async SetGoal(goal) { const active = mockTabs.find((tab) => tab.active); if (active) await this.SetGoalForTab(active.id, goal); },
         async SetGoalForTab(tabID, goal) {
           const nextGoal = goal.trim();
           mockTabs = mockTabs.map((tab) =>
@@ -3090,6 +3108,7 @@ function makeMockApp(): AppBindings {
               : tab,
           );
         },
+        async EditGoalForTab(tabID, objective, maxGoalRounds) { mockTabs = mockTabs.map((tab) => editMockGoalTab(tab, tabID, objective, maxGoalRounds)); },
         async ResumeGoalForTab(tabID) {
           let resumed = false;
           mockTabs = mockTabs.map((tab) => {
@@ -3108,9 +3127,7 @@ function makeMockApp(): AppBindings {
           });
           return paused;
         },
-        async ClearGoalForTab(tabID) {
-          await this.SetGoalForTab(tabID, "");
-        },
+        async ClearGoalForTab(tabID) { await this.SetGoalForTab(tabID, ""); },
         async Compact() {},
         async CompactForTab() {},
         async NewSession() {},
@@ -3199,6 +3216,24 @@ function makeMockApp(): AppBindings {
           out.data = mockHistoryContentField(message, ref);
           out.chunks = 1;
           return out;
+        },
+        async SessionHistoryPageForTab(): Promise<MessageHistoryPage> {
+          return { messages: [], snapshotSequence: 0, hasMore: false };
+        },
+        async SessionHistoryContentForTab(_tabID: string, ref: SessionContentRef, offset: number): Promise<SessionHistoryContentChunk> {
+          return { data: "", nextOffset: Math.min(offset, ref.bytes), done: offset >= ref.bytes };
+        },
+        async RemoteSessionHistoryPageForTab(): Promise<MessageHistoryPage> {
+          return { messages: [], snapshotSequence: 0, hasMore: false };
+        },
+        async RemoteSessionHistoryContentForTab(_tabID: string, ref: SessionContentRef, offset: number): Promise<SessionHistoryContentChunk> {
+          return { data: "", nextOffset: Math.min(offset, ref.bytes), done: offset >= ref.bytes };
+        },
+        async SearchSessionHistoryForTab(): Promise<SearchHistoryPage> {
+          return { hits: [], snapshotSequence: 0, hasMore: false };
+        },
+        async RemoteSearchSessionHistoryForTab(): Promise<SearchHistoryPage> {
+          return { hits: [], snapshotSequence: 0, hasMore: false };
         },
     async ListSessions() {
       return sessions.map((s) => ({ ...s }));
@@ -3447,7 +3482,7 @@ function makeMockApp(): AppBindings {
             goal: active?.goal ?? "",
             goalStatus: active?.goalStatus ?? (active?.goal ? "running" : "stopped"),
           };
-        }, async DismissTodoBatchForTab() {},
+        },
         async MetaForTab(tabID) {
           const tab = mockTabs.find((item) => item.id === tabID) ?? mockTabs.find((item) => item.active) ?? mockTabs[0];
           const toolApprovalMode = normalizeToolApprovalMode(tab?.toolApprovalMode, tab ? normalizeMode(tab.mode) : "normal", settings.autoApproveTools);
@@ -4133,6 +4168,9 @@ function makeMockApp(): AppBindings {
     },
     async PickExportFile(defaultFilename: string, _mimeType: string) {
       return defaultFilename;
+    },
+    async ExportGoalDiagnostics() {
+      return "goal-diagnostics.json";
     },
     async SaveExportFile(path: string, payload: string, base64Encoded: boolean) {
       const a = document.createElement("a");

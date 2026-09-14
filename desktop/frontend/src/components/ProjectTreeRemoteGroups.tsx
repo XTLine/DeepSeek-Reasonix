@@ -50,7 +50,9 @@ export function mergeRemoteSessionsIntoTree(
     if (!node.remote) return node;
     const rows = sessions[remoteProjectKey(node.remote)] ?? [];
     const remoteChildren = rows.map((row): ProjectNode => {
-      const session = runtime?.sessions.find(session => session.hostId === node.remote!.hostId && session.workspaceRoot === node.remote!.workspace && session.sessionPath === row.path);
+      const session = runtime?.sessions.find(session => session.hostId === node.remote!.hostId && session.workspaceRoot === node.remote!.workspace && (
+        row.sessionId ? session.sessionId === row.sessionId : session.sessionPath === row.path
+      ));
       const state = selectRuntime(session, failed);
       const status = state.unknown ? "unknown" : state.known && state.kind !== "idle" && state.kind !== "legacy" ? state.kind : undefined;
       return ({
@@ -65,7 +67,7 @@ export function mergeRemoteSessionsIntoTree(
       status: status as ProjectNode["status"],
       lastActivityAt: row.lastActivityAt,
       pinned: row.pinned,
-      remoteSession: { hostId: node.remote!.hostId, workspace: node.remote!.workspace, name: row.name, path: row.path, title: row.title },
+      remoteSession: { hostId: node.remote!.hostId, workspace: node.remote!.workspace, name: row.name, path: row.path, sessionId: row.sessionId, title: row.title },
       children: [],
     }); });
     return { ...node, children: [...remoteChildren, ...(node.children ?? [])] };
@@ -112,12 +114,12 @@ export function useRemoteSessionActions(
 }
 
 export function openRemoteSessionNode(
-  remote: { hostId: string; workspace: string; name: string; path?: string; title?: string } | undefined,
-  open: (ref: RemoteTabRefView, opts?: { sessionName?: string; sessionPath?: string; sessionTitle?: string; focus?: boolean }) => Promise<void>,
+  remote: { hostId: string; workspace: string; name: string; path?: string; sessionId?: string; title?: string } | undefined,
+  open: (ref: RemoteTabRefView, opts?: { sessionName?: string; sessionPath?: string; sessionId?: string; sessionTitle?: string; focus?: boolean }) => Promise<void>,
 ): boolean {
   if (!remote) return false;
-  void open(remote, remote.name || remote.path
-    ? { sessionName: remote.name, sessionPath: remote.path, sessionTitle: remote.title }
+  void open(remote, remote.name || remote.path || remote.sessionId
+    ? { sessionName: remote.name, sessionPath: remote.path, sessionId: remote.sessionId, sessionTitle: remote.title }
     : { focus: true });
   return true;
 }
@@ -176,15 +178,15 @@ export function useRemoteProjectGroups(
 
   const openRemoteProject = useCallback(async (
     ref: RemoteTabRefView,
-    opts?: { newSession?: boolean; sessionName?: string; sessionPath?: string; sessionTitle?: string; focus?: boolean },
+    opts?: { newSession?: boolean; sessionName?: string; sessionPath?: string; sessionId?: string; sessionTitle?: string; focus?: boolean },
   ) => {
     const key = remoteProjectKey(ref);
     if (opening.current.has(key)) return;
     opening.current.add(key);
     try {
       const outcome = await navigateRemote(ref,
-        opts?.focus ? {} : opts?.sessionName || opts?.sessionPath
-          ? { sessionName: opts.sessionName, sessionPath: opts.sessionPath, sessionTitle: opts.sessionTitle }
+        opts?.focus ? {} : opts?.sessionName || opts?.sessionPath || opts?.sessionId
+          ? { sessionName: opts.sessionName, sessionPath: opts.sessionPath, sessionId: opts.sessionId, sessionTitle: opts.sessionTitle }
           : { newSession: true });
       if (outcome.status === "cancelled") return;
       if (outcome.status === "failed") throw outcome.error;
@@ -386,7 +388,7 @@ interface RemoteMenuOptions {
   ref: RemoteTabRefView;
   t: Translator;
   closeMenu: () => void;
-  openRemoteProject: (ref: RemoteTabRefView, opts?: { newSession?: boolean; sessionName?: string; sessionPath?: string; sessionTitle?: string; focus?: boolean }) => Promise<void>;
+  openRemoteProject: (ref: RemoteTabRefView, opts?: { newSession?: boolean; sessionName?: string; sessionPath?: string; sessionId?: string; sessionTitle?: string; focus?: boolean }) => Promise<void>;
   openRemoteWindow: (ref: RemoteTabRefView) => Promise<void>;
   setRemoteSessions: Dispatch<SetStateAction<Record<string, RemoteSessionView[]>>>;
   refresh: () => Promise<void>;

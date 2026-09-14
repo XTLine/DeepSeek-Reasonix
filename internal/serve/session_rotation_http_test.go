@@ -39,7 +39,7 @@ func TestServeSilentRotationsPublishSessionChanged(t *testing.T) {
 			ctrl := control.New(control.Options{Executor: exec, Sink: bc, SessionDir: t.TempDir()})
 			ctrl.EnsureSessionPath()
 			oldPath := ctrl.SessionPath()
-			server := New(ctrl, bc, config.ServeConfig{})
+			server := newLifecycleTestServer(t, ctrl, bc, config.ServeConfig{})
 			all, stop := bc.SubscribeAll()
 			defer stop()
 			httpServer := httptest.NewServer(server.Handler())
@@ -114,7 +114,7 @@ func TestServeResumeBuffersSynchronousEventsUntilRoutePublication(t *testing.T) 
 func TestServeClearSessionEndpoint(t *testing.T) {
 	bc := NewBroadcaster()
 	ctrl := control.New(control.Options{Sink: bc, SessionDir: t.TempDir()})
-	srv := httptest.NewServer(New(ctrl, bc, config.ServeConfig{}).Handler())
+	srv := httptest.NewServer(newLifecycleTestServer(t, ctrl, bc, config.ServeConfig{}).Handler())
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/clear", "application/json", nil)
@@ -134,7 +134,7 @@ func TestServeSubmitClearCompletesRotationBeforeReturning(t *testing.T) {
 	bc := NewBroadcaster()
 	ctrl := control.New(control.Options{Sink: bc, SessionDir: t.TempDir()})
 	ctrl.EnsureSessionPath()
-	srv := httptest.NewServer(New(ctrl, bc, config.ServeConfig{}).Handler())
+	srv := httptest.NewServer(newLifecycleTestServer(t, ctrl, bc, config.ServeConfig{}).Handler())
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/submit", "application/json", strings.NewReader(`{"input":"/clear"}`))
@@ -153,7 +153,7 @@ func TestServeSubmitClearCompletesRotationBeforeReturning(t *testing.T) {
 func TestServeNewSessionEndpoint(t *testing.T) {
 	bc := NewBroadcaster()
 	ctrl := control.New(control.Options{Sink: bc, SessionDir: t.TempDir()})
-	srv := httptest.NewServer(New(ctrl, bc, config.ServeConfig{}).Handler())
+	srv := httptest.NewServer(newLifecycleTestServer(t, ctrl, bc, config.ServeConfig{}).Handler())
 	defer srv.Close()
 	resp, err := http.Post(srv.URL+"/new", "application/json", nil)
 	if err != nil {

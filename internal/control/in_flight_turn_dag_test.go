@@ -40,7 +40,7 @@ func TestInterruptedTurnRecoveryUsesLogMarkersForSchemaTwo(t *testing.T) {
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "first"})
 	sess.Add(provider.Message{Role: provider.RoleAssistant, Content: "one"})
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test", Sink: event.Discard})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test", Sink: event.Discard})
 	if err := c.Snapshot(); err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestInterruptedTurnRecoveryUsesLogMarkersForSchemaTwo(t *testing.T) {
 	}
 	exec2 := agent.New(nil, nil, recovered, agent.Options{}, event.Discard)
 	sink := &noticeSink{}
-	c2 := New(Options{Executor: exec2, SessionDir: dir, SessionPath: path, Label: "test", Sink: sink})
+	c2 := newOwnedTestController(t, Options{Executor: exec2, SessionDir: dir, SessionPath: path, Label: "test", Sink: sink})
 	c2.recoverInterruptedTurn(path)
 
 	got := exec2.Session().Snapshot()
@@ -113,7 +113,7 @@ func TestFinishedTurnClosesLogMarkerInOneBatch(t *testing.T) {
 	path := filepath.Join(dir, "session.jsonl")
 	sess := agent.NewSession("sys")
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test", Sink: event.Discard})
+	c := newOwnedTestController(t, Options{Executor: exec, SessionDir: dir, SessionPath: path, Label: "test", Sink: event.Discard})
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "first"})
 	if err := c.Snapshot(); err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestConcurrentWriterEmitsNoticeOnBothSides(t *testing.T) {
 	reply := [][]provider.Chunk{{{Type: provider.ChunkText, Text: "ok"}, {Type: provider.ChunkDone}}}
 	sinkA, sinkB := &noticeSink{}, &noticeSink{}
 	execA := agent.New(&recordingProvider{streams: reply}, tool.NewRegistry(), agent.NewSession(systemPrompt), agent.Options{}, event.Discard)
-	ctrlA := New(Options{Runner: execA, Executor: execA, SystemPrompt: systemPrompt, SessionDir: dir, SessionPath: path, Label: "a", Sink: sinkA})
+	ctrlA := newOwnedTestController(t, Options{Runner: execA, Executor: execA, SystemPrompt: systemPrompt, SessionDir: dir, SessionPath: path, Label: "a", Sink: sinkA})
 	if err := ctrlA.RunTurn(context.Background(), "first from A"); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestConcurrentWriterEmitsNoticeOnBothSides(t *testing.T) {
 		t.Fatal(err)
 	}
 	execB := agent.New(&recordingProvider{streams: reply}, tool.NewRegistry(), agent.NewSession(systemPrompt), agent.Options{}, event.Discard)
-	ctrlB := New(Options{Runner: execB, Executor: execB, SystemPrompt: systemPrompt, SessionDir: dir, SessionPath: path, Label: "b", Sink: sinkB})
+	ctrlB := newOwnedTestController(t, Options{Runner: execB, Executor: execB, SystemPrompt: systemPrompt, SessionDir: dir, SessionPath: path, Label: "b", Sink: sinkB})
 	ctrlB.Resume(loaded, path)
 	if err := ctrlA.RunTurn(context.Background(), "second from A"); err != nil {
 		t.Fatal(err)
@@ -171,7 +171,7 @@ func TestConcurrentWriterEmitsNoticeOnBothSides(t *testing.T) {
 	}
 	execC := agent.New(&recordingProvider{streams: reply}, tool.NewRegistry(), agent.NewSession(systemPrompt), agent.Options{}, event.Discard)
 	sinkC := &noticeSink{}
-	ctrlC := New(Options{Runner: execC, Executor: execC, SystemPrompt: systemPrompt, SessionDir: dir, SessionPath: path, Label: "c", Sink: sinkC})
+	ctrlC := newOwnedTestController(t, Options{Runner: execC, Executor: execC, SystemPrompt: systemPrompt, SessionDir: dir, SessionPath: path, Label: "c", Sink: sinkC})
 	ctrlC.Resume(reopened, path)
 	notice, ok = sinkC.lastNotice()
 	if !ok || notice.Code != event.NoticeCodeSessionHeadSwitched {

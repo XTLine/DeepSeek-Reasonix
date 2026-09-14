@@ -3,7 +3,7 @@ import { createRuntimeStateStore, selectRuntime, type RuntimeProjection, type Ru
 import { startRuntimeStateSync } from "../lib/runtimeStateSync";
 import { acceptRuntimeState } from "../lib/runtimeStateReducer";
 
-const state: RuntimeState = { schemaVersion: 1, runtimeEpoch: "controller-a", revision: 1, phase: "executing", running: true,
+const state: RuntimeState = { schemaVersion: 1, runtimeEpoch: "controller-a", activityRevision: 1, revision: 1, phase: "executing", running: true,
   turnId: "turn-a", turnStatus: "in_progress", turnEventSeq: 1, pendingPrompt: false, cancelRequested: false, cancellable: true, backgroundJobs: 0, activity: "thinking" };
 const projection = (revision: number, changes: Partial<RuntimeState> = {}): RuntimeProjection => ({ epoch: "app-a", revision, topics: [],
   sessions: [{ tabId: "a", scope: "project", workspaceRoot: "/fixture", topicId: "topic", sessionPath: "/fixture/session", sessionGeneration: 1,

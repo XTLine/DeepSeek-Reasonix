@@ -165,7 +165,7 @@ func (a *App) sessionPathForSettingsRebuild(tab *WorkspaceTab) string {
 func validateModelSettingsReplacement(ctrl, previous control.SessionAPI) error {
 	if stale, err := modelSettingsNeedApply(ctrl); err != nil || stale {
 		if ctrl != previous {
-			ctrl.Close()
+			discardReplacementController(ctrl, previous)
 		}
 		if err != nil {
 			return err

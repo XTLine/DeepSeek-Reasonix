@@ -10,7 +10,7 @@ import (
 
 func TestClearSessionRefusesWhileTurnRuns(t *testing.T) {
 	exec := agent.New(nil, nil, agent.NewSession("sys"), agent.Options{}, event.Discard)
-	c := New(Options{Executor: exec})
+	c := newOwnedTestController(t, Options{Executor: exec})
 	c.mu.Lock()
 	c.running = true
 	c.mu.Unlock()

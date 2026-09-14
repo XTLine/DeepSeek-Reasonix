@@ -117,6 +117,13 @@ func (m *chatTUI) commitSessionSwitchWithLoader(path string, load func(string) (
 		return err
 	}
 	m.ctrl.Resume(loaded, path)
+	if identity, ok := m.ctrl.(control.IdentityLifecycle); ok && identity.UsesExclusiveSession() && m.leases != nil {
+		// The frozen legacy file is no longer the execution store after a
+		// successful import. Release its compatibility lease immediately.
+		if err := m.leases.Rebind(""); err != nil {
+			return err
+		}
+	}
 	return bindChatTUIAuthority(m)
 }
 

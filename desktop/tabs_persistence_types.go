@@ -11,6 +11,7 @@ type desktopTabEntry struct {
 	WorkspaceRoot     string  `json:"workspaceRoot"`
 	TopicID           string  `json:"topicId"`
 	SessionPath       string  `json:"sessionPath,omitempty"`
+	SessionID         string  `json:"sessionId,omitempty"`
 	ReadOnly          bool    `json:"readOnly,omitempty"`
 	TakeoverSpectator bool    `json:"takeoverSpectator,omitempty"`
 	Model             string  `json:"model,omitempty"`
@@ -41,6 +42,7 @@ func persistedDesktopTabEntry(tab *WorkspaceTab) desktopTabEntry {
 		WorkspaceRoot:     tab.WorkspaceRoot,
 		TopicID:           tab.TopicID,
 		SessionPath:       tab.currentSessionPath(),
+		SessionID:         tab.SessionID,
 		ReadOnly:          tab.ReadOnly,
 		TakeoverSpectator: tab.Takeover.Spectator,
 		Model:             tab.model,

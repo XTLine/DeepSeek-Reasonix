@@ -247,8 +247,11 @@ func TestListDecodesGB18030SkillFile(t *testing.T) {
 
 	st := New(Options{HomeDir: home, CustomPaths: []string{root}, DisableBuiltins: true})
 	skills := st.List()
-	if len(skills) != 1 || skills[0].Description != "中文技能" || !strings.Contains(skills[0].Body, "用中文处理任务") {
+	if len(skills) != 1 || skills[0].Description != "中文技能" || skills[0].Body != "" {
 		t.Fatalf("decoded skills = %+v", skills)
+	}
+	if loaded, ok := st.Read("cn"); !ok || !strings.Contains(loaded.Body, "用中文处理任务") {
+		t.Fatalf("selected skill body = %+v found=%v", loaded, ok)
 	}
 }
 
@@ -452,6 +455,7 @@ func TestBlankDescriptionFlatClaudeMarkdownIsSkillLike(t *testing.T) {
 			}
 
 			stderr.Reset()
+			scans := st.DiscoveryScans()
 			sk, ok := st.Read(tc.name)
 			if !ok {
 				t.Fatal("blank description marker should still make flat Claude markdown skill-like")
@@ -459,8 +463,8 @@ func TestBlankDescriptionFlatClaudeMarkdownIsSkillLike(t *testing.T) {
 			if sk.Description != "" {
 				t.Fatalf("description should stay empty, got %q", sk.Description)
 			}
-			if got := stderr.String(); !strings.Contains(got, "has no description") {
-				t.Fatalf("blank description skill should warn, got %q", got)
+			if got := stderr.String(); got != "" || st.DiscoveryScans() != scans {
+				t.Fatalf("warm cached read rescanned or repeated diagnostics: output=%q scans=%d->%d", got, scans, st.DiscoveryScans())
 			}
 		})
 	}

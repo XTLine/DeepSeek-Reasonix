@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ type sessionTagSink struct {
 	bc                  *Broadcaster
 	mu                  sync.Mutex
 	path                string
+	sessionID           string
 	active              bool
 	runtimeActive       bool
 	pending             []event.Event
@@ -45,11 +47,16 @@ func NewSessionTagSink(bc *Broadcaster) *SessionTagSink {
 }
 
 func (s *sessionTagSink) SetPath(path string) {
+	s.SetIdentity(path, "")
+}
+
+func (s *sessionTagSink) SetIdentity(path, sessionID string) {
 	s.mu.Lock()
 	if s.path != "" && s.path != canonicalSessionPath(path) {
 		s.runtimeActive = false
 	}
 	s.path = canonicalSessionPath(path)
+	s.sessionID = strings.TrimSpace(sessionID)
 	s.activateLocked()
 	s.mu.Unlock()
 }
@@ -100,6 +107,9 @@ func (s *sessionTagSink) activateLocked() {
 		if s.path != "" {
 			e.SessionPath = s.path
 		}
+		if s.sessionID != "" {
+			e.SessionID = s.sessionID
+		}
 		s.bc.Emit(e)
 	}
 	s.pending = nil
@@ -120,6 +130,9 @@ func (s *sessionTagSink) Emit(e event.Event) {
 	}
 	if s.path != "" {
 		e.SessionPath = s.path
+	}
+	if s.sessionID != "" {
+		e.SessionID = s.sessionID
 	}
 	s.bc.Emit(e)
 }
@@ -185,7 +198,11 @@ func (s *Server) setControllerPath(ctrl *control.Controller, path string) {
 		path = agent.CanonicalSessionPath(path)
 	}
 	if tag := s.tagFor(ctrl); tag != nil {
-		tag.SetPath(path)
+		sessionID := ""
+		if ref, ok := ctrl.SessionRef(); ok {
+			sessionID = ref.SessionID
+		}
+		tag.SetIdentity(path, sessionID)
 	}
 	s.bc.SetCurrentSession(path)
 }
@@ -475,7 +492,13 @@ func (s *Server) busyDetach(ctx context.Context, cur *control.Controller, target
 }
 
 func (s *Server) announceSessionChanged(path string, reset bool) {
-	s.bc.Emit(event.Event{Kind: event.SessionChanged, SessionPath: path, SessionReset: reset})
+	e := event.Event{Kind: event.SessionChanged, SessionPath: path, SessionReset: reset}
+	if identity, ok := s.ctl().(control.IdentityLifecycle); ok {
+		if ref, bound := identity.SessionRef(); bound {
+			e.SessionID = ref.SessionID
+		}
+	}
+	s.bc.Emit(e)
 	if ctrl, ok := s.ctl().(*control.Controller); ok {
 		if tag := s.tagFor(ctrl); tag != nil {
 			tag.ActivateRuntime()

@@ -4,13 +4,18 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"reasonix/internal/agent"
+	"reasonix/internal/control"
+	"reasonix/internal/session"
 	"reasonix/internal/store"
 )
 
 type sessionListEntry struct {
+	HostID     string `json:"hostId,omitempty"`
+	SessionID  string `json:"sessionId,omitempty"`
 	Name       string `json:"name"`
 	Path       string `json:"path"`
 	Title      string `json:"title,omitempty"`
@@ -30,7 +35,9 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entries, err := os.ReadDir(dir)
-	if err != nil {
+	if os.IsNotExist(err) {
+		entries = nil
+	} else if err != nil {
 		writeJSON(w, []any{})
 		return
 	}
@@ -73,8 +80,26 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, row)
 	}
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
+	if concrete, ok := ctrl.(*control.Controller); ok {
+		if service := concrete.SessionService(); service != nil {
+			_, runtime, bound := concrete.SessionBinding()
+			page, listErr := service.Query().List(r.Context(), "", 100)
+			if listErr == nil {
+				for _, info := range page.Sessions {
+					row := sessionListEntry{
+						HostID: info.Ref.HostID, SessionID: info.Ref.SessionID, Name: info.SessionID,
+						Title: info.Title, Turns: info.Turns, MtimeMilli: info.CreatedAt.UnixMilli(),
+						Current: bound && info.Ref == runtime.Ref(),
+					}
+					if live, exists := service.Runtime(info.Ref); exists {
+						phase := live.Snapshot().Phase
+						row.Running = phase == session.RuntimeRunning || phase == session.RuntimeCancelling || phase == session.RuntimeRecoveryRequired
+					}
+					out = append(out, row)
+				}
+			}
+		}
 	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].MtimeMilli > out[j].MtimeMilli })
 	writeJSON(w, out)
 }

@@ -16,7 +16,7 @@ const maxInspectBytes = 16 << 10
 func (t *UseCapabilityTool) resolveDiscovery(ctx context.Context, p useCapabilityArgs, action, id string, base tool.ResolvedCall) (tool.ResolvedCall, error) {
 	switch action {
 	case "list":
-		out, err := t.listCapabilities()
+		out, err := t.listCapabilitiesPage(p.Limit, p.Cursor)
 		if err != nil {
 			if t.audit != nil {
 				t.audit.RecordMCPProxy(true, false, true)
@@ -100,7 +100,7 @@ func (t *UseCapabilityTool) inspect(_ context.Context, id string) (string, error
 		"network_call": false,
 	}
 	if strings.HasPrefix(id, "skill:") {
-		if contract, ok := t.capabilityArgumentContract(id); ok {
+		if contract, ok := capabilityArgumentContract(e); ok {
 			payload["input_schema"] = contract.Schema
 			payload["call_example"] = contract.Example
 			payload["schema_fingerprint"] = tool.SchemaFingerprint(contract.Schema)

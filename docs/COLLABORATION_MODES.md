@@ -13,12 +13,13 @@ are task instructions; no sequential evidence signoff is required.
 
 ## Goal
 
-An explicitly activated Goal continues after a normal turn when the model
-reports `continue` or provides no report. `update_goal(complete)` commits the
-model's completion declaration at a normal end boundary; `blocked` stops
-continuation immediately. There is no independent completion evaluator.
-Restored and forked Goals need explicit activation. Cancellation, user input,
-permission waits, errors and explicit budgets retain their boundaries.
+An active, armed Goal is continued by the runtime idle driver after every
+normally completed top-level turn. No per-turn `continue` vote exists.
+`update_goal(complete)` commits the model's completion declaration and
+`update_goal(blocked)` stops continuation after the automatic-round minimum.
+There is no independent completion evaluator. Restored and forked Goals are
+always disarmed. Cancellation, queued user input, pending interaction,
+persistence errors and explicit budgets retain their boundaries.
 
 Plan, Goal, permission, sandbox, and the task contract are independent states.
 Read only, Workspace write, and Full access keep their public meanings. The tool

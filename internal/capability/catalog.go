@@ -17,6 +17,8 @@ import (
 type Catalog struct {
 	Entries     []Entry
 	Fingerprint string
+	Incomplete  bool
+	Stale       bool
 }
 
 // CatalogOptions builds a catalog from live tools, skills, configured MCP
@@ -30,6 +32,9 @@ type CatalogOptions struct {
 	Disabled    map[string]bool
 	CachedTools map[string][]plugin.CachedTool // server → tools
 	CacheKeyOK  map[string]bool                // server → schema-cache key match
+	// CatalogIncomplete/Stale describe the discovery snapshot used for Skills.
+	CatalogIncomplete bool
+	CatalogStale      bool
 	// ProxyTools carries host-observed live tools of servers connected through
 	// the use_capability proxy: they are absent from Tools (never registered)
 	// yet must stay routable after the server turns ready.
@@ -120,7 +125,7 @@ func BuildCatalog(opts CatalogOptions) Catalog {
 		}
 		return out[i].ID < out[j].ID
 	})
-	return Catalog{Entries: out, Fingerprint: catalogFingerprint(out)}
+	return Catalog{Entries: out, Fingerprint: catalogFingerprint(out), Incomplete: opts.CatalogIncomplete, Stale: opts.CatalogStale}
 }
 
 // SkillEntriesForCatalog keeps every skill in the catalog. Legacy frontmatter
@@ -261,7 +266,7 @@ func rankStatus(s Status) int {
 func catalogFingerprint(entries []Entry) string {
 	h := sha256.New()
 	for _, e := range entries {
-		fmt.Fprintf(h, "%s|%s|%s|%v\n", e.ID, e.Kind, e.Status, e.AutoUse)
+		fmt.Fprintf(h, "%s|%s|%s|%v|%s|%s|%t|%s\n", e.ID, e.Kind, e.Status, e.AutoUse, e.Name, e.Description, e.ReadOnly, e.SkillRunAs)
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }

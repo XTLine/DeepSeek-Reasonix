@@ -39,11 +39,14 @@ func (r *checkpointEventRunner) Run(ctx context.Context, input string) error {
 	return r.err
 }
 
-func newCheckpointEventController(runner *checkpointEventRunner) (*Controller, <-chan event.Event) {
+func newCheckpointEventController(t *testing.T, runner *checkpointEventRunner) (*Controller, <-chan event.Event) {
+	t.Helper()
 	events := make(chan event.Event, 8)
 	executor := agent.New(nil, tool.NewRegistry(), runner.session, agent.Options{}, event.Discard)
-	controller := New(Options{
+	dir := t.TempDir()
+	controller := newOwnedTestController(t, Options{
 		Runner: runner, Executor: executor,
+		SessionDir: dir, SessionPath: dir + "/session.jsonl",
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.TurnDone {
 				events <- e
@@ -74,7 +77,7 @@ func requireCheckpointTurn(t *testing.T, e event.Event, want int) {
 func TestTurnDoneCarriesValidatedCheckpointAcrossSuccessAndError(t *testing.T) {
 	session := agent.NewSession("system")
 	runner := &checkpointEventRunner{session: session}
-	controller, events := newCheckpointEventController(runner)
+	controller, events := newCheckpointEventController(t, runner)
 	defer controller.Close()
 
 	controller.Send("first prompt")
@@ -97,7 +100,7 @@ func TestCancelledTurnDoneCarriesRetainedUserCheckpoint(t *testing.T) {
 	session := agent.NewSession("system")
 	started := make(chan struct{})
 	runner := &checkpointEventRunner{session: session, started: started, wait: true}
-	controller, events := newCheckpointEventController(runner)
+	controller, events := newCheckpointEventController(t, runner)
 	defer controller.Close()
 
 	controller.Send("cancel this prompt")
@@ -118,7 +121,7 @@ func TestCancelBeforeRunnerAddsUserCarriesFallbackCheckpoint(t *testing.T) {
 	session := agent.NewSession("system")
 	started := make(chan struct{})
 	runner := &checkpointEventRunner{session: session, started: started, wait: true, skipUser: true}
-	controller, events := newCheckpointEventController(runner)
+	controller, events := newCheckpointEventController(t, runner)
 	defer controller.Close()
 
 	controller.Send("cancel before user append")
@@ -149,7 +152,7 @@ func TestTurnDoneOmitsUncommittedOrNonVisibleCheckpoint(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			session := agent.NewSession("system")
 			runner := &checkpointEventRunner{session: session, skipUser: tc.skipUser, localOnly: tc.localOnly}
-			controller, events := newCheckpointEventController(runner)
+			controller, events := newCheckpointEventController(t, runner)
 			defer controller.Close()
 
 			controller.Send("blocked prompt")
@@ -165,7 +168,7 @@ func TestTurnDoneRejectsCheckpointAfterSessionSwap(t *testing.T) {
 	completion := &guardedTurnCompletion{}
 	ctx := context.WithValue(context.Background(), guardedTurnCompletionKey{}, completion)
 	runner := &checkpointEventRunner{session: oldSession}
-	controller, _ := newCheckpointEventController(runner)
+	controller, _ := newCheckpointEventController(t, runner)
 	defer controller.Close()
 
 	controller.beginCheckpoint(ctx, "old prompt")
@@ -181,7 +184,7 @@ func TestTurnDoneRejectsSameSessionCheckpointStoreCollision(t *testing.T) {
 	completion := &guardedTurnCompletion{}
 	ctx := context.WithValue(context.Background(), guardedTurnCompletionKey{}, completion)
 	runner := &checkpointEventRunner{session: session}
-	controller, _ := newCheckpointEventController(runner)
+	controller, _ := newCheckpointEventController(t, runner)
 	defer controller.Close()
 
 	controller.beginCheckpoint(ctx, "original prompt")
@@ -198,7 +201,7 @@ func TestTurnDoneRejectsSameSessionCheckpointStoreCollision(t *testing.T) {
 func TestBlockedCandidateDoesNotLeakIntoNextTurn(t *testing.T) {
 	session := agent.NewSession("system")
 	runner := &checkpointEventRunner{session: session, skipUser: true}
-	controller, events := newCheckpointEventController(runner)
+	controller, events := newCheckpointEventController(t, runner)
 	defer controller.Close()
 
 	controller.Send("blocked before user append")
@@ -219,8 +222,10 @@ func TestParkedTurnsKeepIndependentCheckpointCandidates(t *testing.T) {
 	releaseFirst := make(chan struct{})
 	var deliveries atomic.Int32
 	executor := agent.New(nil, tool.NewRegistry(), session, agent.Options{}, event.Discard)
-	controller := New(Options{
+	dir := t.TempDir()
+	controller := newOwnedTestController(t, Options{
 		Runner: runner, Executor: executor,
+		SessionDir: dir, SessionPath: dir + "/session.jsonl",
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind != event.TurnDone {
 				return

@@ -10,6 +10,7 @@
 // shows each one's own tabs. The add menu stays session-local.
 
 import { create } from "zustand";
+import { cancelFileNavigation } from "../lib/fileNavigationLifetime";
 
 export type TabType = "file" | "changed" | "context" | "remote" | "browser";
 
@@ -91,7 +92,7 @@ export type ActivityBarState = {
   /** Most recently closed tabs, newest first. Session-local. */
   recentlyClosed: ClosedTabRecord[];
   /** Open the entry's default tab, switching to it when one of that type exists. */
-  openEntry: (type: TabType, label: string, meta?: Record<string, unknown>) => void;
+  openEntry: (type: TabType, label: string, meta?: Record<string, unknown>) => string;
   /** Append a new tab of the given type and activate it. */
   addTab: (type: TabType, label: string, meta?: Record<string, unknown>) => void;
   closeTab: (tabId: string) => void;
@@ -115,7 +116,7 @@ export const useActivityBarStore = create<ActivityBarState>((set, get) => ({
   activityBarOpen: initial.tabs.length > 0,
   addMenuOpen: false,
   recentlyClosed: [],
-  openEntry: (type, label, meta) =>
+  openEntry: (type, label, meta) => {
     set((state) => {
       const existing = state.tabs.find((tab) => tab.type === type);
       if (existing) {
@@ -126,15 +127,20 @@ export const useActivityBarStore = create<ActivityBarState>((set, get) => ({
       const tabs = [...state.tabs, tab];
       persist(tabs, tab.id);
       return { tabs, activeTabId: tab.id, activityBarOpen: true };
-    }),
-  addTab: (type, label, meta) =>
+    });
+    return get().activeTabId!;
+  },
+  addTab: (type, label, meta) => {
+    cancelFileNavigation();
     set((state) => {
       const tab: TabItem = { id: nextTabId(), type, label, meta, openedAt: Date.now() };
       const tabs = [...state.tabs, tab];
       persist(tabs, tab.id);
       return { tabs, activeTabId: tab.id, activityBarOpen: true };
-    }),
-  closeTab: (tabId) =>
+    });
+  },
+  closeTab: (tabId) => {
+    cancelFileNavigation();
     set((state) => {
       const index = state.tabs.findIndex((tab) => tab.id === tabId);
       if (index < 0) return state;
@@ -150,7 +156,8 @@ export const useActivityBarStore = create<ActivityBarState>((set, get) => ({
       persist(tabs, activeTabId);
       // Closing the last tab collapses the container back to the activity bar.
       return { tabs, activeTabId, recentlyClosed, activityBarOpen: tabs.length > 0 };
-    }),
+    });
+  },
   reopenTab: (tabId) =>
     set((state) => {
       const record = state.recentlyClosed.find((entry) => entry.tab.id === tabId);
@@ -165,12 +172,14 @@ export const useActivityBarStore = create<ActivityBarState>((set, get) => ({
         recentlyClosed: state.recentlyClosed.filter((entry) => entry.tab.id !== tabId),
       };
     }),
-  activateTab: (tabId) =>
+  activateTab: (tabId) => {
+    cancelFileNavigation();
     set((state) => {
       if (!state.tabs.some((tab) => tab.id === tabId)) return state;
       persist(state.tabs, tabId);
       return { activeTabId: tabId, activityBarOpen: true };
-    }),
+    });
+  },
   moveTab: (fromId, toId, side) =>
     set((state) => {
       if (fromId === toId) return state;
@@ -184,10 +193,11 @@ export const useActivityBarStore = create<ActivityBarState>((set, get) => ({
       persist(tabs, state.activeTabId);
       return { tabs };
     }),
-  setActivityBarOpen: (open) => set({ activityBarOpen: open }),
+  setActivityBarOpen: (open) => { if (!open) cancelFileNavigation(); set({ activityBarOpen: open }); },
   setAddMenuOpen: (open) => set({ addMenuOpen: open }),
   setWorkspaceRoot: (root) => {
     if (root === workspaceRoot) return;
+    cancelFileNavigation();
     closedByProject.set(workspaceRoot, get().recentlyClosed);
     workspaceRoot = root;
     const loaded = loadTabs();

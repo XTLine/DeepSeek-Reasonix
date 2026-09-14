@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"log/slog"
 
 	"reasonix/internal/agent"
 	"reasonix/internal/provider"
@@ -44,6 +45,9 @@ func (c *Controller) ApplyExtensionSystemPrompt(prompt string) {
 	c.prompt.base = prompt
 	c.mu.Unlock()
 	c.executor.SetSession(agent.NewSession(prompt))
+	if err := c.replaceSessionEventProjection(context.Background(), "extension-system-prompt", c.executor.Session().Snapshot()); err != nil {
+		slog.Warn("controller: record extension system prompt", "err", err)
+	}
 }
 
 func (c *Controller) basePrompt() string {

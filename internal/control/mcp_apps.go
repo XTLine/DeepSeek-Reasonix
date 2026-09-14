@@ -79,15 +79,17 @@ func (c *Controller) MCPAppCallTool(instanceToken, toolName string, args json.Ra
 	if hookErr != nil {
 		toolEvent.Err = hookErr.Error()
 	}
-	if emitErr := event.EmitChecked(c.sink, event.Event{Kind: event.ToolResult, Tool: toolEvent}); emitErr != nil {
+	committedMessage := provider.Message{
+		ID:   agent.NewMessageID(),
+		Role: provider.RoleTool, LocalOnly: true,
+		ToolCallID: callID, Name: target.Name(),
+		Content: output,
+	}
+	if emitErr := event.EmitChecked(c.sink, event.Event{Kind: event.ToolResult, Tool: toolEvent, CommittedMessage: &committedMessage}); emitErr != nil {
 		return string(rawResult), fmt.Errorf("persist app result: %w", emitErr)
 	}
 	if c.executor != nil && c.executor.Session() != nil {
-		c.executor.Session().Add(provider.Message{
-			Role: provider.RoleTool, LocalOnly: true,
-			ToolCallID: callID, Name: target.Name(),
-			Content: output,
-		})
+		c.executor.Session().Add(committedMessage)
 	}
 	return string(rawResult), err
 }

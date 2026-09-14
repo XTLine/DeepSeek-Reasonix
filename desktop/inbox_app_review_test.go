@@ -56,6 +56,7 @@ func TestSteerInboxItemPausedReturnsStableCode(t *testing.T) {
 	ctrl := control.New(control.Options{
 		SessionDir: dir, SessionPath: filepath.Join(dir, "session.jsonl"), Sink: event.Discard,
 	})
+	t.Cleanup(ctrl.Close)
 	if err := ctrl.SetInboxPaused(true); err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +80,7 @@ func TestEnqueueInboxSteerWhenPausedQueuesFollowup(t *testing.T) {
 	ctrl := control.New(control.Options{
 		SessionDir: dir, SessionPath: filepath.Join(dir, "session.jsonl"), Sink: event.Discard,
 	})
+	t.Cleanup(ctrl.Close)
 	if err := ctrl.SetInboxPaused(true); err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +100,7 @@ func TestDurableInvocationFollowupPreservesEmptyExplicitTask(t *testing.T) {
 	ctrl := control.New(control.Options{
 		SessionDir: dir, SessionPath: filepath.Join(dir, "session.jsonl"), Sink: event.Discard,
 	})
+	t.Cleanup(ctrl.Close)
 	if err := ctrl.SetInboxPaused(true); err != nil {
 		t.Fatal(err)
 	}

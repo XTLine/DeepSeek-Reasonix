@@ -38,7 +38,7 @@ fails with `-32002 not_ready`.
 ```jsonc
 // shell → service
 {"method":"desktop/hello","params":{
-  "protocolVersion": 1,
+  "protocolVersion": 3,
   "contractDigest": "sha256:…",       // digest embedded in the shell bundle
   "build": {"version":"v1.30.0","channel":"stable","commit":"abc123"},
   "host": {"name":"electron","version":"44.2.0","chrome":"152.0.0","platform":"darwin","arch":"arm64"},
@@ -46,7 +46,7 @@ fails with `-32002 not_ready`.
 }}
 // service → shell
 {"result":{
-  "protocolVersion": 1,
+  "protocolVersion": 3,
   "contractDigest": "sha256:…",
   "service": {"version":"v1.30.0","channel":"stable","commit":"abc123","pid":4242},
   "runtimeGeneration": "g-01J…",       // new for every service process

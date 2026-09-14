@@ -137,6 +137,7 @@ export function createMockRemoteProjects(tabs: MockRemoteTabCatalog): {
     },
     async RewindRemoteTab() {},
     async SetRemoteTabGoal() {},
+    async EditRemoteTabGoal() {},
     async RemoteTabSnapshot(tabId) {
       if (disconnectedTab === tabId) {
         __emitMockRemoteTab(tabId, "state", { state: "serve_down", error: "Mock remote tunnel closed" });

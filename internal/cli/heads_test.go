@@ -19,7 +19,7 @@ func newSchemaTwoChatTUI(t *testing.T) (chatTUI, *control.Controller, *agent.Ses
 	sess.Add(provider.Message{Role: provider.RoleUser, Content: "root prompt"})
 	sess.Add(provider.Message{Role: provider.RoleAssistant, Content: "root answer"})
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
-	ctrl := control.New(control.Options{Executor: exec, SessionDir: dir, Label: "test", Sink: event.Discard})
+	ctrl := newOwnedTestController(t, control.Options{Executor: exec, SessionDir: dir, Label: "test", Sink: event.Discard})
 	path := filepath.Join(dir, "root.jsonl")
 	ctrl.SetSessionPath(path)
 	if err := ctrl.Snapshot(); err != nil {
@@ -30,31 +30,31 @@ func newSchemaTwoChatTUI(t *testing.T) (chatTUI, *control.Controller, *agent.Ses
 	return m, ctrl, sess, path
 }
 
-func TestBranchAndSwitchCommandsMoveBetweenHeadsInPlace(t *testing.T) {
-	m, ctrl, sess, path := newSchemaTwoChatTUI(t)
+func TestBranchAndSwitchCommandsUseIndependentSessions(t *testing.T) {
+	m, ctrl, _, parentPath := newSchemaTwoChatTUI(t)
 	m.runBranchCommand("/branch experiment")
-	if ctrl.SessionPath() != path {
-		t.Fatalf("/branch moved the session to %q, want the same log", ctrl.SessionPath())
+	childPath := ctrl.SessionPath()
+	if childPath == parentPath {
+		t.Fatalf("/branch kept the parent log %q writable", parentPath)
 	}
 	tree := strings.Join(*m.pendingCommit, "\n")
 	if !strings.Contains(tree, "experiment") || !strings.Contains(tree, "current") {
-		t.Fatalf("/branch tree must list the new head as current:\n%s", tree)
+		t.Fatalf("/branch tree must list the child session as current:\n%s", tree)
 	}
-	sess.Add(provider.Message{Role: provider.RoleUser, Content: "on the branch"})
-	if err := ctrl.Snapshot(); err != nil {
-		t.Fatal(err)
-	}
-	m.runSwitchCommand("/switch " + agent.BranchID(path))
-	if got := len(ctrl.History()); got != 3 || !m.sessionSwitch || ctrl.SessionPath() != path {
+	m.runSwitchCommand("/switch " + agent.BranchID(parentPath))
+	if got := len(ctrl.History()); got != 3 || !m.sessionSwitch || ctrl.SessionPath() != parentPath {
 		t.Fatalf("/switch to main: history %d switch %v path %q", got, m.sessionSwitch, ctrl.SessionPath())
 	}
 	m.sessionSwitch = false
 	m.runSwitchCommand("/switch experiment")
-	if got := ctrl.History(); len(got) != 4 || got[3].Content != "on the branch" || !m.sessionSwitch {
+	if got := ctrl.History(); len(got) != 3 || !m.sessionSwitch || ctrl.SessionPath() != childPath {
 		t.Fatalf("/switch by name: history %d switch %v", len(got), m.sessionSwitch)
 	}
-	if heads, err := agent.ListSessionHeads(path); err != nil || len(heads) != 2 || !heads[1].Selected {
-		t.Fatalf("heads = %+v err=%v", heads, err)
+	if heads, err := agent.ListSessionHeads(parentPath); err != nil || len(heads) != 1 {
+		t.Fatalf("parent heads = %+v err=%v, want one read-only legacy head", heads, err)
+	}
+	if heads, err := agent.ListSessionHeads(childPath); err != nil || len(heads) != 1 {
+		t.Fatalf("child heads = %+v err=%v, want one independent head", heads, err)
 	}
 }
 

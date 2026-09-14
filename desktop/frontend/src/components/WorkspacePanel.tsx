@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cancelFileNavigation } from "../lib/fileNavigationLifetime";
+import { isAbsoluteDisplayPath, formatWorkspaceSource } from "../lib/workspacePanelFormat";
+import type { WorkspaceRevealRequest, WorkspaceVerificationRevealRequest, WorkspaceFileListRequest, WorkspaceChangeListRequest, WorkspaceChangeListEntry } from "../lib/dockDelivery";
+import { restoredSourcePaths, restoredPresentedTools, type DockResources } from "../lib/dockDelivery";
+export type { WorkspaceVerificationRevealRequest } from "../lib/dockDelivery";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type {
   CSSProperties,
@@ -27,7 +32,9 @@ import { asArray } from "../lib/array";
 import { app } from "../lib/bridge";
 import { useT } from "../lib/i18n";
 import {
-  clampWorkspaceSplitTreeWidth,
+  clampWorkspaceTreeWidth,
+  WORKSPACE_TREE_MIN_WIDTH, WORKSPACE_TREE_DEFAULT_WIDTH, WORKSPACE_PREVIEW_MIN_WIDTH,
+  WORKSPACE_DUAL_PANEL_TARGET_WIDTH,
   initialWorkspaceSplitTreeWidth,
   resolveWorkspaceSplitTreeWidth,
   shouldInitializeWorkspaceSplitOnFileSelect,
@@ -98,42 +105,10 @@ import {
   workspaceTopLevelDirPath as topLevelDirPath,
 } from "../lib/workspacePanelFormat";
 
-const WORKSPACE_TREE_MIN_WIDTH = 140;
-const WORKSPACE_TREE_DEFAULT_WIDTH = 300;
-const WORKSPACE_PREVIEW_MIN_WIDTH = 140;
-const WORKSPACE_PREVIEW_TARGET_WIDTH = 360;
-const WORKSPACE_DUAL_PANEL_TARGET_WIDTH = WORKSPACE_TREE_DEFAULT_WIDTH + WORKSPACE_PREVIEW_TARGET_WIDTH;
 const WORKSPACE_CONTEXT_MENU_SELECTION_HEIGHT = 48;
 const WORKSPACE_MAX_PREVIEW_TABS = 5;
 
-function isAbsoluteDisplayPath(path: string): boolean {
-  return path.startsWith("/") || path.startsWith("\\\\") || /^[A-Za-z]:[\\/]/.test(path);
-}
-
-function formatWorkspaceSource(path: string, body: string): string {
-  if (!/\.json$/i.test(path)) return body;
-  try {
-    return JSON.stringify(JSON.parse(body), null, 2);
-  } catch {
-    return body;
-  }
-}
-
-type WorkspaceRevealRequest = { id: number; path: string; toolCallId?: string; source?: boolean; action?: "preview" | "reveal-tree" | "source" };
 export { WORKSPACE_TURN_VERIFICATION_ID } from "./WorkspaceTurnVerification";
-export type WorkspaceVerificationRevealRequest = { id: number; summary: WireCompletionSummary; tabId: string; turnStartAt: number; currentSummary?: WireCompletionSummary; sessionPath?: string; view?: "changes" | "checks" };
-type WorkspaceFileListRequest = { id: number; paths: string[] };
-type WorkspaceChangeListEntry = { key: string; path: string; meta: string; time: string; detail: string };
-type WorkspaceChangeListRequest = { id: number; changes: WorkspaceChangeListEntry[] };
-
-function clampWorkspaceTreeWidth(width: number, panelWidth?: number): number {
-  return clampWorkspaceSplitTreeWidth({
-    width,
-    panelWidth,
-    treeMinWidth: WORKSPACE_TREE_MIN_WIDTH,
-    previewMinWidth: WORKSPACE_PREVIEW_MIN_WIDTH,
-  });
-}
 
 export function WorkspacePanel({
   open,
@@ -152,6 +127,8 @@ export function WorkspacePanel({
   onSessionRevertCommitted,
   initialViewMode = "files",
   revealPathRequest,
+  navigationSignal,
+  navigationResources,
   changeRevealRequest,
   verificationRevealRequest,
   sessionPath,
@@ -185,6 +162,8 @@ export function WorkspacePanel({
   onSessionRevertCommitted?: (tabId: string, result: RewindResultView) => void;
   initialViewMode?: "files" | "changed";
   revealPathRequest?: WorkspaceRevealRequest | null;
+  navigationSignal?: AbortSignal;
+  navigationResources?: DockResources;
   changeRevealRequest?: WorkspaceRevealRequest | null;
   verificationRevealRequest?: WorkspaceVerificationRevealRequest | null;
   sessionPath?: string;
@@ -255,7 +234,7 @@ export function WorkspacePanel({
     loading: boolean;
     error?: string;
   } | null>(null);
-  const [sourcePaths, setSourcePaths] = useState<Set<string>>(() => new Set());
+  const [sourcePaths, setSourcePaths] = useState<Set<string>>(() => restoredSourcePaths(navigationResources));
   const [viewMode, setViewMode] = useState<"files" | "changed">(initialViewMode);
   const selectedPath = viewMode === "changed" ? selectedChangePath : selectedFilePath;
   // Both creation and regular workspaces use the same three-layer change view;
@@ -304,12 +283,20 @@ export function WorkspacePanel({
   const textPageRequestIdRef = useRef(0);
   const commitDetailRequestIdRef = useRef(0);
   const dirLoadGenerationRef = useRef(0);
+  useEffect(() => {
+    const invalidate = () => {
+      dirLoadGenerationRef.current++; previewRequestIdRef.current++; textPageRequestIdRef.current++;
+      changeDetailRequestIdRef.current++; gitHistoryRequestIdRef.current++; commitDetailRequestIdRef.current++;
+    };
+    navigationSignal?.addEventListener("abort", invalidate);
+    return () => { navigationSignal?.removeEventListener("abort", invalidate); invalidate(); };
+  }, [navigationSignal]);
   const dirLoadRequestIdsRef = useRef<Record<string, number>>({});
   const compactProbeInFlightRef = useRef(new Set<string>());
   const recentAnchorRef = useRef<HTMLButtonElement>(null);
   const openDirsRef = useRef(openDirs);
   const pendingTreeRevealPathRef = useRef<string | null>(null);
-  const presentedToolCallByPathRef = useRef(new Map<string, string>());
+  const presentedToolCallByPathRef = useRef(restoredPresentedTools(navigationResources));
   const lastRestoredMemoryKeyRef = useRef(workspaceMemoryKey);
   const memoryRestorePendingRef = useRef(false);
   const workingTreeRefreshSchedulerRef = useRef<ReturnType<typeof createWorkspaceRefreshScheduler> | null>(null);
@@ -595,8 +582,8 @@ export function WorkspacePanel({
     setFilter(readWorkspaceTreeMemory(workspaceMemoryKey)?.filter ?? "");
     setScopedFilePaths(null);
     setScopedChangeRows(null);
-    setSourcePaths(new Set());
-    presentedToolCallByPathRef.current.clear();
+    setSourcePaths(restoredSourcePaths(navigationResources));
+    presentedToolCallByPathRef.current = restoredPresentedTools(navigationResources);
     setTreeVisible(true);
     void loadDir("");
   }, [cwd, loadDir, open, workspaceMemoryKey]);
@@ -671,6 +658,7 @@ export function WorkspacePanel({
 
   useEffect(() => {
     if (!open || !fileListRequest) return;
+    if (fileListRequest.acceptNavigation && !fileListRequest.acceptNavigation()) return;
     const paths = Array.from(new Set(fileListRequest.paths.map((path) => path.trim()).filter(Boolean)));
     const scopedPathsSettled =
       scopedFilePaths !== null &&
@@ -709,6 +697,7 @@ export function WorkspacePanel({
 
   useEffect(() => {
     if (!open || !changeListRequest) return;
+    if (changeListRequest.acceptNavigation && !changeListRequest.acceptNavigation()) return;
     const changes = changeListRequest.changes
       .map((change) => ({ ...change, path: change.path.trim() }))
       .filter((change) => change.path.length > 0);
@@ -745,6 +734,7 @@ export function WorkspacePanel({
 
   useEffect(() => {
     if (!open || !revealPathRequest) return;
+    if (revealPathRequest.acceptNavigation && !revealPathRequest.acceptNavigation()) return;
     if (dismissedRevealRequestIdRef.current === revealPathRequest.id) return;
     if (
       lastRevealRequestIdRef.current === revealPathRequest.id &&
@@ -781,6 +771,7 @@ export function WorkspacePanel({
 
   useEffect(() => {
     if (!open || !changeRevealRequest) return;
+    if (changeRevealRequest.acceptNavigation && !changeRevealRequest.acceptNavigation()) return;
     if (dismissedChangeRevealRequestIdRef.current === changeRevealRequest.id) return;
     if (
       lastChangeRevealRequestIdRef.current === changeRevealRequest.id &&
@@ -806,6 +797,7 @@ export function WorkspacePanel({
 
   useEffect(() => {
     if (!open || !activeVerificationRevealRequest) return;
+    if (activeVerificationRevealRequest.acceptNavigation && !activeVerificationRevealRequest.acceptNavigation()) return;
     if (lastVerificationRevealRequestIdRef.current !== activeVerificationRevealRequest.id) {
       lastVerificationRevealRequestIdRef.current = activeVerificationRevealRequest.id;
       setViewMode("changed");
@@ -1053,7 +1045,7 @@ export function WorkspacePanel({
               <button
                 className="workspace-change"
                 type="button"
-                onClick={() => selectFile(change.path)}
+                onClick={() => { cancelFileNavigation(); selectFile(change.path); }}
               >
                 <FileText size={14} />
                 <span className="workspace-change__body">
@@ -1604,6 +1596,7 @@ export function WorkspacePanel({
     } else if (selectedPath === row.path) {
       setSelectedFilePath(null);
     } else {
+      cancelFileNavigation();
       selectFile(row.path);
     }
   };
@@ -1807,7 +1800,7 @@ export function WorkspacePanel({
           <nav className="workspace-document-tabs" aria-label={t("workspace.openFiles")}>
             {openTabs.map((path) => (
               <span key={path} className={`workspace-document-tab${selectedFilePath === path ? " is-active" : ""}`} title={path}>
-                <button type="button" onClick={() => selectFile(path, "files", presentedToolCallByPathRef.current.get(path))}>
+                <button type="button" onClick={() => { cancelFileNavigation(); selectFile(path, "files", presentedToolCallByPathRef.current.get(path)); }}>
                   <FileText size={12} />
                   <span>{basename(path)}</span>
                 </button>
@@ -1857,6 +1850,7 @@ export function WorkspacePanel({
                       onClick={() => {
                         dismissedChangeListRequestIdRef.current = lastChangeListRequestIdRef.current;
                         setScopedChangeRows(null);
+                        cancelFileNavigation();
                         selectFile(change.path);
                       }}
                     >
@@ -1951,7 +1945,7 @@ export function WorkspacePanel({
                                         <button
                                           key={file}
                                           className="workspace-git-history__file"
-                                          onClick={() => selectFile(file)}
+                                          onClick={() => { cancelFileNavigation(); selectFile(file); }}
                                         >
                                           <FileText size={14} /> {file}
                                         </button>
@@ -2009,7 +2003,7 @@ export function WorkspacePanel({
                                     <button
                                       key={file}
                                       className="workspace-git-history__file"
-                                      onClick={() => selectFile(file)}
+                                      onClick={() => { cancelFileNavigation(); selectFile(file); }}
                                     >
                                       <FileText size={14} /> {file}
                                     </button>
