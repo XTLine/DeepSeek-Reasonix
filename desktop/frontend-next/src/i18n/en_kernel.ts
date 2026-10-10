@@ -245,6 +245,12 @@ export const EN_KERNEL: Record<string, string> = {
   "检查失败，没有具体原因": "The check failed and gave no reason",
   "无法连接该地址。请检查网络是否通畅，以及地址是否有误":
     "Cannot reach that address. Check the network, or whether the address has a typo",
+  "地址可以连通，但没有 System One 决策接口。请填写服务的基地址，不要带 /v1/systemone，Reasonix 会自己在后面追加":
+    "The address answers, but has no System One decision endpoint. Enter the service's base address without /v1/systemone — Reasonix appends it",
+  "该地址有响应，但返回的不是 System One 的决策结果。请确认这是决策协议服务的基地址":
+    "The address answers, but not with a System One decision. Check that it is the decision service's base address",
+  "服务拒绝了这次决策请求。请核对模型名与服务文档，具体原因见下方服务返回的内容":
+    "The service refused the decision request. Check the model name against its documentation; what it said is shown with this result",
   "该地址有响应，但不是 OpenAI 或 Anthropic 类接口。请确认是否误将网页地址复制过来":
     "Something answered, but not as an OpenAI- or Anthropic-compatible API. Check a web page address was not pasted in",
   "无法解析本次请求的内容，请刷新页面后重试": "That request could not be read — reload the page and try again",
