@@ -20,7 +20,7 @@ const props = {
   onSettings() {}, needsProject: false, onOpenProject() {}, onKeepHere() {},
   theme: "dark", dockW: 560, dockMax: 880, onDockW() {},
 };
-async function open(conversation = true, holdInitialStatus = false, runtimePath: string | undefined = "session-a") {
+async function open(conversation = true, holdInitialStatus = false, runtimePath: string | undefined = "session-a", mutation?: Partial<RewindResult>) {
   const port = new MockPort();
   let history = original;
   let session = "session-a";
@@ -33,11 +33,11 @@ async function open(conversation = true, holdInitialStatus = false, runtimePath:
   let resolveStatus: (() => void) | undefined;
   if (holdInitialStatus) statusReads.mockReturnValueOnce(new Promise((resolve) => { resolveStatus = () => resolve({ ...status, running, sessionPath: session }); }));
   const reads = vi.spyOn(port, "history").mockImplementation(async () => history);
-  vi.spyOn(port, "checkpoints").mockImplementation(async () => history.length ? [{ turn: 1, prompt: "Restore this turn", files: 1, msgIndex: 0 }] : []);
-  vi.spyOn(port, "prepareRewind").mockResolvedValue({ planId: "plan-1", turn: 1, coverage: "full", canFiles: true, canConversation: true, fileCount: 1, requiresConfirmation: false });
+  vi.spyOn(port, "checkpoints").mockImplementation(async () => history.length ? [{ turn: 1, prompt: "Restore this turn", files: mutation ? 3 : 1, msgIndex: 0 }] : []);
+  vi.spyOn(port, "prepareRewind").mockResolvedValue({ planId: "plan-1", turn: 1, coverage: "full", canFiles: true, canConversation: true, fileCount: mutation ? 3 : 1, requiresConfirmation: false });
   vi.spyOn(port, "commitRewind").mockImplementation(async () => {
     if (conversation) history = [];
-    return { ok: true, conversationOk: conversation, transactionId: "tx-1", undoAvailable: true, deleted: ["file.txt"] };
+    return { ok: true, conversationOk: conversation, transactionId: "tx-1", undoAvailable: true, deleted: ["file.txt"], ...mutation };
   });
   const undo = vi.spyOn(port, "undoRewind").mockImplementation(async () => { history = original; });
   const view = render(<Pane {...props} rt={{ ...props.rt, sessionPath: runtimePath }} port={port} />);
@@ -184,4 +184,23 @@ it("does not replay a pending rewind history read into a switched conversation",
   await waitFor(() => expect(screen.queryByRole("button", { name: "撤销这次还原" })).toBeNull());
   await act(async () => resolve([{ role: "user", content: "Stale prior-session text", msgIndex: 0 }]));
   expect(screen.queryByText("Stale prior-session text")).toBeNull();
+});
+
+
+it.each([
+  { label: "mixed restore and delete", written: ["a", "b"], deleted: ["c"], conversation: false, count: 3 },
+  { label: "restore only", written: ["a", "b", "c"], deleted: undefined, conversation: false, count: 3 },
+  { label: "restore only with empty deletes", written: ["a", "b", "c"], deleted: [], conversation: false, count: 3 },
+  { label: "fewer writes than planned", written: ["a"], deleted: undefined, conversation: false, count: 1 },
+  { label: "conversation only", written: undefined, deleted: undefined, conversation: true, count: 0 },
+])("preserves upstream committed-file counts after the Pane reload: $label", async ({ written, deleted, conversation, count }) => {
+  const h = await open(conversation, false, "session-a", { written, deleted });
+  fireEvent.click(screen.getByRole("button", { name: "回到这里" }));
+  expect(screen.getAllByText("3 个文件")).toHaveLength(2);
+  fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(conversation ? "只回退对话" : "只还原代码") }));
+  await screen.findByText(`已还原 ${count} 个文件`);
+  const undo = screen.getByRole<HTMLButtonElement>("button", { name: "撤销这次还原" });
+  await waitFor(() => expect(undo.disabled).toBe(false));
+  fireEvent.click(undo);
+  await waitFor(() => expect(h.undo).toHaveBeenCalledExactlyOnceWith("tx-1"));
 });

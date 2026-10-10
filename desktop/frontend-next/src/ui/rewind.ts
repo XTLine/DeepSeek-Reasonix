@@ -9,7 +9,7 @@ export type RestoreNotice = { tx: string; files: number; working: boolean; error
 /** A restore receipt belongs to the conversation, not to a transcript card that
  *  the restore itself can remove. Session changes retire pending callbacks too. */
 export function useRewindActions(port: AgentPort, reloadSession: (current?: () => boolean) => void | Promise<void>, onRestoreText: (text: string) => void, session = "", running = false) {
-  const owner = useMemo(() => ({ active: true, epoch: 0, run: 0, plans: new Map<string, number>(), notice: null as RestoreNotice | null,
+  const owner = useMemo(() => ({ active: true, epoch: 0, run: 0, notice: null as RestoreNotice | null,
     commit: null as { planId: string; promise: Promise<RewindResult> } | null, undo: null as Promise<void> | null, reload: null as Promise<void> | null }), [port, session]);
   const [notice, setNotice] = useState<{ owner: typeof owner; value: RestoreNotice | null } | null>(null);
   const [reloadFailure, setReloadFailure] = useState<(ReloadFailure & { owner: typeof owner }) | null>(null);
@@ -23,7 +23,7 @@ export function useRewindActions(port: AgentPort, reloadSession: (current?: () =
   }, [owner]);
   // A new run consumes kernel undo, but a completed mutation still needs its history read.
   useLayoutEffect(() => {
-    if (running) { owner.run++; owner.plans.clear(); publish(null); }
+    if (running) { owner.run++; publish(null); }
   }, [owner, running, publish]);
   const onReloadSession = useCallback(() => {
     if (!owner.active) return Promise.resolve();
@@ -49,7 +49,6 @@ export function useRewindActions(port: AgentPort, reloadSession: (current?: () =
     const run = owner.run;
     const plan = await port.prepareRewind(turn, scope);
     if (!owner.active || owner.epoch !== epoch || owner.run !== run) throw new Error(t("会话已切换，请重新选择还原位置"));
-    owner.plans.set(plan.planId, plan.fileCount);
     return plan;
   }, [port, owner]);
   const onCommitRewind = useCallback((planId: string, text?: string) => {
@@ -65,7 +64,7 @@ export function useRewindActions(port: AgentPort, reloadSession: (current?: () =
       if (!owner.active || owner.epoch !== epoch) return result;
       const tx = result.undoAvailable ? result.transactionId : undefined;
       if (owner.run === run) {
-        publish(tx ? { tx, files: result.deleted?.length ?? owner.plans.get(planId) ?? 0, working: true, error: "" } : null);
+        publish(tx ? { tx, files: (result.written?.length ?? 0) + (result.deleted?.length ?? 0), working: true, error: "" } : null);
         if (result.conversationOk && text !== undefined) onRestoreText(text);
       }
       await onReloadSession();
@@ -76,7 +75,6 @@ export function useRewindActions(port: AgentPort, reloadSession: (current?: () =
     void operation.catch(() => {
       if (owner.active && owner.epoch === epoch && owner.run === run) publish(previous);
     }).finally(() => {
-      owner.plans.delete(planId);
       if (owner.commit?.promise === operation) owner.commit = null;
     });
     return operation;

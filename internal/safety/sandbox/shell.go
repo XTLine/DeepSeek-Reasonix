@@ -77,7 +77,7 @@ type Shell struct {
 // favours bash; a forced kind overrides the PATH lookup with path and falls back
 // to auto if unusable, so a typo cannot leave the tool broken.
 func ResolveShell(prefer, path string, warn io.Writer) Shell {
-	return resolveShell(prefer, path, warn, runtime.GOOS, exec.LookPath, fileExists, windowsBashCandidates(), windowsPowerShellCandidates(), probeBash, isWindowsWSLBash, powerShellLaunches)
+	return ShellDiscovery{Prefer: prefer, Path: path, Warn: warn}.Resolve()
 }
 
 // shellHost holds the lookups shell discovery needs. Resolution and enumeration
@@ -92,22 +92,11 @@ type shellHost struct {
 	probe    func(string) bool
 	isWSL    func(string) bool
 	launches func(string) bool // whether a found PowerShell starts; asked only of the one about to win
+	search   *bashSearch       // nil means the defaults
 }
 
 func currentHost() shellHost {
-	return shellHost{runtime.GOOS, exec.LookPath, fileExists, windowsBashCandidates(), windowsPowerShellCandidates(), probeBash, isWindowsWSLBash, powerShellLaunches}
-}
-
-func (h shellHost) bash() (Shell, bool) {
-	if p, err := h.lookPath("bash"); err == nil && !h.isWSL(p) && h.probe(p) {
-		return Shell{Kind: ShellBash, Path: p}, true
-	}
-	for _, p := range h.winBash {
-		if h.exists(p) && !h.isWSL(p) && h.probe(p) {
-			return Shell{Kind: ShellBash, Path: p}, true
-		}
-	}
-	return Shell{}, false
+	return shellHost{runtime.GOOS, exec.LookPath, fileExists, windowsBashCandidates(), windowsPowerShellCandidates(), probeBash, isWindowsWSLBash, powerShellLaunches, nil}
 }
 
 func (h shellHost) powerShell(order []string) (Shell, bool) {
@@ -262,7 +251,11 @@ func verifyShell(prefer, path string, exists, probe, launches func(string) bool)
 // Git-for-Windows candidates whose %ProgramFiles% values are empty off Windows.
 // launches is injected too, so any host can test "pwsh will not start, 5.1 will".
 func resolveShell(prefer, path string, warn io.Writer, goos string, lookPath func(string) (string, error), exists func(string) bool, winBashCandidates []string, winPowerShellCandidates []string, probe func(string) bool, isWSL func(string) bool, launches func(string) bool) Shell {
-	h := shellHost{goos, lookPath, exists, winBashCandidates, winPowerShellCandidates, probe, isWSL, launches}
+	return resolveOn(shellHost{goos, lookPath, exists, winBashCandidates, winPowerShellCandidates, probe, isWSL, launches, nil}, prefer, path, warn)
+}
+
+func resolveOn(h shellHost, prefer, path string, warn io.Writer) Shell {
+	exists, probe, launches := h.exists, h.probe, h.launches
 	switch strings.ToLower(strings.TrimSpace(prefer)) {
 	case "", "auto":
 		return h.auto(warn)
@@ -399,34 +392,6 @@ func probeFailureReason(ctxErr error) FallbackReason {
 		return FallbackProbeTimeout
 	}
 	return FallbackProbeFailed
-}
-
-// bashProbeIdentity is the file a successful probe vouched for. The same path
-// with the same size and mtime is the same executable, so it is not launched
-// again; a failure is never kept, because a timeout may be transient.
-type bashProbeIdentity struct {
-	path    string
-	size    int64
-	modTime int64
-}
-
-// provenBash lives for the process and holds successes only.
-var provenBash sync.Map
-
-func probeBashMemo(path string, run func(string) bool) bool {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return run(path)
-	}
-	id := bashProbeIdentity{path: path, size: fi.Size(), modTime: fi.ModTime().UnixNano()}
-	if _, ok := provenBash.Load(id); ok {
-		return true
-	}
-	if !run(path) {
-		return false
-	}
-	provenBash.Store(id, struct{}{})
-	return true
 }
 
 func fileExists(p string) bool {

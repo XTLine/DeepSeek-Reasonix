@@ -348,7 +348,7 @@ func TestPlanClaudePluginWithNoMappedCapabilitiesIsBlocked(t *testing.T) {
 func TestApplyLocalSkillFileCopiesToProject(t *testing.T) {
 	project := testenv.TempDir(t)
 	home := testenv.TempDir(t)
-	src := filepath.Join(testenv.TempDir(t), "beta.md")
+	src := filepath.Join(project, "author", "beta.md")
 	writeFile(t, src, "---\nname: beta\ndescription: Beta helper\n---\nDo beta work.")
 
 	tl := NewTool(Options{ProjectRoot: project, HomeDir: home})
@@ -401,7 +401,7 @@ func TestApplyLocalSkillFileDoesNotShadowFlatCompatInstall(t *testing.T) {
 func TestApplyLocalSKILLFileCopiesSiblingResources(t *testing.T) {
 	project := testenv.TempDir(t)
 	home := testenv.TempDir(t)
-	srcDir := filepath.Join(testenv.TempDir(t), "frontend-design")
+	srcDir := filepath.Join(project, "author", "frontend-design")
 	writeFile(t, filepath.Join(srcDir, "SKILL.md"), "---\nname: frontend-design\ndescription: Frontend helper\n---\nSee references/style.md")
 	writeFile(t, filepath.Join(srcDir, "references", "style.md"), "# Style\n\nUse crisp layouts.")
 	writeFile(t, filepath.Join(srcDir, "scripts", "lint.sh"), "#!/bin/sh\nexit 0\n")

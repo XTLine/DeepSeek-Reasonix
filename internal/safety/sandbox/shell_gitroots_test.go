@@ -93,7 +93,7 @@ func TestRegistryRootIsFoundAndChosenOverPowerShell(t *testing.T) {
 	no := func(string) bool { return false }
 	cands := appendGitInstallRoots(nil, []string{`D:\Tools\Git`})
 	want := cands[0]
-	h := shellHost{"windows", fakePath("pwsh"), func(p string) bool { return p == want }, cands, []string{`C:\fake\pwsh.exe`}, yes, no, yes}
+	h := shellHost{"windows", fakePath("pwsh"), func(p string) bool { return p == want }, cands, []string{`C:\fake\pwsh.exe`}, yes, no, yes, nil}
 	var warn strings.Builder
 	sh := h.auto(&warn)
 	if sh.Kind != ShellBash || sh.Path != want || sh.Fallback != FallbackNone {
@@ -163,9 +163,9 @@ func TestFallbackToPowerShellIsTypedAndWarned(t *testing.T) {
 		want   FallbackReason
 		inWarn string
 	}{
-		{"no candidate exists", shellHost{"windows", fakePath(), yes, nil, ps, yes, no, yes}, nil, FallbackNotFound, "no Git Bash was found"},
-		{"candidate exists but did not run", shellHost{"windows", fakePath(), yes, gitBash, ps, no, no, yes}, nil, FallbackProbeFailed, "did not run a command"},
-		{"candidate timed out", shellHost{"windows", fakePath(), yes, gitBash, ps, no, no, yes}, func() { bashProbeFailures.Store(gitBash[0], FallbackProbeTimeout) }, FallbackProbeTimeout, "did not answer in time"},
+		{"no candidate exists", shellHost{"windows", fakePath(), yes, nil, ps, yes, no, yes, nil}, nil, FallbackNotFound, "no Git Bash was found"},
+		{"candidate exists but did not run", shellHost{"windows", fakePath(), yes, gitBash, ps, no, no, yes, nil}, nil, FallbackProbeFailed, "did not run a command"},
+		{"candidate timed out", shellHost{"windows", fakePath(), yes, gitBash, ps, no, no, yes, nil}, func() { bashProbeFailures.Store(gitBash[0], FallbackProbeTimeout) }, FallbackProbeTimeout, "did not answer in time"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -188,7 +188,7 @@ func TestFallbackToPowerShellIsTypedAndWarned(t *testing.T) {
 func TestBashThatRunsIsNotAFallback(t *testing.T) {
 	yes := func(string) bool { return true }
 	no := func(string) bool { return false }
-	h := shellHost{"windows", fakePath(), yes, []string{`C:\fake\Git\bin\bash.exe`}, nil, yes, no, yes}
+	h := shellHost{"windows", fakePath(), yes, []string{`C:\fake\Git\bin\bash.exe`}, nil, yes, no, yes, nil}
 	sh := h.auto(io.Discard)
 	if sh.Kind != ShellBash || sh.Fallback != FallbackNone {
 		t.Fatalf("got kind=%v fallback=%q, want plain bash", sh.Kind, sh.Fallback)

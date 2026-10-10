@@ -51,11 +51,7 @@ func (t *Tool) skillAction(req request, cand skillCandidate, mode string) action
 		skill:         cand,
 	}
 	a.RiskLevel, a.RiskReasons = skillActionRisk(mode, cand)
-	if mode == "link" && !isLinkTargetSafe(cand.SourcePath, t.home, t.root) {
-		a.RiskLevel = RiskHigh
-		a.RiskReasons = append(a.RiskReasons, "link target is an absolute path outside the project or home root")
-	}
-	return a
+	return t.localSourceRisk(a)
 }
 
 // skillActionRisk explains the risk budget for a skill install. The model
@@ -93,7 +89,7 @@ func (t *Tool) skillRootAction(req request, path string, candidates []skillCandi
 		files[cand.Name] = append(files[cand.Name], file)
 	}
 	slices.Sort(names)
-	return action{
+	return t.localSourceRisk(action{
 		Kind:        "skill",
 		Action:      "register_skill_root",
 		Name:        "",
@@ -109,7 +105,18 @@ func (t *Tool) skillRootAction(req request, path string, candidates []skillCandi
 		RiskLevel:   RiskMedium,
 		RiskReasons: []string{"adds a new skill root to the active config"},
 		skillFiles:  files,
+	})
+}
+
+func (t *Tool) localSourceRisk(a action) action {
+	if resolved, err := filepath.EvalSymlinks(a.Source); err == nil && resolved != a.Source {
+		a.RiskReasons = append(a.RiskReasons, "source resolves to "+hostLiteral(resolved))
 	}
+	if !isLinkTargetSafe(a.Source, t.home, t.root) {
+		a.RiskLevel = RiskHigh
+		a.RiskReasons = append(a.RiskReasons, "skill source is an absolute path outside the project or home root")
+	}
+	return a
 }
 
 func (t *Tool) skillInstallRoot(scope string) (string, error) {
@@ -249,18 +256,23 @@ func parseSkillContent(content, fallbackName, source string, strict bool) (skill
 // flat compatibility skill. RootPath records the containing directory that must
 // be registered for the runtime Store to discover that candidate.
 func scanSkillRoot(root string, strict bool) ([]skillCandidate, error) {
+	walkRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
 	var out []skillCandidate
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(walkRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if path == root {
+		if path == walkRoot {
 			return nil
 		}
-		rel, err := filepath.Rel(root, path)
+		rel, err := filepath.Rel(walkRoot, path)
 		if err != nil {
 			return err
 		}
+		path = filepath.Join(root, rel)
 		depth := pathDepth(rel)
 		if d.IsDir() {
 			if depth > maxSkillScanDepth {

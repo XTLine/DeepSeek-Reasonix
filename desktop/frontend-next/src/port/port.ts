@@ -160,7 +160,8 @@ export interface TrayPrefs {
 export interface AgentPort {
   providerSetup(): Promise<ProviderSetup | null>;
   saveProviderKey(apiKey: string): Promise<void>;
-  models(): Promise<ModelEntry[]>;
+  // The models that answer the job asked about; "chat" when none is named.
+  models(answers?: "chat" | "decision" | "all"): Promise<ModelEntry[]>;
   // What the line being typed can still become, asked once per keystroke. The
   // answer depends on the caret, so it cannot be cached into a static list the
   // way slash() is.

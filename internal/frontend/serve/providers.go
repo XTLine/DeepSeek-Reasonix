@@ -521,6 +521,11 @@ const (
 	codeProbeUnreachable     = "provider.probe.unreachable"
 	codeProbeNotCompatible   = "provider.probe.not_compatible"
 	codeProbeFailed          = "provider.probe.failed"
+
+	codeProbeDecisionPathNotFound  = "provider.probe.decision_path_not_found"
+	codeProbeDecisionNotCompatible = "provider.probe.decision_not_compatible"
+	codeProbeDecisionRejected      = "provider.probe.decision_rejected"
+	codeNoModelsPicked             = "provider.no_models_picked"
 )
 
 // probeReasonRefusal is the one place a probe identity becomes a status and a dotted
