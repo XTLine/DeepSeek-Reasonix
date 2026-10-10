@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { Pane } from "./Pane";
 import { MockPort } from "../port/mock";
 import type { HistoryMessage, RewindResult } from "../port/port";
+import type { WireEvent } from "../port/wire";
 import type { RuntimeView } from "../port/hub";
 
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); });
@@ -23,10 +24,14 @@ async function open(conversation = true, holdInitialStatus = false, runtimePath:
   const port = new MockPort();
   let history = original;
   let session = "session-a";
+  let running = false;
+  let emit: (event: WireEvent) => void = () => {};
+  const subscribe = port.subscribe.bind(port);
+  vi.spyOn(port, "subscribe").mockImplementation((onEvent, onGap, bootstrap) => { emit = onEvent; return subscribe(onEvent, onGap, bootstrap); });
   const status = await port.status();
-  const statusReads = vi.spyOn(port, "status").mockImplementation(async () => ({ ...status, sessionPath: session }));
+  const statusReads = vi.spyOn(port, "status").mockImplementation(async () => ({ ...status, running, sessionPath: session }));
   let resolveStatus: (() => void) | undefined;
-  if (holdInitialStatus) statusReads.mockReturnValueOnce(new Promise((resolve) => { resolveStatus = () => resolve({ ...status, sessionPath: session }); }));
+  if (holdInitialStatus) statusReads.mockReturnValueOnce(new Promise((resolve) => { resolveStatus = () => resolve({ ...status, running, sessionPath: session }); }));
   const reads = vi.spyOn(port, "history").mockImplementation(async () => history);
   vi.spyOn(port, "checkpoints").mockImplementation(async () => history.length ? [{ turn: 1, prompt: "Restore this turn", files: 1, msgIndex: 0 }] : []);
   vi.spyOn(port, "prepareRewind").mockResolvedValue({ planId: "plan-1", turn: 1, coverage: "full", canFiles: true, canConversation: true, fileCount: 1, requiresConfirmation: false });
@@ -37,7 +42,7 @@ async function open(conversation = true, holdInitialStatus = false, runtimePath:
   const undo = vi.spyOn(port, "undoRewind").mockImplementation(async () => { history = original; });
   const view = render(<Pane {...props} rt={{ ...props.rt, sessionPath: runtimePath }} port={port} />);
   await screen.findByRole("button", { name: "回到这里" });
-  return { port, reads, undo, view, resolveStatus, setSession: (next: string) => { session = next; } };
+  return { port, reads, undo, view, resolveStatus, start: () => { running = true; emit({ kind: "turn_started" } as WireEvent); }, setSession: (next: string) => { session = next; } };
 }
 async function restore(scope = "代码和对话") {
   fireEvent.click(screen.getByRole("button", { name: "回到这里" }));
@@ -129,4 +134,54 @@ it("keeps a receipt when runtime metadata catches up to the known host session",
   await screen.findByRole("button", { name: "撤销这次还原" });
   h.view.rerender(<Pane {...props} port={h.port} />);
   expect(screen.getByRole("button", { name: "撤销这次还原" })).toBeTruthy();
+});
+
+it("retries history after a successful undo without applying the transaction twice", async () => {
+  const h = await open(); await restore();
+  const undo = await screen.findByRole("button", { name: "撤销这次还原" });
+  await waitFor(() => expect((undo as HTMLButtonElement).disabled).toBe(false));
+  h.reads.mockRejectedValueOnce(new Error("History unavailable"));
+  fireEvent.click(undo);
+  const retry = await screen.findByRole("button", { name: "重试刷新会话" });
+  expect(screen.getByRole("alert").textContent).toBe("History unavailable");
+  expect(screen.queryByRole("button", { name: "撤销这次还原" })).toBeNull();
+  fireEvent.click(retry);
+  await screen.findByRole("button", { name: "回到这里" });
+  expect(screen.queryByRole("button", { name: "重试刷新会话" })).toBeNull();
+  expect(h.undo).toHaveBeenCalledExactlyOnceWith("tx-1");
+});
+
+
+it.each(["commit", "undo"])("reloads the actual Pane after %s completes behind a new-run event", async (operation) => {
+  const h = await open();
+  if (operation === "undo") { await restore(); await screen.findByRole("button", { name: "撤销这次还原" }); }
+  let release!: () => void;
+  const response = new Promise<void>((resolve) => { release = resolve; });
+  const commit = vi.mocked(h.port.commitRewind);
+  const mutation = operation === "commit" ? commit.getMockImplementation()! : h.undo.getMockImplementation()!;
+  if (operation === "commit") commit.mockImplementation(async (plan) => { const result = await mutation(plan); await response; return result as RewindResult; });
+  else h.undo.mockImplementation(async (tx) => { await mutation(tx); await response; });
+  if (operation === "commit") await restore();
+  else fireEvent.click(screen.getByRole("button", { name: "撤销这次还原" }));
+  await act(async () => h.start());
+  const before = h.reads.mock.calls.length;
+  await act(async () => release());
+  await waitFor(() => expect(h.reads.mock.calls.length).toBeGreaterThan(before));
+  const userCards = h.view.container.querySelectorAll('[data-k="me"] .txt');
+  expect([...userCards].map((card) => card.textContent)).toEqual(operation === "undo" ? ["Restore this turn"] : []);
+  expect(screen.queryByRole("button", { name: "撤销这次还原" })).toBeNull();
+  expect((screen.getByRole("combobox", { name: "任务输入" }) as HTMLTextAreaElement).value).toBe(operation === "undo" ? "Restore this turn" : "");
+});
+
+it("does not replay a pending rewind history read into a switched conversation", async () => {
+  const h = await open();
+  let resolve!: (history: HistoryMessage[]) => void;
+  h.reads.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+  await restore();
+  await screen.findByRole("button", { name: "撤销这次还原" });
+  h.setSession("session-b");
+  h.view.rerender(<Pane {...props} port={h.port} pulse={1} />);
+  await waitFor(() => expect(screen.queryByRole("button", { name: "撤销这次还原" })).toBeNull());
+  await act(async () => resolve([{ role: "user", content: "Stale prior-session text", msgIndex: 0 }]));
+  expect(screen.queryByText("Stale prior-session text")).toBeNull();
 });
