@@ -222,6 +222,7 @@ const SAID: Record<string, string> = {
   "provider.probe.failed": "检查失败，没有具体原因",
   "provider.probe.decision_path_not_found": "地址可以连通，但没有 System One 决策接口。请填写服务的基地址，不要带 /v1/systemone，Reasonix 会自己在后面追加",
   "provider.probe.decision_not_compatible": "该地址有响应，但返回的不是 System One 的决策结果。请确认这是决策协议服务的基地址",
+  "provider.probe.decision_rejected": "服务拒绝了这次决策请求。请核对模型名与服务文档，具体原因见下方服务返回的内容",
   "provider.probe.not_compatible": "该地址有响应，但不是 OpenAI 或 Anthropic 类接口。请确认是否误将网页地址复制过来",
 
   // ── 推理强度：这个端点给不了 ─────────────────────────────────────

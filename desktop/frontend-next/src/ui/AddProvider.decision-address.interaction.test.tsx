@@ -43,3 +43,10 @@ it("a decision source failing at the wrong address is told the base-address rule
   expect(said).not.toContain("以 /v1 结尾");
   expect(said).toContain("HTTP 404");
 });
+
+it("a refused decision request keeps its status and the service's words next to a refusal sentence", () => {
+  const said = checkFailure({ ok: false, code: "provider.probe.decision_rejected", httpStatus: 422, detail: "bad model" } as never);
+  expect(said).toContain("拒绝了这次决策请求");
+  expect(said).toContain("HTTP 422");
+  expect(said).toContain("bad model");
+});

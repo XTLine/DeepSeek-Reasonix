@@ -3,6 +3,7 @@ package serve
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 
@@ -38,7 +39,7 @@ func probeDecision(ctx context.Context, cfg *config.Config, entry *config.Provid
 	}
 	client, err := netclient.NewHTTPClient(proxy, netclient.TransportOptions{})
 	if err != nil {
-		return err
+		return fmt.Errorf("decision probe client: %v", err)
 	}
 	defer client.CloseIdleConnections()
 	return typesafe.Client{HTTP: client, BaseURL: entry.BaseURL, APIKey: entry.APIKey}.Probe(ctx, model)
@@ -85,6 +86,6 @@ func decisionStatusCode(status int) string {
 	case status >= http.StatusInternalServerError:
 		return codeProbeUpstreamError
 	default:
-		return codeProbeDecisionNotCompatible
+		return codeProbeDecisionRejected
 	}
 }

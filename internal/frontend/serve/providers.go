@@ -524,6 +524,7 @@ const (
 
 	codeProbeDecisionPathNotFound  = "provider.probe.decision_path_not_found"
 	codeProbeDecisionNotCompatible = "provider.probe.decision_not_compatible"
+	codeProbeDecisionRejected      = "provider.probe.decision_rejected"
 	codeNoModelsPicked             = "provider.no_models_picked"
 )
 
