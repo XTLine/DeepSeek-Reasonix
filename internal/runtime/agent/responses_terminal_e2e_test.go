@@ -79,3 +79,18 @@ func (t terminalCountingEcho) Execute(ctx context.Context, args json.RawMessage)
 	t.calls.Add(1)
 	return t.echoTool.Execute(ctx, args)
 }
+
+func TestResponsesTerminalToolIntegrity(t *testing.T) {
+	const text = `{"type":"response.output_text.delta","item_id":"msg_1","content_index":0,"delta":"I will run the tool: partial-text-marker."}`
+	const ready = `{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"id":"fc_ready","type":"function_call","call_id":"call_ready","name":"ready","status":"completed","arguments":"{}"}]}}`
+	cases := []struct {
+		name   string
+		events []string
+		want   terminalExpectation
+	}{
+		{name: "no_argument_tool_accepts_empty_object", events: []string{text, ready}, want: terminalExpectation{requests: 2, calls: map[string]terminalCallExpectation{"call_ready": {name: "ready", arguments: `{}`}}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { runTerminalFixture(t, tc.events, tc.want) })
+	}
+}
