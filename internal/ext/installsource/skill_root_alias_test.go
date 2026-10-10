@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -464,7 +465,12 @@ func TestSkillRootAliasPreviewQuotesResolvedPath(t *testing.T) {
 	for _, mode := range []string{"register", "copy", "link"} {
 		t.Run(mode, func(t *testing.T) {
 			project := testenv.TempDir(t)
-			root := filepath.Join(project, "catalog\nforged reason\u202eend")
+			name := "catalog\nforged reason\u202eend"
+			if runtime.GOOS == "windows" {
+				// A Windows file name cannot hold a newline.
+				name = "catalog forged reason\u202eend"
+			}
+			root := filepath.Join(project, name)
 			writeFile(t, filepath.Join(root, "alpha.md"), "---\nname: alpha\ndescription: Skill\n---\nUse skill.\n")
 			alias := filepath.Join(project, "alias")
 			makeSkillRootAlias(t, root, alias)
