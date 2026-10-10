@@ -129,7 +129,7 @@ describe("conversation-owned restore receipt", () => {
   it("retires an older restore receipt after a successful single-file revert", async () => {
     const h = setup();
     await act(async () => { await h.result.current.onCommitRewind("plan-1"); });
-    vi.spyOn(h.port, "commitFileRevert").mockResolvedValue({ ok: true });
+    vi.spyOn(h.port, "commitFileRevert").mockResolvedValue({ ok: true, transactionId: "file-tx" });
     await act(async () => { await h.result.current.onCommitFileRevert("file-plan"); });
     expect(h.result.current.restoreNotice).toBeNull();
     expect(h.reload).toHaveBeenCalledTimes(1);
