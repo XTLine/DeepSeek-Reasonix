@@ -12,6 +12,7 @@ import { useReplyActions } from "./reply";
 import { useGateActions } from "./gates";
 import { useQueueActions } from "./queueactions";
 import { useRewindActions } from "./rewind";
+import { RestoreNotice } from "./RestoreNotice";
 import { initialTraj, reduceTraj } from "../state/trajectory";
 import { Transcript } from "./Transcript";
 import { useBackgroundDeltas } from "./deltas";
@@ -320,7 +321,7 @@ function PaneView({ port, rt, title, active, visible, sideHost, side, onFocus, o
     sessionState: sessionRead.kind,
     sessionPath: status?.sessionPath,
   });
-  const { onPrepareRewind, onCommitRewind, onUndoRewind, onPrepareFileRevert, onCommitFileRevert } = useRewindActions(port, reloadSession, onRestoreText);
+  const { restoreNotice, dismissRestore, onPrepareRewind, onCommitRewind, onUndoRewind, onPrepareFileRevert, onCommitFileRevert } = useRewindActions(port, reloadSession, onRestoreText, JSON.stringify([rt.id, rt.root, status?.sessionPath ?? rt.sessionPath]), running);
 
   const { onApprove, onFullAccess, onPlan, onForget, onExtInvoke, onExtSubmit, onAnswer } = useGateActions({
     port,
@@ -417,7 +418,6 @@ function PaneView({ port, rt, title, active, visible, sideHost, side, onFocus, o
         checkpoints={paired}
         onPrepareRewind={onPrepareRewind}
         onCommitRewind={onCommitRewind}
-        onUndoRewind={onUndoRewind}
         onPrepareFileRevert={onPrepareFileRevert}
         onCommitFileRevert={onCommitFileRevert}
         needsProject={needsProject}
@@ -521,6 +521,7 @@ function PaneView({ port, rt, title, active, visible, sideHost, side, onFocus, o
             both are dismissed one at a time, so nothing else bounds how many can
             be on screen at once. */}
         <div className="composenotes">
+          {restoreNotice && <RestoreNotice receipt={restoreNotice} onUndo={onUndoRewind} onDismiss={dismissRestore} />}
           {s.error && (
             <div className="errbar" role="alert">
               <span>{s.error}</span>
