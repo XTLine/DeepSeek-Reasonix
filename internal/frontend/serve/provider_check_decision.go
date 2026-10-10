@@ -3,7 +3,6 @@ package serve
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 
@@ -39,7 +38,7 @@ func probeDecision(ctx context.Context, cfg *config.Config, entry *config.Provid
 	}
 	client, err := netclient.NewHTTPClient(proxy, netclient.TransportOptions{})
 	if err != nil {
-		return fmt.Errorf("decision probe client: %v", err)
+		return errors.New("decision probe client: " + err.Error())
 	}
 	defer client.CloseIdleConnections()
 	return typesafe.Client{HTTP: client, BaseURL: entry.BaseURL, APIKey: entry.APIKey}.Probe(ctx, model)

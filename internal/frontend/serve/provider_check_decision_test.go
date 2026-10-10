@@ -207,10 +207,10 @@ func TestCheckProviderModelDecisionOutcomesAreUnchanged(t *testing.T) {
 		{"ok", func(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"answers":{"probe":{"type":"noul","noul":0.5}}}`))
 		}, "available", "", 0},
-		{"unauthorized", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(401) }, "unknown", "auth", 401},
-		{"not found", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404) }, "unknown", "rejected", 404},
-		{"rate limited", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(429) }, "unknown", "rate_limited", 429},
-		{"upstream", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(502) }, "unknown", "network", 502},
+		{"unauthorized", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) }, "unknown", "auth", 401},
+		{"not found", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotFound) }, "unknown", "rejected", 404},
+		{"rate limited", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusTooManyRequests) }, "unknown", "rate_limited", 429},
+		{"upstream", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusBadGateway) }, "unknown", "network", 502},
 		{"html", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("<html>")) }, "unknown", "rejected", 0},
 		{"no verdict", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"answers":{}}`)) }, "unknown", "rejected", 0},
 	}
