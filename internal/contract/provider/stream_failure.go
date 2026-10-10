@@ -2,8 +2,8 @@ package provider
 
 import "errors"
 
-// ErrInvalidFunctionCall identifies an unreadable call in completed Responses output.
-var ErrInvalidFunctionCall = errors.New("responses: completed response contains an invalid function call")
+// ErrInvalidFunctionCall identifies an unreadable call in a Responses stream.
+var ErrInvalidFunctionCall = errors.New("responses: stream contains an invalid function call")
 
 // ErrUnfinishedFunctionCall identifies a successful terminal with an open call.
 var ErrUnfinishedFunctionCall = errors.New("responses: stream ended with an unfinished function call")
@@ -32,7 +32,7 @@ func StreamFailureCauseOf(err error) StreamFailureCause {
 func (c StreamFailureCause) Description() string {
 	switch c {
 	case StreamFailureInvalidFunctionCall:
-		return "The completed Responses output contained a function call with an invalid wire shape. The host refused the whole response; none of its tool calls ran or entered model history."
+		return "The Responses stream contained a function call with an invalid wire shape. The host refused the whole response; none of its tool calls ran or entered model history."
 	case StreamFailureUnfinishedFunctionCall:
 		return "The Responses stream ended successfully while a function call was still unclosed. The host refused the whole response; none of its tool calls ran or entered model history."
 	default:

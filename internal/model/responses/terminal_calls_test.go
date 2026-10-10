@@ -108,7 +108,7 @@ func TestTerminalCallsKeepTextOnlyDONE(t *testing.T) {
 }
 
 func TestTerminalCallsLeaveArgumentJSONToToolValidation(t *testing.T) {
-	if err := terminalOutputError([]json.RawMessage{json.RawMessage(`{"type":"function_call","call_id":"call_1","name":"echo","arguments":"{"}`)}); err != nil {
+	if err := (&turn{}).terminalOutputError([]json.RawMessage{json.RawMessage(`{"type":"function_call","call_id":"call_1","name":"echo","arguments":"{"}`)}); err != nil {
 		t.Fatal(err)
 	}
 }

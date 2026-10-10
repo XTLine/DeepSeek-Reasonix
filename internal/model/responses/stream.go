@@ -208,6 +208,7 @@ func (t *turn) completeCall(ctx context.Context, call *streamedCall) bool {
 	if call.completed || call.name == "" {
 		return true
 	}
+	call.arguments = cmp.Or(call.arguments, "{}")
 	call.completed = true
 	return t.send(ctx, provider.Chunk{
 		Type:     provider.ChunkToolCall,
@@ -257,7 +258,7 @@ func (t *turn) applyTerminal(ctx context.Context, event sseEvent) bool {
 		return false
 	}
 	if event.Type == "response.completed" {
-		if err := terminalOutputError(event.Response.Output); err != nil {
+		if err := t.terminalOutputError(event.Response.Output); err != nil {
 			return t.refuseCalls(ctx, err)
 		}
 		t.responseID = event.Response.ID
@@ -416,6 +417,10 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 			}
 			t.terminal = true
 			break
+		}
+		if err := doneArgumentsError([]byte(data)); err != nil {
+			t.refuseCalls(ctx, err)
+			return
 		}
 		var event sseEvent
 		if json.Unmarshal([]byte(data), &event) != nil {

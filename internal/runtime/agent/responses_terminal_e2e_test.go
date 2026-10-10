@@ -103,7 +103,7 @@ func TestResponsesTerminalToolIntegrity(t *testing.T) {
 	const parallelComplete = `{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"id":"fc_1","type":"function_call","call_id":"call_1","name":"echo","status":"completed","arguments":"{\"text\":\"hi\"}"},{"id":"fc_2","type":"function_call","call_id":"call_2","name":"echo","status":"completed","arguments":"{\"text\":\"second\"}"}]}}`
 
 	success := terminalExpectation{requests: 2, calls: map[string]terminalCallExpectation{"call_1": {name: "echo", arguments: `{"text":"hi"}`, output: "echoed: hi"}}, finals: []string{"I will run the tool: partial-text-marker.", "done"}}
-	invalid := terminalExpectation{requests: 1, err: provider.ErrInvalidFunctionCall, cause: provider.StreamFailureInvalidFunctionCall, description: "The completed Responses output contained a function call with an invalid wire shape. The host refused the whole response; none of its tool calls ran or entered model history.", explicitContinuation: true}
+	invalid := terminalExpectation{requests: 1, err: provider.ErrInvalidFunctionCall, cause: provider.StreamFailureInvalidFunctionCall, description: "The Responses stream contained a function call with an invalid wire shape. The host refused the whole response; none of its tool calls ran or entered model history.", explicitContinuation: true}
 	unfinished := terminalExpectation{requests: 1, err: provider.ErrUnfinishedFunctionCall, cause: provider.StreamFailureUnfinishedFunctionCall, description: "The Responses stream ended successfully while a function call was still unclosed. The host refused the whole response; none of its tool calls ran or entered model history.", explicitContinuation: true}
 	cases := []struct {
 		name   string

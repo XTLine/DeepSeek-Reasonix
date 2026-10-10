@@ -7,7 +7,7 @@ import (
 	"reasonix/internal/contract/provider"
 )
 
-func terminalOutputError(output []json.RawMessage) error {
+func (t *turn) terminalOutputError(output []json.RawMessage) error {
 	for _, raw := range output {
 		var envelope struct {
 			Type      string          `json:"type"`
@@ -17,7 +17,14 @@ func terminalOutputError(output []json.RawMessage) error {
 			continue
 		}
 		var item sseItem
-		if len(envelope.Arguments) == 0 || envelope.Arguments[0] != '"' || json.Unmarshal(raw, &item) != nil || item.CallID == "" || item.Name == "" || (item.Status != "" && item.Status != "completed") {
+		if (len(envelope.Arguments) > 0 && envelope.Arguments[0] != '"') || json.Unmarshal(raw, &item) != nil || item.CallID == "" || item.Name == "" {
+			return provider.ErrInvalidFunctionCall
+		}
+		closed := false
+		for _, call := range t.calls {
+			closed = closed || (call.completed && call.id == item.CallID && call.name == item.Name)
+		}
+		if (item.Arguments == "" && !closed) || (item.Status != "" && item.Status != "completed" && !(item.Status == "in_progress" && closed)) {
 			return provider.ErrInvalidFunctionCall
 		}
 	}
@@ -47,4 +54,33 @@ func (t *turn) refuseCalls(ctx context.Context, err error) bool {
 	t.c.ResetContext()
 	_ = t.send(ctx, provider.Chunk{Type: provider.ChunkError, Err: err})
 	return false
+}
+
+func doneArgumentsError(raw []byte) error {
+	var event struct {
+		Type      string          `json:"type"`
+		Arguments json.RawMessage `json:"arguments"`
+		Item      json.RawMessage `json:"item"`
+	}
+	if json.Unmarshal(raw, &event) != nil {
+		return nil
+	}
+	switch event.Type {
+	case "response.function_call_arguments.done":
+	case "response.output_item.done":
+		var item struct {
+			Type      string          `json:"type"`
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		if json.Unmarshal(event.Item, &item) != nil || item.Type != "function_call" {
+			return nil
+		}
+		event.Arguments = item.Arguments
+	default:
+		return nil
+	}
+	if len(event.Arguments) > 0 && event.Arguments[0] != '"' {
+		return provider.ErrInvalidFunctionCall
+	}
+	return nil
 }
