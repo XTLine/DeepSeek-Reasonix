@@ -26,16 +26,20 @@ const terminalFinalAnswerSSE = "data: {\"type\":\"response.output_text.delta\",\
 
 const terminalSystemPrompt = "Stable system instructions for the Responses integrity fixture."
 
+var terminalUnsafeMarkers = []string{"partial-text-marker", "private-reasoning-marker", "partial-arguments-marker"}
+
 type terminalExpectation struct {
-	requests   int
-	calls      map[string]terminalCallExpectation
-	finals     []string
-	err        error
-	cause      provider.StreamFailureCause
-	retries    int
-	exactRetry bool
-	notice     string
-	noNotices  bool
+	requests             int
+	calls                map[string]terminalCallExpectation
+	finals               []string
+	err                  error
+	cause                provider.StreamFailureCause
+	description          string
+	retries              int
+	exactRetry           bool
+	explicitContinuation bool
+	notice               string
+	noNotices            bool
 }
 
 type terminalCallExpectation struct {
@@ -100,6 +104,29 @@ func runTerminalFixture(t *testing.T, events []string, want terminalExpectation)
 	assertTerminalNotices(t, sink, want)
 	for _, body := range bodies[1:] {
 		assertTerminalWireCalls(t, body, want.calls)
+	}
+	if !want.explicitContinuation {
+		return
+	}
+	assertTerminalRecoveryMetadata(t, a.Session().Snapshot(), want.cause)
+	if err := a.Run(ctx, "Continue if the task is still needed"); err != nil {
+		t.Fatalf("explicit continuation: %v", err)
+	}
+	continued := captured.snapshot()
+	if len(continued) != want.requests+1 {
+		t.Fatalf("explicit continuation requests=%d, want %d", len(continued), want.requests+1)
+	}
+	if len(bodies) == 0 {
+		t.Fatal("first request was never captured")
+	}
+	assertTerminalRecoveryRequest(t, bodies[0], continued[len(continued)-1], want)
+	assertTerminalExecutions(t, executions, nil)
+	assertTerminalHistory(t, a.Session().Snapshot(), sink, nil, []string{"done"})
+	if len(sink.kinds(event.Retrying)) != 0 {
+		t.Error("explicit continuation introduced an automatic retry")
+	}
+	if a.pendingInterruptedRecovery() != nil {
+		t.Error("explicit user continuation did not consume pending recovery")
 	}
 }
 
@@ -209,6 +236,31 @@ func assertTerminalNotices(t *testing.T, sink *recordSink, want terminalExpectat
 	}
 }
 
+func assertTerminalRecoveryMetadata(t *testing.T, messages []provider.Message, want provider.StreamFailureCause) {
+	t.Helper()
+	var pending int
+	for _, m := range messages {
+		if m.InterruptedTurn == nil {
+			continue
+		}
+		if !m.LocalOnly {
+			t.Error("recovery metadata is not local-only")
+		}
+		if m.InterruptedTurn.Pending {
+			pending++
+			if m.InterruptedTurn.StreamFailure != want {
+				t.Errorf("durable failure=%q, want %q", m.InterruptedTurn.StreamFailure, want)
+			}
+			if len(m.InterruptedTurn.CompletedTools) != 0 {
+				t.Errorf("refused attempt claims completed tools: %+v", m.InterruptedTurn.CompletedTools)
+			}
+		}
+	}
+	if pending != 1 {
+		t.Errorf("pending recovery records=%d, want 1", pending)
+	}
+}
+
 type terminalRequest struct {
 	Instructions json.RawMessage   `json:"instructions"`
 	Tools        json.RawMessage   `json:"tools"`
@@ -268,6 +320,54 @@ func assertTerminalWireCalls(t *testing.T, body []byte, want map[string]terminal
 	}
 }
 
+func assertTerminalRecoveryRequest(t *testing.T, firstBody, nextBody []byte, want terminalExpectation) {
+	t.Helper()
+	first := decodeTerminalRequest(t, firstBody)
+	var instructions string
+	if err := json.Unmarshal(first.Instructions, &instructions); err != nil || instructions != terminalSystemPrompt {
+		t.Errorf("initial system instructions=%s, want %q", first.Instructions, terminalSystemPrompt)
+	}
+	if len(first.Tools) == 0 || bytes.Equal(first.Tools, []byte("[]")) {
+		t.Error("initial tool schema prefix is empty")
+	}
+	next := decodeTerminalRequest(t, nextBody)
+	if !bytes.Equal(first.Instructions, next.Instructions) || !bytes.Equal(first.Tools, next.Tools) {
+		t.Error("protocol recovery changed cache-stable instructions or tool schemas")
+	}
+	if len(next.Input) != len(first.Input)+1 {
+		t.Fatalf("continuation input items=%d, want original %d plus one user tail", len(next.Input), len(first.Input))
+	}
+	for i := range first.Input {
+		if !bytes.Equal(first.Input[i], next.Input[i]) {
+			t.Errorf("continuation changed prior input item %d", i)
+		}
+	}
+	var tail terminalInput
+	if err := json.Unmarshal(next.Input[len(next.Input)-1], &tail); err != nil {
+		t.Fatal(err)
+	}
+	if tail.Role != "user" || !strings.Contains(tail.Content, "Continue if the task is still needed") {
+		t.Errorf("recovery is not on next explicit user tail: %+v", tail)
+	}
+	for _, required := range []string{"<interrupted-turn-recovery>", "stream_failure: " + string(want.cause), want.description} {
+		if !strings.Contains(tail.Content, required) {
+			t.Errorf("recovery tail missing %q: %s", required, tail.Content)
+		}
+	}
+	if strings.Count(string(nextBody), string(want.cause)) != 1 {
+		t.Errorf("failure identity must appear once on user tail: %s", nextBody)
+	}
+	for _, marker := range terminalUnsafeMarkers {
+		if strings.Contains(string(nextBody), marker) {
+			t.Errorf("raw refused payload %q leaked to continuation", marker)
+		}
+	}
+	if want.err != nil && strings.Contains(string(nextBody), want.err.Error()) {
+		t.Error("raw error prose leaked instead of bounded cause projection")
+	}
+	assertTerminalWireCalls(t, nextBody, nil)
+}
+
 type terminalExecutions struct {
 	mu    sync.Mutex
 	calls map[string]int
@@ -300,4 +400,52 @@ func (terminalReadyTool) ReadOnly() bool { return true }
 func (t terminalReadyTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
 	t.executions.record(t.Name(), args)
 	return "ready", nil
+}
+
+func runTerminalCancellationFixture(t *testing.T) {
+	t.Helper()
+	var captured terminalRequests
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured.add(t, r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial-text-marker\"}\n\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"fc_cancel\",\"type\":\"function_call\",\"call_id\":\"call_cancel\",\"name\":\"echo\"}}\n\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_cancel\",\"delta\":\"{\\\"text\\\":\\\"partial-arguments-marker\"}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sink := &terminalCancelSink{recordSink: &recordSink{}, cancel: cancel}
+	a, executions := newTerminalAgent(srv.URL, sink)
+	err := a.Run(ctx, "Run the required tool and report the result")
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Run error=%v, want context.Canceled", err)
+	}
+	if provider.IsStreamInterrupted(err) || provider.StreamFailureCauseOf(err) != "" {
+		t.Errorf("cancellation classified as transport/protocol failure: %v", err)
+	}
+	if !sink.sawPartial {
+		t.Error("cancellation did not observe partial call arguments")
+	}
+	if len(captured.snapshot()) != 1 || len(sink.kinds(event.Retrying)) != 0 {
+		t.Error("cancellation issued another request or automatic retry")
+	}
+	assertTerminalExecutions(t, executions, nil)
+	assertTerminalHistory(t, a.Session().Snapshot(), sink.recordSink, nil, nil)
+}
+
+type terminalCancelSink struct {
+	*recordSink
+	cancel     context.CancelFunc
+	sawPartial bool
+}
+
+func (s *terminalCancelSink) Emit(e event.Event) {
+	s.recordSink.Emit(e)
+	if e.Kind == event.ToolDispatch && e.Tool.Partial && e.Tool.ArgChars > 0 {
+		s.sawPartial = true
+		s.cancel()
+	}
 }

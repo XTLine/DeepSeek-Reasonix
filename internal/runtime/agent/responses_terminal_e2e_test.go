@@ -82,15 +82,24 @@ func (t terminalCountingEcho) Execute(ctx context.Context, args json.RawMessage)
 
 func TestResponsesTerminalToolIntegrity(t *testing.T) {
 	const text = `{"type":"response.output_text.delta","item_id":"msg_1","content_index":0,"delta":"I will run the tool: partial-text-marker."}`
+	const start = `{"type":"response.output_item.added","output_index":1,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"echo","status":"in_progress","arguments":""}}`
+	const partial = `{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"text\":\"partial-arguments-marker"}`
 	const ready = `{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"id":"fc_ready","type":"function_call","call_id":"call_ready","name":"ready","status":"completed","arguments":"{}"}]}}`
+
+	unfinished := terminalExpectation{requests: 1, err: provider.ErrUnfinishedFunctionCall, cause: provider.StreamFailureUnfinishedFunctionCall, description: "The Responses stream ended successfully while a function call was still unclosed. The host refused the whole response; none of its tool calls ran or entered model history.", explicitContinuation: true}
 	cases := []struct {
 		name   string
 		events []string
 		want   terminalExpectation
 	}{
 		{name: "no_argument_tool_accepts_empty_object", events: []string{text, ready}, want: terminalExpectation{requests: 2, calls: map[string]terminalCallExpectation{"call_ready": {name: "ready", arguments: `{}`, output: "ready"}}, finals: []string{"I will run the tool: partial-text-marker.", "done"}}},
+		{name: "unclosed_call_at_DONE", events: []string{text, start, partial, "[DONE]"}, want: unfinished},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { runTerminalFixture(t, tc.events, tc.want) })
 	}
+}
+
+func TestResponsesTerminalCancellationDoesNotExecuteOrRetry(t *testing.T) {
+	runTerminalCancellationFixture(t)
 }
