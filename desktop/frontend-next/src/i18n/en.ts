@@ -720,6 +720,7 @@ export const EN: Record<string, string> = {
   "收工检查": "Wrap-up check",
   "查看其后续使用的简报": "See the digest it carries forward",
   "正在还原…": "Restoring…",
+  "会话已切换，请重新选择还原位置": "The conversation changed. Choose a restore point again.",
   "撤销这次还原": "Undo this restore",
   "仍还原其余部分": "Restore the rest anyway",
   "还原失败": "Could not restore",
