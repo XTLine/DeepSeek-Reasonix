@@ -235,6 +235,7 @@ export function AddProvider({
             disabled={busy || checkingModel !== ""}
             spellCheck={false}
           />
+          {wire?.answers === "decision" && <i className="tip">{t("填写服务的基地址，不要带 /v1/systemone；Reasonix 会自己在后面追加。本地的 Ollama 之类地址不适用这个协议。")}</i>}
         </label>
         <label className="grow full">
           <span>API Key{t(sibling ? "（留空就用现有那个来源的 key）" : "")}</span>

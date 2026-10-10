@@ -220,6 +220,8 @@ const SAID: Record<string, string> = {
   "provider.probe.timeout": "该地址在限定时间内没有响应。请检查网络或代理，或稍后重试",
   "provider.probe.unreachable": "无法连接该地址。请检查网络是否通畅，以及地址是否有误",
   "provider.probe.failed": "检查失败，没有具体原因",
+  "provider.probe.decision_path_not_found": "地址可以连通，但没有 System One 决策接口。请填写服务的基地址，不要带 /v1/systemone，Reasonix 会自己在后面追加",
+  "provider.probe.decision_not_compatible": "该地址有响应，但返回的不是 System One 的决策结果。请确认这是决策协议服务的基地址",
   "provider.probe.not_compatible": "该地址有响应，但不是 OpenAI 或 Anthropic 类接口。请确认是否误将网页地址复制过来",
 
   // ── 推理强度：这个端点给不了 ─────────────────────────────────────

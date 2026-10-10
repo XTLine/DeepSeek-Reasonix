@@ -694,6 +694,8 @@ export const EN_SETTINGS: Record<string, string> = {
   "自定义来源": "Custom source",
   "按服务文档填写。连接检测只帮助读取模型，不会替你决定协议。": "Use the service documentation. Connection checks can read models, but do not choose the protocol for you.",
   "接口协议": "API protocol",
+  "填写服务的基地址，不要带 /v1/systemone；Reasonix 会自己在后面追加。本地的 Ollama 之类地址不适用这个协议。":
+    "Enter the service's base address without /v1/systemone; Reasonix appends it. An address such as a local Ollama does not speak this protocol.",
   "以服务商文档为准；模型列表无法可靠判断聊天协议。": "Follow the provider documentation; a model list cannot reliably identify the chat protocol.",
   "模型限制": "Model limits",
   "作为该来源中模型的默认值": "Defaults for models from this source",
