@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,15 +29,19 @@ const terminalSystemPrompt = "Stable system instructions for the Responses integ
 type terminalExpectation struct {
 	requests   int
 	calls      map[string]terminalCallExpectation
+	finals     []string
 	err        error
 	cause      provider.StreamFailureCause
 	retries    int
 	exactRetry bool
+	notice     string
+	noNotices  bool
 }
 
 type terminalCallExpectation struct {
 	name      string
 	arguments string
+	output    string
 }
 
 func runTerminalFixture(t *testing.T, events []string, want terminalExpectation) {
@@ -91,6 +96,11 @@ func runTerminalFixture(t *testing.T, events []string, want terminalExpectation)
 		t.Errorf("EOF retry changed frozen request\nfirst=%s\nretry=%s", bodies[0], bodies[1])
 	}
 	assertTerminalExecutions(t, executions, want.calls)
+	assertTerminalHistory(t, a.Session().Snapshot(), sink, want.calls, want.finals)
+	assertTerminalNotices(t, sink, want)
+	for _, body := range bodies[1:] {
+		assertTerminalWireCalls(t, body, want.calls)
+	}
 }
 
 type terminalRequests struct {
@@ -135,6 +145,126 @@ func assertTerminalExecutions(t *testing.T, executions *terminalExecutions, want
 	defer executions.mu.Unlock()
 	if !reflect.DeepEqual(executions.calls, expected) {
 		t.Errorf("executions=%v, want %v", executions.calls, expected)
+	}
+}
+
+func assertTerminalHistory(t *testing.T, messages []provider.Message, sink *recordSink, want map[string]terminalCallExpectation, wantFinals []string) {
+	t.Helper()
+	calls := map[string]int{}
+	results := map[string]int{}
+	var finals []string
+	for _, m := range messages {
+		if m.LocalOnly {
+			continue
+		}
+		switch m.Role {
+		case provider.RoleAssistant:
+			finals = append(finals, m.Content)
+			for _, call := range m.ToolCalls {
+				calls[call.ID]++
+				if expected, ok := want[call.ID]; !ok || call.Name != expected.name || call.Arguments != expected.arguments {
+					t.Errorf("committed call=%+v, want %+v", call, expected)
+				}
+			}
+		case provider.RoleTool:
+			results[m.ToolCallID]++
+			if expected, ok := want[m.ToolCallID]; !ok || m.Name != expected.name || m.Content != expected.output {
+				t.Errorf("committed tool result=%+v, want %+v", m, expected)
+			}
+		}
+	}
+	if !reflect.DeepEqual(finals, wantFinals) {
+		t.Errorf("committed assistant text=%q, want %q", finals, wantFinals)
+	}
+	eventCounts := map[string]int{}
+	for _, e := range sink.kinds(event.ToolResult) {
+		eventCounts[e.Tool.ID]++
+		if expected, ok := want[e.Tool.ID]; !ok || e.Tool.Name != expected.name || e.Tool.Output != expected.output || e.Tool.Err != "" {
+			t.Errorf("tool result event=%+v, want %+v", e.Tool, expected)
+		}
+	}
+	for label, counts := range map[string]map[string]int{"history calls": calls, "history results": results, "result events": eventCounts} {
+		if len(counts) != len(want) {
+			t.Errorf("%s=%v, want %d distinct calls", label, counts, len(want))
+		}
+		for id := range want {
+			if counts[id] != 1 {
+				t.Errorf("%s for %q=%d, want 1", label, id, counts[id])
+			}
+		}
+	}
+}
+
+func assertTerminalNotices(t *testing.T, sink *recordSink, want terminalExpectation) {
+	t.Helper()
+	var texts []string
+	for _, e := range sink.kinds(event.Notice) {
+		texts = append(texts, e.Text)
+	}
+	if want.noNotices && len(texts) != 0 {
+		t.Errorf("unexpected notices=%q", texts)
+	}
+	if want.notice != "" && !strings.Contains(strings.Join(texts, "\n"), want.notice) {
+		t.Errorf("notices=%q, missing %q", texts, want.notice)
+	}
+}
+
+type terminalRequest struct {
+	Instructions json.RawMessage   `json:"instructions"`
+	Tools        json.RawMessage   `json:"tools"`
+	Input        []json.RawMessage `json:"input"`
+}
+
+type terminalInput struct {
+	Type      string `json:"type"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	CallID    string `json:"call_id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+	Output    string `json:"output"`
+}
+
+func decodeTerminalRequest(t *testing.T, body []byte) terminalRequest {
+	t.Helper()
+	var request terminalRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatalf("decode request: %v\n%s", err, body)
+	}
+	return request
+}
+
+func assertTerminalWireCalls(t *testing.T, body []byte, want map[string]terminalCallExpectation) {
+	t.Helper()
+	request := decodeTerminalRequest(t, body)
+	calls, outputs := map[string]int{}, map[string]int{}
+	for _, raw := range request.Input {
+		var item terminalInput
+		if err := json.Unmarshal(raw, &item); err != nil {
+			t.Fatalf("decode input: %v", err)
+		}
+		switch item.Type {
+		case "function_call":
+			calls[item.CallID]++
+			if expected, ok := want[item.CallID]; !ok || item.Name != expected.name || item.Arguments != expected.arguments {
+				t.Errorf("continuation call=%+v, want %+v", item, expected)
+			}
+		case "function_call_output":
+			outputs[item.CallID]++
+			if expected, ok := want[item.CallID]; !ok || item.Output != expected.output {
+				t.Errorf("continuation output=%+v, want %+v", item, expected)
+			}
+		}
+	}
+	for label, counts := range map[string]map[string]int{"calls": calls, "outputs": outputs} {
+		if len(counts) != len(want) {
+			t.Errorf("continuation %s=%v, want %d calls", label, counts, len(want))
+		}
+		for id := range want {
+			if counts[id] != 1 {
+				t.Errorf("continuation %s for %q=%d, want 1", label, id, counts[id])
+			}
+		}
 	}
 }
 
