@@ -19,6 +19,8 @@ const (
 	codeUnknownProject    = "project.unknown"
 	codeSessionInUse      = "busy.session_in_use"
 	codeBadValue          = "request.bad_value"
+	codeModelDecisionOnly = "model.decision_only"
+	codeModelNotDecision  = "model.not_decision_source"
 	codeSessionBusy       = "busy.session_running"
 	codeSessionBadName    = "session.bad_name"
 	codeSessionBadPath    = "session.bad_path"

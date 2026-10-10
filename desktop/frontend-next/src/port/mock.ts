@@ -92,9 +92,11 @@ export class MockPort extends MockWorkspace implements AgentPort {
     this.overrides = { ...this.overrides, [role]: (this.overrides[role] ?? []).filter((o) => o.key !== key) };
   }
 
-  async models(): Promise<ModelEntry[]> {
+  async models(answers: "chat" | "decision" | "all" = "chat"): Promise<ModelEntry[]> {
     const efforts = ["auto", "low", "high", "max"];
-    return mockModels(efforts).map((m) => ({ ...m, default: m.ref === this.defaultRef }));
+    return mockModels(efforts)
+      .filter((m) => answers === "all" || (m.answers ?? "chat") === answers)
+      .map((m) => ({ ...m, default: m.ref === this.defaultRef }));
   }
 
   // The one model the catalogue marks as default, so a pick in the settings row

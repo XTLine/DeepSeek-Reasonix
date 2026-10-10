@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 
+	"reasonix/internal/contract/config"
 	"reasonix/internal/session/control"
 )
 
@@ -92,6 +93,12 @@ func writeErr(w http.ResponseWriter, fallback int, err error) {
 	if refuseUnparsedConfig(w, err) {
 		return
 	}
+	var mismatch *config.AnswersMismatchError
+	if errors.As(err, &mismatch) {
+		refuse(w, http.StatusConflict, answersMismatchCode(mismatch), err.Error(),
+			map[string]any{"model": mismatch.Ref, "has": string(mismatch.Has), "want": string(mismatch.Want)})
+		return
+	}
 	http.Error(w, err.Error(), fallback)
 }
 
@@ -142,4 +149,14 @@ func rebuildFailed(w http.ResponseWriter, err error) {
 		return
 	}
 	refuse(w, http.StatusConflict, "runtime.rebuild_failed", err.Error(), map[string]any{"detail": err.Error()})
+}
+
+// answersMismatchCode names which way the model was misplaced, because the two
+// are different things to fix: a decision source put on a conversation job, or
+// a conversation model put where the decision tool asks.
+func answersMismatchCode(e *config.AnswersMismatchError) string {
+	if e.Has == config.AnswersDecision {
+		return codeModelDecisionOnly
+	}
+	return codeModelNotDecision
 }

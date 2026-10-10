@@ -41,8 +41,8 @@ export class SsePort extends SseWorkspace implements AgentPort {
     return this.post("/provider-setup", { apiKey });
   }
 
-  async models() {
-    const r = await this.get<{ models?: ModelEntry[] }>("/models");
+  async models(answers?: "chat" | "decision" | "all") {
+    const r = await this.get<{ models?: ModelEntry[] }>(answers ? `/models?answers=${answers}` : "/models");
     return r.models ?? [];
   }
 
