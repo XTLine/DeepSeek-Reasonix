@@ -748,10 +748,16 @@ func (s *Server) branches(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{"branches": branches, "tree": tree})
 }
 
-// models lists configured chat models for the browser model picker.
-func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
+// models lists the configured models that answer the requested job: chat by
+// default, "decision" for the decision sources, "all" for the management views.
+func (s *Server) models(w http.ResponseWriter, r *http.Request) {
+	scope, ok := modelScopeOf(r)
+	if !ok {
+		badValue(w, "answers", "chat", "decision", "all")
+		return
+	}
 	if s.resolver != nil {
-		s.resolverModels(w)
+		s.resolverModels(w, scope)
 		return
 	}
 	cfg, err := config.Load()
@@ -765,7 +771,7 @@ func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
 	modelCounts := make(map[string]int)
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
-		if !p.Configured() {
+		if !p.Configured() || !scope.has(p.Kind) {
 			continue
 		}
 		models := p.ChatModelList()
@@ -783,7 +789,7 @@ func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
 	seen := make(map[string]struct{})
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
-		if !p.Configured() {
+		if !p.Configured() || !scope.has(p.Kind) {
 			continue
 		}
 		models := p.ChatModelList()
@@ -826,7 +832,7 @@ func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
 			continue
 		}
 		seen[ref] = struct{}{}
-		if entry, ok := catalogModelEntry(d, current); ok {
+		if entry, ok := catalogModelEntry(d, current); ok && scope.has(entry.Kind) {
 			out = append(out, entry)
 		}
 	}

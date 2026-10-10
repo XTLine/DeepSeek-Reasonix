@@ -253,6 +253,17 @@ func (b *builder) loadConfig() (*config.Config, error) {
 	return cfg, nil
 }
 
+// skippedDefaultDetail says why the saved default was passed over. A decision
+// source exists but answers system_one only, which is a different fix from a name
+// nothing declares.
+func (b *builder) skippedDefaultDetail() string {
+	var mismatch *config.AnswersMismatchError
+	if errors.As(b.cfg.RequireAnswers(b.model.skipped, config.AnswersChat), &mismatch) {
+		return fmt.Sprintf("default_model = %q is a decision source: it answers system_one's questions, not conversation; using %q. Choosing a default model replaces it; until then the file keeps it as written.", b.model.skipped, b.model.ref)
+	}
+	return fmt.Sprintf("default_model = %q names no configured provider or model; using %q. Choosing a default model replaces it; until then the file keeps it as written.", b.model.skipped, b.model.ref)
+}
+
 func (b *builder) reportModelNotices() {
 	cfg, entry := b.cfg, b.model.entry
 	if ignored := cfg.IgnoredProjectDefaultModel(); ignored != "" {
@@ -261,7 +272,7 @@ func (b *builder) reportModelNotices() {
 	if b.model.skipped != "" {
 		report(b.sink, event.Event{Level: event.LevelWarn, Code: event.NoticeCodeDefaultModelUnavailable,
 			Text:   "The saved default model is not configured, so another configured model is in use.",
-			Detail: fmt.Sprintf("default_model = %q names no configured provider or model; using %q. Choosing a default model replaces it; until then the file keeps it as written.", b.model.skipped, b.model.ref)})
+			Detail: b.skippedDefaultDetail()})
 	}
 	// Without RequireKey the UI stays reachable, so a missing key would
 	// otherwise surface only as a silently failing first request.
