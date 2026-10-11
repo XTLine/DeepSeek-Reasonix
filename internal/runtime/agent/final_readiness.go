@@ -480,34 +480,28 @@ func (a *Agent) appendUnseenRenderGap(out *finalReadinessCheck, missing []string
 	return missing
 }
 
-// appendVerificationGap records what this turn owes for verification. Only what
-// the turn itself failed to do fails the turn: where the host cannot read what
-// ran, it declines to judge rather than guessing.
+// appendVerificationGap records verification not established by the ledger.
 func (a *Agent) appendVerificationGap(out *finalReadinessCheck, missing []string, writer int, blockedWithCheck, verified bool) []string {
 	if a.deliveryProfile || !a.turn.policySet || a.turn.policy.Verification < taskpolicy.VerifyTargeted ||
 		!toolPresent(a.svc.tools, "bash") || blockedWithCheck || a.checkEstablished(writer, verified) ||
 		a.task.ledger.ProseOnlyWithoutChecks(a.checkContract()) {
 		return missing
 	}
-	gap, owed := a.verificationGap(writer)
-	if !owed {
-		return missing
-	}
 	out.applies = true
 	out.missingVerification++
-	return append(missing, gap)
+	return append(missing, a.verificationGap(writer))
 }
 
-// verificationGap says what the turn owes for verification, and whether it owes
-// anything at all. A check whose exit status belonged to a later stage of the
+// verificationGap says how the turn can establish its missing verification.
+// A check whose exit status belonged to a later stage of the
 // same command did run, so asking for "a verification command" reads as false
 // to the model that just ran one; what it needs is the command named and a
 // shape whose status answers for the check.
-func (a *Agent) verificationGap(writer int) (string, bool) {
+func (a *Agent) verificationGap(writer int) string {
 	ask := "run a relevant verification command after the latest write for the current role setting" + a.verificationCause()
 	if unreadable, ok := a.task.ledger.LatestUnreadableVerificationAfter(writer); ok && strings.TrimSpace(unreadable.Command) != "" {
 		return fmt.Sprintf("%s — %q ran, but its exit status is the last stage's, not the check's, "+
-			"so it proves nothing either way; re-run the check on its own", ask, strings.TrimSpace(unreadable.Command)), true
+			"so it proves nothing either way; re-run the check on its own", ask, strings.TrimSpace(unreadable.Command))
 	}
 	// A model told only to "run a verification command" has already run one.
 	// Which one failed is the host's to say: the debt is keyed on that check's
@@ -518,17 +512,14 @@ func (a *Agent) verificationGap(writer int) (string, bool) {
 			named = fmt.Sprintf(" (%s)", strings.Join(quoteEach(failed), ", "))
 		}
 		return fmt.Sprintf("the check you ran after the latest write did not pass%s: either make that check pass — the same one, so the host can see it — "+
-			"or, if it cannot pass as specified, call conclude_blocked with the evidence for why", named), true
+			"or, if it cannot pass as specified, call conclude_blocked with the evidence for why", named)
 	}
-	// Commands ran and the table read none as a check. The host cannot tell a
-	// runner from a deploy, so it owes nothing and says nothing: it has no
-	// honest sentence, and failing on the guess is the gate over-reaching.
-	if len(a.projectChecks) == 0 {
+	if len(a.projectChecks) == 0 && toolPresent(a.svc.tools, "complete_step") {
 		if _, ok := a.task.ledger.LatestUnrecognizedCommandAfter(writer); ok {
-			return "", false
+			return ask + "; if a custom check already ran, cite its command as verification in complete_step so the host can corroborate it"
 		}
 	}
-	return ask, true
+	return ask
 }
 
 // verificationCause names what keeps the check owed. A turn whose every change

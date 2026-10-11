@@ -2,6 +2,7 @@ package agent
 
 import (
 	"reasonix/internal/state/sessionstore"
+	"slices"
 	"strings"
 	"testing"
 
@@ -97,65 +98,40 @@ func TestFinalReadinessIgnoresLoopGuardQuotedInToolOutput(t *testing.T) {
 	}
 }
 
-// The table will never enumerate every project's own runner, so a project
-// driven by its own scripts runs its check, passes it, and is told it verified
-// nothing. That miss is the host's, so the turn is not charged for it: failing
-// work that did verify itself punishes the gate's blind spot, and the gate
-// lapses next turn regardless, so the failure collects nothing later either.
-func TestVerificationGapSeparatesTheHostsBlindSpotFromTheTurns(t *testing.T) {
+func TestVerificationGapKeepsUnclassifiedCommandsUnverified(t *testing.T) {
 	const ran = "./check.sh"
 	writer := evidence.Receipt{ToolName: "write_file", Success: true, Write: true, Paths: []string{"wordcount.sh"}}
 	command := evidence.Receipt{ToolName: "bash", Success: true, Command: ran}
 	declared := instruction.VerifyCheck{Command: "make check", SourcePath: "AGENTS.md", Line: 3}
-
-	cases := []struct {
-		name     string
-		checks   []instruction.VerifyCheck
-		ledger   *evidence.Ledger
-		wantOwed bool
+	for _, tc := range []struct {
+		name    string
+		checks  []instruction.VerifyCheck
+		ledger  *evidence.Ledger
+		canCite bool
 	}{
-		{"a command the table could not read is owed by nobody", nil, readinessLedger(writer, command), false},
-		{"nothing ran at all is the turn's own miss", nil, readinessLedger(writer), true},
-		{"a project that declared checks owes those", []instruction.VerifyCheck{declared}, readinessLedger(writer, command), true},
-	}
-	for _, tc := range cases {
+		{"unclassified command", nil, readinessLedger(writer, command), true},
+		{"no command", nil, readinessLedger(writer), false},
+		{"declared checks", []instruction.VerifyCheck{declared}, readinessLedger(writer, command), false},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := &Agent{task: taskRuntime{ledger: tc.ledger}, projectChecks: tc.checks}
-			gap, owed := a.verificationGap(0)
-			if owed != tc.wantOwed {
-				t.Fatalf("owed = %v, want %v: %q", owed, tc.wantOwed, gap)
+			reg := tool.NewRegistry()
+			reg.Add(fakeTool{name: "bash"})
+			reg.Add(fakeTool{name: "complete_step"})
+			a := &Agent{
+				task: taskRuntime{ledger: tc.ledger}, projectChecks: tc.checks, svc: agentServices{tools: reg},
+				turn: turnRuntime{policySet: true, policy: taskpolicy.TaskPolicy{Verification: taskpolicy.VerifyTargeted}},
 			}
-			// Nothing owed means nothing said. The host has no honest sentence
-			// for a command it could not read, and a gap with no ask in it was
-			// only ever a flag wearing a message's type.
-			if !owed && gap != "" {
-				t.Errorf("a waived gap still carries a message: %q", gap)
+			got := a.ReadinessResult()
+			if got.Ready || !slices.Contains(got.Missing, "verification") || !strings.Contains(got.Reason, "run a relevant verification command") {
+				t.Fatalf("ReadinessResult() = %+v, want verification debt", got)
 			}
-			if strings.Contains(gap, ran) {
-				t.Errorf("a gap carries the command verbatim: %q", gap)
+			if strings.Contains(got.Reason, ran) {
+				t.Fatalf("guidance repeats the unclassified command: %q", got.Reason)
 			}
-			if owed && !strings.Contains(gap, "run a relevant verification command") {
-				t.Errorf("an owed gap must still carry the ask: %q", gap)
+			if strings.Contains(got.Reason, "cite its command") != tc.canCite {
+				t.Fatalf("citation guidance = %q, want available=%v", got.Reason, tc.canCite)
 			}
 		})
-	}
-}
-
-// The host's blind spot must never be what fails a run.
-func TestUnreadableCommandDoesNotFailTheTurn(t *testing.T) {
-	writer := evidence.Receipt{ToolName: "write_file", Success: true, Write: true, Paths: []string{"wordcount.sh"}}
-	command := evidence.Receipt{ToolName: "bash", Success: true, Command: "./check.sh"}
-	reg := tool.NewRegistry()
-	reg.Add(fakeTool{name: "bash"})
-
-	a := &Agent{
-		task: taskRuntime{ledger: readinessLedger(writer, command)},
-		svc:  agentServices{tools: reg},
-		turn: turnRuntime{policySet: true, policy: taskpolicy.TaskPolicy{Verification: taskpolicy.VerifyTargeted}},
-	}
-	got := a.ReadinessResult()
-	if !got.Ready {
-		t.Fatalf("ReadinessResult() = %+v, want ready: the host's blind spot must not fail the run", got)
 	}
 }
 
@@ -323,10 +299,7 @@ func TestAFailedCheckIsNamedBackToTheTurn(t *testing.T) {
 	reg.Add(fakeTool{name: "conclude_blocked"})
 	a := &Agent{task: taskRuntime{ledger: readinessLedger(writer, failed, passed)}, svc: agentServices{tools: reg}}
 
-	gap, owed := a.verificationGap(0)
-	if !owed {
-		t.Fatal("a check standing failed owes the turn something")
-	}
+	gap := a.verificationGap(0)
 	if !strings.Contains(gap, `"grep -L lsit app.js"`) {
 		t.Fatalf("the failed check is not named: %q", gap)
 	}
