@@ -24,6 +24,11 @@ it.each([
   ["trailing ", true, "@trailing\\ /"],
   ["trailing\t", true, "@trailing\\\t/"],
   ['name"', false, '@name"'],
+  [String.raw`literal\name.txt`, false, String.raw`@literal\name.txt`],
+  [String.raw`before\ space.txt`, false, String.raw`@before\\ space.txt`],
+  [String.raw`repeat\\ space.txt`, false, String.raw`@repeat\\\ space.txt`],
+  ["before\\\ttab.txt", false, "@before\\\\\ttab.txt"],
+  ["folder\\", true, "@folder\\/"],
 ])("copies %j into the real Composer without changing its reference", async (path, folder, reference) => {
   const user = userEvent.setup();
   const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
@@ -42,7 +47,7 @@ it.each([
   await waitFor(() => expect(onSubmit.mock.calls[0]?.[0]).toBe(reference));
 });
 
-it.each(["trailing ", "trailing\t", "trailing\u00a0", "trailing\ufeff"])("keeps only path copying for a file whose final whitespace Composer would trim: %j", async (path) => {
+it.each(["trailing ", "trailing\t", "trailing\u00a0", "trailing\ufeff", "trailing\\"])("keeps only path copying for a file whose suffix cannot safely form a reference: %j", async (path) => {
   const user = userEvent.setup();
   const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
   const port = new MockPort();

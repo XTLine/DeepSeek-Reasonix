@@ -52,7 +52,7 @@ export function WorkbenchFileMenu({ menu, root, revealable, platform, onReveal, 
   // Keep the same token spelling as control.EscapeRefPath and RefDirItems.
   const path = menu.path + (menu.folder ? "/" : "");
   const ambiguous = path.includes(":");
-  const reference = ambiguous || path.trimEnd() !== path || /[\r\n\f]|[.,;!?)}\]]$/.test(path) ? "" : "@" + path.replace(/[ \t]/g, "\\$&");
+  const reference = ambiguous || path.endsWith("\\") || path.trimEnd() !== path || /[\r\n\f]|[.,;!?)}\]]$/.test(path) ? "" : "@" + path.replace(/[ \t]/g, "\\$&");
   return createPortal(
     <div
       className="tabmenu"
