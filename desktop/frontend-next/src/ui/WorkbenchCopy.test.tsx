@@ -17,14 +17,17 @@ it.each([
   ["C:\\My Project", "src/two words.ts", false, "C:\\My Project\\src\\two words.ts", "@src/two\\ words.ts"],
   ["\\\\server\\share\\", "docs/team notes", true, "\\\\server\\share\\docs\\team notes", "@docs/team\\ notes/"],
   ["/", "a\tb", true, "/a\tb", "@a\\\tb/"],
+  ["/work", 'name"', false, '/work/name"', '@name"'],
+  ["/work", 'quoted-dir"', true, '/work/quoted-dir"', '@quoted-dir"/'],
 ])("copies paths and references from %s without opening or submitting", async (root, path, folder, absolute, reference) => {
   const user = userEvent.setup();
   const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
   const port = new MockPort();
   vi.spyOn(port, "workspaceFiles").mockResolvedValue({ files: folder ? [] : [path], directories: folder ? [path] : [] });
   const read = vi.spyOn(port, "workspaceFile"), submit = vi.spyOn(port, "submit"), drop = vi.spyOn(port, "dropRefs");
+  const mcp = vi.spyOn(port, "mcp");
   render(<WorkbenchPanel {...props(port, root)} />);
-  const row = await screen.findByRole("button", { name: (name) => name.replace(/\s+/g, " ") === path.split("/").at(-1)?.replace(/\s+/g, " ") });
+  const row = await screen.findByRole("button", { name: (name) => name.trim().replace(/\s+/g, " ") === path.split("/").at(-1)?.trim().replace(/\s+/g, " ") });
   for (const [label, text] of [["复制路径", absolute], ["复制引用", reference]]) {
     fireEvent.contextMenu(row);
     await user.click(screen.getByRole("menuitem", { name: label }));
@@ -34,6 +37,7 @@ it.each([
   expect(read).not.toHaveBeenCalled();
   expect(submit).not.toHaveBeenCalled();
   expect(drop).not.toHaveBeenCalled();
+  expect(mcp).not.toHaveBeenCalled();
 });
 
 it.each([false, true])("allows copies without a local reveal (remote: %s)", async (remote) => {
@@ -167,4 +171,29 @@ it("labels copy actions in English", async () => {
     boot();
     localStorage.removeItem(STORAGE);
   }
+});
+
+
+it.each([
+  ["github:notes.md", false, false],
+  ["github:team notes.md", false, true],
+  ["github:dir", true, true],
+  ["src/github:notes.md", false, true],
+  ["src/github:dir", true, true],
+])("keeps path copy but disables ambiguous MCP references for %s", async (path, folder, remote) => {
+  const user = userEvent.setup();
+  const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  const port = new MockPort();
+  vi.spyOn(port, "workspaceFiles").mockResolvedValue({ files: folder ? [] : [path], directories: folder ? [path] : [] });
+  const read = vi.spyOn(port, "workspaceFile"), submit = vi.spyOn(port, "submit"), drop = vi.spyOn(port, "dropRefs"), mcp = vi.spyOn(port, "mcp");
+  render(<WorkbenchPanel {...props(port, "/work")} remote={remote} />);
+  fireEvent.contextMenu(await screen.findByRole("button", { name: path.split("/").at(-1) }));
+  const reference = screen.getByRole("menuitem", { name: "复制引用" }) as HTMLButtonElement;
+  expect(reference.disabled).toBe(true);
+  expect(reference.title).toBe("此名称可能被识别为 MCP 资源");
+  await user.click(reference);
+  expect(write).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("menuitem", { name: "复制路径" }));
+  expect(write).toHaveBeenCalledExactlyOnceWith(`/work/${path}`);
+  for (const action of [read, submit, drop, mcp]) expect(action).not.toHaveBeenCalled();
 });

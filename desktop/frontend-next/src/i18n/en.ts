@@ -95,6 +95,7 @@ export const EN: Record<string, string> = {
   "复制路径": "Copy path",
   "复制引用": "Copy reference",
   "此名称不能表示为 @ 引用": "This name cannot be represented as an @ reference",
+  "此名称可能被识别为 MCP 资源": "This name could resolve to an MCP resource",
   "思考 {chars}": "Thought · {chars}",
   "耗时 {t}": "Worked for {t}",
   "思考 {secs} 秒 · {chars}": "Thought for {secs}s · {chars}",

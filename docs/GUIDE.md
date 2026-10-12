@@ -1614,6 +1614,9 @@ In Studio's file panel, right-click one file or folder:
   cannot represent, or whose final whitespace the composer would trim, disable
   this action.
 
+Paths containing `:` disable Copy reference because they can be interpreted as
+MCP resources instead of workspace entries.
+
 Copying does not open the entry or send a message.
 
 ## Two-model collaboration

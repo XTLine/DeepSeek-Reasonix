@@ -23,6 +23,7 @@ it.each([
   ["space name.txt", false, "@space\\ name.txt"],
   ["trailing ", true, "@trailing\\ /"],
   ["trailing\t", true, "@trailing\\\t/"],
+  ['name"', false, '@name"'],
 ])("copies %j into the real Composer without changing its reference", async (path, folder, reference) => {
   const user = userEvent.setup();
   const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();

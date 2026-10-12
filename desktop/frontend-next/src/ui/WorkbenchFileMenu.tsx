@@ -51,7 +51,8 @@ export function WorkbenchFileMenu({ menu, root, revealable, platform, onReveal, 
   const absolute = absoluteWorkspacePath(root, menu.path);
   // Keep the same token spelling as control.EscapeRefPath and RefDirItems.
   const path = menu.path + (menu.folder ? "/" : "");
-  const reference = path.trimEnd() !== path || /[\r\n\f]|[.,;!?)}\]]$/.test(path) ? "" : "@" + path.replace(/[ \t]/g, "\\$&");
+  const ambiguous = path.includes(":");
+  const reference = ambiguous || path.trimEnd() !== path || /[\r\n\f]|[.,;!?)}\]]$/.test(path) ? "" : "@" + path.replace(/[ \t]/g, "\\$&");
   return createPortal(
     <div
       className="tabmenu"
@@ -83,7 +84,7 @@ export function WorkbenchFileMenu({ menu, root, revealable, platform, onReveal, 
         role="menuitem"
         autoFocus={!revealable && !absolute}
         disabled={!reference || state === "copying"}
-        title={reference ? undefined : t("此名称不能表示为 @ 引用")}
+        title={reference ? undefined : ambiguous ? t("此名称可能被识别为 MCP 资源") : t("此名称不能表示为 @ 引用")}
         data-action="workbench.copy-ref"
         data-target={menu.path}
         onClick={() => void copy(reference)}
